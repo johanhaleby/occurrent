@@ -542,14 +542,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         requireNonNull(cancelled, "cancelled cannot be null");
 
         if (delegate != null) {
-            // Before any refusal, so a cancelled call returns null also where the id is taken or the model is shut down
-            if (cancelled.getAsBoolean()) {
-                return null;
-            }
             // Refused here rather than left to the wrapped model, which may accept the subscribe and fail it only
-            // later, a catch-up model replaying history and then failing at the handover for example.
+            // later, a catch-up model replaying history and then failing at the handover for example. Also when the
+            // call was cancelled, as a subscribe that wasn't cancelled is.
             if (shutdown) {
                 throw new SubscriptionModelShutdownException();
+            }
+            // Before the other refusals, so a cancelled call returns null also where the id is taken
+            if (cancelled.getAsBoolean()) {
+                return null;
             }
             // Deliberately outside this model's monitor, which no step of subscribeByDelegating takes. Reading the start
             // position waits on the checkpoint store and handing the subscription over calls the wrapped model, and
@@ -559,11 +560,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
 
         // Checked before the read below, so a duplicate subscribe and one on a shut-down model do not ask the wrapped
-        // model where the feed is, and checked again under the monitor where the id is taken. A cancelled call returns
-        // null before both, so it takes over no delete of the id and reads nothing. A subscribe of the id made after
-        // the cancel takes the id under this monitor, so this check sees that cancel whenever it sees that subscribe.
+        // model where the feed is, and checked again under the monitor where the id is taken. A cancelled call on a
+        // model that isn't shut down returns null before both, so it takes over no delete of the id and reads nothing.
+        // A subscribe of the id made after the cancel takes the id under this monitor, so this check sees that cancel
+        // whenever it sees that subscribe.
         synchronized (this) {
-            if (cancelled.getAsBoolean()) {
+            if (cancelled.getAsBoolean() && !shutdown) {
                 return null;
             }
             requireIdFreeAndNotShutDown(subscriptionId);
@@ -605,7 +607,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         final @Nullable Reservation reservation;
         try {
             synchronized (this) {
-                if (cancelled.getAsBoolean()) {
+                if (cancelled.getAsBoolean() && !shutdown) {
                     reservation = null;
                 } else {
                     requireIdFreeAndNotShutDown(subscriptionId);

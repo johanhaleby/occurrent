@@ -329,8 +329,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         RunStart runStart;
         synchronized (this) {
             // Under the monitor that cancelSubscription(..) takes, so a cancel either finds the subscription or keeps it
-            // from being registered
-            if (cancelled.getAsBoolean()) {
+            // from being registered. A shut-down model refuses the call below as it refuses one that wasn't cancelled.
+            if (cancelled.getAsBoolean() && !shutdown) {
                 return null;
             }
             if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
