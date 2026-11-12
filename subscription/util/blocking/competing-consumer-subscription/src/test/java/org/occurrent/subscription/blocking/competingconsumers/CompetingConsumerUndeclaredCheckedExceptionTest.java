@@ -359,7 +359,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
     }
 
     @Test
-    void a_resume_that_a_stop_did_not_wait_for_and_whose_pause_afterwards_throws_a_checked_exception_after_it_took_effect_does_not_give_the_lease_back() throws Exception {
+    void a_resume_that_a_stop_did_not_wait_for_and_whose_pause_afterwards_throws_a_checked_exception_after_it_took_effect_gives_the_lease_up_only_by_unregistering() throws Exception {
         // Given
         Wrapped wrapped = new Wrapped(true);
         CompetingConsumerSubscriptionModel model = modelOver(wrapped);
@@ -379,7 +379,9 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
 
         // Then
         assertThat(thrown).as("what resumeSubscription threw").isNull();
-        assertThat(strategy.calls).as("the calls to the lease strategy").doesNotContain("release cc");
+        // cc gives its lease up once the stop() is applied to it, which can be after the resume returned
+        await().atMost(EVENTUALLY).untilAsserted(() ->
+                assertThat(strategy.calls).as("the calls to the lease strategy").containsExactly("register cc", "unregister cc", "register cc", "unregister cc"));
     }
 
     @Test
@@ -440,16 +442,6 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(wrapped.running).as("the subscriptions the wrapped model runs").containsExactly("cc"));
     }
 
-    private static boolean aThreadAppliesWhatWasHandedOverFor(String subscriptionId) {
-        return Thread.getAllStackTraces().keySet().stream()
-                .anyMatch(thread -> thread.isAlive() && thread.getName().equals("occurrent-competing-consumer-lifecycle-" + subscriptionId));
-    }
-
-    private static boolean waitsOnAMonitor(Thread thread) {
-        return thread.getState() == Thread.State.WAITING && Stream.of(thread.getStackTrace())
-                .anyMatch(frame -> frame.getClassName().equals(Object.class.getName()) && frame.getMethodName().startsWith("wait"));
-    }
-
     @Test
     void a_stop_applied_by_a_later_cancel_to_a_subscribe_under_way_throws_the_checked_exception_the_wrapped_model_threw_on_being_asked_whether_it_runs_the_subscription() throws Exception {
         // Given
@@ -487,6 +479,16 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
 
         // Then
         assertThat(thrown).as("what stop() threw").isSameAs(cannotSay);
+    }
+
+    private static boolean aThreadAppliesWhatWasHandedOverFor(String subscriptionId) {
+        return Thread.getAllStackTraces().keySet().stream()
+                .anyMatch(thread -> thread.isAlive() && thread.getName().equals("occurrent-competing-consumer-lifecycle-" + subscriptionId));
+    }
+
+    private static boolean waitsOnAMonitor(Thread thread) {
+        return thread.getState() == Thread.State.WAITING && Stream.of(thread.getStackTrace())
+                .anyMatch(frame -> frame.getClassName().equals(Object.class.getName()) && frame.getMethodName().startsWith("wait"));
     }
 
     private CompetingConsumerSubscriptionModel modelOver(Wrapped wrapped) {
