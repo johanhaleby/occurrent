@@ -247,6 +247,31 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         assertThat(model.isPaused("cc")).as("cc is paused once the subscribe returned").isTrue();
     }
 
+    @Test
+    void a_start_handed_over_for_a_subscription_that_does_not_compete_is_tried_again_after_its_wrapped_model_throws_an_InterruptedException() throws Exception {
+        // Given
+        Wrapped wrapped = new Wrapped(false);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        model.subscribe(SUBSCRIBER, "nc", null, DOES_NOT_COMPETE, __ -> {
+        });
+        Gate isPausedInTheWrappedModel = new Gate();
+        wrapped.nextIsPaused = isPausedInTheWrappedModel;
+        CompletableFuture<@Nullable Throwable> pausing = CompletableFuture.supplyAsync(() -> catchThrowable(() -> model.pauseSubscription("nc")));
+        assertThat(isPausedInTheWrappedModel.awaitEntered()).as("the pause holds the lock of nc").isTrue();
+        wrapped.failures.next("start", new IOException("The wrapped model cannot start right now"));
+        wrapped.failures.next("start", new InterruptedException("The wrapped model was interrupted while starting"));
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.start(true));
+        isPausedInTheWrappedModel.open();
+        pausing.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+
+        // Then
+        assertThat(thrown).as("what start(true) threw").isInstanceOf(IOException.class);
+        await().atMost(EVENTUALLY).untilAsserted(() ->
+                assertThat(wrapped.started).as("the wrapped model is started once the thread the start(true) was handed to tried again").isTrue());
+    }
+
     private CompetingConsumerSubscriptionModel modelOver(Wrapped wrapped) {
         model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
         return model;
@@ -332,7 +357,8 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
 
     // A model of a user's own that keeps what it runs running across its own stop(), and holds a subscription made while
     // it is stopped, or through subscribePaused, paused. One that starts itself on a subscribe refuses subscribePaused.
-    // The next subscribe waits at nextSubscribe once it is set, and onceMade runs once after each subscribe.
+    // The next subscribe waits at nextSubscribe once it is set, and the next isPaused at nextIsPaused, and onceMade runs
+    // once after each subscribe.
     private static final class Wrapped implements SubscriptionModel {
         private final Failures failures = new Failures();
         private final Set<String> running = ConcurrentHashMap.newKeySet();
@@ -340,6 +366,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         private volatile boolean started;
         private volatile boolean startsItselfOnSubscribe;
         private volatile @Nullable Gate nextSubscribe;
+        private volatile @Nullable Gate nextIsPaused;
         private volatile Runnable onceMade = () -> {
         };
 
@@ -413,6 +440,11 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
 
         @Override
         public boolean isPaused(String subscriptionId) {
+            @Nullable Gate gate = nextIsPaused;
+            nextIsPaused = null;
+            if (gate != null) {
+                gate.pass();
+            }
             failures.throwIfArmed("isPaused " + subscriptionId);
             return paused.contains(subscriptionId);
         }

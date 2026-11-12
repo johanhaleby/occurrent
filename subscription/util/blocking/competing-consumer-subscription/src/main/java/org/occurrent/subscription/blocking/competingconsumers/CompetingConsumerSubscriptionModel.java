@@ -1215,34 +1215,43 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             Duration backoff = RECONCILE_FIRST_BACKOFF;
             int failures = 0;
             while (true) {
+                @Nullable SubscriptionLock lock;
                 try {
-                    if (applyEverythingHandedOver(subscriptionId, handed)) {
-                        return;
-                    }
-                    // Nothing failed, so this thread waits only for that call to take the lock
-                    Thread.sleep(LEFT_TO_A_CALL_WAITING);
-                    continue;
+                    lock = lockSubscriptionUnlessShutDown(subscriptionId);
                 } catch (InterruptedException e) {
+                    lock = null;
+                }
+                if (lock == null) {
                     synchronized (this) {
                         handedOver.remove(subscriptionId, handed);
                     }
                     return;
+                }
+                // Nothing failed, so this thread waits only for that call to take the lock
+                Duration wait = LEFT_TO_A_CALL_WAITING;
+                try {
+                    if (applyEverythingHandedOver(subscriptionId, handed, lock)) {
+                        return;
+                    }
                 } catch (Throwable e) {
+                    // Also an InterruptedException that the wrapped model threw without declaring it, which is tried again
+                    // as any other failure. An interrupt of this thread ends it once it waits.
                     if (failures++ % RECONCILE_TRIES_BETWEEN_WARNINGS == 0) {
                         log.warn("Could not start or stop subscription {} once the call that held it had returned, so it is tried again", subscriptionId, e);
                     }
+                    beforeAHandedOverThreadBacksOff.run();
+                    wait = backoff;
+                    Duration doubled = backoff.multipliedBy(2);
+                    backoff = doubled.compareTo(RECONCILE_MAX_BACKOFF) > 0 ? RECONCILE_MAX_BACKOFF : doubled;
                 }
-                beforeAHandedOverThreadBacksOff.run();
                 try {
-                    Thread.sleep(backoff);
+                    Thread.sleep(wait);
                 } catch (InterruptedException e) {
                     synchronized (this) {
                         handedOver.remove(subscriptionId, handed);
                     }
                     return;
                 }
-                Duration doubled = backoff.multipliedBy(2);
-                backoff = doubled.compareTo(RECONCILE_MAX_BACKOFF) > 0 ? RECONCILE_MAX_BACKOFF : doubled;
             }
         });
     }
@@ -1277,19 +1286,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         this.onceACancelHasFreedTheId = requireNonNull(hook, "hook cannot be null");
     }
 
-    // Applies every start(..) and stop() handed over for the subscription, oldest first, under one hold of its lock, so
-    // no other call for it comes in between. That includes one handed over while this runs. Returns true once none is
-    // left, or this model is shut down, and false when the next one began after a pause, resume or cancel waiting for
-    // the lock, which comes first. Throws what failed for a subscription no try covers, and keeps that call and every
-    // one after it to be applied again.
-    private boolean applyEverythingHandedOver(String subscriptionId, HandedOver handed) throws InterruptedException {
-        @Nullable SubscriptionLock lock = lockSubscriptionUnlessShutDown(subscriptionId);
-        if (lock == null) {
-            synchronized (this) {
-                handedOver.remove(subscriptionId, handed);
-            }
-            return true;
-        }
+    // Applies every start(..) and stop() handed over for the subscription, oldest first, under the hold of its lock that
+    // this takes over and releases, so no other call for it comes in between. That includes one handed over while this
+    // runs. Returns true once none is left, or this model is shut down, and false when the next one began after a pause,
+    // resume or cancel waiting for the lock, which comes first. Throws what failed for a subscription no try covers, and
+    // keeps that call and every one after it to be applied again.
+    private boolean applyEverythingHandedOver(String subscriptionId, HandedOver handed, SubscriptionLock lock) {
         try {
             while (true) {
                 @Nullable Lifecycle next;
