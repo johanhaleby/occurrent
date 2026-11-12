@@ -137,10 +137,10 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * transaction to the synchronization. On a replica set the read is its first operation, and anywhere else the store
  * reads in a transaction of its own first. An append in that synchronization joins the bound transaction, and the
  * store doesn't retry its conflict. With synchronization active and a session already bound, a read with that mark
- * reports no versions. So does a read without it once the store has written in that session, and a read after marker
- * versions is refused there. Without a write of the store's in the bound session, a read without the mark reads in a
- * snapshot transaction of its own. That rests on nothing else writing event or marker documents through the template
- * in that session. The store answers {@link DcbAppendConfirmation} with a majority read on the primary from
+ * reports no versions. So does a read without it once a store on the same database factory has written in that
+ * session, and a read after marker versions is refused there. Without such a write in the bound session, a read
+ * without the mark reads in a snapshot transaction of its own. That rests on nothing else writing event or marker
+ * documents through the template in that session. The store answers {@link DcbAppendConfirmation} with a majority read on the primary from
  * {@link org.springframework.data.mongodb.ReactiveMongoDatabaseFactory#getMongoDatabase()}, which joins no session. A
  * store built on a template from {@link ReactiveMongoTemplate#withSession(ClientSession)} isn't supported for DCB
  * snapshot deciders.

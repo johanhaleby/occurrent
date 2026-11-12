@@ -86,10 +86,12 @@ through `MongoDatabaseUtils` or `ReactiveMongoDatabaseUtils`. An append in the s
 handler undoes the append. When a session
 is already bound, for example by an earlier read in the same scope, a read with `confirmsAppendBeforeSaving` reads
 through the template in that session and reports no versions, or is refused after saved versions, as inside a
-transaction. So does a read without it once the store has written in that session, which the store records against
-the bound session. A read on a session of its own wouldn't see those writes, and an append checked against its token
+transaction. So does a read without it once a Spring store on the same database factory has written in that session,
+which the store records against the bound session. A read on a session of its own wouldn't see those writes, and an append checked against its token
 could fail its condition on them. A read without the mark in a bound session the store hasn't written in reads in a
-transaction of its own, as ADR 148 describes. That rests on nothing else writing event or marker documents through the
+transaction of its own, as ADR 148 describes. An append that then joins the session checks its condition at the
+session's snapshot, which is older than the read's when another writer committed in between. The condition then fails,
+where a read in the session would have led to a write conflict instead, and the service reads and decides again. That rests on nothing else writing event or marker documents through the
 template in that session.
 
 With no session bound yet, or one the store hasn't written in, a read without `confirmsAppendBeforeSaving` takes ADR 148's path in that scope. That covers the `@Snapshot` view and a
