@@ -301,6 +301,48 @@ class SnapshotDcbDeciderInCallerTransactionTest {
         );
     }
 
+    @Test
+    void a_snapshot_decider_resumes_from_its_snapshot_in_a_callers_scope_without_a_transaction_when_an_earlier_execute_in_that_scope_saved_it() {
+        appendSeed();
+        SnapshotDcbDeciderApplicationService<DomainEvent> supporting = new SnapshotDcbDeciderApplicationService<>(applicationServiceOnPropagation(TransactionDefinition.PROPAGATION_SUPPORTS));
+        AtomicReference<List<String>> state = new AtomicReference<>();
+
+        callerScopeWithoutATransaction().executeWithoutResult(status -> {
+            supporting.execute(new Add("first"), decider);
+            Snapshot<List<String>> saved = snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria())).orElseThrow();
+            snapshots.save(DcbSnapshotKeys.canonicalKey(criteria()), Snapshot.atMarkerVersions(List.of("snapshot-only"), saved.markerVersions().orElseThrow(), saved.highestFoldedPosition(), 1));
+            state.set(supporting.executeAndReturnState(new Add("second"), decider));
+        });
+
+        assertAll(
+                () -> assertThat(state.get()).as("the state, resumed from the snapshot so only the tail was read").containsExactly("snapshot-only", "second"),
+                () -> assertThat(eventStore.read(criteria()).events()).as("events stored").hasSize(3)
+        );
+    }
+
+    @Test
+    void a_snapshot_decider_folds_the_event_a_plain_command_appended_earlier_in_a_callers_scope_without_a_transaction() {
+        appendSeed();
+        GenericDcbApplicationService<DomainEvent> plain = applicationServiceOnPropagation(TransactionDefinition.PROPAGATION_SUPPORTS);
+        SnapshotDcbDeciderApplicationService<DomainEvent> supporting = new SnapshotDcbDeciderApplicationService<>(plain);
+        AtomicReference<List<String>> state = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> callerScopeWithoutATransaction().executeWithoutResult(status -> {
+            plain.execute(criteria(), events -> List.of(nameWasChanged("plain")));
+            state.set(supporting.executeAndReturnState(new Add("second"), decider));
+        }));
+
+        assertAll(
+                () -> assertThat(thrown).as("what the scope threw, no append condition should fail").isNull(),
+                () -> assertThat(state.get()).as("the state, which folds the plain command's event").containsExactly("seed", "plain", "second"),
+                () -> assertThat(eventStore.read(criteria()).events()).as("events stored").hasSize(3)
+        );
+    }
+
+    private TransactionTemplate callerScopeWithoutATransaction() {
+        return new TransactionTemplate(transactionManager, new DefaultTransactionDefinition(TransactionDefinition.PROPAGATION_SUPPORTS));
+    }
+
     private static Stream<Arguments> callerScopesWithoutATransactionAndExecutorPropagations() {
         return Stream.of("PROPAGATION_NOT_SUPPORTED", "PROPAGATION_SUPPORTS").flatMap(callerScope ->
                 Stream.of("PROPAGATION_NOT_SUPPORTED", "PROPAGATION_SUPPORTS", "PROPAGATION_NEVER", "PROPAGATION_REQUIRES_NEW").map(executorPropagation -> Arguments.of(callerScope, executorPropagation)));
