@@ -9,6 +9,11 @@ Accepted. Resolves [#1305](https://github.com/johanhaleby/occurrent/issues/1305)
 therefore corrected by reference rather than edited. Builds on
 [ADR 150](0150-a-global-position-is-not-a-saga-redelivery-key.md), which left the stream key as the only redelivery key.
 
+Amended in place on 2026-11-04, before 0.35.0 shipped. A pending version is no longer dropped, for
+[#1330](https://github.com/johanhaleby/occurrent/issues/1330). Each pending version keeps
+the instant it first failed, for [#1318](https://github.com/johanhaleby/occurrent/issues/1318), as
+[ADR 157](0157-a-sagas-quarantine-budget-runs-per-input.md) decides.
+
 ## Context
 
 A saga recognises a redelivered event by its `streamid` with its `streamversion`. Up to this decision it kept one
@@ -74,9 +79,10 @@ record starts the clock quarantine measures from and nothing would clear that cl
 A failing event that is offered again and again writes once. Each further attempt reads the instance and finds the
 version already pending, which is what the quarantine path costs too.
 
-At most the reorder window many versions are kept pending per stream and event type. When one more fails, the smallest
-is dropped and the saga logs an error naming the stream. That version is then skipped as behind the window if it comes
-back after the instance has moved that far ahead, which is today's behaviour for it.
+Every pending version stays pending until a save applies it. Dropping one would acknowledge an event whose reaction
+never ran, once the instance moved the window past it. When a failure takes the pending versions of one type past the
+window, the saga logs a warning naming the stream, the type and the window, because the instance then grows with every
+further failure. An instance that was already past a window that has been lowered since gets no warning.
 
 The failure record keeps its older role as a fallback. A record naming an event still says that the event was never
 applied, so the saga treats that event as new however far behind it is, and at or below the floor too. This covers an
@@ -88,8 +94,8 @@ event to `legacyFailed`, a list of stream versions kept per stream. It holds ver
 record written before pending does not say which type failed, and a stream version identifies exactly one event. A
 version in that list is new however far behind it is, like a pending one. Applying it removes it from the list, and if
 it fails again with its type known it moves to pending. A record written since pending existed is already pending when
-it is replaced, so the list only ever holds the record an instance already had when it was upgraded. It is capped at the reorder
-window per stream, and the saga logs an error naming the stream if it has to drop the smallest.
+it is replaced, so the list only ever holds the record an instance already had when it was upgraded. Nothing is dropped
+from it either.
 
 **The horizon keeps a raised window from undoing a skip.** Trimming `applied` forgets the versions at or below
 `mark - window`, and a version the saga forgot looks the same as one it never applied. If the window were only read from
@@ -118,7 +124,6 @@ failed in the saga.** That is the precondition, and these are the cases that fal
 | An event arrives before the event that starts its instance | The saga skips it and the source acknowledges it. This is how it behaved before 0.35.0 | No |
 | The instance is completed or quarantined | Inert by design | Quarantine logs |
 | A version that did not fail arrives more than the window behind, without a restart replaying it | Skipped as a redelivery | One warning per stream |
-| More than the window many versions are pending on one stream and type | The smallest is dropped | Error |
 
 The fifth row is the one this design cannot close. A restart from an old checkpoint delivers a long run of behind-window
 versions that are all correct skips, and a reordered version looks the same. Throwing on each would block the replay, and

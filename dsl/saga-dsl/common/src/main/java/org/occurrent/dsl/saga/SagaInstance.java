@@ -61,9 +61,8 @@ public interface SagaInstance {
      * where and why. Those two read the same way here on purpose, because the operational question is the same one:
      * what is this instance stuck on.
      * <p>
-     * {@link SagaFailure#firstFailedAt()} is when the instance started failing rather than when the input the record
-     * names first failed, and the two differ once a second input has failed on the same instance. See that record for
-     * why the budget belongs to the instance.
+     * {@link SagaFailure#firstFailedAt()} is when the input the record names first failed. See that record for how
+     * each failing input keeps its own clock.
      */
     @Nullable SagaFailure failure();
 
