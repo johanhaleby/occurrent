@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.spring.reactor;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import org.bson.BsonDocument;
@@ -42,6 +43,8 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.util.List;
 import java.util.UUID;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * The ADR 116 conditional-checkpoint-write glue, {@link ReactorCheckpointStorage#save(String, Checkpoint,
  * org.occurrent.subscription.CheckpointWriteCondition)} and {@link ReactorCheckpointStorage#writeVersion(String)},
@@ -63,8 +66,9 @@ class ReactorCheckpointStorageConformanceTest extends CheckpointStorageConforman
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
-        mongoOperations = new ReactiveMongoTemplate(mongoClient, DATABASE);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        mongoOperations = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
     }
 
     @AfterAll

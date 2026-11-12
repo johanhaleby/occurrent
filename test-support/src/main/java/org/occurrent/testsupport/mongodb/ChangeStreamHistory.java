@@ -16,6 +16,7 @@
 
 package org.occurrent.testsupport.mongodb;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -25,6 +26,8 @@ import org.bson.Document;
 
 import java.time.Duration;
 import java.util.stream.IntStream;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * Makes MongoDB drop the change stream history from a given operation time, so a test can check what a change stream
@@ -70,8 +73,9 @@ public final class ChangeStreamHistory {
      * @throws AssertionError if the oplog still reaches back to {@code operationTime} after three minutes
      */
     public static void dropHistoryFrom(ReplicaSetReadyMongoDBContainer container, String database, BsonTimestamp operationTime) {
-        try (MongoClient client = MongoClients.create(container.getReplicaSetUrl(database))) {
-            MongoDatabase db = client.getDatabase(database);
+        ConnectionString connectionString = new ConnectionString(container.getReplicaSetUrl(database));
+        try (MongoClient client = MongoClients.create(connectionString)) {
+            MongoDatabase db = client.getDatabase(requireNonNull(connectionString.getDatabase()));
             MongoCollection<Document> filler = db.getCollection("change-stream-history-filler");
             MongoCollection<Document> oplog = client.getDatabase("local").getCollection("oplog.rs");
             long deadline = System.nanoTime() + TIMEOUT.toNanos();

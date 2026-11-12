@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.reactor.durable;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -117,6 +118,7 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     private static MongoClient mongoClient;
+    private static String databaseName;
 
     private final String eventCollectionName = "events-" + UUID.randomUUID();
     private final AtomicLong eventsWritten = new AtomicLong();
@@ -130,7 +132,9 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
     }
 
     @AfterAll
@@ -139,11 +143,11 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     }
 
     ReactorDurableMongoSubscriptionModelStartAgainTest() {
-        template = new ReactiveMongoTemplate(mongoClient, DATABASE);
+        template = new ReactiveMongoTemplate(mongoClient, databaseName);
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(eventCollectionName)
-                .transactionConfig(new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, DATABASE)))
+                .transactionConfig(new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, databaseName)))
                 .timeRepresentation(timeRepresentation)
                 .build();
         eventStore = new ReactorMongoEventStore(template, eventStoreConfig);

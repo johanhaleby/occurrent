@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.reactor.durable;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -58,6 +59,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -85,6 +87,7 @@ class NamedCatchupPathTest {
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     private static MongoClient mongoClient;
+    private static String databaseName;
 
     private ReactiveMongoTemplate reactiveMongoTemplate;
     private ReactorMongoEventStore eventStore;
@@ -96,7 +99,9 @@ class NamedCatchupPathTest {
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
     }
 
     @AfterAll
@@ -109,11 +114,11 @@ class NamedCatchupPathTest {
         eventCollectionName = "events-" + UUID.randomUUID();
         checkpointCollectionName = "checkpoints-" + UUID.randomUUID();
         streamId = UUID.randomUUID().toString();
-        reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, DATABASE);
+        reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, databaseName);
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(eventCollectionName)
-                .transactionConfig(new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, DATABASE)))
+                .transactionConfig(new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, databaseName)))
                 .timeRepresentation(timeRepresentation)
                 .build();
         eventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);

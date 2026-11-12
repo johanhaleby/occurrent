@@ -16,6 +16,7 @@
 
 package org.occurrent.testing.springboot;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -40,6 +41,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.lang.reflect.Proxy;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -120,7 +122,7 @@ class EnableOccurrentTestingClearStateTest {
 
         @Bean
         MongoTemplate mongoTemplate(MongoClient mongoClient) {
-            return new MongoTemplate(mongoClient, DATABASE);
+            return new MongoTemplate(mongoClient, requireNonNull(new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE)).getDatabase()));
         }
     }
 }

@@ -16,12 +16,15 @@
 
 package org.occurrent.subscription.mongodb.spring.reactor;
 
+import com.mongodb.ConnectionString;
 import org.occurrent.tck.subscription.reactor.ReactiveSubscriptionModelConformance;
 import org.occurrent.tck.subscription.reactor.ReactiveSubscriptionModelFixture;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * What {@link ReactorMongoSubscriptionModelConformanceTest} cannot see through the blocking bridge: that
@@ -38,6 +41,7 @@ class ReactorMongoReactiveSubscriptionModelConformanceTest extends ReactiveSubsc
 
     @Override
     protected ReactiveSubscriptionModelFixture createFixture() {
-        return new ReactorMongoReactiveSubscriptionModelFixture(mongoDBContainer.getReplicaSetUrl(DATABASE), DATABASE);
+        String url = mongoDBContainer.getReplicaSetUrl(DATABASE);
+        return new ReactorMongoReactiveSubscriptionModelFixture(url, requireNonNull(new ConnectionString(url).getDatabase()));
     }
 }

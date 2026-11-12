@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.blocking.competingconsumers;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import org.junit.jupiter.api.AfterAll;
@@ -27,6 +28,8 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * {@link CompetingConsumerSubscriptionModel} implements {@link org.occurrent.subscription.api.blocking.IntrospectableSubscriptions}
@@ -42,12 +45,15 @@ class CompetingConsumerSubscriptionModelIntrospectionConformanceTest extends Int
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     private static MongoClient mongoClient;
+    private static String databaseName;
     private static MongoTemplate mongoTemplate;
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
-        mongoTemplate = new MongoTemplate(mongoClient, DATABASE);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
+        mongoTemplate = new MongoTemplate(mongoClient, databaseName);
     }
 
     @AfterAll
@@ -57,6 +63,6 @@ class CompetingConsumerSubscriptionModelIntrospectionConformanceTest extends Int
 
     @Override
     protected SubscriptionModelFixture createFixture() {
-        return new CompetingConsumerSubscriptionModelFixture(mongoClient, mongoTemplate, DATABASE);
+        return new CompetingConsumerSubscriptionModelFixture(mongoClient, mongoTemplate, databaseName);
     }
 }

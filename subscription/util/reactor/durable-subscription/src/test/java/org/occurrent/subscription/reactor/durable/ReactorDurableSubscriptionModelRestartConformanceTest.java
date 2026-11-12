@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.reactor.durable;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import org.junit.jupiter.api.AfterAll;
@@ -26,6 +27,8 @@ import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * Runs the restart suite against {@code Durable(Catchup(Mongo))} through
@@ -40,10 +43,13 @@ class ReactorDurableSubscriptionModelRestartConformanceTest extends RestartConfo
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     private static MongoClient mongoClient;
+    private static String databaseName;
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
     }
 
     @AfterAll
@@ -53,6 +59,6 @@ class ReactorDurableSubscriptionModelRestartConformanceTest extends RestartConfo
 
     @Override
     protected RestartableSubscriptionModelFixture createFixture() {
-        return new ReactorDurableSubscriptionModelFixture(mongoClient, DATABASE);
+        return new ReactorDurableSubscriptionModelFixture(mongoClient, databaseName);
     }
 }

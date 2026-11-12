@@ -21,6 +21,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import jakarta.annotation.PreDestroy;
@@ -78,6 +79,7 @@ import java.util.function.Function;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -143,8 +145,9 @@ class StandbyLostPositionMongoTest {
             LOST.put(scenario, storedCheckpoint(scenario.database()));
         }
         BsonTimestamp now;
-        try (MongoClient client = MongoClients.create(mongoDBContainer.getReplicaSetUrl(Scenario.values()[0].database()))) {
-            now = client.getDatabase(Scenario.values()[0].database()).runCommand(new Document("ping", 1)).get("operationTime", BsonTimestamp.class);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(Scenario.values()[0].database()));
+        try (MongoClient client = MongoClients.create(connectionString)) {
+            now = client.getDatabase(requireNonNull(connectionString.getDatabase())).runCommand(new Document("ping", 1)).get("operationTime", BsonTimestamp.class);
         }
         ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, Scenario.values()[0].database(), now);
         for (Scenario scenario : Scenario.values()) {
