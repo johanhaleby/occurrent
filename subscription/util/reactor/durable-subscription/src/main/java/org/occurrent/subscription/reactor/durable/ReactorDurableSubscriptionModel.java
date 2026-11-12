@@ -2693,7 +2693,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         final @Nullable InternalSubscription internalSubscription;
         synchronized (this) {
             if (shutdown) {
-                throw new IllegalStateException(ReactorDurableSubscriptionModel.class.getSimpleName() + " is shutdown");
+                throw new SubscriptionModelShutdownException(ReactorDurableSubscriptionModel.class.getSimpleName() + " is shutdown");
             }
             requireKnown(subscriptionId);
             if (isPaused(subscriptionId)) {
@@ -2750,7 +2750,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         final Reservation reservation;
         synchronized (this) {
             if (shutdown) {
-                throw new IllegalStateException(ReactorDurableSubscriptionModel.class.getSimpleName() + " is shutdown");
+                throw new SubscriptionModelShutdownException(ReactorDurableSubscriptionModel.class.getSimpleName() + " is shutdown");
             }
             requireKnown(subscriptionId);
             if (isRunning(subscriptionId)) {

@@ -66,6 +66,7 @@ import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
@@ -170,6 +171,29 @@ public class ReactorMongoSubscriptionLifecycleTest {
 
         // Then
         assertThat(throwable).isExactlyInstanceOf(SubscriptionModelShutdownException.class);
+    }
+
+    @Test
+    void pausing_and_resuming_after_the_model_is_shut_down_throw_subscription_model_shutdown_exception() {
+        // Given
+        String runningId = UUID.randomUUID().toString();
+        String pausedId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(runningId, __ -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(10));
+        subscriptionModel.subscribe(pausedId, __ -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(10));
+        subscriptionModel.pauseSubscription(pausedId);
+        subscriptionModel.shutdown();
+
+        // When
+        Throwable pause = catchThrowable(() -> subscriptionModel.pauseSubscription(runningId));
+        Throwable resume = catchThrowable(() -> subscriptionModel.resumeSubscription(pausedId));
+        Throwable resumeAtAPosition = catchThrowable(() -> subscriptionModel.resumeSubscription(pausedId, StartAt.now()));
+
+        // Then
+        assertAll(
+                () -> assertThat(pause).as("what a pause throws").isExactlyInstanceOf(SubscriptionModelShutdownException.class),
+                () -> assertThat(resume).as("what a resume throws").isExactlyInstanceOf(SubscriptionModelShutdownException.class),
+                () -> assertThat(resumeAtAPosition).as("what a resume at a position throws").isExactlyInstanceOf(SubscriptionModelShutdownException.class)
+        );
     }
 
     @Test

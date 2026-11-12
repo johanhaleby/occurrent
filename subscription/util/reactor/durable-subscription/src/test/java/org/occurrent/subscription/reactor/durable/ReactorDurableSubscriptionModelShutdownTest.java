@@ -26,6 +26,8 @@ import reactor.core.publisher.Mono;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorDurableSubscriptionModelShutdownTest {
@@ -37,6 +39,25 @@ class ReactorDurableSubscriptionModelShutdownTest {
 
         assertThatThrownBy(() -> model.subscribe("someSubscription", __ -> Mono.empty()))
                 .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
+    }
+
+    // The wrapped model here manages no named subscriptions, so this model pauses and resumes its subscriptions itself
+    @Test
+    void a_pause_or_a_resume_after_the_model_is_shut_down_throws_subscription_model_shutdown_exception() {
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("global"), new InMemoryCheckpointStorage());
+        model.subscribe("someSubscription", __ -> Mono.empty());
+        model.shutdown();
+
+        assertAll(
+                () -> assertThat(catchThrowable(() -> model.pauseSubscription("someSubscription"))).as("what a pause of a subscription throws")
+                        .isExactlyInstanceOf(SubscriptionModelShutdownException.class).hasMessage("ReactorDurableSubscriptionModel is shutdown"),
+                () -> assertThat(catchThrowable(() -> model.resumeSubscription("someSubscription"))).as("what a resume of a subscription throws")
+                        .isExactlyInstanceOf(SubscriptionModelShutdownException.class).hasMessage("ReactorDurableSubscriptionModel is shutdown"),
+                () -> assertThat(catchThrowable(() -> model.pauseSubscription("unknown"))).as("what a pause of an id never subscribed throws")
+                        .isExactlyInstanceOf(SubscriptionModelShutdownException.class),
+                () -> assertThat(catchThrowable(() -> model.resumeSubscription("unknown"))).as("what a resume of an id never subscribed throws")
+                        .isExactlyInstanceOf(SubscriptionModelShutdownException.class)
+        );
     }
 
     // The wrapped model here accepts a subscribe after its shutdown, as a catch-up model that replays history first
