@@ -49,9 +49,10 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * A wrapped model or a lease strategy written in Kotlin can throw a checked exception without declaring it. What this
- * model does after such a failure is the same as after a {@link RuntimeException}: a start(..) still gives every
- * subscription its turn and throws, a stop() still has a consumer it could not pause tried again, and a subscribe still
- * gives up its registration before the wrapped model has made the subscription, and records it once it has.
+ * model does after such a failure is the same as after a {@link RuntimeException}. A start(..) still gives every
+ * subscription its turn and then throws the failure wrapped in an {@link IllegalStateException}, a stop() still has a
+ * consumer it could not pause tried again, and a subscribe still gives up its registration before the wrapped model has
+ * made the subscription, and records it once it has.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(60)
@@ -73,7 +74,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
     }
 
     @Test
-    void a_start_whose_wrapped_model_throws_a_checked_exception_on_starting_still_resumes_a_subscription_that_does_not_compete_and_throws_it() {
+    void a_start_whose_wrapped_model_throws_a_checked_exception_on_starting_still_resumes_a_subscription_that_does_not_compete_and_throws_it_wrapped_in_an_IllegalStateException() {
         // Given
         Wrapped wrapped = new Wrapped(false);
         CompetingConsumerSubscriptionModel model = modelOver(wrapped);
@@ -111,7 +112,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
     }
 
     @Test
-    void a_start_whose_wrapped_model_throws_a_checked_exception_on_resuming_a_subscription_that_does_not_compete_throws_it_and_leaves_the_model_not_running() {
+    void a_start_whose_wrapped_model_throws_a_checked_exception_on_resuming_a_subscription_that_does_not_compete_throws_it_wrapped_in_an_IllegalStateException_and_leaves_the_model_not_running() {
         // Given
         Wrapped wrapped = new Wrapped(true);
         CompetingConsumerSubscriptionModel model = modelOver(wrapped);
