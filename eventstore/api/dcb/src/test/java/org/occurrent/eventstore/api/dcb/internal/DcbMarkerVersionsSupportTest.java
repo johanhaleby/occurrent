@@ -205,7 +205,7 @@ class DcbMarkerVersionsSupportTest {
 
         @Test
         void is_no_for_options_that_ask_with_a_position_range_and_every_other_default() {
-            DcbReadOptions options = new DcbReadOptions(PositionRange.afterPosition(2), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.empty());
+            DcbReadOptions options = new DcbReadOptions(PositionRange.afterPosition(2), DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty(), true, Optional.empty(), false, false);
 
             assertThat(DcbMarkerVersionsSupport.mayReportVersions(options)).isFalse();
         }

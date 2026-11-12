@@ -211,7 +211,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
     class When_the_store_refuses_the_read {
 
         @Test
-        void the_refusal_reaches_the_caller_without_the_transaction_being_entered() {
+        void the_refusal_reaches_the_caller_and_rolls_the_transaction_back() {
             var store = new ScriptedStore(Optional.empty(), Optional.empty()).refusingTheFirstReads(1);
             var executor = new RecordingExecutor();
             var dispatcher = new RecordingDispatcher();
@@ -231,7 +231,8 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
                             () -> assertThat(refused.isBeforeAppendOf(domainFunction)).as("marked for the function it was given").isTrue(),
                             () -> assertThat(refused.isBeforeAppendOf(anotherFunction)).as("marked for another function").isFalse(),
                             () -> assertThat(refused.isBeforeAppendOf(options)).as("marked for the options it was given").isFalse())),
-                    () -> assertThat(executor.entered).as("transactions entered").isZero(),
+                    () -> assertThat(executor.threw).as("transactions that saw the exception").isEqualTo(1),
+                    () -> assertThat(executor.returned).as("transactions that returned normally").isZero(),
                     () -> assertThat(domainFunctionRan).as("domain function ran").isFalse(),
                     () -> assertThat(store.appendCalls).as("appends").isZero(),
                     () -> assertThat(dispatcher.dispatched).as("dispatched events").isEmpty()
@@ -259,7 +260,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         @Test
-        void a_refusal_thrown_by_the_domain_function_reaches_the_caller_without_the_transaction_being_entered() {
+        void a_refusal_thrown_by_the_domain_function_reaches_the_caller_and_rolls_the_transaction_back() {
             var store = new ScriptedStore(Optional.empty(), Optional.empty());
             var executor = new RecordingExecutor();
             var refusal = new DcbSnapshotInvalidException(CRITERIA, versions("epoch-1", 2), "refused by the domain function");
@@ -270,7 +271,8 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
             assertAll(
                     () -> assertThat(thrown).as("what reached the caller").isSameAs(refusal),
-                    () -> assertThat(executor.entered).as("transactions entered").isZero(),
+                    () -> assertThat(executor.threw).as("transactions that saw the exception").isEqualTo(1),
+                    () -> assertThat(executor.returned).as("transactions that returned normally").isZero(),
                     () -> assertThat(store.appendCalls).as("appends").isZero()
             );
         }
@@ -324,12 +326,12 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         private final RecordingDispatcher dispatcher = new RecordingDispatcher(trace);
 
         @Test
-        void the_read_and_the_domain_function_run_outside_the_transaction_and_the_append_and_dispatch_inside_it() {
+        void the_read_the_domain_function_the_append_and_the_dispatch_run_inside_the_transaction_for_a_command_that_asks_for_marker_versions() {
             var store = new TracingStore(trace);
 
             transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
 
-            assertThat(trace).containsExactly("read", "decide", "begin", "append", "read", "dispatch", "commit");
+            assertThat(trace).containsExactly("begin", "read", "decide", "append", "read", "dispatch", "commit");
         }
 
         @Test
@@ -374,16 +376,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         }
 
         @Test
-        void an_executor_that_does_not_allow_a_read_before_it_gets_the_read_and_the_domain_function_inside_its_transaction() {
-            var store = new TracingStore(trace);
-
-            transactionalService(store, new TracingExecutor(trace).notAllowingAReadBeforeIt(), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
-
-            assertThat(trace).containsExactly("begin", "read", "decide", "append", "read", "dispatch", "commit");
-        }
-
-        @Test
-        void a_no_op_decision_never_enters_the_executor() {
+        void a_no_op_decision_runs_inside_the_transaction_and_appends_nothing() {
             var store = new TracingStore(trace);
             var executor = new TracingExecutor(trace);
 
@@ -394,13 +387,14 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
             assertAll(
                     () -> assertThat(result).as("append result").isEmpty(),
-                    () -> assertThat(executor.entered).as("transactions entered").isZero(),
-                    () -> assertThat(trace).containsExactly("read", "decide")
+                    () -> assertThat(executor.entered).as("transactions entered").isEqualTo(1),
+                    () -> assertThat(store.appendCalls).as("appends").isZero(),
+                    () -> assertThat(trace).containsExactly("begin", "read", "decide", "commit")
             );
         }
 
         @Test
-        void an_executor_that_runs_its_action_again_repeats_only_the_append_with_the_same_token() {
+        void an_executor_that_runs_its_action_again_reads_and_decides_again_with_a_new_token() {
             var store = new TracingStore(trace).conflictingOnTheFirstAppends(1);
             var executor = new TracingExecutor(trace).runningTheActionAgainAfterAConflict();
             var decisions = new AtomicInteger();
@@ -410,11 +404,74 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
                 return decide();
             });
 
-            DcbAppendCondition sameCondition = DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken.of(CRITERIA, 1));
             assertAll(
-                    () -> assertThat(decisions).as("decisions").hasValue(1),
-                    () -> assertThat(store.conditions).as("append conditions").containsExactly(sameCondition, sameCondition),
-                    () -> assertThat(trace).containsExactly("read", "decide", "begin", "append", "append", "read", "dispatch", "commit")
+                    () -> assertThat(decisions).as("decisions").hasValue(2),
+                    () -> assertThat(store.conditions).as("append conditions").containsExactly(
+                            DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken.of(CRITERIA, 1)),
+                            DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken.of(CRITERIA, 2))),
+                    () -> assertThat(trace).containsExactly("begin", "read", "decide", "append", "read", "decide", "append", "read", "dispatch", "commit")
+            );
+        }
+
+        @Test
+        void the_read_of_a_command_that_asks_for_marker_versions_is_the_first_operation_of_the_transaction_the_executor_opened() {
+            var store = new TracingStore(trace);
+
+            transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
+
+            assertThat(store.readOptions).as("[read options]").first().satisfies(options -> assertAll(
+                    () -> assertThat(options).as("options passed").isPresent(),
+                    () -> assertThat(options.orElseThrow().firstOperationOfTransaction()).as("first operation of the transaction").isTrue(),
+                    () -> assertThat(options.orElseThrow().versionsRequested()).as("versions requested").isTrue()));
+        }
+
+        @Test
+        void the_read_is_not_the_first_operation_of_a_transaction_the_executor_joined() {
+            var store = new TracingStore(trace);
+
+            transactionalService(store, new TracingExecutor(trace).joiningATransactionTheCallerOpened(), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
+
+            assertThat(store.readOptions).as("[read options]").first().satisfies(options -> assertAll(
+                    () -> assertThat(options).as("options passed").isPresent(),
+                    () -> assertThat(options.orElseThrow().firstOperationOfTransaction()).as("first operation of the transaction").isFalse(),
+                    () -> assertThat(options.orElseThrow().versionsRequested()).as("versions requested").isTrue()));
+        }
+
+        @Test
+        void the_read_confirms_the_append_before_saving_when_the_executor_started_the_synchronization_it_runs_in() {
+            var store = new TracingStore(trace);
+
+            transactionalService(store, new TracingExecutor(trace).startingTheSynchronizationWithoutATransaction(), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
+
+            assertThat(store.readOptions).as("[read options]").first().satisfies(options -> assertAll(
+                    () -> assertThat(options).as("options passed").isPresent(),
+                    () -> assertThat(options.orElseThrow().confirmsAppendBeforeSaving()).as("confirms the append before saving").isTrue(),
+                    () -> assertThat(options.orElseThrow().firstOperationOfTransaction()).as("first operation of the transaction").isFalse()));
+        }
+
+        @Test
+        void the_read_carries_neither_mark_when_the_executor_neither_opened_the_transaction_nor_started_the_synchronization() {
+            var store = new TracingStore(trace);
+
+            transactionalService(store, new TracingExecutor(trace).joiningATransactionTheCallerOpened(), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> decide());
+
+            assertThat(store.readOptions).as("[read options]").first().satisfies(options -> assertAll(
+                    () -> assertThat(options).as("options passed").isPresent(),
+                    () -> assertThat(options.orElseThrow().confirmsAppendBeforeSaving()).as("confirms the append before saving").isFalse(),
+                    () -> assertThat(options.orElseThrow().versionsRequested()).as("versions requested").isTrue()));
+        }
+
+        @Test
+        @SuppressWarnings("removal")
+        void a_read_after_a_position_reaches_the_store_from_the_executor_without_either_mark() {
+            var store = new TracingStore(trace);
+
+            Throwable thrown = catchThrowable(() -> transactionalService(store, new TracingExecutor(trace), dispatcher).execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().fromPosition(7L), events -> decide()));
+
+            assertAll(
+                    () -> assertThat(thrown).as("[thrown]").isNull(),
+                    () -> assertThat(store.readOptions).as("[read options]").startsWith(Optional.of(DcbReadOptions.afterPosition(7L)))
+                            .noneMatch(options -> options.filter(it -> it.confirmsAppendBeforeSaving() || it.firstOperationOfTransaction()).isPresent())
             );
         }
 
@@ -434,8 +491,8 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
                             DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken.of(CRITERIA, 1)),
                             DcbAppendCondition.failIfEventsMatch(DcbConsistencyToken.of(CRITERIA, 2))),
                     () -> assertThat(trace).containsExactly(
-                            "read", "decide", "begin", "append", "rollback",
-                            "read", "decide", "begin", "append", "read", "dispatch", "commit")
+                            "begin", "read", "decide", "append", "rollback",
+                            "begin", "read", "decide", "append", "read", "dispatch", "commit")
             );
         }
 
@@ -620,12 +677,6 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         int returned;
         int threw;
 
-        // Opens nothing around the caller, like a Spring executor with no caller scope
-        @Override
-        public boolean allowsReadBeforeTransaction() {
-            return true;
-        }
-
         @Override
         public <T> T inTransaction(Supplier<T> action) {
             entered++;
@@ -726,8 +777,9 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
         int entered;
         private final List<String> trace;
         private boolean runAgainAfterAConflict;
-        private boolean allowsReadBeforeIt = true;
         private boolean infersWhetherItOpened;
+        private boolean joinsATransaction;
+        private boolean startsSynchronization;
 
         TracingExecutor(List<String> trace) {
             this.trace = trace;
@@ -738,8 +790,16 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             return this;
         }
 
-        TracingExecutor notAllowingAReadBeforeIt() {
-            this.allowsReadBeforeIt = false;
+        // Reports a transaction of the caller's as joined, not opened
+        TracingExecutor joiningATransactionTheCallerOpened() {
+            this.joinsATransaction = true;
+            return this;
+        }
+
+        // Opens no transaction and reports starting the synchronization, like a Spring executor on PROPAGATION_SUPPORTS with no caller scope
+        TracingExecutor startingTheSynchronizationWithoutATransaction() {
+            this.joinsATransaction = true;
+            this.startsSynchronization = true;
             return this;
         }
 
@@ -749,19 +809,13 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             return this;
         }
 
-        // Opens nothing around the caller unless told otherwise, like a Spring executor with no caller scope
-        @Override
-        public boolean allowsReadBeforeTransaction() {
-            return allowsReadBeforeIt;
-        }
-
-        // Opens the transaction it begins
+        // Opens the transaction it begins unless told to join
         @Override
         public <T> T inTransactionTellingIfOpened(Function<ExecutorScope, T> action) {
             if (infersWhetherItOpened) {
                 return TransactionExecutor.super.inTransactionTellingIfOpened(action);
             }
-            return inTransaction(() -> action.apply(new ExecutorScope(true, false)));
+            return inTransaction(() -> action.apply(new ExecutorScope(!joinsATransaction, startsSynchronization)));
         }
 
         @Override

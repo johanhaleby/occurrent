@@ -18,6 +18,7 @@ package org.occurrent.application.service.spring;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -32,6 +33,7 @@ import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
+import org.occurrent.application.service.blocking.dcb.DcbExecuteOptions;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.domain.DomainEvent;
@@ -61,14 +63,18 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -262,6 +268,56 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
     }
 
     @Test
+    void a_decider_with_versions_in_a_callers_scope_without_a_transaction_runs_again_after_an_append_that_conflicts_with_one_committed_since_its_read() {
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new Reacts(() -> {
+                }))
+                .transactionExecutor(new SpringTransactionExecutor(templateWith(TransactionDefinition.PROPAGATION_SUPPORTS)))
+                .build();
+        String concurrentEventId = UUID.randomUUID().toString();
+        AtomicBoolean appendedConcurrently = new AtomicBoolean();
+
+        templateWith(TransactionDefinition.PROPAGATION_SUPPORTS).executeWithoutResult(status ->
+                applicationService.execute(CRITERIA, DcbExecuteOptions.<DomainEvent>options().withVersions(), events -> {
+                    if (appendedConcurrently.compareAndSet(false, true)) {
+                        appendOnAnotherThread(concurrentEventId);
+                    }
+                    return decide(events);
+                }));
+
+        assertThat(decisions.get()).as("[domain function runs]").isEqualTo(2);
+        assertThat(eventsInBoundary()).as("[events in the boundary]").containsExactly(concurrentEventId, decidedEventIds.getLast());
+    }
+
+    @Test
+    void a_command_without_versions_in_a_callers_scope_without_a_transaction_fails_at_once_on_an_append_that_conflicts_with_one_committed_since_its_read() {
+        var applicationService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter)
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(new Reacts(() -> {
+                }))
+                .transactionExecutor(new SpringTransactionExecutor(templateWith(TransactionDefinition.PROPAGATION_SUPPORTS)))
+                .build();
+        String concurrentEventId = UUID.randomUUID().toString();
+        AtomicBoolean appendedConcurrently = new AtomicBoolean();
+        long startedAt = System.nanoTime();
+
+        Throwable thrown = catchThrowable(() -> templateWith(TransactionDefinition.PROPAGATION_SUPPORTS).executeWithoutResult(status ->
+                applicationService.execute(CRITERIA, events -> {
+                    if (appendedConcurrently.compareAndSet(false, true)) {
+                        appendOnAnotherThread(concurrentEventId);
+                    }
+                    return decide(events);
+                })));
+
+        assertThat(thrown).as("the append in the session bound to the caller's scope conflicts with the concurrent one").isNotNull();
+        assertThat(Stream.iterate(thrown, Objects::nonNull, Throwable::getCause)).as("a transient conflict in the cause chain")
+                .anySatisfy(cause -> assertThat(cause).isInstanceOfSatisfying(MongoException.class, e -> assertThat(e.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)).isTrue()));
+        assertThat(Duration.ofNanos(System.nanoTime() - startedAt)).as("a retry in the bound session runs until the store's deadline").isLessThan(Duration.ofSeconds(30));
+        assertThat(eventsInBoundary()).as("[events in the boundary]").containsExactly(concurrentEventId);
+    }
+
+    @Test
     void a_handler_on_a_service_without_a_transaction_loses_its_reaction_when_the_store_rolls_back_the_write_it_asked_for_under_propagation_not_supported() {
         WriteConditionNotFulfilledException conflict = new WriteConditionNotFulfilledException(streamId, 1, WriteCondition.anyStreamVersion());
         String reactionStreamId = UUID.randomUUID().toString();
@@ -356,6 +412,12 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
                 .synchronousSubscriptions(subscriptions)
                 .transactionExecutor(new SpringTransactionExecutor(transactionManager))
                 .build();
+    }
+
+    // Commits an event to the boundary on another thread, outside the caller's synchronization
+    private void appendOnAnotherThread(String eventId) {
+        var plainService = GenericDcbApplicationService.builder(eventStore, cloudEventConverter).tagGenerator(event -> Set.of(TAG)).build();
+        CompletableFuture.runAsync(() -> plainService.execute(CRITERIA, events -> List.of(new NameWasChanged(eventId, LocalDateTime.now(), "name", "Jane")))).join();
     }
 
     private TransactionTemplate anotherTransactionTemplate() {

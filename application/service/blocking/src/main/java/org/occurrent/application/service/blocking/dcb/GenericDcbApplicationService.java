@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.service.ExecutorScope;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.application.service.dcb.TagGenerator;
@@ -49,6 +50,9 @@ import java.util.function.Supplier;
  */
 @NullMarked
 public class GenericDcbApplicationService<E> implements DcbApplicationService<E> {
+    // Without synchronous subscriptions no executor runs the attempt
+    private static final ExecutorScope NO_EXECUTOR = new ExecutorScope(false, false);
+
     private final DcbEventStore eventStore;
     private final CloudEventConverter<E> cloudEventConverter;
     private final @Nullable TagGenerator<E> tagGenerator;
@@ -150,10 +154,15 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
 
-        Supplier<Optional<Decision<E>>> readAndDecide = () -> {
+        // Given what the executor set up for the attempt the read runs in
+        Function<ExecutorScope, Optional<Decision<E>>> readAndDecide = scope -> {
             final DcbEventStream eventStream;
             try {
-                eventStream = readOptions == null ? eventStore.read(criteria) : eventStore.read(criteria, readOptions);
+                if (readOptions == null) {
+                    eventStream = eventStore.read(criteria);
+                } else {
+                    eventStream = eventStore.read(criteria, dispatchSynchronously ? inExecutor(readOptions, scope) : readOptions);
+                }
                 refuseEventBelowFoldedPosition(criteria, options, eventStream);
             } catch (DcbSnapshotInvalidException refused) {
                 throw refused.beforeAppend(functionThatCallsDomainModel);
@@ -197,7 +206,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 return new Attempt<>(Optional.empty(), List.of());
             }
             try {
-                if (dispatchSynchronously && (!versionsRequested || transactionExecutor.isTransactional() || !transactionExecutor.allowsReadBeforeTransaction())) {
+                if (dispatchSynchronously) {
                     // A failure of the domain function goes through the executor unless the executor reports a transaction both
                     // before and inside the action and didn't open it
                     boolean transactionalBefore = transactionExecutor.isTransactional();
@@ -210,7 +219,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                         failureAfterWrite.keepBeforeWrite(null);
                         final Optional<Decision<E>> decision;
                         try {
-                            decision = readAndDecide.get();
+                            decision = readAndDecide.apply(scope);
                         } catch (Throwable failure) {
                             // Throwable, since a domain function in Kotlin can throw a checked exception
                             if (scope.openedTransaction() || !transactionalBefore || !isTransactionalInside(failure)) {
@@ -224,18 +233,14 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     });
                     return failureAfterWrite.attemptOrFailure(attempt);
                 }
-                // Without synchronous subscriptions every command reads and decides here, and with them a command that asks for
-                // marker versions does, since a store reports none inside a transaction.
-                // The append's condition holds this read's token, and a failed condition goes to the retry strategy around this.
-                Optional<Decision<E>> decision = readAndDecide.get();
+                // Without synchronous subscriptions there's no transaction executor to open, and the append keeps its prior
+                // semantics. The append's condition holds this read's token, and a failed condition goes to the retry
+                // strategy around this.
+                Optional<Decision<E>> decision = readAndDecide.apply(NO_EXECUTOR);
                 if (decision.isEmpty()) {
                     return new Attempt<>(Optional.empty(), List.of());
                 }
-                // Only open the transaction executor when synchronous dispatch must commit atomically with the append.
-                // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
-                // The store joins whatever transaction this opens and so cannot retry a transient conflict itself. Retrying
-                // that belongs to whoever owns the transaction, which is the TransactionExecutor, not this service. See ADR 0074.
-                return failureAfterWrite.attemptOrFailure(dispatchSynchronously ? transactionExecutor.inTransactionTellingIfOpened(scope -> appendAndDispatch.apply(decision.get(), scope.openedTransaction())) : appendAndDispatch.apply(decision.get(), false));
+                return failureAfterWrite.attemptOrFailure(appendAndDispatch.apply(decision.get(), false));
             } catch (Throwable thrown) {
                 // The retry gets the failure itself, so its listeners and error mapper see it. When it's held, nothing says a
                 // transaction of this attempt undid the write, and the shutdown predicate stops the retry on it. A failure kept
@@ -277,6 +282,19 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         if (fromVersions != null && eventStream.hasEventBelow(options.highestFoldedPosition())) {
             throw DcbSnapshotInvalidException.eventBelowFoldedPosition(criteria, fromVersions, options.highestFoldedPosition());
         }
+    }
+
+    // A read in the executor tells the store it's the first operation of a transaction the executor opened, or else that
+    // the caller saves at versions only after confirming an append when the executor started the synchronization the read
+    // runs in. A session that a read binds to a synchronization the caller started stays bound until the caller's scope
+    // ends, so that read stays unmarked and the store reads in a transaction of its own
+    private static DcbReadOptions inExecutor(DcbReadOptions readOptions, ExecutorScope scope) {
+        if (!readOptions.versionsRequested()) {
+            return readOptions;
+        } else if (scope.openedTransaction()) {
+            return readOptions.asFirstOperationOfTransaction();
+        }
+        return scope.startedSynchronization() ? readOptions.confirmingAppendBeforeSaving() : readOptions;
     }
 
     @SuppressWarnings("removal")

@@ -71,7 +71,7 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
  * A snapshot decider with a synchronous subscription over {@link NativeMongoTransactionExecutor}. The service reads and
- * decides before the executor only when no {@link ClientSession} is bound on the thread.
+ * decides inside the executor.
  */
 @Testcontainers
 @DisplayName("SnapshotDcbDeciderApplicationService over NativeMongoTransactionExecutor")
@@ -126,13 +126,13 @@ class SnapshotDcbDeciderOverNativeMongoTransactionExecutorTest {
     }
 
     @Test
-    void saves_a_snapshot_when_no_session_is_bound_on_the_thread() {
+    void reads_and_decides_inside_the_executor_and_saves_a_snapshot_when_no_session_is_bound_on_the_thread() {
         appendSeed();
 
         service.execute(new Add("second"), decider);
 
         assertAll(
-                () -> assertThat(executorDepthsAtDecision).as("executor calls the decision ran in").containsExactly(0),
+                () -> assertThat(executorDepthsAtDecision).as("executor calls the decision ran in").containsExactly(1),
                 () -> assertThat(snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria()))).as("the snapshot").hasValueSatisfying(snapshot ->
                         assertThat(snapshot.state()).containsExactlyInAnyOrder("seed", "second"))
         );

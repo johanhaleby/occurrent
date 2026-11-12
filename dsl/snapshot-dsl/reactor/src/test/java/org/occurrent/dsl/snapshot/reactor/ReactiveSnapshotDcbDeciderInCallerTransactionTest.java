@@ -22,6 +22,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import org.bson.Document;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -103,9 +104,11 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
     private static final String ACCOUNT = "acct";
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
 
+    // enableTestCommands lets the server accept configureFailPoint. withCommand replaces the whole command line, so the
+    // replica set name ReplicaSetReadyMongoDBContainer configures is repeated.
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withCommand("--replSet", "docker-rs", "--setParameter", "enableTestCommands=1");
 
     @RegisterExtension
     OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
@@ -149,7 +152,8 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
     }
 
     @AfterEach
-    void close_client() {
+    void switch_off_fail_point_and_close_client() {
+        configureFailPoint(new Document("mode", "off"));
         mongoClient.close();
     }
 
@@ -300,6 +304,46 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
         );
     }
 
+    @Test
+    void a_snapshot_decider_resumes_from_its_snapshot_in_a_callers_scope_without_a_transaction_when_an_earlier_execute_in_that_scope_saved_it() {
+        appendSeed();
+        ReactiveSnapshotDcbDeciderApplicationService<DomainEvent> supporting = new ReactiveSnapshotDcbDeciderApplicationService<>(applicationServiceOnPropagation(TransactionDefinition.PROPAGATION_SUPPORTS));
+
+        List<String> state = callerScopeWithoutATransaction().transactional(
+                supporting.execute(new Add("first"), decider)
+                        .then(snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria())))
+                        .flatMap(saved -> snapshots.save(DcbSnapshotKeys.canonicalKey(criteria()), Snapshot.atMarkerVersions(List.of("snapshot-only"), saved.markerVersions().orElseThrow(), saved.highestFoldedPosition(), 1)))
+                        .then(supporting.executeAndReturnState(new Add("second"), decider))).block(TIMEOUT);
+
+        assertAll(
+                () -> assertThat(state).as("the state, resumed from the snapshot so only the tail was read").containsExactly("snapshot-only", "second"),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored").hasSize(3)
+        );
+    }
+
+    @Test
+    void a_snapshot_decider_folds_the_event_a_plain_command_appended_earlier_in_a_callers_scope_without_a_transaction() {
+        appendSeed();
+        GenericDcbApplicationService<DomainEvent> plain = applicationServiceOnPropagation(TransactionDefinition.PROPAGATION_SUPPORTS);
+        ReactiveSnapshotDcbDeciderApplicationService<DomainEvent> supporting = new ReactiveSnapshotDcbDeciderApplicationService<>(plain);
+        AtomicReference<List<String>> state = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> callerScopeWithoutATransaction().transactional(
+                plain.execute(criteria(), events -> List.of(nameWasChanged("plain")))
+                        .then(supporting.executeAndReturnState(new Add("second"), decider))
+                        .doOnNext(state::set)).block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(thrown).as("what the scope threw, no append condition should fail").isNull(),
+                () -> assertThat(state.get()).as("the state, which folds the plain command's event").containsExactly("seed", "plain", "second"),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored").hasSize(3)
+        );
+    }
+
+    private TransactionalOperator callerScopeWithoutATransaction() {
+        return TransactionalOperator.create(transactionManager, new DefaultTransactionDefinition(TransactionDefinition.PROPAGATION_SUPPORTS));
+    }
+
     private static Stream<Arguments> callerScopesWithoutATransactionAndExecutorPropagations() {
         return Stream.of("PROPAGATION_NOT_SUPPORTED", "PROPAGATION_SUPPORTS").flatMap(callerScope ->
                 Stream.of("PROPAGATION_NOT_SUPPORTED", "PROPAGATION_SUPPORTS", "PROPAGATION_NEVER", "PROPAGATION_REQUIRES_NEW").map(executorPropagation -> Arguments.of(callerScope, executorPropagation)));
@@ -313,6 +357,39 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
             case "PROPAGATION_REQUIRES_NEW" -> TransactionDefinition.PROPAGATION_REQUIRES_NEW;
             default -> throw new IllegalArgumentException(name);
         };
+    }
+
+    @Test
+    void a_transient_failure_of_the_first_read_is_retried_by_the_executor_and_the_command_succeeds() {
+        appendSeed();
+        configureFailPoint(new Document("mode", new Document("times", 1))
+                .append("data", new Document("failCommands", List.of("find", "aggregate"))
+                        .append("errorCode", 112)
+                        .append("errorLabels", List.of("TransientTransactionError"))));
+
+        Throwable thrown = catchThrowable(() -> service.execute(new Add("first"), decider).block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(thrown).as("what execute threw").isNull(),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored").hasSize(2),
+                () -> assertThat(seenBySubscription).as("events the subscription saw").hasSize(1),
+                () -> assertThat(snapshots.findLatest(DcbSnapshotKeys.canonicalKey(criteria())).block(TIMEOUT)).as("the snapshot saved, which needs the retried read to report versions").isNotNull()
+        );
+    }
+
+    @Test
+    void a_synchronous_handler_that_fails_after_the_append_undoes_it_on_an_executor_that_opens_no_transaction() {
+        appendSeed();
+        IllegalStateException failure = new IllegalStateException("from the handler");
+        subscriptions.subscribe("failing", event -> Mono.error(failure));
+        ReactiveSnapshotDcbDeciderApplicationService<DomainEvent> notSupportingTransactions = new ReactiveSnapshotDcbDeciderApplicationService<>(applicationServiceOnPropagation(TransactionDefinition.PROPAGATION_NOT_SUPPORTED));
+
+        Throwable thrown = catchThrowable(() -> notSupportingTransactions.execute(new Add("first"), decider).block(TIMEOUT));
+
+        assertAll(
+                () -> assertThat(thrown).as("what execute threw").isSameAs(failure),
+                () -> assertThat(eventStore.read(criteria()).block(TIMEOUT).events()).as("events stored").hasSize(1)
+        );
     }
 
     @ParameterizedTest(name = "{0}")
@@ -352,6 +429,12 @@ class ReactiveSnapshotDcbDeciderInCallerTransactionTest {
             eventsSeen.add(events.size());
             return List.of(nameWasChanged(name));
         };
+    }
+
+    private void configureFailPoint(Document configuration) {
+        Document command = new Document("configureFailPoint", "failCommand");
+        command.putAll(configuration);
+        Mono.from(mongoClient.getDatabase("admin").runCommand(command)).block(TIMEOUT);
     }
 
     private GenericDcbApplicationService<DomainEvent> applicationServiceOnPropagation(int propagationBehavior) {

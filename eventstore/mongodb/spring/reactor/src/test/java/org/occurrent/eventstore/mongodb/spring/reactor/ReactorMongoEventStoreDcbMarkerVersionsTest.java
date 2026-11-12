@@ -23,6 +23,7 @@ import com.mongodb.reactivestreams.client.ClientSession;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import com.mongodb.reactivestreams.client.MongoCollection;
+import com.mongodb.client.result.DeleteResult;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
@@ -50,24 +51,38 @@ import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
+import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.reactive.TransactionSynchronization;
+import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
+import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.net.URI;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Filters.eq;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -442,6 +457,402 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
+    void reports_marker_versions_for_a_read_that_is_the_first_operation_of_a_transaction_the_caller_opened_and_resumes_from_them_later() {
+        append("before", DEPOSITED, ACCOUNT_A);
+
+        DcbEventStream read = inCallerTransaction(() -> eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().asFirstOperationOfTransaction()));
+
+        assertThat(read.events()).extracting(CloudEvent::getId).containsExactly("before");
+        assertThat(read.markerVersions()).as("the versions of a read that is the first operation of the transaction").isPresent();
+        append("later", DEPOSITED, ACCOUNT_A);
+        assertThat(eventStore.read(BOUNDARY_A, DcbReadOptions.afterVersions(read.markerVersions().orElseThrow())).block().events())
+                .extracting(CloudEvent::getId).containsExactly("later");
+    }
+
+    @Test
+    void counts_the_uncommitted_append_of_the_transaction_for_a_read_that_says_it_is_the_first_operation_of_it_although_an_append_came_first() {
+        append("before", DEPOSITED, ACCOUNT_A);
+
+        DcbEventStream read = inCallerTransaction(() -> eventStore.read(BOUNDARY_A)
+                .then(eventStore.append(List.of(taggedEvent("own", DEPOSITED, ACCOUNT_A))))
+                .then(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().asFirstOperationOfTransaction())));
+
+        assertThat(read.markerVersions()).as("the store reports versions from the transaction the caller opened").isPresent();
+        assertThat(read.markerVersions().orElseThrow().get(KEY_A).orElseThrow().version()).as("the read runs in the transaction and not on a session of its own, so it counts the increment of the append").isEqualTo(2);
+    }
+
+    @Test
+    void reports_marker_versions_for_a_read_that_confirms_an_append_before_saving_in_a_scope_without_a_transaction_and_rolls_back_an_append_in_the_scope() {
+        append("before", DEPOSITED, ACCOUNT_A);
+        AtomicReference<DcbEventStream> read = new AtomicReference<>();
+
+        Throwable failure = errorOf(inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving())
+                .doOnNext(read::set)
+                .then(eventStore.append(List.of(taggedEvent("own", DEPOSITED, ACCOUNT_A))))
+                .then(Mono.error(new IllegalStateException("scope fails after the append")))));
+
+        assertThat(failure).hasMessage("scope fails after the append");
+        assertThat(read.get().markerVersions()).isPresent();
+        assertThat(eventStore.read(BOUNDARY_A).block().events()).as("the append joined the session transaction the read bound, which rolled back").extracting(CloudEvent::getId).containsExactly("before");
+    }
+
+    @Test
+    void reports_marker_versions_for_a_read_without_the_confirmation_in_a_scope_without_a_transaction_and_commits_an_append_in_the_scope_on_its_own() {
+        append("before", DEPOSITED, ACCOUNT_A);
+        AtomicReference<DcbEventStream> read = new AtomicReference<>();
+
+        Throwable failure = errorOf(inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions())
+                .doOnNext(read::set)
+                .then(eventStore.append(List.of(taggedEvent("own", DEPOSITED, ACCOUNT_A))))
+                .then(Mono.error(new IllegalStateException("scope fails after the append")))));
+
+        assertThat(failure).hasMessage("scope fails after the append");
+        assertThat(read.get().markerVersions()).isPresent();
+        assertThat(eventStore.read(BOUNDARY_A).block().events()).extracting(CloudEvent::getId).containsExactly("before", "own");
+    }
+
+    @Test
+    void reads_through_the_session_a_first_read_bound_in_a_scope_without_a_transaction_and_reports_no_marker_versions_so_a_second_append_sees_the_first() {
+        append("before", DEPOSITED, ACCOUNT_A);
+        AtomicReference<DcbEventStream> second = new AtomicReference<>();
+        DcbReadOptions confirming = DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving();
+
+        inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, confirming)
+                .flatMap(first -> eventStore.append(List.of(taggedEvent("first", DEPOSITED, ACCOUNT_A)), failIfEventsMatch(BOUNDARY_A, first.consistencyToken())))
+                .then(eventStore.read(BOUNDARY_A, confirming))
+                .doOnNext(second::set)
+                .flatMap(read -> eventStore.append(List.of(taggedEvent("second", DEPOSITED, ACCOUNT_A)), failIfEventsMatch(BOUNDARY_A, read.consistencyToken()))))
+                .block();
+
+        assertThat(second.get().markerVersions()).as("versions of a read in a session whose writes may still abort").isEmpty();
+        assertThat(eventStore.read(BOUNDARY_A).block().events()).extracting(CloudEvent::getId).containsExactly("before", "first", "second");
+    }
+
+    @Test
+    void reads_a_versioned_read_without_the_confirmation_mark_through_a_session_already_bound_and_reports_no_marker_versions() {
+        append("before", DEPOSITED, ACCOUNT_A);
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+
+        inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving())
+                .then(eventStore.append(List.of(taggedEvent("in scope", DEPOSITED, ACCOUNT_A))))
+                .then(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
+                .doOnNext(withoutMark::set))
+                .block();
+
+        assertThat(withoutMark.get().markerVersions()).as("versions of a read in a session whose writes may still abort").isEmpty();
+        assertThat(withoutMark.get().events()).as("a read through the bound session sees its append").extracting(CloudEvent::getId).containsExactly("before", "in scope");
+    }
+
+    @Test
+    void appends_conditioned_on_a_versioned_read_without_the_confirmation_mark_in_a_session_already_bound_after_an_append_in_that_session() {
+        append("before", DEPOSITED, ACCOUNT_A);
+
+        inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving())
+                .then(eventStore.append(List.of(taggedEvent("in scope", DEPOSITED, ACCOUNT_A))))
+                .then(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
+                .flatMap(read -> eventStore.append(List.of(taggedEvent("after read", DEPOSITED, ACCOUNT_A)), failIfEventsMatch(BOUNDARY_A, read.consistencyToken()))))
+                .block();
+
+        assertThat(eventStore.read(BOUNDARY_A).block().events()).extracting(CloudEvent::getId).containsExactly("before", "in scope", "after read");
+    }
+
+    @Test
+    void reports_marker_versions_for_a_read_without_the_confirmation_mark_in_a_session_a_plain_read_bound_that_the_store_has_not_written_in() {
+        append("before", DEPOSITED, ACCOUNT_A);
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+        AtomicReference<Object> sessionBoundByPlainRead = new AtomicReference<>();
+
+        inScopeWithoutTransaction(eventStore.read(BOUNDARY_A)
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(manager -> Optional.ofNullable(manager.getResource(databaseFactory))))
+                .doOnNext(session -> sessionBoundByPlainRead.set(session.orElse(null)))
+                .then(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
+                .doOnNext(withoutMark::set))
+                .block();
+
+        assertThat(sessionBoundByPlainRead.get()).as("session bound for the store's database factory by the plain read, or this proves nothing about a bound session").isNotNull();
+        assertThat(withoutMark.get().markerVersions()).as("versions of a read in a session the store never wrote in").isNotEmpty();
+        assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+    }
+
+    @Test
+    void refuses_a_read_after_versions_in_a_session_bound_to_the_synchronization_that_the_store_wrote_in() {
+        append("before", DEPOSITED, ACCOUNT_A);
+        DcbMarkerVersions saved = eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()).block().markerVersions().orElseThrow();
+        AtomicReference<Throwable> refusal = new AtomicReference<>();
+
+        inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving())
+                .then(eventStore.append(List.of(taggedEvent("in scope", DEPOSITED, ACCOUNT_A))))
+                .then(errorSignalOf(eventStore.read(BOUNDARY_A, DcbReadOptions.afterVersions(saved))))
+                .doOnNext(refusal::set))
+                .block();
+
+        assertThat(refusal.get()).as("what the read after versions failed with in the session the store wrote in").isInstanceOf(DcbSnapshotInvalidException.class)
+                .hasMessageContaining("that the event store wrote in");
+        assertThat(eventStore.read(BOUNDARY_A, DcbReadOptions.afterVersions(saved)).block().events())
+                .as("the same read outside the scope is accepted, or the refusal proves nothing")
+                .extracting(CloudEvent::getId).containsExactly("in scope");
+    }
+
+    @Test
+    void reports_no_marker_versions_for_a_read_with_the_confirmation_mark_in_a_session_a_plain_read_bound_that_the_store_has_not_written_in() {
+        // Passes with or without the record of the store's writes, since a read with the mark gets no versions in any bound session
+        append("before", DEPOSITED, ACCOUNT_A);
+        AtomicReference<DcbEventStream> withMark = new AtomicReference<>();
+        AtomicReference<Object> sessionBoundByPlainRead = new AtomicReference<>();
+
+        inScopeWithoutTransaction(eventStore.read(BOUNDARY_A)
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(manager -> Optional.ofNullable(manager.getResource(databaseFactory))))
+                .doOnNext(session -> sessionBoundByPlainRead.set(session.orElse(null)))
+                .then(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving()))
+                .doOnNext(withMark::set))
+                .block();
+
+        assertThat(sessionBoundByPlainRead.get()).as("session bound for the store's database factory by the plain read, or this proves nothing about a bound session").isNotNull();
+        assertThat(withMark.get().markerVersions()).as("versions of a read with the mark in a bound session").isEmpty();
+        assertThat(withMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+    }
+
+    @Test
+    void reports_no_marker_versions_for_a_read_without_the_confirmation_mark_in_a_session_bound_to_the_synchronization_after_the_store_deleted_through_the_template() {
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A), taggedEvent("unrelated", DEPOSITED, ACCOUNT_B))).block();
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+
+        inScopeWithoutTransaction(eventStore.delete(Filter.id("unrelated"))
+                .then(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
+                .doOnNext(withoutMark::set))
+                .block();
+
+        assertThat(withoutMark.get().markerVersions()).as("versions of a read in a session the store deleted in").isEmpty();
+        assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+        assertThat(eventStore.read(BOUNDARY_B).block().events()).as("the delete went through").isEmpty();
+    }
+
+    @Test
+    void reads_a_versioned_read_without_the_confirmation_mark_without_binding_a_session_to_the_synchronization() {
+        append("before", DEPOSITED, ACCOUNT_A);
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+        AtomicReference<List<TransactionSynchronization>> registeredAfterRead = new AtomicReference<>();
+
+        inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions())
+                .doOnNext(withoutMark::set)
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(TransactionSynchronizationManager::getSynchronizations))
+                .doOnNext(registeredAfterRead::set))
+                .block();
+
+        assertThat(withoutMark.get().markerVersions()).isNotEmpty();
+        assertThat(registeredAfterRead.get()).as("synchronizations registered for a session bound by the read").isEmpty();
+    }
+
+    @Test
+    void reads_a_versioned_read_without_the_confirmation_mark_without_binding_a_session_to_the_synchronization_when_the_commit_of_its_snapshot_fails() {
+        // A read without versions is a full read the caller applies from the initial state, so the fallback loses nothing. Binding no session
+        // keeps a later append in the scope in a transaction of the store's own, which the store retries and which commits on its
+        // own, rather than in a session transaction the scope commits or drops.
+        append("before", DEPOSITED, ACCOUNT_A);
+        AtomicBoolean failing = new AtomicBoolean(true);
+        ReactorMongoEventStore store = storeWhoseSessionsFailToCommitWhen(failing);
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+        AtomicReference<List<TransactionSynchronization>> registeredAfterRead = new AtomicReference<>();
+
+        inScopeWithoutTransaction(store.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions())
+                .doOnNext(withoutMark::set)
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(TransactionSynchronizationManager::getSynchronizations))
+                .doOnNext(registeredAfterRead::set)
+                .doOnNext(registered -> failing.set(false)))
+                .block();
+
+        assertThat(withoutMark.get().markerVersions()).as("the snapshot failed to commit, or this proves nothing about the fallback").isEmpty();
+        assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+        assertThat(registeredAfterRead.get()).as("synchronizations registered for a session bound by the read").isEmpty();
+    }
+
+    @Test
+    void reads_a_versioned_read_without_the_confirmation_mark_without_binding_a_session_to_the_synchronization_when_resuming_from_marker_versions_is_turned_off() {
+        // A read without versions is a full read the caller applies from the initial state, so the fallback loses nothing. Binding no session
+        // keeps a later append in the scope in a transaction of the store's own, which the store retries and which commits on its
+        // own, rather than in a session transaction the scope commits or drops.
+        ReactorMongoEventStore notResuming = storeOver(config -> config.resumeFromMarkerVersions(false));
+        notResuming.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A))).block();
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+        AtomicReference<List<TransactionSynchronization>> registeredAfterRead = new AtomicReference<>();
+
+        inScopeWithoutTransaction(notResuming.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions())
+                .doOnNext(withoutMark::set)
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(TransactionSynchronizationManager::getSynchronizations))
+                .doOnNext(registeredAfterRead::set))
+                .block();
+
+        assertThat(withoutMark.get().markerVersions()).isEmpty();
+        assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+        assertThat(registeredAfterRead.get()).as("synchronizations registered for a session bound by the read").isEmpty();
+    }
+
+    @Test
+    void reads_a_versioned_read_without_the_confirmation_mark_without_binding_a_session_to_the_synchronization_for_match_all_criteria() {
+        // A read without versions is a full read the caller applies from the initial state, so the fallback loses nothing. Binding no session
+        // keeps a later append in the scope in a transaction of the store's own, which the store retries and which commits on its
+        // own, rather than in a session transaction the scope commits or drops.
+        append("before", DEPOSITED, ACCOUNT_A);
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+        AtomicReference<List<TransactionSynchronization>> registeredAfterRead = new AtomicReference<>();
+
+        inScopeWithoutTransaction(eventStore.read(DcbCriteria.all(), DcbReadOptions.fromBeginning().withVersions())
+                .doOnNext(withoutMark::set)
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(TransactionSynchronizationManager::getSynchronizations))
+                .doOnNext(registeredAfterRead::set))
+                .block();
+
+        assertThat(withoutMark.get().markerVersions()).isEmpty();
+        assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+        assertThat(registeredAfterRead.get()).as("synchronizations registered for a session bound by the read").isEmpty();
+    }
+
+    @Test
+    void reports_no_marker_versions_for_a_read_without_the_confirmation_mark_in_a_session_bound_to_the_synchronization_after_a_store_delete_was_cancelled() {
+        // The delete has run in the session the template bound when the signal fires, and the cancel then ends it before it completes
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A), taggedEvent("unrelated", DEPOSITED, ACCOUNT_B))).block();
+        Sinks.Empty<Void> deleted = Sinks.empty();
+        ReactiveMongoTemplate signalling = new ReactiveMongoTemplate(databaseFactory) {
+            @Override
+            public Mono<DeleteResult> remove(Query query, String collectionName) {
+                return super.remove(query, collectionName).flatMap(result -> {
+                    deleted.tryEmitEmpty();
+                    return Mono.<DeleteResult>never();
+                });
+            }
+        };
+        ReactorMongoEventStore store = storeOver(signalling, config -> {
+        });
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+
+        inScopeWithoutTransaction(store.delete(Filter.id("unrelated")).takeUntilOther(deleted.asMono())
+                .then(store.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
+                .doOnNext(withoutMark::set))
+                .block(Duration.ofSeconds(30));
+
+        assertThat(withoutMark.get().markerVersions()).as("versions of a read in a session the store cancelled a delete in").isEmpty();
+        assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+        assertThat(eventStore.query(Filter.id("unrelated")).collectList().block()).as("the delete ran before the cancel, or this proves nothing about a write").isEmpty();
+    }
+
+    @Test
+    void reports_no_marker_versions_for_a_read_without_the_confirmation_mark_in_a_session_bound_to_the_synchronization_after_a_dcb_append_was_cancelled() {
+        // The insert has run in the session the template bound when the signal fires, and the cancel then ends the append before it completes
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A))).block();
+        Sinks.Empty<Void> inserted = Sinks.empty();
+        ReactiveMongoTemplate signalling = new ReactiveMongoTemplate(databaseFactory) {
+            @Override
+            public <T> Flux<T> insert(Collection<? extends T> batchToSave, String collectionName) {
+                return super.insert(batchToSave, collectionName).collectList().flatMapMany(result -> {
+                    inserted.tryEmitEmpty();
+                    return Flux.<T>never();
+                });
+            }
+        };
+        ReactorMongoEventStore store = storeOver(signalling, config -> {
+        });
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+
+        inScopeWithoutTransaction(store.read(BOUNDARY_A)
+                .then(store.append(List.of(taggedEvent("cancelled", DEPOSITED, ACCOUNT_A))).takeUntilOther(inserted.asMono()))
+                .then(store.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
+                .doOnNext(withoutMark::set))
+                .block(Duration.ofSeconds(30));
+
+        assertThat(withoutMark.get().markerVersions()).as("versions of a read in a session the store cancelled an append in").isEmpty();
+        assertThat(withoutMark.get().events()).as("the read sees the insert, so it ran in the session the read uses, or this proves nothing about a write")
+                .extracting(CloudEvent::getId).containsExactly("before", "cancelled");
+    }
+
+    @Test
+    void reads_the_events_of_a_versioned_read_without_the_confirmation_mark_but_no_marker_versions_when_the_session_bound_template_is_not_a_reactive_mongo_template() {
+        // The wrapper hides the ReactiveMongoTemplate type, so the store can't keep the read out of the synchronization and reads through its template
+        // That read may bind a session but still returns every event, which beats failing the read
+        ReactiveMongoTemplate wrapping = new ReactiveMongoTemplate(databaseFactory) {
+            @Override
+            public ReactiveMongoOperations withSession(ClientSession session) {
+                ReactiveMongoOperations sessionTemplate = super.withSession(session);
+                return (ReactiveMongoOperations) Proxy.newProxyInstance(ReactiveMongoOperations.class.getClassLoader(), new Class<?>[]{ReactiveMongoOperations.class}, (proxy, method, args) -> {
+                    try {
+                        return method.invoke(sessionTemplate, args);
+                    } catch (InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+            }
+        };
+        ReactorMongoEventStore store = storeOver(wrapping, config -> config.resumeFromMarkerVersions(false));
+        store.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A))).block();
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+
+        Throwable thrown = errorOf(inScopeWithoutTransaction(store.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions())
+                .doOnNext(withoutMark::set)));
+
+        assertThat(thrown).as("what the read failed with").isNull();
+        // Checks that the fallback through the template reports no versions
+        assertThat(withoutMark.get().markerVersions()).isEmpty();
+        assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+    }
+
+    @Test
+    void keeps_an_append_after_a_versioned_read_without_the_confirmation_mark_when_the_scope_without_a_transaction_then_fails() {
+        // A read without versions is a full read the caller applies from the initial state, so the fallback loses nothing. Binding no session
+        // keeps a later append in the scope in a transaction of the store's own, which the store retries and which commits on its
+        // own, rather than in a session transaction the scope commits or drops.
+        ReactorMongoEventStore notResuming = storeOver(config -> config.resumeFromMarkerVersions(false));
+
+        Throwable thrown = errorOf(inScopeWithoutTransaction(notResuming.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions())
+                .then(notResuming.append(List.of(taggedEvent("in scope", DEPOSITED, ACCOUNT_A))))
+                .then(Mono.error(new IllegalStateException("scope fails")))));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("scope fails");
+        assertThat(notResuming.read(BOUNDARY_A).block().events()).as("the append ran in the store's own transaction").extracting(CloudEvent::getId).containsExactly("in scope");
+    }
+
+    @Test
+    void binds_a_session_to_the_synchronization_for_a_read_with_the_confirmation_mark_when_resuming_from_marker_versions_is_turned_off() {
+        ReactorMongoEventStore notResuming = storeOver(config -> config.resumeFromMarkerVersions(false));
+        AtomicReference<List<TransactionSynchronization>> registeredAfterRead = new AtomicReference<>();
+
+        inScopeWithoutTransaction(notResuming.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving())
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(TransactionSynchronizationManager::getSynchronizations))
+                .doOnNext(registeredAfterRead::set))
+                .block();
+
+        assertThat(registeredAfterRead.get()).as("synchronizations registered for a session bound by the read").isNotEmpty();
+    }
+
+    @Test
+    void binds_a_session_to_the_synchronization_for_a_read_with_the_confirmation_mark_for_match_all_criteria() {
+        AtomicReference<List<TransactionSynchronization>> registeredAfterRead = new AtomicReference<>();
+
+        inScopeWithoutTransaction(eventStore.read(DcbCriteria.all(), DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving())
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(TransactionSynchronizationManager::getSynchronizations))
+                .doOnNext(registeredAfterRead::set))
+                .block();
+
+        assertThat(registeredAfterRead.get()).as("synchronizations registered for a session bound by the read").isNotEmpty();
+    }
+
+    @Test
+    void fails_an_append_that_conflicts_in_a_session_bound_in_a_scope_without_a_transaction_at_once_instead_of_retrying_until_the_deadline() {
+        append("before", DEPOSITED, ACCOUNT_A);
+        DcbReadOptions confirming = DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving();
+        long startedAt = System.nanoTime();
+
+        // toFuture subscribes without the scope's context, so the concurrent append runs outside the bound session
+        Throwable thrown = errorOf(inScopeWithoutTransaction(eventStore.read(BOUNDARY_A, confirming)
+                .flatMap(read -> Mono.fromFuture(() -> eventStore.append(List.of(taggedEvent("concurrent", DEPOSITED, ACCOUNT_A))).toFuture())
+                        .then(eventStore.append(List.of(taggedEvent("in scope", DEPOSITED, ACCOUNT_A)), failIfEventsMatch(BOUNDARY_A, read.consistencyToken()))))));
+
+        assertThat(thrown).as("the append in the bound session conflicts with the concurrent one").isNotNull();
+        assertThat(Stream.iterate(thrown, Objects::nonNull, Throwable::getCause)).as("a transient conflict, not a condition failure, in the cause chain")
+                .anySatisfy(cause -> assertThat(cause).isInstanceOfSatisfying(MongoException.class, e -> assertThat(e.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)).isTrue()));
+        assertThat(Duration.ofNanos(System.nanoTime() - startedAt)).as("a retry in an aborted transaction runs until its deadline").isLessThan(Duration.ofSeconds(30));
+        assertThat(eventStore.read(BOUNDARY_A).block().events()).extracting(CloudEvent::getId).containsExactly("before", "concurrent");
+    }
+
+    @Test
     void adds_no_marker_versions_extension_to_the_events_a_query_returns() {
         append("a", DEPOSITED, ACCOUNT_A);
         assertThat(rawEvent("a").containsKey(EVENT_MARKER_VERSIONS)).as("the stored event has marker versions, or this proves nothing").isTrue();
@@ -450,6 +861,10 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
 
         assertThat(queried).hasSize(1);
         assertThat(queried.getFirst().getExtensionNames()).doesNotContain(EVENT_MARKER_VERSIONS);
+    }
+
+    private <T> Mono<T> inScopeWithoutTransaction(Mono<T> body) {
+        return TransactionalOperator.create(transactionManager, new DefaultTransactionDefinition(TransactionDefinition.PROPAGATION_SUPPORTS)).transactional(body);
     }
 
     private <T> T inCallerTransaction(Supplier<Mono<T>> body) {
