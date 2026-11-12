@@ -33,11 +33,16 @@ import org.occurrent.springboot.mongo.reactor.ApplicationRestart.EventWriter;
 import org.occurrent.springboot.mongo.reactor.ApplicationRestart.Recorder;
 import org.occurrent.springboot.mongo.reactor.ApplicationRestart.RecordingSubscriber;
 import org.occurrent.springboot.mongo.reactor.ApplicationRestart.TestEvent;
+import org.occurrent.springboot.reactor.ComposedCatchupModel;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
+import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
+import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -52,17 +57,21 @@ import reactor.core.publisher.Mono;
 import java.util.List;
 import java.util.UUID;
 
+import static java.time.Duration.ofMillis;
+import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * The reactive control for the blocking {@code DefaultStartAtLeftOverCatchUpCheckpointMongoTest}. A reactive
  * {@code @Subscription} with {@code startAt} unset resolves the stored checkpoint to a plain {@code StartAt.checkpoint}
  * that the catch-up layer replays from, so what was written while the application was down is delivered.
  * <p>
- * The first boot runs the id at {@code BEGINNING} and is delivered {@code historic-1}, {@code historic-2} and
- * {@code live-1}. The catch-up checkpoint a replay of the two historic events would have left is written in place of
- * the one it stored. The second boot runs the same id with {@code startAt} unset, with {@code while-down-1} written
- * before it subscribes and {@code live-2} after it started.
+ * The first boot runs the id at {@code BEGINNING}. The replay delivers {@code historic-1} and {@code historic-2}, and
+ * {@code live-1} is written once the replay is over, so it is delivered live and the checkpoint stored with it is a
+ * MongoDB resume token. A catch-up checkpoint with that token as its live start is written in place of the stored
+ * one. The second boot runs the same id with {@code startAt} unset, with {@code while-down-1} written before it
+ * subscribes and {@code live-2} after it started.
  */
 @DisplayName("Reactive DEFAULT start position with a catch-up checkpoint in storage")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -84,7 +93,8 @@ class ReactiveDefaultStartAtLeftOverCatchUpCheckpointMongoTest {
             ApplicationRestart.awaitDelivered(subscriber, "live-1");
             ApplicationRestart.awaitCheckpointed(firstBoot, ID, subscriber, "live-1");
             CheckpointStorage storage = firstBoot.getBean(CheckpointStorage.class);
-            Checkpoint live = GlobalCheckpoint.parse(storage.read(ID).block()).liveFrom().orElseThrow();
+            Checkpoint live = storage.read(ID).block();
+            assertThat(GlobalCheckpoint.isGlobalCheckpoint(live)).as("live-1 is delivered live, so its checkpoint is a resume token").isFalse();
             // historic-2 is global position 2
             storage.save(ID, GlobalCheckpoint.of(2, live, 0, 2)).block();
             Checkpoint stored = storage.read(ID).block();
@@ -131,8 +141,25 @@ class ReactiveDefaultStartAtLeftOverCatchUpCheckpointMongoTest {
         @Bean
         EventWriter eventWriter(ApplicationService<TestEvent> applicationService,
                                 @Value("${test.before-subscribe}") String beforeSubscribe,
-                                @Value("${test.after-start}") String afterStart) {
-            return new EventWriter(name -> applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent(name))).block(), beforeSubscribe, afterStart);
+                                @Value("${test.after-start}") String afterStart,
+                                ObjectProvider<SubscriptionBeginning> beginning,
+                                ObjectProvider<ComposedCatchupModel> composedCatchupModel,
+                                ObjectProvider<FluxSubscriptionModel> subscriptionModel) {
+            // An event written while the replay still runs can be delivered by the replay, which hands it over with a
+            // GlobalCheckpoint. live-1 is written once the replay is over so that it arrives live.
+            Runnable replayIsOver = () -> {
+                SubscriptionBeginning replaying = beginning.getIfAvailable();
+                if (replaying == null) {
+                    return;
+                }
+                String lastHistory = List.of(beforeSubscribe.split(",")).getLast();
+                ReplayAwareSubscriptions replayAware = composedCatchupModel.getObject().catchupModelFor((SubscriptionModelCapability) subscriptionModel.getObject()).orElseThrow();
+                await().atMost(ofSeconds(30)).pollInterval(ofMillis(50)).untilAsserted(() -> {
+                    assertThat(replaying.names()).contains(lastHistory);
+                    assertThat(replayAware.isCatchingUp(ID)).isFalse();
+                });
+            };
+            return new EventWriter(name -> applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent(name))).block(), beforeSubscribe, afterStart, replayIsOver);
         }
 
         @Bean
