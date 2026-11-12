@@ -569,15 +569,15 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
     void reports_marker_versions_for_a_read_without_the_confirmation_mark_in_a_session_a_plain_read_bound_that_the_store_has_not_written_in() {
         eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
         AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
-        AtomicReference<Set<Object>> boundAfterPlainRead = new AtomicReference<>();
+        AtomicReference<Object> sessionBoundByPlainRead = new AtomicReference<>();
 
         inScopeWithoutTransaction(() -> {
             eventStore.read(BOUNDARY_A);
-            boundAfterPlainRead.set(Set.copyOf(TransactionSynchronizationManager.getResourceMap().keySet()));
+            sessionBoundByPlainRead.set(TransactionSynchronizationManager.getResource(databaseFactory));
             withoutMark.set(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()));
         });
 
-        assertThat(boundAfterPlainRead.get()).as("resources bound to the synchronization by the plain read, or this proves nothing about a bound session").isNotEmpty();
+        assertThat(sessionBoundByPlainRead.get()).as("session bound for the store's database factory by the plain read, or this proves nothing about a bound session").isNotNull();
         assertThat(withoutMark.get().markerVersions()).as("versions of a read in a session the store never wrote in").isNotEmpty();
         assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
     }
@@ -605,12 +605,15 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
         // Passes with or without the record of the store's writes, since a read with the mark gets no versions in any bound session
         eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A)));
         AtomicReference<DcbEventStream> withMark = new AtomicReference<>();
+        AtomicReference<Object> sessionBoundByPlainRead = new AtomicReference<>();
 
         inScopeWithoutTransaction(() -> {
             eventStore.read(BOUNDARY_A);
+            sessionBoundByPlainRead.set(TransactionSynchronizationManager.getResource(databaseFactory));
             withMark.set(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving()));
         });
 
+        assertThat(sessionBoundByPlainRead.get()).as("session bound for the store's database factory by the plain read, or this proves nothing about a bound session").isNotNull();
         assertThat(withMark.get().markerVersions()).as("versions of a read with the mark in a bound session").isEmpty();
         assertThat(withMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
     }

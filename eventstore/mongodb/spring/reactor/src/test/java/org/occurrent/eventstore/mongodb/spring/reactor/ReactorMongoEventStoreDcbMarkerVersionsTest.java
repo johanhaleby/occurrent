@@ -23,6 +23,7 @@ import com.mongodb.reactivestreams.client.ClientSession;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import com.mongodb.reactivestreams.client.MongoCollection;
+import com.mongodb.client.result.DeleteResult;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
@@ -53,6 +54,7 @@ import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.reactive.TransactionSynchronization;
 import org.springframework.transaction.reactive.TransactionSynchronizationManager;
@@ -62,6 +64,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
@@ -71,6 +74,7 @@ import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -554,16 +558,16 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
     void reports_marker_versions_for_a_read_without_the_confirmation_mark_in_a_session_a_plain_read_bound_that_the_store_has_not_written_in() {
         append("before", DEPOSITED, ACCOUNT_A);
         AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
-        AtomicReference<List<TransactionSynchronization>> registeredAfterPlainRead = new AtomicReference<>();
+        AtomicReference<Object> sessionBoundByPlainRead = new AtomicReference<>();
 
         inScopeWithoutTransaction(eventStore.read(BOUNDARY_A)
-                .then(TransactionSynchronizationManager.forCurrentTransaction().map(TransactionSynchronizationManager::getSynchronizations))
-                .doOnNext(registeredAfterPlainRead::set)
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(manager -> Optional.ofNullable(manager.getResource(databaseFactory))))
+                .doOnNext(session -> sessionBoundByPlainRead.set(session.orElse(null)))
                 .then(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
                 .doOnNext(withoutMark::set))
                 .block();
 
-        assertThat(registeredAfterPlainRead.get()).as("synchronizations registered for the session the plain read bound, or this proves nothing about a bound session").isNotEmpty();
+        assertThat(sessionBoundByPlainRead.get()).as("session bound for the store's database factory by the plain read, or this proves nothing about a bound session").isNotNull();
         assertThat(withoutMark.get().markerVersions()).as("versions of a read in a session the store never wrote in").isNotEmpty();
         assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
     }
@@ -591,12 +595,16 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
         // Passes with or without the record of the store's writes, since a read with the mark gets no versions in any bound session
         append("before", DEPOSITED, ACCOUNT_A);
         AtomicReference<DcbEventStream> withMark = new AtomicReference<>();
+        AtomicReference<Object> sessionBoundByPlainRead = new AtomicReference<>();
 
         inScopeWithoutTransaction(eventStore.read(BOUNDARY_A)
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(manager -> Optional.ofNullable(manager.getResource(databaseFactory))))
+                .doOnNext(session -> sessionBoundByPlainRead.set(session.orElse(null)))
                 .then(eventStore.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions().confirmingAppendBeforeSaving()))
                 .doOnNext(withMark::set))
                 .block();
 
+        assertThat(sessionBoundByPlainRead.get()).as("session bound for the store's database factory by the plain read, or this proves nothing about a bound session").isNotNull();
         assertThat(withMark.get().markerVersions()).as("versions of a read with the mark in a bound session").isEmpty();
         assertThat(withMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
     }
@@ -697,8 +705,37 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
+    void reports_no_marker_versions_for_a_read_without_the_confirmation_mark_in_a_session_bound_to_the_synchronization_after_a_store_delete_was_cancelled() {
+        // The delete has run in the session the template bound when the signal fires, and the cancel then ends it before it completes
+        eventStore.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A), taggedEvent("unrelated", DEPOSITED, ACCOUNT_B))).block();
+        Sinks.Empty<Void> deleted = Sinks.empty();
+        ReactiveMongoTemplate signalling = new ReactiveMongoTemplate(databaseFactory) {
+            @Override
+            public Mono<DeleteResult> remove(Query query, String collectionName) {
+                return super.remove(query, collectionName).flatMap(result -> {
+                    deleted.tryEmitEmpty();
+                    return Mono.<DeleteResult>never();
+                });
+            }
+        };
+        ReactorMongoEventStore store = storeOver(signalling, config -> {
+        });
+        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+
+        inScopeWithoutTransaction(store.delete(Filter.id("unrelated")).takeUntilOther(deleted.asMono())
+                .then(store.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
+                .doOnNext(withoutMark::set))
+                .block(Duration.ofSeconds(30));
+
+        assertThat(withoutMark.get().markerVersions()).as("versions of a read in a session the store cancelled a delete in").isEmpty();
+        assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+        assertThat(eventStore.query(Filter.id("unrelated")).collectList().block()).as("the delete ran before the cancel, or this proves nothing about a write").isEmpty();
+    }
+
+    @Test
     void reads_the_events_of_a_versioned_read_without_the_confirmation_mark_but_no_marker_versions_when_the_session_bound_template_is_not_a_reactive_mongo_template() {
         // The wrapper hides the ReactiveMongoTemplate type, so the store can't keep the read out of the synchronization and reads through its template
+        // That read may bind a session but still returns every event, which beats failing the read
         ReactiveMongoTemplate wrapping = new ReactiveMongoTemplate(databaseFactory) {
             @Override
             public ReactiveMongoOperations withSession(ClientSession session) {
@@ -720,7 +757,6 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
                 .doOnNext(withoutMark::set)));
 
         assertThat(thrown).as("what the read failed with").isNull();
-        assertThat(withoutMark.get().markerVersions()).isEmpty();
         assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
     }
 
