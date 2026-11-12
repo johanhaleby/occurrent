@@ -93,6 +93,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -100,8 +105,10 @@ import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.Assertions.fail;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -199,7 +206,7 @@ class BackgroundStartupLostPositionMongoTest {
     @EnumSource(Kind.class)
     void a_lost_position_fails_the_start_unless_the_startup_mode_is_background_and_repairing_it_lets_the_subscription_deliver(Kind kind) {
         // Unset startupMode keeps failing the start
-        Throwable failure = catchThrowable(() -> boot(kind.database(), kind.unset, true, "live-2").close());
+        Throwable failure = failureOfTheStartWithStartupModeUnset(kind);
         assertThat(failure).as("the start with startupMode unset").isNotNull();
         assertThat(causes(failure)).as("the start with startupMode unset").anySatisfy(cause -> assertThat(cause).isInstanceOf(CatchupCannotResumeException.class));
         assertThat(storedCheckpoint(kind.database())).as("the checkpoint after the refused start").isEqualTo(STORED.get(kind));
@@ -256,6 +263,26 @@ class BackgroundStartupLostPositionMongoTest {
             assertThat(broken.received()).as("what the broken subscription received").isEmpty();
             assertThat(logs.errorsFor(BROKEN)).as("errors logged for the broken subscription").hasSize(1);
             assertThat(logs.errorsFor(HEALTHY)).as("errors logged for the healthy subscription").isEmpty();
+        }
+    }
+
+    // A start that never finishes is a failure of the test and not a hang, since a refused start has to fail within seconds
+    private static Throwable failureOfTheStartWithStartupModeUnset(Kind kind) {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        Future<ConfigurableApplicationContext> start = executor.submit(() -> boot(kind.database(), kind.unset, true, "live-2"));
+        try {
+            start.get(60, SECONDS).close();
+            return null;
+        } catch (ExecutionException e) {
+            return e.getCause();
+        } catch (TimeoutException e) {
+            start.cancel(true);
+            return fail("Expected the start with startupMode unset to fail with CatchupCannotResumeException, but it neither finished nor failed within 60 s");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        } finally {
+            executor.shutdownNow();
         }
     }
 
