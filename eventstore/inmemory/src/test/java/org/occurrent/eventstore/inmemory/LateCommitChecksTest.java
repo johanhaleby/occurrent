@@ -23,11 +23,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.platform.engine.TestExecutionResult;
 import org.junit.platform.testkit.engine.EngineTestKit;
 import org.junit.platform.testkit.engine.Events;
-import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.tck.eventstore.blocking.DcbLateCommitConformance;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
-import org.occurrent.tck.eventstore.blocking.StreamLateCommitConformance;
 import org.occurrent.tck.latecommit.AppendHold;
 import org.occurrent.tck.latecommit.HeldAppend;
 import org.occurrent.tck.latecommit.LateCommits;
@@ -42,12 +40,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass;
 
 /**
- * The late-commit suites trust a fixture's hold, so they check it. Each fixture here gets the hold or the declaration
+ * The late-commit suite trusts a fixture's hold, so it checks it. Each fixture here gets the hold or the declaration
  * wrong in one way, and every test of the suite must fail with an {@link IllegalStateException} that says so. It must
- * not be a {@code GuaranteeViolated}, because that would let an expected-violation listing hide a broken fixture.
+ * not be an {@link AssertionError} from a guarantee check, because that would read as a store breaking the guarantee
+ * rather than as a broken fixture.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
-@DisplayName("the late-commit suites")
+@DisplayName("the late-commit suite")
 class LateCommitChecksTest {
 
     @Test
@@ -61,18 +60,8 @@ class LateCommitChecksTest {
     }
 
     @Test
-    void reject_a_hook_that_never_engages_for_a_stream_write() {
-        assertEveryTestFailsWith(NeverEngagesStreamSuite.class, "completed without being held");
-    }
-
-    @Test
     void reject_a_store_declared_to_commit_in_position_order_that_does_not_make_the_append_visible() {
         assertEveryTestFailsWith(DeclaresInOrderButDropsDcbSuite.class, "not visible once it had returned");
-    }
-
-    @Test
-    void reject_a_stream_store_declared_to_commit_in_position_order_that_does_not_make_the_write_visible() {
-        assertEveryTestFailsWith(DeclaresInOrderButDropsStreamSuite.class, "not visible once it had returned");
     }
 
     private static void assertEveryTestFailsWith(Class<?> suite, String message) {
@@ -94,7 +83,7 @@ class LateCommitChecksTest {
     static class TooEarlyDcbSuite extends DcbLateCommitConformance {
         @Override
         protected EventStoreFixture createFixture() {
-            return new Fixture(Fixture.OWN_DCB, Fixture.OWN_STREAM, store -> {
+            return new Fixture(Fixture.OWN_DCB, store -> {
                 AppendHold hold = new AppendHold();
                 DcbEventStore holdsBeforeAssigningAPosition = delegatingTo(DcbEventStore.class, store, "append", () -> {
                     if (hold.engage()) {
@@ -110,16 +99,7 @@ class LateCommitChecksTest {
     static class NeverEngagesDcbSuite extends DcbLateCommitConformance {
         @Override
         protected EventStoreFixture createFixture() {
-            return new Fixture(Fixture.OWN_DCB, Fixture.OWN_STREAM,
-                    store -> HeldAppend.of(new AppendHold(), store, () -> {
-                    }));
-        }
-    }
-
-    static class NeverEngagesStreamSuite extends StreamLateCommitConformance {
-        @Override
-        protected EventStoreFixture createFixture() {
-            return new Fixture(Fixture.OWN_DCB, Fixture.OWN_STREAM,
+            return new Fixture(Fixture.OWN_DCB,
                     store -> HeldAppend.of(new AppendHold(), store, () -> {
                     }));
         }
@@ -129,34 +109,22 @@ class LateCommitChecksTest {
         @Override
         protected EventStoreFixture createFixture() {
             return new Fixture(store -> delegatingTo(DcbEventStore.class, store, "append", () -> {
-            }, new InMemoryEventStore()), Fixture.OWN_STREAM, null);
-        }
-    }
-
-    static class DeclaresInOrderButDropsStreamSuite extends StreamLateCommitConformance {
-        @Override
-        protected EventStoreFixture createFixture() {
-            return new Fixture(Fixture.OWN_DCB, store -> delegatingTo(EventStore.class, store, "write", () -> {
             }, new InMemoryEventStore()), null);
         }
     }
 
     /**
-     * The in-memory fixture with its late-commit answer replaced, and optionally its DCB or stream store wrapped. The
-     * wrappers get the fixture's own store, so reads that the fixture does not wrap see the same data.
+     * The in-memory fixture with its late-commit answer replaced, and optionally its DCB store wrapped. The wrapper
+     * gets the fixture's own store, so reads that the fixture does not wrap see the same data.
      */
     private static final class Fixture extends InMemoryEventStoreConformanceFixture {
         static final Function<InMemoryEventStore, DcbEventStore> OWN_DCB = store -> store;
-        static final Function<InMemoryEventStore, EventStore> OWN_STREAM = store -> store;
 
         private final Function<InMemoryEventStore, DcbEventStore> dcb;
-        private final Function<InMemoryEventStore, EventStore> stream;
         private final @Nullable Function<InMemoryEventStore, HeldAppend> holds;
 
-        Fixture(Function<InMemoryEventStore, DcbEventStore> dcb, Function<InMemoryEventStore, EventStore> stream,
-                @Nullable Function<InMemoryEventStore, HeldAppend> holds) {
+        Fixture(Function<InMemoryEventStore, DcbEventStore> dcb, @Nullable Function<InMemoryEventStore, HeldAppend> holds) {
             this.dcb = dcb;
-            this.stream = stream;
             this.holds = holds;
         }
 
@@ -167,11 +135,6 @@ class LateCommitChecksTest {
         @Override
         public DcbEventStore dcbEventStore() {
             return dcb.apply(own());
-        }
-
-        @Override
-        public EventStore eventStore() {
-            return stream.apply(own());
         }
 
         @Override

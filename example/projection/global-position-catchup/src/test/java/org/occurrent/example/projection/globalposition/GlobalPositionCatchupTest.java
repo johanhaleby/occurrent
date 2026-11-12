@@ -43,11 +43,13 @@ import static org.occurrent.application.composition.command.partial.PartialFunct
  * Demonstrates the global position feature: every event gets a single monotonic position no matter which stream it
  * belongs to. The example writes events to three streams (one per person), interleaved, then shows:
  * <p>
- * 1. Reading events across streams in write order via {@code afterPosition} and {@code readInPositionOrder} with a
- * {@link PositionRange}.
+ * 1. Reading events across streams in write order via {@code readInPositionOrder} with a {@link PositionRange}.
  * 2. Rebuilding a projection by replaying events in position order, giving cross-stream write order instead of
  * per-stream grouping.
  * 3. That a store using {@code withoutStreamPosition()} carries no position and rejects the position-based reads.
+ * <p>
+ * A position read is a range query with no promise about resuming. To process every event, resume a catch-up
+ * subscription from the checkpoint it stores.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class GlobalPositionCatchupTest {
@@ -75,14 +77,6 @@ class GlobalPositionCatchupTest {
         List<DomainEvent> all = queries.readInPositionOrder(Filter.all(), PositionRange.fromBeginning()).toList();
         assertThat(all).extracting(DomainEvent::eventId)
                 .containsExactly("event-1", "event-2", "event-3", "event-4", "event-5");
-
-        // And afterPosition lets a reader resume from a known point, again across streams
-        List<DomainEvent> afterFirstTwo = queries.afterPosition(2).toList();
-        assertThat(afterFirstTwo).extracting(DomainEvent::eventId)
-                .containsExactly("event-3", "event-4", "event-5");
-
-        // And currentPosition reports the store's position high-watermark
-        assertThat(queries.currentPosition()).isEqualTo(5L);
     }
 
     @Test
