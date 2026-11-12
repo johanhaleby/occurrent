@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.reactor.durable;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -60,6 +61,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.filter.Filter.type;
@@ -84,6 +86,7 @@ class ReactorDurableMongoSubscriptionModelQuietPositionTest {
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     private static MongoClient mongoClient;
+    private static String databaseName;
 
     // A collection of its own for every test, since a subscription started at the present can also receive what was
     // written up to 16 seconds before it
@@ -98,7 +101,9 @@ class ReactorDurableMongoSubscriptionModelQuietPositionTest {
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
     }
 
     @AfterAll
@@ -107,11 +112,11 @@ class ReactorDurableMongoSubscriptionModelQuietPositionTest {
     }
 
     ReactorDurableMongoSubscriptionModelQuietPositionTest() {
-        template = new ReactiveMongoTemplate(mongoClient, DATABASE);
+        template = new ReactiveMongoTemplate(mongoClient, databaseName);
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(eventCollectionName)
-                .transactionConfig(new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, DATABASE)))
+                .transactionConfig(new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, databaseName)))
                 .timeRepresentation(timeRepresentation)
                 .build();
         eventStore = new ReactorMongoEventStore(template, eventStoreConfig);

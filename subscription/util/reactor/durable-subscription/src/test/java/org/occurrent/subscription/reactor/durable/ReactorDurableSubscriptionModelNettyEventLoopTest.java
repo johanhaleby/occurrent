@@ -72,6 +72,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -96,6 +97,7 @@ class ReactorDurableSubscriptionModelNettyEventLoopTest {
     private final List<ReactorDurableSubscriptionModel> handingOver = new CopyOnWriteArrayList<>();
     private EventLoopGroup eventLoop;
     private MongoClient mongoClient;
+    private String databaseName;
     private ReactiveMongoTemplate template;
     private ReactorMongoEventStore eventStore;
     private ReactorDurableSubscriptionModel model;
@@ -103,15 +105,17 @@ class ReactorDurableSubscriptionModelNettyEventLoopTest {
     @BeforeEach
     void create_a_mongodb_client_with_one_event_loop_thread() {
         eventLoop = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        databaseName = requireNonNull(connectionString.getDatabase());
         MongoClientSettings settings = MongoClientSettings.builder()
-                .applyConnectionString(new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE)))
+                .applyConnectionString(connectionString)
                 .transportSettings(TransportSettings.nettyBuilder().eventLoopGroup(eventLoop).build())
                 .build();
         mongoClient = MongoClients.create(settings);
-        template = new ReactiveMongoTemplate(mongoClient, DATABASE);
+        template = new ReactiveMongoTemplate(mongoClient, databaseName);
         eventStore = new ReactorMongoEventStore(template, new EventStoreConfig.Builder()
                 .eventStoreCollectionName(eventCollectionName)
-                .transactionConfig(new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, DATABASE)))
+                .transactionConfig(new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, databaseName)))
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .build());
         ReactorMongoSubscriptionModel mongoModel = new ReactorMongoSubscriptionModel(template, eventCollectionName, TimeRepresentation.RFC_3339_STRING);
@@ -140,7 +144,7 @@ class ReactorDurableSubscriptionModelNettyEventLoopTest {
         AtomicBoolean onTheEventLoop = new AtomicBoolean();
 
         // When
-        CompletableFuture<Subscription> subscribed = Mono.from(mongoClient.getDatabase(DATABASE).runCommand(new Document("ping", 1)))
+        CompletableFuture<Subscription> subscribed = Mono.from(mongoClient.getDatabase(databaseName).runCommand(new Document("ping", 1)))
                 .map(__ -> {
                     onTheEventLoop.set(eventLoop.next().inEventLoop());
                     return model.subscribe("subscription", null, startAt, cloudEvent -> Mono.empty());
@@ -208,7 +212,7 @@ class ReactorDurableSubscriptionModelNettyEventLoopTest {
     }
 
     private CompletableFuture<Subscription> subscribeOnTheEventLoop(ReactorDurableSubscriptionModel durableMongo, AtomicBoolean onTheEventLoop, List<Long> delivered) {
-        return Mono.from(mongoClient.getDatabase(DATABASE).runCommand(new Document("ping", 1)))
+        return Mono.from(mongoClient.getDatabase(databaseName).runCommand(new Document("ping", 1)))
                 .map(__ -> {
                     onTheEventLoop.set(eventLoop.next().inEventLoop());
                     return durableMongo.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(delivered));

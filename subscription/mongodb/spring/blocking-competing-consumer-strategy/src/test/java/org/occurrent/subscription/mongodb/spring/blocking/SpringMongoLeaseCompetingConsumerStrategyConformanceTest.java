@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.spring.blocking;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import org.junit.jupiter.api.AfterAll;
@@ -32,6 +33,8 @@ import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.time.Duration;
 import java.util.UUID;
+
+import static java.util.Objects.requireNonNull;
 
 @Testcontainers
 class SpringMongoLeaseCompetingConsumerStrategyConformanceTest extends CompetingConsumerStrategyConformance {
@@ -55,8 +58,9 @@ class SpringMongoLeaseCompetingConsumerStrategyConformanceTest extends Competing
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
-        mongoOperations = new MongoTemplate(mongoClient, DATABASE);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        mongoOperations = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
     }
 
     @AfterAll

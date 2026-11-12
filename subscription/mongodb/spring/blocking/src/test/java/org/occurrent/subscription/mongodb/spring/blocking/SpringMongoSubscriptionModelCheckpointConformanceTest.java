@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.spring.blocking;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import org.junit.jupiter.api.AfterAll;
@@ -28,6 +29,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import static java.util.Objects.requireNonNull;
+
 @Testcontainers
 class SpringMongoSubscriptionModelCheckpointConformanceTest extends CheckpointAwareSubscriptionModelConformance {
 
@@ -37,12 +40,15 @@ class SpringMongoSubscriptionModelCheckpointConformanceTest extends CheckpointAw
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     private static MongoClient mongoClient;
+    private static String databaseName;
     private static MongoTemplate mongoTemplate;
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
-        mongoTemplate = new MongoTemplate(mongoClient, DATABASE);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
+        mongoTemplate = new MongoTemplate(mongoClient, databaseName);
     }
 
     @AfterAll
@@ -52,6 +58,6 @@ class SpringMongoSubscriptionModelCheckpointConformanceTest extends CheckpointAw
 
     @Override
     protected SubscriptionModelFixture createFixture() {
-        return new SpringMongoSubscriptionModelFixture(mongoClient, mongoTemplate, DATABASE);
+        return new SpringMongoSubscriptionModelFixture(mongoClient, mongoTemplate, databaseName);
     }
 }

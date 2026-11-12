@@ -16,12 +16,15 @@
 
 package org.occurrent.subscription.reactor.durable;
 
+import com.mongodb.ConnectionString;
 import org.occurrent.tck.subscription.reactor.ReactiveSubscriptionModelConformance;
 import org.occurrent.tck.subscription.reactor.ReactiveSubscriptionModelFixture;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+
+import static java.util.Objects.requireNonNull;
 
 @Testcontainers
 class ReactorDurableReactiveSubscriptionModelConformanceTest extends ReactiveSubscriptionModelConformance {
@@ -33,6 +36,7 @@ class ReactorDurableReactiveSubscriptionModelConformanceTest extends ReactiveSub
 
     @Override
     protected ReactiveSubscriptionModelFixture createFixture() {
-        return new ReactorDurableReactiveSubscriptionModelFixture(mongoDBContainer.getReplicaSetUrl(DATABASE), DATABASE);
+        String url = mongoDBContainer.getReplicaSetUrl(DATABASE);
+        return new ReactorDurableReactiveSubscriptionModelFixture(url, requireNonNull(new ConnectionString(url).getDatabase()));
     }
 }

@@ -114,6 +114,7 @@ class DcbCatchupLateCommitMongoTest {
     private MongoTemplate mongoTemplate;
     private CloudEventConverter<DomainEvent> converter;
     private MongoClient mongoClient;
+    private String databaseName;
 
     // Holds the commit of whichever transaction runs on the HELD_WRITER thread, after the store reserved its position
     // and inserted its documents inside the transaction, so they stay invisible to every other reader
@@ -136,8 +137,9 @@ class DcbCatchupLateCommitMongoTest {
     void create_instances() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
         mongoClient = MongoClients.create(connectionString);
-        mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
-        MongoTransactionManager tx = new HoldingTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+        databaseName = requireNonNull(connectionString.getDatabase());
+        mongoTemplate = new MongoTemplate(mongoClient, databaseName);
+        MongoTransactionManager tx = new HoldingTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, databaseName));
         EventStoreConfig config = new EventStoreConfig.Builder()
                 .eventStoreCollectionName("events")
                 .transactionConfig(tx)
@@ -563,7 +565,7 @@ class DcbCatchupLateCommitMongoTest {
     }
 
     private void dropChangeStreamHistoryUpToNow() {
-        BsonTimestamp now = requireNonNull(mongoClient.getDatabase(DATABASE).runCommand(new Document("hostInfo", 1)).get("operationTime", BsonTimestamp.class));
+        BsonTimestamp now = requireNonNull(mongoClient.getDatabase(databaseName).runCommand(new Document("hostInfo", 1)).get("operationTime", BsonTimestamp.class));
         ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, DATABASE, now);
     }
 

@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.reactor.durable;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -98,6 +99,7 @@ class ReactorCatchupLateCommitMongoTest {
     private static final ReplicaSetReadyMongoDBContainer mongoDBContainer = ChangeStreamHistory.container();
 
     private static MongoClient mongoClient;
+    private static String databaseName;
 
     private final AtomicBoolean holdNextCommit = new AtomicBoolean();
     private final CountDownLatch heldInCommit = new CountDownLatch(1);
@@ -130,7 +132,9 @@ class ReactorCatchupLateCommitMongoTest {
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
     }
 
     @AfterAll
@@ -142,7 +146,7 @@ class ReactorCatchupLateCommitMongoTest {
     void create_collections() {
         eventCollectionName = "events-" + UUID.randomUUID();
         checkpointCollectionName = "checkpoints-" + UUID.randomUUID();
-        reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, DATABASE);
+        reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, databaseName);
     }
 
     @AfterEach
@@ -471,7 +475,7 @@ class ReactorCatchupLateCommitMongoTest {
     private ReactorMongoEventStore eventStore(EventStoreCapability first, EventStoreCapability... rest) {
         EventStoreConfig config = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(eventCollectionName)
-                .transactionConfig(new HoldingTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, DATABASE)))
+                .transactionConfig(new HoldingTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, databaseName)))
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .eventStoreCapabilities(first, rest)
                 .build();
@@ -488,7 +492,7 @@ class ReactorCatchupLateCommitMongoTest {
     }
 
     private void dropChangeStreamHistoryUpToNow() {
-        Document hostInfo = requireNonNull(Mono.from(mongoClient.getDatabase(DATABASE).runCommand(new Document("hostInfo", 1))).block(TIMEOUT));
+        Document hostInfo = requireNonNull(Mono.from(mongoClient.getDatabase(databaseName).runCommand(new Document("hostInfo", 1))).block(TIMEOUT));
         ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, DATABASE, requireNonNull(hostInfo.get("operationTime", BsonTimestamp.class)));
     }
 

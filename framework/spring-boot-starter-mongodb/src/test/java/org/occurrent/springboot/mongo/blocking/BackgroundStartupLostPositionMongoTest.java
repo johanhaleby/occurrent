@@ -21,6 +21,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -105,6 +106,7 @@ import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -193,8 +195,9 @@ class BackgroundStartupLostPositionMongoTest {
             STORED.put(kind, storedCheckpoint(kind.database()));
         }
         BsonTimestamp now;
-        try (MongoClient client = MongoClients.create(mongoDBContainer.getReplicaSetUrl(Kind.SUBSCRIPTION.database()))) {
-            now = client.getDatabase(Kind.SUBSCRIPTION.database()).runCommand(new Document("ping", 1)).get("operationTime", BsonTimestamp.class);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(Kind.SUBSCRIPTION.database()));
+        try (MongoClient client = MongoClients.create(connectionString)) {
+            now = client.getDatabase(requireNonNull(connectionString.getDatabase())).runCommand(new Document("ping", 1)).get("operationTime", BsonTimestamp.class);
         }
         ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, Kind.SUBSCRIPTION.database(), now);
         for (Kind kind : Kind.values()) {

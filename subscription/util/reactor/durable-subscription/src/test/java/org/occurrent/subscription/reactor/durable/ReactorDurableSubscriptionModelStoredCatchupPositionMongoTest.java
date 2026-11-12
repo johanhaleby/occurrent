@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.reactor.durable;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -53,6 +54,7 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
@@ -74,10 +76,13 @@ class ReactorDurableSubscriptionModelStoredCatchupPositionMongoTest {
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     private static MongoClient client;
+    private static String databaseName;
 
     @BeforeAll
     static void connect() {
-        client = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        client = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
     }
 
     @AfterAll
@@ -88,13 +93,13 @@ class ReactorDurableSubscriptionModelStoredCatchupPositionMongoTest {
     @Test
     void a_subscription_whose_stored_checkpoint_is_a_global_checkpoint_is_refused_instead_of_opened_at_the_present() {
         // Given a checkpoint a catch-up subscription model stored, and an event written before the subscribe
-        ReactiveMongoTemplate template = new ReactiveMongoTemplate(client, DATABASE);
+        ReactiveMongoTemplate template = new ReactiveMongoTemplate(client, databaseName);
         String collection = "events-" + UUID.randomUUID();
         ReactorMongoSubscriptionModel mongoModel = new ReactorMongoSubscriptionModel(template, collection, TimeRepresentation.RFC_3339_STRING);
         ReactorCheckpointStorage storage = new ReactorCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
         ReactorDurableSubscriptionModel durable = new ReactorDurableSubscriptionModel(mongoModel, storage);
         ReactorMongoEventStore eventStore = new ReactorMongoEventStore(template, new EventStoreConfig.Builder().eventStoreCollectionName(collection)
-                .transactionConfig(new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(client, DATABASE)))
+                .transactionConfig(new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(client, databaseName)))
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING).build());
         String subscriptionId = UUID.randomUUID().toString();
         GlobalCheckpoint stored = GlobalCheckpoint.of(7);

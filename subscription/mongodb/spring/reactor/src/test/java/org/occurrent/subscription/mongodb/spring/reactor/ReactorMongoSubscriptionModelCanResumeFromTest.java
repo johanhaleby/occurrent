@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.spring.reactor;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
@@ -56,8 +57,9 @@ class ReactorMongoSubscriptionModelCanResumeFromTest {
 
     @BeforeEach
     void create_instances() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
-        subscriptionModel = new ReactorMongoSubscriptionModel(new ReactiveMongoTemplate(mongoClient, DATABASE), "events", TimeRepresentation.RFC_3339_STRING);
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        subscriptionModel = new ReactorMongoSubscriptionModel(new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase())), "events", TimeRepresentation.RFC_3339_STRING);
     }
 
     @AfterEach

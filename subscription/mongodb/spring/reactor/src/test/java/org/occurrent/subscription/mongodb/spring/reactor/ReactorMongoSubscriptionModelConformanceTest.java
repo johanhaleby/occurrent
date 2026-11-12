@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.spring.reactor;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import org.junit.jupiter.api.AfterAll;
@@ -26,6 +27,8 @@ import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * Reaches {@link ReactorMongoSubscriptionModel} through {@link org.occurrent.tck.subscription.reactor.BlockingSubscriptionOverReactive}.
@@ -42,10 +45,13 @@ class ReactorMongoSubscriptionModelConformanceTest extends SubscriptionModelConf
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     private static MongoClient mongoClient;
+    private static String databaseName;
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
     }
 
     @AfterAll
@@ -55,6 +61,6 @@ class ReactorMongoSubscriptionModelConformanceTest extends SubscriptionModelConf
 
     @Override
     protected SubscriptionModelFixture createFixture() {
-        return new ReactorMongoSubscriptionModelFixture(mongoClient, DATABASE);
+        return new ReactorMongoSubscriptionModelFixture(mongoClient, databaseName);
     }
 }
