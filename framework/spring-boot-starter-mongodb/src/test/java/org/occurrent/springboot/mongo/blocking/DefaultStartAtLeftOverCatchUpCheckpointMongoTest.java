@@ -24,6 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.Projection;
+import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
@@ -65,7 +66,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.awaitility.Awaitility.await;
 
 /**
- * A blocking {@code @Subscription} or {@code @Projection} with {@code startAt} unset is delivered the events written
+ * A blocking {@code @Subscription}, {@code @StreamSubscription} or {@code @Projection} with {@code startAt} unset is delivered the events written
  * while it was down when the checkpoint stored for its id is a catch-up checkpoint.
  * <p>
  * A first boot at the present delivers {@code historic-1} and stores a live checkpoint. A test can't stop a catch-up
@@ -97,6 +98,13 @@ class DefaultStartAtLeftOverCatchUpCheckpointMongoTest {
     @Test
     void projection_without_start_at_is_delivered_what_was_written_while_it_was_down_when_a_catch_up_checkpoint_is_stored() {
         List<String> handled = restartWithCatchUpCheckpoint("projection", ProjectionDefault.class);
+
+        assertThat(handled).containsExactly("while-down-1", "live-2");
+    }
+
+    @Test
+    void stream_subscription_without_start_at_is_delivered_what_was_written_while_it_was_down_when_a_catch_up_checkpoint_is_stored() {
+        List<String> handled = restartWithCatchUpCheckpoint("stream-subscription", StreamSubscriptionDefault.class);
 
         assertThat(handled).containsExactly("while-down-1", "live-2");
     }
@@ -272,6 +280,13 @@ class DefaultStartAtLeftOverCatchUpCheckpointMongoTest {
 
     static class SubscriptionDefault extends Recording {
         @Subscription(id = ID)
+        void on(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    static class StreamSubscriptionDefault extends Recording {
+        @StreamSubscription(id = ID)
         void on(TestEvent event) {
             record(event.name());
         }
