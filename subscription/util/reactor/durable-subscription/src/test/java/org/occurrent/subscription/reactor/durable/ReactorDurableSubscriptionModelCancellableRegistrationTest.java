@@ -165,6 +165,26 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
         }
 
         @Test
+        void throws_shutdown_when_the_model_is_shut_down_between_the_entry_checks_and_the_call_is_cancelled() {
+            // Given
+            ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new NamedRecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage());
+            AtomicInteger asked = new AtomicInteger();
+
+            // When
+            CallResult result = CallResult.of(() -> model.subscribe("x", null, StartAt.now(), NO_ACTION, () -> {
+                asked.incrementAndGet();
+                model.shutdown();
+                return true;
+            }));
+
+            // Then
+            assertAll(
+                    () -> assertThat(result.thrown).as("what the call threw").isInstanceOf(SubscriptionModelShutdownException.class),
+                    () -> assertThat(result.returned).as("the subscription returned").isNull(),
+                    () -> assertThat(asked).as("the number of times the call asked whether it was cancelled").hasValue(1));
+        }
+
+        @Test
         void throws_when_the_call_is_cancelled_and_the_model_is_shut_down_where_the_position_writer_starts() {
             // Given
             ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new NamedRecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage());
