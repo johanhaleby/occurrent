@@ -371,6 +371,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * reaction stops the instance making progress exactly as a {@code RuntimeException} does, and it costs the saga's
      * other instances exactly the same.
      * <p>
+     * A record whose write loses to another write on the instance is worked out again from what the instance holds now
+     * and written again, up to {@link SagaRunnerConfig#maxCasAttempts()} times. Discarding it instead let a timer that
+     * fired between every read and write keep the instance from ever being quarantined, which ADR 157 records.
+     * <p>
      * Only the event path calls this, and it is not because the timer path has nothing to gain from it. A timeout
      * has no redelivery key of its own, so there is nothing to quarantine it on.
      * <p>
@@ -389,53 +393,65 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Duration quarantineAfter) {
         try {
             Instant now = clock.get();
-            // Read without the state, because nothing on this path applies it and an instance whose state no longer
-            // decodes is the one that most needs to reach its budget. Loading it whole threw, the catch below swallowed
-            // that, and no failure record was ever written.
-            SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
-            FailureRecord<S> record = SagaExecutionSupport.onFailure(saga, sagaId, current, meta, failure, now, quarantineAfter, config.reorderWindow());
-            if (record == null) {
-                return false;
-            }
-            if (record.quarantined() && !confirmedStillObtainable(cloudEvent, failure)) {
-                boolean firstRefusalForThisInstance = refusalAnnounced.add(sagaId);
-                // The measured time rather than the budget. A redelivery can arrive well after the budget elapsed, so
-                // reporting the budget as the elapsed time understates how long the event has been failing.
-                Duration failingFor = failingFor(record, now);
-                // Checked before the write, not after, because quarantining returns normally and that acknowledges the
-                // event to whatever fed it. An unconfirmed answer is treated as a no, so the exception propagates as
-                // it did before 0.34.0 and the instance goes on failing wherever the model offers the event again.
-                // Nothing is saved, which leaves the failure record the earlier attempts wrote and lets the next
-                // redelivery ask again. Retention is rechecked every time so a store coming back is noticed, while
-                // the warning is said once per instance.
-                if (firstRefusalForThisInstance) {
-                    log.warn("Saga '{}' instance '{}' is stopped on the event '{}', which has been failing for {}, past its budget of {}, and it is not quarantined, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and quarantining acknowledges the event. This delivery is rethrown instead. What the event holds up is decided by whatever feeds this subscription. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
-                            subscriptionId, sagaId, meta.redeliveryKey(), failingFor, quarantineAfter, failure);
+            // Asked at most once per delivery, because the answer is about the event and not about the instance
+            Boolean obtainable = null;
+            for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
+                // Read without the state, because nothing on this path applies it and an instance whose state no longer
+                // decodes is the one that most needs to reach its budget. Loading it whole threw, the catch below
+                // swallowed that, and no failure record was ever written.
+                SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
+                FailureRecord<S> record = SagaExecutionSupport.onFailure(saga, sagaId, current, meta, failure, now, quarantineAfter, config.reorderWindow());
+                if (record == null) {
+                    return false;
                 }
-                recordPending(sagaId, meta, failure);
-                return false;
+                if (record.quarantined()) {
+                    if (obtainable == null) {
+                        obtainable = confirmedStillObtainable(cloudEvent, failure);
+                    }
+                    if (!obtainable) {
+                        boolean firstRefusalForThisInstance = refusalAnnounced.add(sagaId);
+                        // The measured time rather than the budget. A redelivery can arrive well after the budget elapsed, so
+                        // reporting the budget as the elapsed time understates how long the event has been failing.
+                        Duration failingFor = failingFor(record, now);
+                        // Checked before the write, not after, because quarantining returns normally and that acknowledges the
+                        // event to whatever fed it. An unconfirmed answer is treated as a no, so the exception propagates as
+                        // it did before 0.34.0 and the instance goes on failing wherever the model offers the event again.
+                        // Nothing is saved, which leaves the failure record the earlier attempts wrote and lets the next
+                        // redelivery ask again. Retention is rechecked every time so a store coming back is noticed, while
+                        // the warning is said once per instance.
+                        if (firstRefusalForThisInstance) {
+                            log.warn("Saga '{}' instance '{}' is stopped on the event '{}', which has been failing for {}, past its budget of {}, and it is not quarantined, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and quarantining acknowledges the event. This delivery is rethrown instead. What the event holds up is decided by whatever feeds this subscription. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+                                    subscriptionId, sagaId, meta.redeliveryKey(), failingFor, quarantineAfter, failure);
+                        }
+                        recordPending(sagaId, meta, failure);
+                        return false;
+                    }
+                }
+                // A refusal that later turns into a quarantine never reaches the clearing in onCloudEvent, because the
+                // quarantine happens on this path and the instance takes no further event afterwards.
+                refusalAnnounced.remove(sagaId);
+                // Written without the state for the same reason it was read without it. The envelope carries whatever
+                // the read gave, so saving it whole would erase the state somebody needs once the converter is repaired.
+                if (!stateStore.compareAndSaveWithoutState(sagaId, record.envelope(), record.expectedVersion())) {
+                    // Another input advanced the instance, most likely a timer that fired. Worked out again from what is
+                    // stored now, since a write dropped here can be dropped on every delivery and never quarantine.
+                    continue;
+                }
+                if (!record.quarantined()) {
+                    log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is for whatever feeds this subscription to decide. The instance can be quarantined once this event has been failing for {}, measured from when this event first failed, even if that was before it was parked and offered again, but that is not the only condition, so read the instance's status to know whether it was.",
+                            subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
+                    return false;
+                }
+                log.error("Saga '{}' instance '{}' is now QUARANTINED, stopped on the event '{}', which has been failing for {}, past its budget of {}. The time runs from when this event first failed, which can be before it was parked and offered again. It skips every further event and fires no timers. Find it with findByStatus(QUARANTINED, ..).",
+                        subscriptionId, sagaId, meta.redeliveryKey(), failingFor(record, now), quarantineAfter, failure);
+                return true;
             }
-            // A refusal that later turns into a quarantine never reaches the clearing in onCloudEvent, because the
-            // quarantine happens on this path and the instance takes no further event afterwards.
-            refusalAnnounced.remove(sagaId);
-            // Written without the state for the same reason it was read without it. The envelope carries whatever the
-            // read gave, so saving it whole would erase the state somebody needs once the converter is repaired.
-            if (!stateStore.compareAndSaveWithoutState(sagaId, record.envelope(), record.expectedVersion())) {
-                // Another input advanced the instance while the failing one was being retried, most likely a timer that
-                // fired successfully. The failing event now meets different state and may well succeed, so discard this
-                // write rather than retry one whose premise has gone. The pending version has no such premise, it is true
-                // whatever the instance looks like now.
-                recordPending(sagaId, meta, failure);
-                return false;
-            }
-            if (!record.quarantined()) {
-                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is for whatever feeds this subscription to decide. The instance can be quarantined once this event has been failing for {}, measured from when this event first failed, even if that was before it was parked and offered again, but that is not the only condition, so read the instance's status to know whether it was.",
-                        subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
-                return false;
-            }
-            log.error("Saga '{}' instance '{}' is now QUARANTINED, stopped on the event '{}', which has been failing for {}, past its budget of {}. The time runs from when this event first failed, which can be before it was parked and offered again. It skips every further event and fires no timers. Find it with findByStatus(QUARANTINED, ..).",
-                    subscriptionId, sagaId, meta.redeliveryKey(), failingFor(record, now), quarantineAfter, failure);
-            return true;
+            log.warn("Saga '{}' instance '{}' failed on the event '{}' and could not record the failure, because the instance kept changing under {} attempts. "
+                            + "The exception goes back to whatever feeds this subscription, and the next failure of the event records it.",
+                    subscriptionId, sagaId, meta.redeliveryKey(), config.maxCasAttempts(), failure);
+            // Still listed as pending, so the event keeps its clock and a replay long after is applied
+            recordPending(sagaId, meta, failure);
+            return false;
         } catch (Throwable storeFailure) {
             // What reaches here is the store being unreachable, or a store that can only read an instance whole
             // failing to decode one. Rethrowing the original is today's behaviour and it is the right one for both,
