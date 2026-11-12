@@ -4,7 +4,7 @@ Date: 2026-10-24
 
 ## Status
 
-Accepted. #1251 and #1253.
+Accepted. #1251 and #1253. Amended by #1430, which adds `StartRefusalReportingSubscriptions` to the list.
 
 Amends [ADR 118](0118-a-subscription-model-capability-marker-replaces-object-in-the-of-lookups.md) and
 [ADR 119](0119-subscription-model-capability-gains-instance-side-lookups.md), where both
@@ -49,10 +49,15 @@ to it.
 * `Pushable`, which takes events in at the bottom of the stack. They reach every wrapper's action on the way up as
   usual.
 * `HistoryLossReportingSubscriptions`. Its listener can answer `TakeOver` and so act on a subscription, which makes it
-  the exception to the rule. It stays unwrapped because it is the SPI a catch-up model uses to hear about lost history
+  an exception to the rule. It stays unwrapped because it is the SPI a catch-up model uses to hear about lost history
   from the MongoDB model under a `DurableSubscriptionModel`, and the `DurableSubscriptionModel` keeps its own state
   through its own listener in the same list. Making it answer only for itself would mean every wrapper forwarding it,
   and would change how a catch-up model takes over a subscription.
+* `StartRefusalReportingSubscriptions`, added in #1430, is the other exception. Its listener is told that the MongoDB
+  model refused a dynamic start and removed the subscription, and the `CompetingConsumerSubscriptionModel` acts on that
+  by giving back the lease and freeing the id. The wrapper whose state changes is the one that added the listener, and
+  it has to hear the refusal from the MongoDB model under a `DurableSubscriptionModel` or a `CatchupSubscriptionModel`,
+  so it stays unwrapped for the same reason as `HistoryLossReportingSubscriptions`.
 
 Every other capability acts on a subscription and is answered only by a model that implements it:
 `Subscribable`, `CancellableSubscriptions` and every type built on it (`SubscriptionModelLifeCycle`,

@@ -296,6 +296,8 @@ From 0.35.0 a wrapper is unwrapped only for a capability that a wrapper's own st
 * `QuietPositionReportingSubscriptions`, which adds and removes a listener that is told positions.
 * `Pushable`, which takes events in at the bottom of the stack.
 * `HistoryLossReportingSubscriptions`, which a catch-up model reaches under a durable model.
+* `StartRefusalReportingSubscriptions`, which a competing consumer model reaches under a durable or catch-up model,
+  so it can give back the lease of a subscription whose start the MongoDB model refused.
 
 Every other capability is found only on a model that implements it. That is `RepositionableSubscriptions`,
 `Subscribable`, `CancellableSubscriptions`, `SubscriptionModelLifeCycle`, `SubscriptionModel`,
