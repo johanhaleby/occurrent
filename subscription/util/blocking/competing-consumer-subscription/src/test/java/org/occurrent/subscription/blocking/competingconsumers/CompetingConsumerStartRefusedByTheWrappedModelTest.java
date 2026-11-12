@@ -349,6 +349,35 @@ class CompetingConsumerStartRefusedByTheWrappedModelTest {
         );
     }
 
+    @Test
+    void an_interrupt_of_a_handle_waiting_for_the_model_to_act_on_a_refusal_ends_the_wait_and_reaches_the_caller() throws Exception {
+        // Given the wrapped handle has thrown, no report is delivered and the handle waits for the refusal to be acted on
+        strategy.grantOnRegister = true;
+        Subscription subscription = subscribe();
+        wrapped.dropAndThrowFromTheHandle(ID);
+        AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+        AtomicReference<@Nullable Boolean> interruptedWhenThrown = new AtomicReference<>();
+        Thread caller = startThread(() -> {
+            try {
+                subscription.waitUntilStarted(Duration.ofSeconds(30));
+            } catch (Throwable e) {
+                interruptedWhenThrown.set(Thread.currentThread().isInterrupted());
+                thrown.set(e);
+            }
+        });
+        awaitWaitingOrDone(caller);
+
+        // When the caller's thread is interrupted
+        caller.interrupt();
+
+        // Then
+        caller.join(EVENTUALLY.toMillis());
+        assertAll(
+                () -> assertThat(thrown.get()).as("thrown by the handle well before its timeout").isInstanceOf(UnsupportedStartAtException.class),
+                () -> assertThat(interruptedWhenThrown.get()).as("interrupt flag of the caller's thread when the handle threw").isTrue()
+        );
+    }
+
     private record Snapshot(Set<String> subscriptionIds, Set<String> registrations, Set<String> holders, @Nullable Throwable subscribeAgain) {
     }
 
