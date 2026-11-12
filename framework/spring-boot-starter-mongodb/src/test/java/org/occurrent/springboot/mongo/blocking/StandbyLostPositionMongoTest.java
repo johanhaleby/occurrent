@@ -185,9 +185,12 @@ class StandbyLostPositionMongoTest {
                 nodeA.close();
                 assertThat(storedCheckpoint(database)).as("the checkpoint after node A stopped").isEqualTo(lost);
 
-                await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> assertThat(modelOnB.isPaused(BROKEN)).as("the standby, granted the lease, is paused").isTrue());
+                // The model records the pause before it logs the error, so both are awaited
+                await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> {
+                    assertThat(modelOnB.isPaused(BROKEN)).as("the standby, granted the lease, is paused").isTrue();
+                    assertThat(logsOnB.errors()).as("errors logged by the competing-consumer model and the lease strategy").hasSize(1).allSatisfy(error -> assertThat(error.getFormattedMessage()).contains(BROKEN));
+                });
                 assertThat(modelOnB.isRunning(BROKEN)).as("the standby is running").isFalse();
-                assertThat(logsOnB.errors()).as("errors logged by the competing-consumer model and the lease strategy").hasSize(1).allSatisfy(error -> assertThat(error.getFormattedMessage()).contains(BROKEN));
 
                 // Several lease periods, in which a standby that gave the lease back would be granted it and refused again
                 await().during(ofSeconds(10)).atMost(ofSeconds(15)).pollInterval(ofMillis(250)).untilAsserted(() -> {
