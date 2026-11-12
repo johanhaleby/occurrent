@@ -136,8 +136,11 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * saving. With synchronization active, no transaction and no session bound yet, the store then binds a session
  * transaction to the synchronization. On a replica set the read is its first operation, and anywhere else the store
  * reads in a transaction of its own first. An append in that synchronization joins the bound transaction, and the
- * store doesn't retry its conflict. With synchronization active and a session already bound, a read reports no
- * versions, with or without that mark, and a read after marker versions is refused. The store answers
+ * store doesn't retry its conflict. With synchronization active and a session already bound, a read with that mark
+ * reports no versions. So does a read without it once the store has written in that session, and a read after marker
+ * versions is refused there. Without a write of the store's in the bound session, a read without the mark reads in a
+ * snapshot transaction of its own. That rests on nothing else writing event or marker documents through the template
+ * in that session. The store answers
  * {@link DcbAppendConfirmation} with a majority read on the primary from
  * {@link org.springframework.data.mongodb.ReactiveMongoDatabaseFactory#getMongoDatabase()}, which joins no session. A store built on a template from {@link ReactiveMongoTemplate#withSession(ClientSession)}
  * isn't supported for DCB snapshot deciders.
@@ -188,6 +191,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             .maxBackoff(Duration.ofMillis(500))
             .filter(throwable -> throwable instanceof WriteConditionNotFulfilledException)
             .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+
+    // Sessions bound to a synchronization that a write of the store ran in, by identity, let go with the session
+    private static final Set<Object> BOUND_SESSIONS_WRITTEN_IN = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 
     private final ReactiveMongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
@@ -296,7 +302,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 if (writeCondition.isAnyStreamVersion()) {
                     transaction = retryOnlyWhenThisStoreOwnsTheTransaction(transaction, ANY_STREAM_VERSION_CONFLICT_RETRY);
                 }
-                return transaction
+                return recordingAWriteInABoundSession(transaction)
                         .map(streamVersionDiff -> new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion, appendId));
             });
         });
@@ -382,8 +388,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // transaction it reports no versions, since the transaction's own increments may still abort and a later append would
     // reuse them, unless the caller says the read is the transaction's first operation. Then it reads in that transaction
     // on a replica set, and in a snapshot transaction of its own anywhere else. With synchronization active and no
-    // transaction, a read goes through a session already bound, which may hold writes that abort later, and gets no
-    // versions. With no session bound yet, a caller that confirms an append before saving reads through the template on a
+    // transaction, a read goes through a session already bound and gets no versions when the store wrote in that session,
+    // since those writes may abort later. A read that confirms an append before saving gets none in any bound session.
+    // A read without that mark in a bound session the store hasn't written in reads in a transaction of its own. With no
+    // session bound yet, a caller that confirms an append before saving reads through the template on a
     // replica set, which binds a session transaction the read is the first operation of, so an append in the
     // synchronization joins it. Anywhere else it reads in a transaction of its own and then binds the session transaction
     // itself. Where it reads versions in a transaction it doesn't own, a failure fails the read so the transaction's
@@ -411,8 +419,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 return runsOnReplicaSet ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
             }
             return synchronization().flatMap(synchronization -> switch (synchronization) {
-                // Through the template the read joins the bound session and sees its writes
-                case SESSION_BOUND -> markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
+                // Through the template the read joins the bound session and sees the store's writes in it
+                case SESSION_BOUND_WRITTEN_IN -> markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization that the event store wrote in, whose writes may still abort", null);
+                case SESSION_BOUND -> options.confirmsAppendBeforeSaving()
+                        ? markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null)
+                        : readInOwnTransaction(criteria, options);
                 case NO_SESSION -> !options.confirmsAppendBeforeSaving() ? readInOwnTransaction(criteria, options)
                         : runsOnReplicaSet ? readMarkerVersionsWith(mongoTemplate, criteria, options)
                         // Binds the session transaction an append in the synchronization joins, as the read through the template does on a replica set
@@ -449,15 +460,38 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     private Mono<Synchronization> synchronization() {
         return TransactionSynchronizationManager.forCurrentTransaction()
-                .map(synchronization -> !synchronization.isSynchronizationActive() ? Synchronization.INACTIVE
-                        : synchronization.hasResource(mongoTemplate.getMongoDatabaseFactory()) ? Synchronization.SESSION_BOUND
-                        : Synchronization.NO_SESSION)
+                .map(synchronization -> {
+                    if (!synchronization.isSynchronizationActive()) {
+                        return Synchronization.INACTIVE;
+                    }
+                    Object boundSession = synchronization.getResource(mongoTemplate.getMongoDatabaseFactory());
+                    return boundSession == null ? Synchronization.NO_SESSION
+                            : BOUND_SESSIONS_WRITTEN_IN.contains(boundSession) ? Synchronization.SESSION_BOUND_WRITTEN_IN
+                            : Synchronization.SESSION_BOUND;
+                })
                 .onErrorResume(NoTransactionException.class, e -> Mono.just(Synchronization.INACTIVE));
     }
 
-    // Whether synchronization is active outside a transaction, and whether a session is bound for this store's database
+    // Whether synchronization is active outside a transaction, whether a session is bound for this store's database, and
+    // whether the store wrote in it
     private enum Synchronization {
-        INACTIVE, NO_SESSION, SESSION_BOUND
+        INACTIVE, NO_SESSION, SESSION_BOUND, SESSION_BOUND_WRITTEN_IN
+    }
+
+    // A session still bound after a write held it, since a transaction of the store's own unbinds its session when it ends. The
+    // record before the write covers a write cancelled in a session bound already.
+    private <T> Mono<T> recordingAWriteInABoundSession(Mono<T> write) {
+        return recordBoundSession().then(write.materialize())
+                .flatMap(signal -> recordBoundSession().thenReturn(signal))
+                .dematerialize();
+    }
+
+    private Mono<Void> recordBoundSession() {
+        return TransactionSynchronizationManager.forCurrentTransaction()
+                .mapNotNull(synchronization -> synchronization.getResource(mongoTemplate.getMongoDatabaseFactory()))
+                .doOnNext(BOUND_SESSIONS_WRITTEN_IN::add)
+                .onErrorResume(NoTransactionException.class, e -> Mono.empty())
+                .then();
     }
 
     private Mono<DcbEventStream> readMarkerVersionsWith(ReactiveMongoOperations template, DcbCriteria criteria, DcbReadOptions options) {
@@ -528,7 +562,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 clientSession -> Mono.defer(() -> {
                     ReactiveMongoOperations template = mongoTemplate.withSession(clientSession);
                     if (!(template instanceof ReactiveMongoTemplate sessionTemplate)) {
-                        throw new IllegalStateException("The session-bound template is a " + template.getClass().getName() + " and not a ReactiveMongoTemplate, so the read can't be kept out of the synchronization.");
+                        // NEVER can't be set on it, so the read goes through the template as it did before it kept out of the synchronization
+                        return readWithoutMarkerVersions(criteria, options);
                     }
                     sessionTemplate.setSessionSynchronization(NEVER);
                     Mono<Long> position = sessionTemplate.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName)
@@ -683,7 +718,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 // The driver does not auto-retry a transient transaction conflict reactively, so retry it here, plus a
                 // DuplicateKeyException from two transactions first-creating the same conflict marker at once. A
                 // DcbAppendConditionNotFulfilledException and a DuplicateCloudEventException are deliberately not retried.
-                return Mono.defer(() -> retryOnlyWhenThisStoreOwnsTheTransaction(transaction, transientConflictRetryWithDeadline()));
+                return recordingAWriteInABoundSession(Mono.defer(() -> retryOnlyWhenThisStoreOwnsTheTransaction(transaction, transientConflictRetryWithDeadline())));
             });
         });
     }
@@ -1451,7 +1486,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         requireNonNull(streamId, "Stream id cannot be null");
 
-        return mongoTemplate.remove(streamIdEqualTo(streamId), eventStoreCollectionName).then();
+        return recordingAWriteInABoundSession(mongoTemplate.remove(streamIdEqualTo(streamId), eventStoreCollectionName).then());
     }
 
     @Override
@@ -1462,7 +1497,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         requireNonNull(cloudEventId, "Cloud event id cannot be null");
         requireNonNull(cloudEventSource, "Cloud event source cannot be null");
 
-        return mongoTemplate.remove(Query.query(where("id").is(cloudEventId).and("source").is(cloudEventSource)), eventStoreCollectionName).then();
+        return recordingAWriteInABoundSession(mongoTemplate.remove(Query.query(where("id").is(cloudEventId).and("source").is(cloudEventSource)), eventStoreCollectionName).then());
     }
 
     @Override
@@ -1472,7 +1507,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         requireNonNull(filter, "Filter cannot be null");
         final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
-        return mongoTemplate.remove(query, eventStoreCollectionName).then();
+        return recordingAWriteInABoundSession(mongoTemplate.remove(query, eventStoreCollectionName).then());
     }
 
     @Override
@@ -1510,7 +1545,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     });
         };
 
-        return transactionalOperator.transactional(logic.apply(updateFunction));
+        return recordingAWriteInABoundSession(transactionalOperator.transactional(logic.apply(updateFunction)));
     }
 
     @Override

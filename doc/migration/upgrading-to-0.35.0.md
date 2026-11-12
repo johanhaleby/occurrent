@@ -988,8 +988,10 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   store's own, and its append runs in one too, which the store retries on a conflict and which doesn't
   join your scope, so a failing handler doesn't undo it.
 - In a Spring scope of yours with no transaction and a session already bound there, a read that asks for marker
-  versions, such as a snapshot decider's, reads in that session and gets no versions, marked or not. A read after
-  marker versions is refused there.
+  versions, such as a snapshot decider's, reads in a transaction of the store's own until the store writes in that
+  session, with an append for example. After that it reads in that session and gets no versions, and a read after
+  marker versions is refused there. The store doesn't see writes to event or marker documents that go through your
+  template in that session, so it relies on there being none.
 - A Spring MongoDB store no longer retries a DCB append or a stream write in a session bound to the synchronization. A
   conflict fails it at once, as in your transaction, instead of a retry in the transaction the conflict aborted.
 - `DcbReadOptions.confirmingAppendBeforeSaving()` and `asFirstOperationOfTransaction()` say something about the caller

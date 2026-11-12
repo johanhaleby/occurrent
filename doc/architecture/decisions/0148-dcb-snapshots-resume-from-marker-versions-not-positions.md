@@ -493,7 +493,7 @@ The read path:
    (`MongoEventStore.java:580-605`). The counter that bounds the events and gives `lastSequencePosition` is read inside
    the same snapshot. The commit has a time bound, which the paragraphs after this list explain. Any failure before the
    commit succeeds, a read error or a commit error, voids the versions and the token, and neither is returned. A read
-   that only asked for versions falls back to today's path, the decider or view skips the save, and the store logs one
+   that only asked for versions falls back to a read without versions, the decider or view skips the save, and the store logs one
    warning per instance and kind of cause. A read after saved versions is refused with `DcbSnapshotInvalid` instead.
    Handing back a full read in its place would look like an incremental read to the caller, which would then apply the
    boundary's events a second time on top of its saved state. The caller reads in full, as it does after a prune.
@@ -679,8 +679,8 @@ prune, on both stacks, and it did whenever the first command had stored or the o
 A Spring scope the caller opened with synchronization but no transaction needs the read in the executor too. That's a
 `TransactionTemplate` or `@Transactional` on `PROPAGATION_SUPPORTS` or `PROPAGATION_NOT_SUPPORTED`, where
 `isTransactional()` answers `false`. The Spring MongoDB stores set `SessionSynchronization.ALWAYS`, so a read with no
-versions in that scope binds a session with a transaction to it. A read with versions doesn't, since it runs on a
-session of the store's own. I ran a plain `execute` in such a scope with the read before the executor. A
+versions in that scope binds a session with a transaction to it. A read with versions that isn't marked as ADR 167
+describes doesn't, since it runs on a session of the store's own. I ran a plain `execute` in such a scope with the read before the executor. A
 `SpringTransactionExecutor` on `PROPAGATION_NOT_SUPPORTED` failed to suspend the scope with `IllegalStateException`, and
 one on `PROPAGATION_NEVER` took the session for an existing transaction and threw `IllegalTransactionStateException`,
 both before the append. One on `PROPAGATION_REQUIRES_NEW` failed to suspend the scope the same way. On the reactive

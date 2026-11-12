@@ -136,8 +136,10 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * transaction and no session bound yet, the store then binds a session transaction to the synchronization. On a replica
  * set the read is its first operation, and anywhere else the store reads in a transaction of its own first. An append
  * in that synchronization joins the bound transaction, and the store doesn't retry its conflict. With synchronization
- * active and a session already bound, a read reports no versions, with or without that mark, and a read after marker
- * versions is refused. The store answers {@link DcbAppendConfirmation} with a majority read on
+ * active and a session already bound, a read with that mark reports no versions. So does a read without it once the
+ * store has written in that session, and a read after marker versions is refused there. Without a write of the store's
+ * in the bound session, a read without the mark reads in a snapshot transaction of its own. That rests on nothing else
+ * writing event or marker documents through the template in that session. The store answers {@link DcbAppendConfirmation} with a majority read on
  * the primary from
  * {@link org.springframework.data.mongodb.MongoDatabaseFactory#getMongoDatabase()}, which joins no session. A store
  * built on a template from {@link MongoTemplate#withSession(ClientSession)} isn't supported for DCB snapshot deciders.
@@ -148,6 +150,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private static final Logger log = LoggerFactory.getLogger(SpringMongoEventStore.class);
 
     private static final String ID = "_id";
+
+    // Sessions bound to a synchronization that a write of the store ran in, by identity, let go with the session
+    private static final Set<Object> BOUND_SESSIONS_WRITTEN_IN = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 
     private final MongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
@@ -284,9 +289,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // Retried only when this store owns the transaction. Joined to a caller's transaction, a thrown
         // WriteConditionNotFulfilledException marks it rollback-only, so a further attempt would participate in a
         // transaction whose inner commit is a no-op and could report a success the caller cannot keep. See ADR 0074.
-        StreamVersionDiff streamVersion = retryOnlyWhenThisStoreOwnsTheTransaction(
+        StreamVersionDiff streamVersion = recordingAWriteInABoundSession(() -> retryOnlyWhenThisStoreOwnsTheTransaction(
                 RetryStrategy.retry().retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion()),
-                () -> transactionTemplate.execute(writeLogic));
+                () -> transactionTemplate.execute(writeLogic)));
         return new WriteResult(streamId, streamVersion.oldStreamVersion, streamVersion.newStreamVersion, appendId);
     }
 
@@ -342,8 +347,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // transaction it reports no versions, since the transaction's own increments may still abort and a later append would
     // reuse them, unless the caller says the read is the transaction's first operation. Then it reads in that transaction
     // on a replica set, and in a snapshot transaction of its own anywhere else. With synchronization active and no
-    // transaction, a read goes through a session already bound, which may hold writes that abort later, and gets no
-    // versions. With no session bound yet, a caller that confirms an append before saving reads through the template on a
+    // transaction, a read goes through a session already bound and gets no versions when the store wrote in that session,
+    // since those writes may abort later. A read that confirms an append before saving gets none in any bound session.
+    // A read without that mark in a bound session the store hasn't written in reads in a transaction of its own. With no
+    // session bound yet, a caller that confirms an append before saving reads through the template on a
     // replica set, which binds a session transaction the read is the first operation of, so an append in the
     // synchronization joins it. Anywhere else it reads in a transaction of its own and then binds the session transaction
     // itself. Where it reads versions in a transaction it doesn't own, a failure fails the read so the transaction's
@@ -369,12 +376,15 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             // Off a replica set nothing has run in the caller's transaction yet, so a snapshot of the store's own misses none of its writes
             return runsOnReplicaSet ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
         }
-        if (TransactionSynchronizationManager.isSynchronizationActive()
-                && TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) != null) {
-            // Through the template the read joins the bound session and sees its writes
-            return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
+        Object boundSession = TransactionSynchronizationManager.isSynchronizationActive() ? TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) : null;
+        if (boundSession != null && BOUND_SESSIONS_WRITTEN_IN.contains(boundSession)) {
+            // Through the template the read joins the bound session and sees the store's writes in it
+            return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization that the event store wrote in, whose writes may still abort", null);
         }
         if (options.confirmsAppendBeforeSaving() && TransactionSynchronizationManager.isSynchronizationActive()) {
+            if (boundSession != null) {
+                return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
+            }
             if (runsOnReplicaSet) {
                 return readMarkerVersionsWith(mongoTemplate, criteria, options);
             }
@@ -602,9 +612,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireStreamCapability();
         requireNonNull(streamId, "Stream id cannot be null");
 
-        transactionTemplate.executeWithoutResult(
+        recordingAWriteInABoundSession(() -> transactionTemplate.execute(
                 __ -> mongoTemplate.remove(Query.query(streamIdEqualToCriteria(streamId)), eventStoreCollectionName)
-        );
+        ));
     }
 
     @Override
@@ -613,7 +623,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireNonNull(cloudEventId, "Cloud event id cannot be null");
         requireNonNull(cloudEventSource, "Cloud event source cannot be null");
 
-        mongoTemplate.remove(cloudEventIdEqualTo(cloudEventId, cloudEventSource), eventStoreCollectionName);
+        recordingAWriteInABoundSession(() -> mongoTemplate.remove(cloudEventIdEqualTo(cloudEventId, cloudEventSource), eventStoreCollectionName));
     }
 
     @Override
@@ -621,7 +631,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireStreamCapability();
         requireNonNull(filter, "Filter cannot be null");
         final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
-        mongoTemplate.remove(query, eventStoreCollectionName);
+        recordingAWriteInABoundSession(() -> mongoTemplate.remove(query, eventStoreCollectionName));
     }
 
     @Override
@@ -655,7 +665,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return Optional.of(updatedCloudEvent);
         };
 
-        return requireNonNull(transactionTemplate.execute(__ -> logic.apply(updateFunction)));
+        return requireNonNull(recordingAWriteInABoundSession(() -> transactionTemplate.execute(__ -> logic.apply(updateFunction))));
     }
 
     @Override
@@ -804,8 +814,20 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // is minted unconditionally, unlike the stream write path.
         AppendId appendId = AppendId.mint();
 
-        return retryOnlyWhenThisStoreOwnsTheTransaction(transientConflictRetryWithDeadline(),
-                () -> appendDcbInTransaction(streamId, eventsToAppend, condition, firstPosition, lastPosition, appendId));
+        return recordingAWriteInABoundSession(() -> retryOnlyWhenThisStoreOwnsTheTransaction(transientConflictRetryWithDeadline(),
+                () -> appendDcbInTransaction(streamId, eventsToAppend, condition, firstPosition, lastPosition, appendId)));
+    }
+
+    // A session still bound after a write held it, since a transaction of the store's own unbinds its session when it ends
+    private <T> T recordingAWriteInABoundSession(Supplier<T> write) {
+        try {
+            return write.get();
+        } finally {
+            Object boundSession = TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory());
+            if (boundSession != null) {
+                BOUND_SESSIONS_WRITTEN_IN.add(boundSession);
+            }
+        }
     }
 
     /**
