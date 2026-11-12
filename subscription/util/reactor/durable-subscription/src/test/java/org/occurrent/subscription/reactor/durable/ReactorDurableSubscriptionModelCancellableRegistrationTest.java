@@ -17,6 +17,8 @@
 package org.occurrent.subscription.reactor.durable;
 
 import io.cloudevents.CloudEvent;
+import org.aopalliance.intercept.MethodInterceptor;
+import org.aopalliance.intercept.MethodInvocation;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -35,18 +37,20 @@ import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionModelShutdownException;
-import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.internal.CancellableRegistration;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorStreamCatchupSubscriptionModel;
+import org.springframework.aop.framework.ProxyFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.lang.reflect.Field;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -58,6 +62,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.joining;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -404,6 +409,47 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
                     () -> assertThat(wrapped.readsStarted).as("the reads of the position the wrapped model got").hasValue(1),
                     () -> assertThat(wrapped.readsUnanswered).as("the reads of the position still waiting").hasValue(0));
         }
+
+        @Test
+        void gives_back_the_delete_it_took_over_when_the_call_is_cancelled_where_the_id_is_reserved() throws Exception {
+            // Given
+            DeleteHeldStorage storage = new DeleteHeldStorage();
+            storage.storage.save("x", new StringBasedCheckpoint("5"), CheckpointWriteCondition.any()).block(TIMEOUT);
+            ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), storage);
+            Mono<Void> cancel = model.cancelSubscription("x");
+            awaitOrFail(storage.deleteEntered);
+            AtomicInteger asked = new AtomicInteger();
+
+            // When
+            Subscription subscription = model.subscribe("x", null, StartAt.subscriptionModelDefault(), NO_ACTION, () -> asked.incrementAndGet() > 1);
+            storage.releaseDeletes.countDown();
+            Throwable cancelThrew = catchThrowable(() -> cancel.block(TIMEOUT));
+
+            // Then
+            assertAll(
+                    () -> assertThat(subscription).as("the subscription returned").isNull(),
+                    () -> assertThat(asked).as("the number of times the call asked whether it was cancelled").hasValue(2),
+                    () -> assertThat(cancelThrew).as("what waiting for the cancel threw, which waits for the subscribe that took its delete over").isNull(),
+                    () -> assertThat(storage.storage.read("x").blockOptional(TIMEOUT)).as("the checkpoint stored for x").isEmpty());
+        }
+
+        @Test
+        void ends_its_read_of_where_the_feed_is_now_when_the_call_is_cancelled_where_the_id_is_reserved() {
+            // Given
+            UnansweredPositionModel wrapped = new UnansweredPositionModel();
+            ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+            AtomicInteger asked = new AtomicInteger();
+
+            // When
+            Subscription subscription = model.subscribe("x", null, StartAt.now(), NO_ACTION, () -> asked.incrementAndGet() > 1);
+
+            // Then
+            assertAll(
+                    () -> assertThat(subscription).as("the subscription returned").isNull(),
+                    () -> assertThat(asked).as("the number of times the call asked whether it was cancelled").hasValue(2),
+                    () -> assertThat(wrapped.readsStarted).as("the reads of the position the wrapped model got").hasValue(1),
+                    () -> assertThat(wrapped.readsUnanswered).as("the reads of the position still waiting").hasValue(0));
+        }
     }
 
     @Nested
@@ -460,7 +506,7 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
             Throwable startFailure = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
 
             // Then
-            assertThat(startFailure).as("what waiting for the subscription threw, SubscriptionNotRunningException if the cancel reached the subscribe").isNull();
+            assertThat(startFailure).as("what waiting for the subscription threw, IllegalStateException if the cancel reached the subscribe").isNull();
         }
 
         @Test
@@ -492,7 +538,7 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).as("what the cancelled subscribe threw").isNull(),
-                    () -> assertThat(startFailure).as("what waiting for the cancelled subscribe threw").isInstanceOf(SubscriptionNotRunningException.class),
+                    () -> assertThat(startFailure).as("what waiting for the cancelled subscribe threw").isExactlyInstanceOf(IllegalStateException.class),
                     () -> assertThat(catchup.isRunning("x")).as("whether the later subscribe of x runs").isTrue());
         }
     }
@@ -501,21 +547,137 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
     class StandsInForSubscribe {
 
         @Test
-        void answers_true_for_the_shipped_model() {
-            assertThat(new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage()).standsInForSubscribe())
-                    .as("whether the shipped model stands in for its named subscribe").isTrue();
+        void answers_true_for_the_shipped_model_called_through_itself() {
+            // Given
+            ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage());
+
+            // When
+            boolean standsIn = model.standsInForSubscribe(model);
+
+            // Then
+            assertThat(standsIn).as("whether the shipped model stands in for its named subscribe").isTrue();
         }
 
         @Test
         void answers_false_for_a_subclass_that_overrides_nothing() {
-            assertThat(new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage()) {
-            }.standsInForSubscribe()).as("whether a subclass overriding nothing stands in for the named subscribe").isFalse();
+            // Given
+            ReactorDurableSubscriptionModel subclass = new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage()) {
+            };
+
+            // When
+            boolean standsIn = subclass.standsInForSubscribe(subclass);
+
+            // Then
+            assertThat(standsIn).as("whether a subclass overriding nothing stands in for the named subscribe").isFalse();
         }
 
         @Test
         void answers_false_for_a_subclass_that_overrides_the_named_subscribe() {
-            assertThat(new OverridingDurableModel(new RecordingSubscriptionModel("feed")).standsInForSubscribe())
-                    .as("whether a subclass overriding the named subscribe stands in for it").isFalse();
+            // Given
+            OverridingDurableModel subclass = new OverridingDurableModel(new RecordingSubscriptionModel("feed"));
+
+            // When
+            boolean standsIn = subclass.standsInForSubscribe(subclass);
+
+            // Then
+            assertThat(standsIn).as("whether a subclass overriding the named subscribe stands in for it").isFalse();
+        }
+
+        @Test
+        void answers_false_for_a_reference_other_than_itself() {
+            // Given
+            ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage());
+
+            // When
+            boolean standsIn = model.standsInForSubscribe(new Object());
+
+            // Then
+            assertThat(standsIn).as("whether the shipped model stands in for a call made through another reference").isFalse();
+        }
+
+        @Test
+        void answers_false_to_the_proxy_when_the_model_is_proxied_by_cglib() {
+            // Given
+            ReactorDurableSubscriptionModel proxy = proxyOf(new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage()), true, new SubscribesSeen());
+
+            // When
+            boolean standsIn = proxy.standsInForSubscribe(proxy);
+
+            // Then
+            assertThat(standsIn).as("whether a CGLIB proxy of the shipped model stands in for its named subscribe").isFalse();
+        }
+
+        @Test
+        void answers_false_to_the_proxy_when_the_model_is_proxied_by_its_interfaces() {
+            // Given
+            CancellableRegistration proxy = proxyOf(new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage()), false, new SubscribesSeen());
+
+            // When
+            boolean standsIn = proxy.standsInForSubscribe(proxy);
+
+            // Then
+            assertThat(standsIn).as("whether a JDK proxy of the shipped model stands in for its named subscribe").isFalse();
+        }
+    }
+
+    @Nested
+    class UnderAReactorCatchupOverAProxy {
+
+        @Test
+        void calls_the_named_subscribe_through_a_cglib_proxy_of_the_model() {
+            // Given
+            SubscribesSeen advice = new SubscribesSeen();
+            ReactorDurableSubscriptionModel proxy = proxyOf(new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage()), true, advice);
+
+            // When
+            Subscription subscription = new ReactorStreamCatchupSubscriptionModel(proxy, new NoReplay())
+                    .subscribe("x", StreamSubscriptionFilter.filter(Filter.all()), StartAt.now(), NO_ACTION);
+
+            // Then
+            assertAll(
+                    () -> assertThat(subscription.waitUntilStarted().block(TIMEOUT)).as("what waiting for the subscription gives").isNull(),
+                    () -> assertThat(advice.subscribes).as("the subscribes the advice of the CGLIB proxy saw").containsExactly(NAMED_SUBSCRIBE));
+        }
+
+        @Test
+        void calls_the_named_subscribe_through_a_jdk_proxy_of_the_model() {
+            // Given
+            SubscribesSeen advice = new SubscribesSeen();
+            CheckpointAwareSubscriptionModel proxy = proxyOf(new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage()), false, advice);
+
+            // When
+            Subscription subscription = new ReactorStreamCatchupSubscriptionModel(proxy, new NoReplay())
+                    .subscribe("x", StreamSubscriptionFilter.filter(Filter.all()), StartAt.now(), NO_ACTION);
+
+            // Then
+            assertAll(
+                    () -> assertThat(subscription.waitUntilStarted().block(TIMEOUT)).as("what waiting for the subscription gives").isNull(),
+                    () -> assertThat(advice.subscribes).as("the subscribes the advice of the JDK proxy saw").containsExactly(NAMED_SUBSCRIBE));
+        }
+    }
+
+    // Spring AOP over a real model, as a proxy built by a Spring container would be
+    @SuppressWarnings("unchecked")
+    private static <T> T proxyOf(ReactorDurableSubscriptionModel model, boolean proxyTargetClass, MethodInterceptor advice) {
+        ProxyFactory factory = new ProxyFactory(model);
+        factory.setProxyTargetClass(proxyTargetClass);
+        factory.addAdvice(advice);
+        return (T) factory.getProxy();
+    }
+
+    private static final String NAMED_SUBSCRIBE = "subscribe(String, SubscriptionFilter, StartAt, Function)";
+
+    // Records the subscribe(..) calls that pass through the proxy, by their parameter types
+    private static final class SubscribesSeen implements MethodInterceptor {
+        final List<String> subscribes = new CopyOnWriteArrayList<>();
+
+        @Override
+        public @Nullable Object invoke(MethodInvocation invocation) throws Throwable {
+            if (invocation.getMethod().getName().equals("subscribe")) {
+                String parameters = Arrays.stream(invocation.getMethod().getParameterTypes()).map(Class::getSimpleName).collect(joining(", "));
+                subscribes.add("subscribe(" + parameters + ")");
+            }
+            return invocation.proceed();
         }
     }
 
@@ -560,8 +722,8 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
 
         // The test opts in, since a subclass otherwise gets the named subscribe
         @Override
-        public boolean standsInForSubscribe() {
-            return true;
+        public boolean standsInForSubscribe(Object asSeenByCaller) {
+            return asSeenByCaller == this;
         }
 
         @Override

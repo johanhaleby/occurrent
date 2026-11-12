@@ -47,7 +47,6 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionModelShutdownException;
-import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.DcbSubscriptionModel;
@@ -803,7 +802,7 @@ public class ReactorMongoSubscriptionModelTest {
 
                 // Then the handle fails, since nothing can start the subscription any more
                 Throwable told = catchThrowable(() -> cancelled.waitUntilStarted().block(Duration.ofSeconds(5)));
-                assertThat(told).isExactlyInstanceOf(SubscriptionNotRunningException.class);
+                assertThat(told).isExactlyInstanceOf(IllegalStateException.class);
             } finally {
                 mayAnswer.countDown();
             }

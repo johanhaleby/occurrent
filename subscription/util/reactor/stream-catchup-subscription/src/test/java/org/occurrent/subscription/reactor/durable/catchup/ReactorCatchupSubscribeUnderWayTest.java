@@ -961,7 +961,7 @@ class ReactorCatchupSubscribeUnderWayTest {
             assertAll(
                     () -> assertThat(heldOnceItReturned).as("the ids the wrapped model holds once the cancelled subscribe returned").isEmpty(),
                     () -> assertThat(runningOnceItReturned).as("whether the catch-up reports x running once the cancelled subscribe returned").isFalse(),
-                    () -> assertThat(startFailure).as("what waiting for the start of the cancelled subscribe threw").isInstanceOf(SubscriptionNotRunningException.class)
+                    () -> assertThat(startFailure).as("what waiting for the start of the cancelled subscribe threw").isExactlyInstanceOf(IllegalStateException.class)
                             .hasMessage("Subscription x was cancelled before it started."),
                     () -> assertThat(later).as("what a subscribe of x once the cancelled subscribe returned threw").isNull(),
                     () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("cancelled:x", "skipped:x", "subscribed:x"),
@@ -1104,7 +1104,7 @@ class ReactorCatchupSubscribeUnderWayTest {
             assertAll(
                     () -> assertThat(cancel).as("what the cancel threw").isInstanceOf(IllegalStateException.class),
                     () -> assertThat(heldOnceItReturned).as("the ids the wrapped model holds once the cancelled subscribe returned").isEmpty(),
-                    () -> assertThat(startFailure).as("what waiting for the start of the cancelled subscribe threw").isInstanceOf(SubscriptionNotRunningException.class),
+                    () -> assertThat(startFailure).as("what waiting for the start of the cancelled subscribe threw").isExactlyInstanceOf(IllegalStateException.class),
                     () -> assertThat(later).as("what a subscribe of x once the cancelled subscribe returned threw").isNull(),
                     () -> assertThat(wrapped.events).as("what the wrapped model was told").containsExactly("skipped:x", "subscribed:x"));
         }
@@ -1572,10 +1572,10 @@ class ReactorCatchupSubscribeUnderWayTest {
     private static final class WrappedModelThatSkipsACancelledSubscribe extends WrappedModel implements CancellableRegistration {
 
         // Opts in, so the catch-up calls the subscribe with the cancelled supplier in place of the named one, see
-        // CancellableRegistration.standsInForSubscribe()
+        // CancellableRegistration.standsInForSubscribe(Object)
         @Override
-        public boolean standsInForSubscribe() {
-            return true;
+        public boolean standsInForSubscribe(Object asSeenByCaller) {
+            return asSeenByCaller == this;
         }
 
         @Override
