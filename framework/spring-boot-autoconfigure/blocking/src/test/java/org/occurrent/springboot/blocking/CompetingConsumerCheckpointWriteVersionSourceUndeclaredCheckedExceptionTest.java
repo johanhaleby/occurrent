@@ -67,7 +67,7 @@ class CompetingConsumerCheckpointWriteVersionSourceUndeclaredCheckedExceptionTes
 
     @Test
     @SuppressWarnings("unchecked")
-    void a_resolution_that_throws_an_InterruptedException_answers_empty_and_leaves_the_thread_interrupted() {
+    void a_resolution_that_throws_an_InterruptedException_answers_empty_and_does_not_interrupt_the_thread() {
         // Given
         ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
         when(provider.getIfUnique()).thenAnswer(__ -> {
@@ -83,7 +83,7 @@ class CompetingConsumerCheckpointWriteVersionSourceUndeclaredCheckedExceptionTes
         // Then
         assertThat(thrown).as("what the write version threw while resolving the strategy").isNull();
         assertThat(version.get()).as("the write version while resolving the strategy throws").isEmpty();
-        assertThat(interrupted).as("the thread is interrupted once the write version returned").isTrue();
+        assertThat(interrupted).as("the thread is interrupted once the write version returned").isFalse();
     }
 
     @SuppressWarnings("unchecked")
