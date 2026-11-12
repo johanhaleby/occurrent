@@ -394,12 +394,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         if (!resumeFromMarkerVersions) {
             return afterVersions.isPresent()
                     ? Mono.error(new DcbSnapshotInvalidException(criteria, afterVersions.get(), "Resuming from marker versions is turned off for this event store (resumeFromMarkerVersions)"))
-                    : readWithoutMarkerVersions(criteria, options);
+                    : readWithoutMarkerVersionsBindingNothingUnlessConfirming(criteria, options);
         }
         if (criteria instanceof DcbCriteria.MatchAll) {
             return Mono.defer(() -> {
                 afterVersions.ifPresent(saved -> DcbMarkerVersionsSupport.requireResumable(criteria, saved, Map.of()));
-                return readWithoutMarkerVersions(criteria, options);
+                return readWithoutMarkerVersionsBindingNothingUnlessConfirming(criteria, options);
             });
         }
         return callerTransactionActive().flatMap(callerTransactionActive -> {
@@ -508,7 +508,37 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         Optional<DcbMarkerVersions> afterVersions = options.afterVersions();
         return afterVersions.isPresent()
                 ? Mono.error(new DcbSnapshotInvalidException(criteria, afterVersions.get(), reason, cause))
-                : readWithoutMarkerVersions(criteria, options);
+                : readWithoutMarkerVersionsBindingNothingUnlessConfirming(criteria, options);
+    }
+
+    // In a scope of the caller's with no transaction and no session bound, a read through the template would bind a session
+    // transaction that an append in the scope then joins without the store's retry. Only a read that confirms its append
+    // before saving asks for that.
+    private Mono<DcbEventStream> readWithoutMarkerVersionsBindingNothingUnlessConfirming(DcbCriteria criteria, DcbReadOptions options) {
+        if (options.confirmsAppendBeforeSaving()) {
+            return readWithoutMarkerVersions(criteria, options);
+        }
+        return callerTransactionActive().zipWith(synchronization()).flatMap(state -> !state.getT1() && state.getT2() == Synchronization.NO_SESSION
+                ? readWithoutMarkerVersionsOnSessionOfItsOwn(criteria, options)
+                : readWithoutMarkerVersions(criteria, options));
+    }
+
+    private Mono<DcbEventStream> readWithoutMarkerVersionsOnSessionOfItsOwn(DcbCriteria criteria, DcbReadOptions options) {
+        return Mono.usingWhen(mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build()),
+                clientSession -> Mono.defer(() -> {
+                    ReactiveMongoOperations template = mongoTemplate.withSession(clientSession);
+                    if (!(template instanceof ReactiveMongoTemplate sessionTemplate)) {
+                        throw new IllegalStateException("The session-bound template is a " + template.getClass().getName() + " and not a ReactiveMongoTemplate, so the read can't be kept out of the synchronization.");
+                    }
+                    sessionTemplate.setSessionSynchronization(NEVER);
+                    Mono<Long> position = sessionTemplate.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName)
+                            .map(document -> ((Number) document.get(DcbMarkerModel.COUNTER_POSITION)).longValue())
+                            .defaultIfEmpty(0L);
+                    return readWithoutMarkerVersions(criteria, options, consistencyToken(criteria, sessionTemplate), position, sessionTemplate, queryOptions);
+                }),
+                clientSession -> Mono.fromRunnable(clientSession::close),
+                (clientSession, error) -> Mono.fromRunnable(clientSession::close),
+                clientSession -> Mono.fromRunnable(clientSession::close));
     }
 
     // Carries the phase a read with marker versions failed in to the fallback, and never leaves this class

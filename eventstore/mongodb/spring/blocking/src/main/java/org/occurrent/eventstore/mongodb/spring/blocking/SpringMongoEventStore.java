@@ -355,11 +355,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             if (afterVersions.isPresent()) {
                 throw new DcbSnapshotInvalidException(criteria, afterVersions.get(), "Resuming from marker versions is turned off for this event store (resumeFromMarkerVersions)");
             }
-            return readWithoutMarkerVersions(criteria, options);
+            return readWithoutMarkerVersionsBindingNothingUnlessConfirming(criteria, options);
         }
         if (criteria instanceof DcbCriteria.MatchAll) {
             afterVersions.ifPresent(saved -> DcbMarkerVersionsSupport.requireResumable(criteria, saved, Map.of()));
-            return readWithoutMarkerVersions(criteria, options);
+            return readWithoutMarkerVersionsBindingNothingUnlessConfirming(criteria, options);
         }
 
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
@@ -468,7 +468,25 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (afterVersions.isPresent()) {
             throw new DcbSnapshotInvalidException(criteria, afterVersions.get(), reason, cause);
         }
-        return readWithoutMarkerVersions(criteria, options);
+        return readWithoutMarkerVersionsBindingNothingUnlessConfirming(criteria, options);
+    }
+
+    // In a scope of the caller's with no transaction and no session bound, a read through the template would bind a session
+    // transaction that an append in the scope then joins without the store's retry. Only a read that confirms its append
+    // before saving asks for that.
+    private DcbEventStream readWithoutMarkerVersionsBindingNothingUnlessConfirming(DcbCriteria criteria, DcbReadOptions options) {
+        boolean readWouldBindASession = !options.confirmsAppendBeforeSaving()
+                && TransactionSynchronizationManager.isSynchronizationActive()
+                && !TransactionSynchronizationManager.isActualTransactionActive()
+                && TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) == null;
+        if (!readWouldBindASession) {
+            return readWithoutMarkerVersions(criteria, options);
+        }
+        try (ClientSession session = mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build())) {
+            MongoTemplate sessionTemplate = mongoTemplate.withSession(session);
+            sessionTemplate.setSessionSynchronization(NEVER);
+            return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(criteria, sessionTemplate), () -> positionOf(sessionTemplate), sessionTemplate, queryOptions);
+        }
     }
 
     @Override
@@ -1049,7 +1067,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     @Override
     public long currentPosition() {
         requirePosition();
-        Document document = mongoTemplate.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName);
+        return positionOf(mongoTemplate);
+    }
+
+    private long positionOf(MongoTemplate template) {
+        Document document = template.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName);
         return document == null ? 0 : ((Number) document.get(DcbMarkerModel.COUNTER_POSITION)).longValue();
     }
 
