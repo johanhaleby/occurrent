@@ -1571,11 +1571,12 @@ class ReactorCatchupSubscribeUnderWayTest {
     // ReactorDurableSubscriptionModel do. The tests order the cancel and the registration themselves, so no lock is taken
     private static final class WrappedModelThatSkipsACancelledSubscribe extends WrappedModel implements CancellableRegistration {
 
-        // Declared here, as the shipped models declare theirs, so the catch-up calls the subscribe of
-        // CancellableRegistration in its place, see CancellableRegistration.standsInForSubscribe
+        // Declared here and not the named subscribe, so the catch-up calls the subscribe of CancellableRegistration
+        // in place of the named one, see CancellableRegistration.standsInForSubscribe
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
-            return super.subscribe(subscriptionId, filter, startAt, action);
+        public @Nullable Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action,
+                                                BooleanSupplier cancelled) {
+            return super.subscribe(subscriptionId, filter, startAt, action, cancelled);
         }
     }
 }

@@ -39,6 +39,7 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.internal.CancellableRegistration;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorStreamCatchupSubscriptionModel;
 import reactor.core.publisher.Flux;
@@ -443,6 +444,51 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
         }
 
         @Test
+        void calls_the_named_subscribe_a_subclass_overrides_that_declares_cancellable_registration_again() {
+            // Given
+            OverridingDurableModelDeclaringCancellableRegistration durable = new OverridingDurableModelDeclaringCancellableRegistration(new RecordingSubscriptionModel("feed"));
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(durable, new NoReplay());
+
+            // When
+            Subscription subscription = catchup.subscribe("x", StreamSubscriptionFilter.filter(Filter.all()), StartAt.now(), NO_ACTION);
+
+            // Then
+            assertAll(
+                    () -> assertThat(durable.subscribed).as("the ids the override subscribed").containsExactly("x"),
+                    () -> assertThat(subscription.waitUntilStarted().block(TIMEOUT)).as("what waiting for the subscription gives").isNull());
+        }
+
+        @Test
+        void calls_the_named_subscribe_a_subclass_overrides_beside_the_cancellable_one() {
+            // Given
+            OverridingBothSubscribesDurableModel durable = new OverridingBothSubscribesDurableModel(new RecordingSubscriptionModel("feed"));
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(durable, new NoReplay());
+
+            // When
+            Subscription subscription = catchup.subscribe("x", StreamSubscriptionFilter.filter(Filter.all()), StartAt.now(), NO_ACTION);
+
+            // Then
+            assertAll(
+                    () -> assertThat(durable.subscribed).as("the ids the named override subscribed").containsExactly("x"),
+                    () -> assertThat(subscription.waitUntilStarted().block(TIMEOUT)).as("what waiting for the subscription gives").isNull());
+        }
+
+        @Test
+        void calls_the_named_subscribe_a_middle_class_overrides_when_a_lower_class_overrides_only_the_cancellable_one() {
+            // Given
+            LowerOverridingCancellableDurableModel durable = new LowerOverridingCancellableDurableModel(new RecordingSubscriptionModel("feed"));
+            ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(durable, new NoReplay());
+
+            // When
+            Subscription subscription = catchup.subscribe("x", StreamSubscriptionFilter.filter(Filter.all()), StartAt.now(), NO_ACTION);
+
+            // Then
+            assertAll(
+                    () -> assertThat(durable.subscribed).as("the ids the named override subscribed").containsExactly("x"),
+                    () -> assertThat(subscription.waitUntilStarted().block(TIMEOUT)).as("what waiting for the subscription gives").isNull());
+        }
+
+        @Test
         void a_cancelled_subscribe_fails_its_start_after_a_later_subscribe_took_the_id_over_a_model_that_only_streams_events() throws Exception {
             cancelledSubscribeFailsItsStartAfterALaterSubscribeTookTheId(new RecordingSubscriptionModel("feed"));
         }
@@ -473,6 +519,46 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
                     () -> assertThat(thrown).as("what the cancelled subscribe threw").isNull(),
                     () -> assertThat(startFailure).as("what waiting for the cancelled subscribe threw").isInstanceOf(SubscriptionNotRunningException.class),
                     () -> assertThat(catchup.isRunning("x")).as("whether the later subscribe of x runs").isTrue());
+        }
+    }
+
+    @Nested
+    class StandsInForSubscribe {
+
+        @Test
+        void answers_true_for_the_shipped_model() {
+            assertThat(CancellableRegistration.standsInForSubscribe(new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage())))
+                    .as("whether the shipped model stands in for its named subscribe").isTrue();
+        }
+
+        @Test
+        void answers_false_for_a_subclass_that_overrides_only_the_named_subscribe() {
+            assertThat(CancellableRegistration.standsInForSubscribe(new OverridingDurableModel(new RecordingSubscriptionModel("feed"))))
+                    .as("whether a subclass overriding the named subscribe stands in for it").isFalse();
+        }
+
+        @Test
+        void answers_false_for_a_subclass_that_overrides_only_the_named_subscribe_and_declares_cancellable_registration_again() {
+            assertThat(CancellableRegistration.standsInForSubscribe(new OverridingDurableModelDeclaringCancellableRegistration(new RecordingSubscriptionModel("feed"))))
+                    .as("whether a subclass overriding the named subscribe and declaring the interface again stands in for it").isFalse();
+        }
+
+        @Test
+        void answers_false_for_a_subclass_that_overrides_the_named_subscribe_beside_the_cancellable_one() {
+            assertThat(CancellableRegistration.standsInForSubscribe(new OverridingBothSubscribesDurableModel(new RecordingSubscriptionModel("feed"))))
+                    .as("whether a subclass overriding both subscribes stands in for the named one").isFalse();
+        }
+
+        @Test
+        void answers_false_for_a_class_that_overrides_only_the_cancellable_subscribe_below_a_class_overriding_the_named_one() {
+            assertThat(CancellableRegistration.standsInForSubscribe(new LowerOverridingCancellableDurableModel(new RecordingSubscriptionModel("feed"))))
+                    .as("whether a class overriding only the cancellable subscribe below an override of the named one stands in for it").isFalse();
+        }
+
+        @Test
+        void answers_true_for_a_subclass_that_overrides_only_the_cancellable_subscribe() {
+            assertThat(CancellableRegistration.standsInForSubscribe(new HeldOnceDurableModel(new RecordingSubscriptionModel("feed"))))
+                    .as("whether a subclass overriding the cancellable subscribe stands in for the named one").isTrue();
         }
     }
 
@@ -544,6 +630,70 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
             subscribed.add(subscriptionId);
             return super.subscribe(subscriptionId, filter, startAt, action);
+        }
+    }
+
+    // As OverridingDurableModel, and declares CancellableRegistration again
+    private static final class OverridingDurableModelDeclaringCancellableRegistration extends ReactorDurableSubscriptionModel implements CancellableRegistration {
+        final List<String> subscribed = new CopyOnWriteArrayList<>();
+
+        OverridingDurableModelDeclaringCancellableRegistration(CheckpointAwareSubscriptionModel wrapped) {
+            super(wrapped, new InMemoryCheckpointStorage());
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            subscribed.add(subscriptionId);
+            return super.subscribe(subscriptionId, filter, startAt, action);
+        }
+    }
+
+    // Overrides both subscribes, the cancellable one delegating to super
+    private static final class OverridingBothSubscribesDurableModel extends ReactorDurableSubscriptionModel {
+        final List<String> subscribed = new CopyOnWriteArrayList<>();
+
+        OverridingBothSubscribesDurableModel(CheckpointAwareSubscriptionModel wrapped) {
+            super(wrapped, new InMemoryCheckpointStorage());
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            subscribed.add(subscriptionId);
+            return super.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public @Nullable Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
+                                                Function<CloudEvent, Mono<Void>> action, BooleanSupplier cancelled) {
+            return super.subscribe(subscriptionId, filter, startAt, action, cancelled);
+        }
+    }
+
+    // Overrides the named subscribe, and is extended by a class that overrides only the cancellable one
+    private static class MiddleOverridingNamedDurableModel extends ReactorDurableSubscriptionModel {
+        final List<String> subscribed = new CopyOnWriteArrayList<>();
+
+        MiddleOverridingNamedDurableModel(CheckpointAwareSubscriptionModel wrapped) {
+            super(wrapped, new InMemoryCheckpointStorage());
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            subscribed.add(subscriptionId);
+            return super.subscribe(subscriptionId, filter, startAt, action);
+        }
+    }
+
+    // Overrides only the cancellable subscribe, below a class that overrides the named one
+    private static final class LowerOverridingCancellableDurableModel extends MiddleOverridingNamedDurableModel {
+        LowerOverridingCancellableDurableModel(CheckpointAwareSubscriptionModel wrapped) {
+            super(wrapped);
+        }
+
+        @Override
+        public @Nullable Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
+                                                Function<CloudEvent, Mono<Void>> action, BooleanSupplier cancelled) {
+            return super.subscribe(subscriptionId, filter, startAt, action, cancelled);
         }
     }
 

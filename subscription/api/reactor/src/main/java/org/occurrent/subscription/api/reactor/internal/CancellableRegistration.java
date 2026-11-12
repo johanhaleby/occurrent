@@ -24,7 +24,6 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.Subscription;
 import reactor.core.publisher.Mono;
 
-import java.util.Arrays;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
@@ -58,23 +57,29 @@ public interface CancellableRegistration {
                                      Function<CloudEvent, Mono<Void>> action, BooleanSupplier cancelled);
 
     /**
-     * Whether {@code model}'s {@code subscribe(String, SubscriptionFilter, StartAt, Function)} is declared by a class
-     * that implements this interface itself, so calling the {@code subscribe(..)} of this interface runs the same code.
-     * It answers {@code false} for a subclass that overrides that {@code subscribe(..)}, since calling this interface
-     * would skip the override. A caller then calls the override, and the subclass keeps the cleanup a model that
-     * doesn't implement this interface gets.
+     * Whether no subclass of the topmost class of {@code model} that implements this interface overrides
+     * {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, so calling the {@code subscribe(..)} of this
+     * interface skips no override. That topmost class subscribes in both {@code subscribe(..)} methods the same way, as
+     * this interface asks. It answers {@code false} when a subclass overrides that {@code subscribe(..)}, also when the
+     * subclass declares this interface again or overrides the {@code subscribe(..)} of this interface too. A caller then
+     * calls the override, and the subclass keeps the cleanup a model that doesn't implement this interface gets. A
+     * subclass that overrides only the {@code subscribe(..)} of this interface answers {@code true}.
      *
      * @param model The model to call.
      * @return {@code true} when the {@code subscribe(..)} of this interface can be called in place of the one of
      * {@code SubscriptionModel}.
      */
     static boolean standsInForSubscribe(CancellableRegistration model) {
-        Class<?> declaring;
+        Class<?> declaringSubscribe;
         try {
-            declaring = model.getClass().getMethod("subscribe", String.class, SubscriptionFilter.class, StartAt.class, Function.class).getDeclaringClass();
+            declaringSubscribe = model.getClass().getMethod("subscribe", String.class, SubscriptionFilter.class, StartAt.class, Function.class).getDeclaringClass();
         } catch (NoSuchMethodException e) {
             return false;
         }
-        return Arrays.asList(declaring.getInterfaces()).contains(CancellableRegistration.class);
+        Class<?> topmostImplementing = model.getClass();
+        while (topmostImplementing.getSuperclass() != null && CancellableRegistration.class.isAssignableFrom(topmostImplementing.getSuperclass())) {
+            topmostImplementing = topmostImplementing.getSuperclass();
+        }
+        return declaringSubscribe.isAssignableFrom(topmostImplementing);
     }
 }
