@@ -830,8 +830,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     // is free and that one must not be forgotten
                     forgetTheDeliveriesOf(subscriptionId);
                     @Nullable StartRefusal startRefusal = startRefusals.remove(cc.subscriptionIdAndSubscriberId);
+                    competingConsumers.remove(cc.subscriptionIdAndSubscriberId);
                     try {
-                        competingConsumers.remove(cc.subscriptionIdAndSubscriberId);
                         onceACancelHasFreedTheId.run();
                         mayRunWhileStopped.remove(cc.subscriptionIdAndSubscriberId);
                     } finally {
