@@ -49,6 +49,7 @@ import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -58,6 +59,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -241,6 +243,60 @@ class StreamCatchupTakeoverLifecycleTest {
                 () -> assertThat(received).as("the event written in between").filteredOn(writtenInTheGap::equals).hasSize(1),
                 () -> assertThat(delivered).as("the event written after the handover is delivered").isTrue()
         );
+    }
+
+    // A storage written in Kotlin can throw a checked exception without declaring it
+    @Test
+    @Timeout(60)
+    void a_takeover_whose_storage_throws_a_checked_exception_tries_again_and_delivers_what_was_written_in_between() {
+        // Given
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> write(writtenInTheGap));
+        IOException unreachable = new IOException("The checkpoint storage cannot be reached right now");
+        AtomicBoolean threw = new AtomicBoolean();
+        storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                if (Thread.currentThread().getName().startsWith("occurrent-catchup-takeover-") && threw.compareAndSet(false, true)) {
+                    throw sneaky(unreachable);
+                }
+                return super.save(id, checkpoint, condition);
+            }
+        };
+        create(true);
+
+        // When
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        boolean delivered = waitUpTo(Duration.ofSeconds(10), () -> received.contains(writtenInTheGap));
+
+        // Then
+        assertThat(threw).as("the storage threw as the takeover stored where it replays from").isTrue();
+        assertThat(delivered).as("the event written in between, delivered once the takeover tried again").isTrue();
+    }
+
+    @Test
+    @Timeout(60)
+    void a_takeover_whose_storage_throws_an_InterruptedException_tries_again_and_delivers_what_was_written_in_between() {
+        // Given
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> write(writtenInTheGap));
+        AtomicInteger savesByTheTakeover = new AtomicInteger();
+        storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                if (Thread.currentThread().getName().startsWith("occurrent-catchup-takeover-") && savesByTheTakeover.incrementAndGet() == 1) {
+                    throw sneaky(new InterruptedException("The checkpoint storage was interrupted"));
+                }
+                return super.save(id, checkpoint, condition);
+            }
+        };
+        create(true);
+
+        // When
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        boolean delivered = waitUpTo(Duration.ofSeconds(10), () -> received.contains(writtenInTheGap));
+
+        // Then
+        assertThat(savesByTheTakeover.get()).as("the saves the takeover made, the first of which threw").isGreaterThan(1);
+        assertThat(delivered).as("the event written in between, delivered once the takeover tried again").isTrue();
     }
 
     @ParameterizedTest(name = "storing={0}")
@@ -665,6 +721,11 @@ class StreamCatchupTakeoverLifecycleTest {
             }
         }
         return true;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException sneaky(Throwable t) throws E {
+        throw (E) t;
     }
 
     private static void awaitUnchecked(CountDownLatch latch) {

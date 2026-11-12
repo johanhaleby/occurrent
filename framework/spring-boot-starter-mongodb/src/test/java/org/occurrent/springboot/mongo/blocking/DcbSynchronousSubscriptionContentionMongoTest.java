@@ -58,9 +58,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * test covering that combination against a real MongoDB transaction: the other synchronous-subscription tests use the
  * in-memory store, where none of this applies.
  * <p>
- * Contention is guaranteed rather than engineered, because every append increments the one global position counter
- * document, so concurrent commands collide there whatever boundary they target. Remove the retry from
- * {@code SpringTransactionExecutor} and this test fails.
+ * Every command appends an event of the same type, so concurrent commands increment the same type marker and collide
+ * on it, whatever tag they target. Remove the retry from {@code SpringTransactionExecutor} and this test fails.
  */
 @DisplayName("DCB commands with a synchronous subscription under contention")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -112,7 +111,7 @@ class DcbSynchronousSubscriptionContentionMongoTest {
         }
 
         assertThat(failures)
-                .as("Every command must commit. A conflict on the shared position counter has to be retried by the executor, because the store joins the transaction the executor opened and cannot retry it")
+                .as("Every command must commit. A conflict on the shared type marker has to be retried by the executor, because the store joins the transaction the executor opened and cannot retry it")
                 .isEmpty();
         assertThat(countingSubscriber.count())
                 .as("The synchronous handler must see every committed event at least once")

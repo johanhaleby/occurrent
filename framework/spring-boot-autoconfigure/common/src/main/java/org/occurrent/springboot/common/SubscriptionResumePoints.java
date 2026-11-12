@@ -37,8 +37,8 @@ import org.occurrent.dsl.dcb.DcbEventMetadata;
  * replay from where it started.
  * <p>
  * The checkpoint is the string the subscription delivered with that event, {@link EventMetadata#getCheckpoint()} or
- * {@link DcbEventMetadata#checkpoint()}. The string means something only to a catch-up subscription, and
- * {@link CheckpointCarrier#checkpoint()} says what the other subscription models do with it.
+ * {@link DcbEventMetadata#checkpoint()}. The checkpoint of a replayed event means something only to a catch-up
+ * subscription, and {@link CheckpointCarrier#checkpoint()} says what a MongoDB subscription model does with it.
  * <p>
  * A non-null answer wins over the checkpoint that Spring Boot's own {@code CheckpointStorage} holds for the
  * subscription. When that stored checkpoint is newer than the answer, the events between the two are delivered again.

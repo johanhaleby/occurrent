@@ -41,6 +41,7 @@ import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.eventstore.mongodb.spring.reactor.CommitRetryingReactiveMongoTransactionManager;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
@@ -127,7 +128,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @ConditionalOnMissingBean(ReactiveMongoTransactionManager.class)
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public ReactiveMongoTransactionManager reactiveMongoTransactionManager(ReactiveMongoDatabaseFactory dbFactory) {
-        return new ReactiveMongoTransactionManager(dbFactory);
+        return new CommitRetryingReactiveMongoTransactionManager(dbFactory);
     }
 
     @Bean
@@ -233,7 +234,8 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         composedCatchupModel.suppliedBy(durableSubscriptionModel, catchupLayer);
         // A default StartAt resolves to StartAt.subscriptionModelDefault() (see StartPositionSupport), which both
         // the stream and DCB catch-up layers composeCatchupLayer can build classify as live, the same as a
-        // checkpoint that is neither global nor time-based, so a wiped checkpoint changes nothing for it either.
+        // checkpoint that is neither global nor time-based, so a start with no checkpoint stored doesn't replay. One
+        // that finds a catch-up checkpoint in storage replays from it (ADR 166, tested on the stream layer).
         composedCatchupModel.defaultBypassesCatchup();
         if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
             // Stopped here rather than after the annotations are scanned, so every subscription is registered on a

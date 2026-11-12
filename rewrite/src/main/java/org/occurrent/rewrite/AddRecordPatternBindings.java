@@ -35,12 +35,12 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * The shared mechanics of the record-pattern recipes, {@link MigrateAppendResultRecordPattern} and
- * {@link MigrateDcbMarkerVersionsRecordPattern}. A record grew components, so a deconstruction pattern against it
- * that still has the old number of bindings stops compiling. For each {@link Target} this appends one
- * {@code var <component name>} binding per added component to any pattern of exactly the old arity. Any other arity
- * is left alone, since four where three was expected means the binding is already there, and anything else is not
- * a shape this knows how to extend.
+ * The shared mechanics of the record-pattern recipes, {@link MigrateAppendResultRecordPattern},
+ * {@link MigrateDcbMarkerVersionsRecordPattern} and {@link MigrateNativeMongoSubscriptionRecordPattern}. A record
+ * grew components, so a deconstruction pattern against it that still has the old number of bindings stops compiling.
+ * For each {@link Target} this appends one {@code var <component name>} binding per added component to any pattern
+ * of exactly the old arity. Any other arity is left alone, since four where three was expected means the binding is
+ * already there, and anything else is not a shape this knows how to extend.
  */
 final class AddRecordPatternBindings {
 

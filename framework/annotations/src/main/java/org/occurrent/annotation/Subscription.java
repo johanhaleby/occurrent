@@ -61,11 +61,13 @@ import java.lang.annotation.*;
  * {@link #eventTypes()}.
  * </p>
  * <p>
- * Registration happens once every singleton in the application is instantiated, so a subscription starting at
- * {@link StartPosition#NOW} does not see an event written during singleton construction, {@code @PostConstruct}
- * included. A write from a later startup phase, an {@code ApplicationRunner} for example, or from a bean created
- * after registration such as one marked {@code @Lazy}, is delivered normally, since registration itself precedes
- * both.
+ * Registration happens once every singleton in the application is instantiated, so a subscription that starts at
+ * the present does not see an event written during singleton construction, {@code @PostConstruct} included. That is
+ * a {@link StartPosition#NOW} start the first time the subscription runs, and on every run when
+ * {@link #resumeBehavior()} is {@code SAME_AS_START_AT}. Under the default {@code resumeBehavior} a later run
+ * resumes from the position the subscription model stored, if it stores one, and delivers such an event. A write
+ * from a later startup phase, an {@code ApplicationRunner} for example, or from a bean created after registration
+ * such as one marked {@code @Lazy}, is delivered normally, since registration itself precedes both.
  * </p>
  *
  * <h4>Metadata</h4>

@@ -38,13 +38,18 @@ import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.time.Duration;
 import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.StringJoiner;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -203,6 +208,35 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // on JDK 21 to 23
     private final ConcurrentMap<String, IdLock> idLocks = new ConcurrentHashMap<>();
 
+    // The subscribes that ask their function before they take the lock for their id, kept until they hold it
+    private final Set<Asked> asking = ConcurrentHashMap.newKeySet();
+
+    // How long a resume of an id on another thread waits for the function of a subscribe of the id to return
+    private static final Duration ASKED_WAIT = Duration.ofSeconds(10);
+
+    private static final class Asked {
+        private final String subscriptionId;
+        private final Thread asker = Thread.currentThread();
+        // Completes once the function has returned or thrown
+        private final CompletableFuture<Void> returned = new CompletableFuture<>();
+        // Completes once the subscribe holds the lock for the id or its function has thrown
+        private final CompletableFuture<Void> settled = new CompletableFuture<>();
+        // Set by a cancel on another thread before the subscribe holds the lock for the id
+        private volatile boolean cancelled;
+
+        private Asked(String subscriptionId) {
+            this.subscriptionId = subscriptionId;
+        }
+    }
+
+    // What a subscribe cancelled while its function was asked returns. It never started and nothing will start it
+    private record CancelledWhileAsked(String id) implements Subscription {
+        @Override
+        public boolean waitUntilStarted(Duration timeout) {
+            return false;
+        }
+    }
+
     private <T> T underLockFor(String subscriptionId, Supplier<T> call) {
         IdLock idLock = idLocks.compute(subscriptionId, (__, held) -> held == null ? new IdLock() : held.oneMoreCaller());
         try {
@@ -222,6 +256,47 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             call.run();
             return null;
         });
+    }
+
+    private void settle(Asked asked) {
+        asking.remove(asked);
+        asked.returned.complete(null);
+        asked.settled.complete(null);
+    }
+
+    // A resume waits for the subscribes of the id whose function another thread asks, so it still comes after them. It
+    // waits up to ASKED_WAIT for the functions to return, and then for those subscribes to take the lock with no limit,
+    // as a resume always waited for the lock. The asking thread itself goes ahead. An interrupt doesn't end the wait,
+    // and is set again once the wait is over
+    private void waitForAsksOnOtherThreads(String subscriptionId) {
+        Thread current = Thread.currentThread();
+        List<Asked> asks = asking.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != current).toList();
+        if (asks.isEmpty()) {
+            return;
+        }
+        CompletableFuture<Void> returned = CompletableFuture.allOf(asks.stream().map(asked -> asked.returned).toArray(CompletableFuture[]::new));
+        long deadline = System.nanoTime() + ASKED_WAIT.toNanos();
+        boolean interrupted = false;
+        try {
+            while (!returned.isDone()) {
+                try {
+                    returned.get(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                } catch (ExecutionException e) {
+                    break;
+                } catch (TimeoutException e) {
+                    throw new IllegalStateException("Cannot resume subscription " + subscriptionId + ", because the StartAt.dynamic function of a subscribe of it on another thread didn't return within "
+                            + ASKED_WAIT.toMillis() + " ms. Nothing was changed.");
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        // join doesn't end on an interrupt and keeps the flag set
+        CompletableFuture.allOf(asks.stream().map(asked -> asked.settled).toArray(CompletableFuture[]::new)).join();
     }
 
     /**
@@ -393,17 +468,51 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
-        // Held for the whole method, not just the opt-out branch, so subscribe, resumeSubscription and
+        // The caller's function runs here, with no lock held, since it can wait for a cancel of the id on another thread.
+        // A cancel made before this takes the lock finds asked, and then nothing reaches the wrapped model. A start that
+        // isn't dynamic asks nothing, so a cancel doesn't stop it, as before the function was asked ahead of the lock
+        Asked asked = new Asked(subscriptionId);
+        if (startAt.isDynamic()) {
+            asking.add(asked);
+        }
+        StartAt answered = startAt;
+        try {
+            while (answered != null && !answered.isDefault() && answered.isDynamic()) {
+                answered = answered.get(new SubscriptionModelContext(DurableSubscriptionModel.class));
+            }
+        } catch (Throwable e) {
+            // Throwable, since a Kotlin function can throw a checked exception, and an entry left in asking makes every
+            // later resume of the id on another thread throw after 10 seconds
+            settle(asked);
+            // A subscribe whose function throws still stops what an earlier subscribe of the id left untracked, as when
+            // the function was asked under the lock
+            try {
+                runUnderLockFor(subscriptionId, () -> stopUntrackedRegistrations(subscriptionId));
+            } catch (Throwable stopFailure) {
+                // Throwable, since a wrapped model written in Kotlin can throw a checked exception
+                if (stopFailure != e) {
+                    e.addSuppressed(stopFailure);
+                }
+            }
+            throw e;
+        }
+        asked.returned.complete(null);
+        StartAt askedOnce = answered;
+        // Held for the rest of the method, not just the opt-out branch, so subscribe, resumeSubscription and
         // cancelSubscription for the same id stay serialized against notCheckpointedSubscriptions (see the field
         // comment above). The blocking MongoDB models evaluate the returned StartAt on their executor each time
         // they open a change stream, outside this lock, so a cancelSubscription can run while a later evaluation
         // reads the checkpoint or writes a first position. An evaluation that comes while this records the first
         // position waits for that write and takes its outcome, see FirstPosition.
         return underLockFor(subscriptionId, () -> {
+            settle(asked);
+            if (asked.cancelled) {
+                return new CancelledWhileAsked(subscriptionId);
+            }
             stopUntrackedRegistrations(subscriptionId);
             CheckpointRegistration registration = new CheckpointRegistration();
             AtomicReference<@Nullable FirstPosition> firstPositionToRecord = new AtomicReference<>();
-            StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt, registration, firstPositionToRecord::set);
+            StartAt startAtToUse = askedOnce == null ? null : generateStartAtPositionFrom(subscriptionId, askedOnce, registration, firstPositionToRecord::set);
             if (startAtToUse == null) {
                 // Not allowed to start, delegate to the wrapped subscription instead. Whether it was already
                 // marked is captured before marking it, so a duplicate attempt against an already-active,
@@ -550,7 +659,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private void recordOrCancel(String subscriptionId, FirstPosition firstPosition, CheckpointRegistration registration) {
         try {
             firstPosition.recordOnceAccepted();
-        } catch (RuntimeException | Error refusal) {
+        } catch (Throwable refusal) {
+            // Throwable, since a storage or wrapped model written in Kotlin can throw a checked exception
             // Ended before the cancel, so an evaluation that the cancel waits for stores nothing
             firstPosition.subscribeEnded();
             cancelAfterFailedSubscribe(subscriptionId, registration, refusal);
@@ -567,7 +677,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             subscriptionModel.cancelSubscription(subscriptionId);
             // The wrapped model doesn't wait for an action that is running
             keepUntracked(subscriptionId, registration);
-        } catch (RuntimeException | Error cancelFailure) {
+        } catch (Throwable cancelFailure) {
+            // Throwable, since a wrapped model written in Kotlin can throw a checked exception
             registration.keepCheckpointWhenCancelled();
             track(subscriptionId, registration);
             failure.addSuppressed(new IllegalStateException("Cancelling subscription " + subscriptionId + " in the wrapped " +
@@ -676,7 +787,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         @Nullable Checkpoint stored;
         try {
             stored = storage.read(subscriptionId);
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception, since a storage written in Kotlin can throw a checked exception
             throw StartPositionAlreadyPinnedException.readingTheStoredPositionBackFailed(subscriptionId, positionRead, e);
         }
         if (stored == null) {
@@ -692,7 +804,6 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // recorded or adopted, and before any evaluation returns it. It learns at most once for each subscribe, and never
     // for a refused one or for a StartAt of the caller's own. An evaluation that records a first position outside the
     // settled outcome writes it through the registration, so once the registration has stopped writing, it is refused
-    @Nullable
     private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt, CheckpointRegistration registration,
                                                 Consumer<FirstPosition> firstPositionToRecord) {
         final StartAt startAtToUse;
@@ -722,13 +833,6 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 firstPosition.positionStored();
                 return StartAt.checkpoint(checkpoint);
             });
-        } else if (originalStartAt.isDynamic()) {
-            var subscriptionModelContext = new SubscriptionModelContext(DurableSubscriptionModel.class);
-            var nextStartAt = originalStartAt.get(subscriptionModelContext);
-            if (nextStartAt != null) {
-                return generateStartAtPositionFrom(subscriptionId, nextStartAt, registration, firstPositionToRecord);
-            }
-            return null;
         } else {
             startAtToUse = originalStartAt;
         }
@@ -775,11 +879,16 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * present and would silently drop whatever was published while this subscription was paused. For the same
      * reason a MongoDB model resumes from its own tracked position when the stored checkpoint is one it cannot open
      * its change stream at, such as the position a catch-up stores while it replays.
+     * <p>
+     * A subscribe of the id on another thread whose {@code StartAt.dynamic} function is still being asked is waited
+     * for. If that function doesn't return within 10 seconds, this throws {@link IllegalStateException} and changes
+     * nothing.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         // Held for the whole decision, reposition call included, so a concurrent subscribe or cancelSubscription
         // for this id cannot land between the marker check and acting on it.
+        waitForAsksOnOtherThreads(subscriptionId);
         return underLockFor(subscriptionId, () -> resumeFromStoredCheckpoint(subscriptionId));
     }
 
@@ -830,7 +939,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * or one the wrapped model doesn't report as paused, is passed on to the wrapped model as it is and nothing is
      * stored. The wrapped model then throws for a subscription it doesn't hold paused.
      * <p>
-     * Holds the same lock per subscription id as {@link #resumeSubscription(String)} for the whole call.
+     * Holds the same lock per subscription id as {@link #resumeSubscription(String)} for the whole call, and waits for a
+     * subscribe of the id on another thread as that method does.
      *
      * @throws UnsupportedOperationException if the wrapped model is not repositionable, in which case
      *                                       {@link RepositionableSubscriptions#findIn} doesn't find this model either.
@@ -841,6 +951,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel())
                 .orElseThrow(() -> new UnsupportedOperationException(getWrappedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"));
+        waitForAsksOnOtherThreads(subscriptionId);
         return underLockFor(subscriptionId, () -> {
             if (notCheckpointedSubscriptions.contains(subscriptionId) || !getWrappedSubscriptionModel().isPaused(subscriptionId)) {
                 return repositionable.resumeSubscription(subscriptionId, startAt);
@@ -865,7 +976,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             storage.save(subscriptionId, position, writeCondition);
             try {
                 return repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(position));
-            } catch (RuntimeException | Error e) {
+            } catch (Throwable e) {
+                // Throwable, since a wrapped model written in Kotlin can throw a checked exception
                 putBack(subscriptionId, previous, writeCondition, e);
                 throw e;
             }
@@ -882,8 +994,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
         try {
             storage.save(subscriptionId, previous, writeCondition);
-        } catch (RuntimeException | Error putBackFailure) {
-            resumeFailure.addSuppressed(putBackFailure);
+        } catch (Throwable putBackFailure) {
+            // Throwable, since a storage written in Kotlin can throw a checked exception
+            if (putBackFailure != resumeFailure) {
+                resumeFailure.addSuppressed(putBackFailure);
+            }
         }
     }
 
@@ -920,12 +1035,21 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * It also stops the checkpoint writes of every subscription the wrapped model may still hold after a
      * {@code subscribe(..)} of the id threw, before it deletes the checkpoint. An action of such a subscription that
      * returns after this call has returned writes no checkpoint, and an evaluation of its start position records none.
+     * <p>
+     * It doesn't wait for a subscribe of the id on another thread whose start-position function is still being asked.
+     * That subscribe subscribes nothing in the wrapped model, and the subscription it returns never starts. A cancel
+     * the function makes on the subscribing thread doesn't stop that subscribe, and neither does a cancel that throws.
      *
      * @param subscriptionId The subscription id to cancel
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
         runUnderLockFor(subscriptionId, () -> {
+            // The subscribes whose function another thread asks once this holds the lock. A subscribe made later waits
+            // for this cancel and then goes ahead. A cancel the function makes on the subscribing thread doesn't stop
+            // that subscribe, as before the function was asked ahead of the lock
+            Thread current = Thread.currentThread();
+            List<Asked> pending = asking.stream().filter(asked -> asked.subscriptionId.equals(subscriptionId) && asked.asker != current).toList();
             subscriptionModel.cancelSubscription(subscriptionId);
             // The wrapped model doesn't wait for an action that is running, so its checkpoint is written before the
             // registrations are cancelled below or not at all. The untracked ones stop before anything is deleted
@@ -938,6 +1062,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
             notCheckpointedSubscriptions.remove(subscriptionId);
             checkpointedSubscriptions.remove(subscriptionId);
+            // Only once the cancel has run without throwing, and still under the lock the subscribe needs, so a
+            // subscribe whose function is asked still goes ahead when the cancel throws
+            pending.forEach(asked -> asked.cancelled = true);
         });
     }
 
@@ -1044,7 +1171,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         void recordOnceAccepted() {
             try {
                 settle();
-            } catch (RuntimeException refusal) {
+            } catch (Exception refusal) {
+                // Exception, since a wrapped model or a storage written in Kotlin can throw a checked exception
                 if (endUnlessSettled()) {
                     throw refusal;
                 }

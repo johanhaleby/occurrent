@@ -7,6 +7,10 @@ Date: 2026-07-30
 Accepted. Adds `StreamConcurrencyConformance` to the TCK ([ADR 77](0077-a-published-tck-for-occurrent-contracts.md)) and
 changes the reactive event store's write path, which has shipped. Resolves #467, #474 and #475.
 
+Amended by [ADR 164](0164-a-spring-mongo-dcb-append-retries-a-transaction-conflict-for-about-two-minutes.md). The reactive
+store's retry of a lost `any()` version race makes 320 retries now, not 15, so the 15-retry ceiling named below no
+longer holds.
+
 ## Context
 
 Optimistic concurrency is the reason an event store takes a `WriteCondition` at all, and until now it was the least

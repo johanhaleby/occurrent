@@ -19,7 +19,9 @@ package org.occurrent.subscription.reactor.durable;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.ThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
@@ -45,6 +47,18 @@ final class LoggedByTheModel implements AutoCloseable {
             return appender.list.stream()
                     .filter(event -> event.getLevel().equals(level))
                     .map(ILoggingEvent::getFormattedMessage)
+                    .toList();
+        }
+    }
+
+    /**
+     * The throwable logged with each message equal to message, or null for a message logged without one.
+     */
+    List<@Nullable Throwable> thrownWith(String message) {
+        synchronized (appender) {
+            return appender.list.stream()
+                    .filter(event -> event.getFormattedMessage().equals(message))
+                    .map(event -> event.getThrowableProxy() instanceof ThrowableProxy proxy ? proxy.getThrowable() : null)
                     .toList();
         }
     }

@@ -254,6 +254,42 @@ class ReactorDurableSubscriptionModelFailedDuplicateCheckTest {
         }
 
         /**
+         * As above, with a lookup that throws a checked exception, which a wrapped model written in Kotlin throws
+         * without declaring it. The subscribe throws it as it is, and the resume fails with it.
+         */
+        @ParameterizedTest(name = "{0}")
+        @MethodSource("org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModelFailedDuplicateCheckTest#everyKindOfWrappedModel")
+        @DisplayName("a resume made while the lookup after the subscribe is set up throws a checked exception fails with that exception")
+        void a_resume_made_while_the_lookup_after_the_subscribe_is_set_up_throws_a_checked_exception_fails_with_that_exception(Lookup lookup) throws Exception {
+            // Given
+            Throwable lookupFailed = ThrownAtTheCall.of("checked exception", "lookup failed");
+            WrappedModel wrapped = wrappedModel(lookup);
+            wrapped.failOnlyTheLookupNumbered(2, lookupFailed);
+            wrapped.holdTheLookupNumbered(2);
+            ExecutorService caller = Executors.newSingleThreadExecutor();
+            try {
+                CompletableFuture<Throwable> subscribing = CompletableFuture.supplyAsync(() -> catchThrowable(() -> subscribe(StartAt.subscriptionModelDefault())), caller);
+                assertThat(wrapped.lookupHeld.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("lookup after the subscribe is set up held").isTrue();
+
+                // When
+                requireModel().pauseSubscription(SUBSCRIPTION_ID);
+                Subscription resumed = requireModel().resumeSubscription(SUBSCRIPTION_ID);
+                wrapped.lookupReleased.countDown();
+                Throwable subscribeThrew = subscribing.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                Throwable resumeFailed = catchThrowable(() -> resumed.waitUntilStarted().toFuture().get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+
+                // Then
+                assertAll(
+                        () -> assertThat(subscribeThrew).as("the exception the subscribe threw").isSameAs(lookupFailed),
+                        () -> assertThat(resumeFailed).as("how waiting for the start of the resume ended").hasCauseReference(lookupFailed)
+                );
+            } finally {
+                wrapped.lookupReleased.countDown();
+                caller.shutdownNow();
+            }
+        }
+
+        /**
          * A pause of the id comes while the lookup after the subscribe is set up runs, and that lookup finds the id held
          * by the wrapped model, so the subscribe is refused as a duplicate. The pause returned normally, so the wrapped
          * model, which holds the id, gets it.
@@ -393,7 +429,7 @@ class ReactorDurableSubscriptionModelFailedDuplicateCheckTest {
         final CountDownLatch lookupReleased = new CountDownLatch(1);
         volatile int heldLookup;
         volatile IntPredicate failsAt = __ -> false;
-        volatile RuntimeException failure = new IllegalStateException("no failure set");
+        volatile Throwable failure = new IllegalStateException("no failure set");
         private final Lookup lookup;
         // The number of the lookup by isRunning(id) that the next isPaused(id) answers for
         private final AtomicInteger askedRunning = new AtomicInteger();
@@ -403,7 +439,7 @@ class ReactorDurableSubscriptionModelFailedDuplicateCheckTest {
         }
 
         // Only the lookup with that number, counting from 1, throws failure
-        void failOnlyTheLookupNumbered(int number, RuntimeException failure) {
+        void failOnlyTheLookupNumbered(int number, Throwable failure) {
             this.failure = failure;
             this.failsAt = lookupNumber -> lookupNumber == number;
         }
@@ -438,7 +474,7 @@ class ReactorDurableSubscriptionModelFailedDuplicateCheckTest {
                 awaitReleased();
             }
             if (failsAt.test(number)) {
-                throw failure;
+                throw ThrownAtTheCall.undeclared(failure);
             }
         }
 
