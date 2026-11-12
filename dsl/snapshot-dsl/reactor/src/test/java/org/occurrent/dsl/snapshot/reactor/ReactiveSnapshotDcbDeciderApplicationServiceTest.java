@@ -594,6 +594,12 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
             public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
                 return Mono.defer(action).flatMap(result -> refuseAfterTheAction.get() ? Mono.<T>error(refusal) : Mono.just(result));
             }
+
+            @Override
+            public Mono<Boolean> allowsReadBeforeTransaction() {
+                // The read and the decision run before this executor, so its refusal comes after a committed append
+                return Mono.just(true);
+            }
         };
         ReactiveSynchronousEventDispatcher dispatcherWithoutEffect = new ReactiveSynchronousEventDispatcher() {
             @Override
