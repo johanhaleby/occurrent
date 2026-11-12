@@ -29,12 +29,14 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Projection;
+import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
@@ -59,10 +61,11 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 /**
- * ADR 132 decision 9's third case: {@code @Projection(recordAppliedAppends = true)} left at the default start
- * position never replays ({@code StartPositionSupport} bypasses the catch-up layer for it unconditionally), so it
- * records but never clears its own memberships on a rebuild. The registrar must warn once at startup naming the
- * projection, and must not warn when {@link StartPosition#BEGINNING} is what the projection actually declared.
+ * ADR 132 decision 9's third case: {@code @Projection(recordAppliedAppends = true)} that is verified never to replay
+ * records but never clears its own memberships on a rebuild, so the registrar warns once at startup naming the
+ * projection. A start at {@link StartPosition#NOW} with {@code SAME_AS_START_AT} is such a start. The default start
+ * position is not, since it resolves to the model default on every layer and a restart that finds a catch-up checkpoint
+ * replays from it, and neither is {@link StartPosition#BEGINNING}.
  * Container-free, following {@link ProjectionAnnotationRecordingPhaseSourceTest}'s mocked {@code Subscribable}.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -96,18 +99,14 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
-    void the_shipped_compositions_default_start_position_warns_naming_the_projection_because_the_starter_registered_that_it_never_replays() {
-        // Simulates what OccurrentMongoAutoConfiguration actually does, a capability-observable model, plus
-        // ComposedDefaultStartPosition told that this exact model is the one its DEFAULT fact is about (issue 871),
-        // and defaultBypassesCatchup() as the separate, owner-supplied fact this warning is keyed on (issue 865).
+    void a_default_start_position_does_not_warn_even_when_the_composition_can_report_its_catch_up_phase() {
+        // DEFAULT resolves to StartAt.subscriptionModelDefault() on every layer, so a restart that finds a catch-up
+        // checkpoint in storage replays from it and the registrar has no fact that this start never replays.
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(mock(Subscription.class));
-        ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
-        composedDefaultStartPosition.suppliedBy(model);
-        composedDefaultStartPosition.defaultBypassesCatchup();
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -115,30 +114,21 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .withBean("defaultStartPositionProjection", DefaultStartPositionProjection.class, DefaultStartPositionProjection::new)
                 .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
                 .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
-                .withBean(ComposedDefaultStartPosition.class, () -> composedDefaultStartPosition)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    assertThat(warnings()).hasSize(1);
-                    assertThat(warnings().get(0).getFormattedMessage())
-                            .contains(PROJECTION_ID)
-                            .contains("recordAppliedAppends = true")
-                            .contains("never replays");
+                    assertThat(warnings()).isEmpty();
                 });
     }
 
     @Test
-    void startAtGlobalPosition_does_not_warn_even_on_the_shipped_composition_because_it_overrides_default_and_genuinely_replays() {
-        // Same owner-registered fact as the test above, but startAtGlobalPosition = 0 takes precedence over the
-        // left-at-default startAt (generateAgnosticStartAt checks it first) and genuinely replays, so the DEFAULT
-        // branch of verifiedNeverReplays must not treat this as the live-only case.
+    void startAtGlobalPosition_does_not_warn_because_it_overrides_default_and_genuinely_replays() {
+        // startAtGlobalPosition = 0 takes precedence over the left-at-default startAt (generateAgnosticStartAt checks
+        // it first) and genuinely replays.
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(true);
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(mock(Subscription.class));
-        ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
-        composedDefaultStartPosition.suppliedBy(model);
-        composedDefaultStartPosition.defaultBypassesCatchup();
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -146,7 +136,6 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .withBean("startAtGlobalPositionProjection", StartAtGlobalPositionProjection.class, StartAtGlobalPositionProjection::new)
                 .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
                 .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
-                .withBean(ComposedDefaultStartPosition.class, () -> composedDefaultStartPosition)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(warnings()).isEmpty();
@@ -154,78 +143,13 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
-    void a_subscriptions_replacement_that_genuinely_replays_does_not_inherit_the_starters_never_replays_fact() {
-        // Issue 871: the starter still built its own default composition (ComposedDefaultStartPosition is present
-        // and true for it), but the application replaced the Subscriptions DSL bean to wrap a different, genuinely
-        // replaying composition of its own. isDefaultKnownLiveOnlyFor must compare identity against the model this
-        // projection's own capability resolves to, not just read the flag.
-        Subscribable starterModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
-        ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
-        composedDefaultStartPosition.suppliedBy(starterModel);
-        composedDefaultStartPosition.defaultBypassesCatchup();
-
-        Subscribable customModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
-        doReturn(java.util.Optional.of((ReplayAwareSubscriptions) customModel)).when(customModel).capability(ReplayAwareSubscriptions.class);
-        when(((ReplayAwareSubscriptions) customModel).isCatchingUp(anyString())).thenReturn(true);
-        when(customModel.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
-
-        new ApplicationContextRunner()
-                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(TestConfiguration.class)
-                .withBean("defaultStartPositionProjection", DefaultStartPositionProjection.class, DefaultStartPositionProjection::new)
-                .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
-                .withBean(Subscriptions.class, () -> new Subscriptions<>(customModel, testEventConverter()))
-                .withBean(ComposedDefaultStartPosition.class, () -> composedDefaultStartPosition)
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    assertThat(warnings()).isEmpty();
-                });
-    }
-
-    @Test
-    void a_stream_subscriptions_replacement_that_genuinely_replays_does_not_inherit_the_starters_never_replays_fact() {
-        // Same defect, the StreamSubscriptions DSL bean replaced instead of Subscriptions. wrapForRecordingIfNeeded
-        // is reached through the same private verifiedNeverReplays either way, but this exercises the capability
-        // StreamSubscriptions.getSubscriptionModel() actually hands it, not Subscriptions'.
-        Subscribable starterModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
-        ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
-        composedDefaultStartPosition.suppliedBy(starterModel);
-        composedDefaultStartPosition.defaultBypassesCatchup();
-
-        Subscribable customModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
-        doReturn(java.util.Optional.of((ReplayAwareSubscriptions) customModel)).when(customModel).capability(ReplayAwareSubscriptions.class);
-        when(((ReplayAwareSubscriptions) customModel).isCatchingUp(anyString())).thenReturn(true);
-        when(customModel.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
-
-        new ApplicationContextRunner()
-                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(TestConfiguration.class)
-                .withBean("streamDefaultStartPositionProjection", StreamDefaultStartPositionProjection.class, StreamDefaultStartPositionProjection::new)
-                .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
-                .withBean(org.occurrent.dsl.subscription.blocking.StreamSubscriptions.class, () -> new org.occurrent.dsl.subscription.blocking.StreamSubscriptions<>(customModel, testEventConverter()))
-                .withBean(ComposedDefaultStartPosition.class, () -> composedDefaultStartPosition)
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    assertThat(warnings()).isEmpty();
-                });
-    }
-
-    @Test
-    void a_stream_subscriptions_replacement_that_matches_the_starters_registered_model_still_warns() {
-        // Positive control for the test above: when the StreamSubscriptions bean wraps the exact model
-        // ComposedDefaultStartPosition was told about, the warning still fires. Without this, the mismatch test
-        // alone could not tell "correctly silent because it verified identity" from "silent because this whole
-        // path stopped warning".
+    void a_stream_projection_at_the_default_start_does_not_warn_even_when_the_composition_can_report_its_catch_up_phase() {
+        // The stream counterpart of the agnostic default start test above, through the StreamSubscriptions bean.
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(mock(Subscription.class));
-        ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
-        composedDefaultStartPosition.suppliedBy(model);
-        composedDefaultStartPosition.defaultBypassesCatchup();
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -233,38 +157,6 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .withBean("streamDefaultStartPositionProjection", StreamDefaultStartPositionProjection.class, StreamDefaultStartPositionProjection::new)
                 .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
                 .withBean(org.occurrent.dsl.subscription.blocking.StreamSubscriptions.class, () -> new org.occurrent.dsl.subscription.blocking.StreamSubscriptions<>(model, testEventConverter()))
-                .withBean(ComposedDefaultStartPosition.class, () -> composedDefaultStartPosition)
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    assertThat(warnings()).hasSize(1);
-                    assertThat(warnings().get(0).getFormattedMessage())
-                            .contains(PROJECTION_ID)
-                            .contains("never replays");
-                });
-    }
-
-    @Test
-    void a_dcb_subscriptions_replacement_that_genuinely_replays_does_not_inherit_the_starters_never_replays_fact() {
-        // Same defect again, the DcbSubscriptions DSL bean replaced. DcbSubscriptions.subscriptionModel() hands back
-        // the raw SubscriptionModel it was built from, so that is what has to mismatch the holder's stored identity.
-        SubscriptionModel starterModel = mock(SubscriptionModel.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
-        ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
-        composedDefaultStartPosition.suppliedBy(starterModel);
-        composedDefaultStartPosition.defaultBypassesCatchup();
-
-        SubscriptionModel customModel = mock(SubscriptionModel.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
-        doReturn(java.util.Optional.of((ReplayAwareSubscriptions) customModel)).when(customModel).capability(ReplayAwareSubscriptions.class);
-        when(((ReplayAwareSubscriptions) customModel).isCatchingUp(anyString())).thenReturn(true);
-        when(customModel.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
-
-        new ApplicationContextRunner()
-                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(TestConfiguration.class)
-                .withBean("dcbDefaultStartPositionProjection", DcbDefaultStartPositionProjection.class, DcbDefaultStartPositionProjection::new)
-                .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
-                .withBean(DcbSubscriptions.class, () -> new DcbSubscriptions<>(customModel, testEventConverter()))
-                .withBean(ComposedDefaultStartPosition.class, () -> composedDefaultStartPosition)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(warnings()).isEmpty();
@@ -272,17 +164,14 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
-    void a_dcb_subscriptions_replacement_that_matches_the_starters_registered_model_still_warns() {
-        // Positive control for the test above, the same reason a_stream_subscriptions_replacement_that_matches...
-        // exists: a DcbSubscriptions bean wrapping the exact model the holder was told about must still warn.
+    void a_dcb_projection_at_the_default_start_does_not_warn() {
+        // A DCB DEFAULT reaches the catch-up layer as the model default, and a restart that finds a DCB catch-up position
+        // in storage resumes from it, so it can replay.
         SubscriptionModel model = mock(SubscriptionModel.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(mock(Subscription.class));
-        ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
-        composedDefaultStartPosition.suppliedBy(model);
-        composedDefaultStartPosition.defaultBypassesCatchup();
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -290,13 +179,9 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .withBean("dcbDefaultStartPositionProjection", DcbDefaultStartPositionProjection.class, DcbDefaultStartPositionProjection::new)
                 .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
                 .withBean(DcbSubscriptions.class, () -> new DcbSubscriptions<>(model, testEventConverter()))
-                .withBean(ComposedDefaultStartPosition.class, () -> composedDefaultStartPosition)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    assertThat(warnings()).hasSize(1);
-                    assertThat(warnings().get(0).getFormattedMessage())
-                            .contains(PROJECTION_ID)
-                            .contains("never replays");
+                    assertThat(warnings()).isEmpty();
                 });
     }
 
@@ -309,12 +194,10 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
 
     @Test
     void a_custom_compositions_default_start_position_does_not_claim_it_never_replays_when_its_capability_is_unreadable() {
-        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one), and no
-        // ComposedDefaultStartPosition bean in this context either, the same as an application that supplied its
-        // own Subscribable rather than the shipped Mongo composition. Nothing here registered the DEFAULT fact, and
-        // DEFAULT resolves to StartAt.subscriptionModelDefault(), a marker whose actual behavior this specific,
-        // unobservable composition is free to interpret however it wants, so it might genuinely replay. Blocking has
-        // no separate "cannot tell" warning of its own, so this case stays silent, the same as the BEGINNING case.
+        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one). DEFAULT resolves to
+        // StartAt.subscriptionModelDefault(), which this unobservable composition is free to interpret however it wants,
+        // so it might genuinely replay. Blocking has no separate "cannot tell" warning of its own, so this case stays
+        // silent, the same as the BEGINNING case.
         Subscribable model = unobservableModel();
 
         new ApplicationContextRunner()
@@ -330,11 +213,46 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
-    void a_custom_compositions_default_start_position_does_not_warn_even_when_its_capability_is_readable() {
-        // Unlike the shipped composition test above, this model does expose ReplayAwareSubscriptions, but there is
-        // still no ComposedDefaultStartPosition bean registering the DEFAULT fact, the same as an application-supplied
-        // composition nobody told this registrar bypasses catch-up for DEFAULT. A capability-observable composition
-        // is not by itself proof of what DEFAULT does, so this stays silent rather than guessing.
+    void startAt_now_with_same_as_start_at_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
+        // NOW with SAME_AS_START_AT keeps no checkpoint and starts at the present, whatever the composition is.
+        Subscribable model = unobservableModel();
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("startAtNowSameAsStartAtProjection", StartAtNowSameAsStartAtProjection.class, StartAtNowSameAsStartAtProjection::new)
+                .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
+                .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).hasSize(1);
+                    assertThat(warnings().get(0).getFormattedMessage())
+                            .contains(PROJECTION_ID)
+                            .contains("never replays");
+                });
+    }
+
+    @Test
+    void startAt_now_with_same_as_start_at_does_not_warn_when_a_subscription_resume_points_bean_can_replace_the_start_with_a_checkpoint() {
+        Subscribable model = unobservableModel();
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("startAtNowSameAsStartAtProjection", StartAtNowSameAsStartAtProjection.class, StartAtNowSameAsStartAtProjection::new)
+                .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
+                .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
+                .withBean(SubscriptionResumePoints.class, () -> subscriptionId -> null)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).isEmpty();
+                });
+    }
+
+    @Test
+    void a_default_start_position_does_not_warn_when_a_subscription_resume_points_bean_can_replace_the_start_with_a_checkpoint() {
+        // The mock model of the default start tests whose composition reports its catch-up phase, plus a
+        // SubscriptionResumePoints bean.
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
@@ -347,6 +265,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .withBean("defaultStartPositionProjection", DefaultStartPositionProjection.class, DefaultStartPositionProjection::new)
                 .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
                 .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
+                .withBean(SubscriptionResumePoints.class, () -> subscriptionId -> null)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(warnings()).isEmpty();
@@ -354,11 +273,9 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
-    void startAt_now_still_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
-        // Unlike DEFAULT, an explicit NOW resolves to StartAt.now(), a documented, composition-independent contract
-        // (subscribe at this moment, no replay) every Subscribable must honor regardless of whether it also exposes
-        // ReplayAwareSubscriptions, so that fact holds and is worth warning about even though the composition
-        // itself cannot say whether it would otherwise have replayed.
+    void startAt_now_with_the_default_resume_behavior_does_not_warn_when_the_composition_cannot_say_whether_it_would_replay() {
+        // NOW with the default resumeBehavior continues from its stored checkpoint on a restart, and replays when a
+        // catch-up stored that checkpoint.
         Subscribable model = unobservableModel();
 
         new ApplicationContextRunner()
@@ -369,10 +286,28 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    assertThat(warnings()).hasSize(1);
-                    assertThat(warnings().get(0).getFormattedMessage())
-                            .contains(PROJECTION_ID)
-                            .contains("never replays");
+                    assertThat(warnings()).isEmpty();
+                });
+    }
+
+    @Test
+    void startAt_now_with_the_default_resume_behavior_does_not_warn_when_the_composition_can_report_its_catch_up_phase() {
+        // A NOW start continues from its stored checkpoint on a restart, and replays when a catch-up stored it.
+        Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
+        doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
+        when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
+        when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(mock(Subscription.class));
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("startAtNowProjection", StartAtNowProjection.class, StartAtNowProjection::new)
+                .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
+                .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).isEmpty();
                 });
     }
 
@@ -511,9 +446,18 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         }
     }
 
+    static class StartAtNowSameAsStartAtProjection {
+        @Projection(id = PROJECTION_ID, recordAppliedAppends = true, startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
     // startAt is left at its default value on purpose. startAtGlobalPosition >= 0 overrides it and replays from
-    // that position regardless (generateAgnosticStartAt checks it first), so this is a valid, genuinely replaying
-    // configuration that must not trip the DEFAULT branch of verifiedNeverReplays.
+    // that position regardless (generateAgnosticStartAt checks it first), so this is a genuinely replaying configuration.
     static class StartAtGlobalPositionProjection {
         @Projection(id = PROJECTION_ID, recordAppliedAppends = true, startAtGlobalPosition = 0)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {

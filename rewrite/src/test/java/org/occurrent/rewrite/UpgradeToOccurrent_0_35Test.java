@@ -32,24 +32,26 @@ import static org.occurrent.rewrite.DcbMarkerVersionsStubs.DCB_EVENT_STREAM;
 import static org.occurrent.rewrite.DcbMarkerVersionsStubs.DCB_MARKER_VERSIONS;
 import static org.occurrent.rewrite.DcbMarkerVersionsStubs.DCB_READ_OPTIONS;
 import static org.occurrent.rewrite.DcbMarkerVersionsStubs.POSITION_RANGE;
+import static org.occurrent.rewrite.NativeMongoSubscriptionStubs.NATIVE_MONGO_SUBSCRIPTION;
 import static org.openrewrite.java.Assertions.java;
 
 /**
  * Verifies the {@code UpgradeToOccurrent_0_35} recipe resolves its sub-recipes through a classpath-scanning
  * Environment, which is what proves the cross-file recipe references actually link. What each sub-recipe does is
- * covered in {@link MigrateDcbMarkerVersionsRecordPatternTest}, so one case per sub-recipe is enough here. Add a case
- * per sub-recipe as they are added.
+ * covered in {@link MigrateDcbMarkerVersionsRecordPatternTest} and {@link MigrateNativeMongoSubscriptionRecordPatternTest},
+ * so one case per sub-recipe is enough here. Add a case per sub-recipe as they are added.
  * <p>
  * Identifier type validation is off for the same reason as in {@link MigrateDcbMarkerVersionsRecordPatternTest}.
  */
 class UpgradeToOccurrent_0_35Test implements RewriteTest {
 
     private static final String DCB_MARKER_VERSIONS_RECORD_PATTERN = "org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35";
+    private static final String NATIVE_MONGO_SUBSCRIPTION_RECORD_PATTERN = "org.occurrent.MigrateNativeMongoSubscriptionRecordPattern_0_35";
 
     @Override
     public void defaults(RecipeSpec spec) {
         spec.parser(JavaParser.fromJavaVersion().dependsOn(APPEND_ID, CLOUD_EVENT, POSITION_RANGE, DCB_CONSISTENCY_TOKEN,
-                        DCB_MARKER_VERSIONS, DCB_APPEND_RESULT, DCB_EVENT_STREAM, DCB_READ_OPTIONS))
+                        DCB_MARKER_VERSIONS, DCB_APPEND_RESULT, DCB_EVENT_STREAM, DCB_READ_OPTIONS, NATIVE_MONGO_SUBSCRIPTION))
                 .typeValidationOptions(TypeValidation.builder().identifiers(false).build());
     }
 
@@ -76,6 +78,23 @@ class UpgradeToOccurrent_0_35Test implements RewriteTest {
         assertThat(recipe.getName()).isEqualTo(DCB_MARKER_VERSIONS_RECORD_PATTERN);
         assertThat(recipe.getRecipeList()).extracting(Recipe::getName)
                 .containsExactly("org.occurrent.rewrite.MigrateDcbMarkerVersionsRecordPattern");
+    }
+
+    @Test
+    void theRecipeListsTheNativeMongoSubscriptionRecordPatternSubRecipe() {
+        Recipe recipe = activate("org.occurrent.UpgradeToOccurrent_0_35");
+
+        assertThat(recipe.getRecipeList()).extracting(Recipe::getName).contains(NATIVE_MONGO_SUBSCRIPTION_RECORD_PATTERN);
+    }
+
+    @Test
+    void theNativeMongoSubscriptionRecordPatternSubRecipeLoadsAndValidates() {
+        Recipe recipe = activate(NATIVE_MONGO_SUBSCRIPTION_RECORD_PATTERN);
+
+        assertThat(recipe.validate().isValid()).isTrue();
+        assertThat(recipe.getName()).isEqualTo(NATIVE_MONGO_SUBSCRIPTION_RECORD_PATTERN);
+        assertThat(recipe.getRecipeList()).extracting(Recipe::getName)
+                .containsExactly("org.occurrent.rewrite.MigrateNativeMongoSubscriptionRecordPattern");
     }
 
     @Test
@@ -106,6 +125,43 @@ class UpgradeToOccurrent_0_35Test implements RewriteTest {
                             String describe(Object result) {
                                 return switch (result) {
                                     case DcbAppendResult(var first, var last, var count, var appendId, var markerVersions) -> first + ".." + last + " (" + count + ")";
+                                    default -> "unknown";
+                                };
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void addsTheStartFailureBindingToANativeMongoSubscriptionPattern() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscription;
+
+                        class Reader {
+                            String describe(Object subscription) {
+                                return switch (subscription) {
+                                    case NativeMongoSubscription(var subscriptionId, var latch) -> subscriptionId + ":" + latch.getCount();
+                                    default -> "unknown";
+                                };
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscription;
+
+                        class Reader {
+                            String describe(Object subscription) {
+                                return switch (subscription) {
+                                    case NativeMongoSubscription(var subscriptionId, var latch, var startFailure) -> subscriptionId + ":" + latch.getCount();
                                     default -> "unknown";
                                 };
                             }
