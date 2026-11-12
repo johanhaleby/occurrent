@@ -141,6 +141,57 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
         }
 
         @Test
+        void throws_shutdown_when_the_call_is_cancelled_and_the_model_is_shut_down_after_the_wrapped_model_held_the_id() {
+            // Given
+            NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel("feed");
+            ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+            wrapped.subscribe("x", null, StartAt.now(), NO_ACTION);
+            AtomicInteger asked = new AtomicInteger();
+
+            // When
+            CallResult result = CallResult.of(() -> model.subscribe("x", null, StartAt.now(), NO_ACTION, () -> {
+                if (asked.incrementAndGet() < 2) {
+                    return false;
+                }
+                model.shutdown();
+                return true;
+            }));
+
+            // Then
+            assertAll(
+                    () -> assertThat(asked).as("the number of times the call asked whether it was cancelled").hasValue(2),
+                    () -> assertThat(result.thrown).as("what the call threw").isInstanceOf(SubscriptionModelShutdownException.class),
+                    () -> assertThat(result.returned).as("the subscription returned").isNull());
+        }
+
+        @Test
+        void throws_when_the_call_is_cancelled_and_the_model_is_shut_down_where_the_position_writer_starts() {
+            // Given
+            ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new NamedRecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage());
+            Object positionLock = field(model, "positionLock");
+            AtomicInteger asked = new AtomicInteger();
+            AtomicBoolean shutDownHoldingTheLock = new AtomicBoolean();
+
+            // When
+            CallResult result = CallResult.of(() -> model.subscribe("x", null, StartAt.now(), NO_ACTION, () -> {
+                if (asked.incrementAndGet() < 2) {
+                    return false;
+                }
+                shutDownHoldingTheLock.set(Thread.holdsLock(positionLock));
+                model.shutdown();
+                return true;
+            }));
+
+            // Then
+            assertAll(
+                    () -> assertThat(asked.get()).as("the number of times the call asked whether it was cancelled").isGreaterThanOrEqualTo(2),
+                    () -> assertThat(shutDownHoldingTheLock).as("whether the shutdown came while the call held the position lock").isTrue(),
+                    () -> assertThat(result.thrown).as("what the call threw").isInstanceOf(SubscriptionModelShutdownException.class),
+                    () -> assertThat(result.returned).as("the subscription returned").isNull(),
+                    () -> assertThat(model.subscriptionIds()).as("the ids the model holds").isEmpty());
+        }
+
+        @Test
         void returns_null_when_the_call_is_cancelled_while_the_wrapped_model_is_asked_whether_it_holds_the_id() {
             // Given
             AtomicBoolean askedForTheId = new AtomicBoolean();
@@ -203,6 +254,29 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
                     () -> assertThat(model.subscriptionIds()).as("the ids the model holds").isEmpty(),
                     () -> assertThat(model.subscribe("x", NO_ACTION).waitUntilStarted().block(TIMEOUT))
                             .as("what waiting for a subscribe of x afterwards gives").isNull());
+        }
+
+        @Test
+        void throws_shutdown_when_the_call_is_cancelled_and_the_model_is_shut_down_where_the_id_is_reserved() {
+            // Given
+            ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage());
+            AtomicInteger asked = new AtomicInteger();
+
+            // When
+            CallResult result = CallResult.of(() -> model.subscribe("x", null, StartAt.now(), NO_ACTION, () -> {
+                if (asked.incrementAndGet() < 2) {
+                    return false;
+                }
+                model.shutdown();
+                return true;
+            }));
+
+            // Then
+            assertAll(
+                    () -> assertThat(asked).as("the number of times the call asked whether it was cancelled").hasValue(2),
+                    () -> assertThat(result.thrown).as("what the call threw").isInstanceOf(SubscriptionModelShutdownException.class),
+                    () -> assertThat(result.returned).as("the subscription returned").isNull(),
+                    () -> assertThat(model.subscriptionIds()).as("the ids the model holds").isEmpty());
         }
 
         @Test
