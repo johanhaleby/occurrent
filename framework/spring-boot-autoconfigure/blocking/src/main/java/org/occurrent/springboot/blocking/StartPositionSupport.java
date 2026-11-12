@@ -84,19 +84,16 @@ class StartPositionSupport {
     }
 
     // Build the neutral StartAt over the unified global position. BEGINNING replays from global position 0,
-    // startAtGlobalPosition replays after a specific position, both applying the same replay-then-resume logic. NOW and
-    // DEFAULT go straight to live.
+    // startAtGlobalPosition replays after a specific position, both applying the same replay-then-resume logic. NOW goes
+    // straight to live. DEFAULT is the model default at every layer, so a catch-up reads storage, goes live when nothing
+    // is stored and resumes a replay it stored a checkpoint for (issue 1418).
     private StartAt agnosticStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtGlobalPosition, ResumeBehavior resumeBehavior) {
         if (startAtGlobalPosition >= 0) {
             return replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(startAtGlobalPosition)), resumeBehavior);
         }
         return switch (startPosition) {
             case NOW -> nowThenResume(resumeBehavior);
-            case DEFAULT -> StartAt.dynamic(ctx -> {
-                // Do not let the catch-up model run its default (replay from the beginning); delegate to the parent
-                // live subscription instead by returning null to the catch-up layer.
-                return isCatchupLayer(ctx) ? null : StartAt.subscriptionModelDefault();
-            });
+            case DEFAULT -> StartAt.subscriptionModelDefault();
             case BEGINNING -> replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), resumeBehavior);
         };
     }
@@ -257,12 +254,8 @@ class StartPositionSupport {
                     }
                 };
                 case NOW -> nowThenResume(resumeBehavior);
-                case DEFAULT -> StartAt.dynamic(ctx -> {
-                    // By default, we don't want to run the "default" behavior of the CatchupSubscriptionModel, which is to
-                    // start streaming from the beginning of time. We want to instruct the CatchupSubscriptionModel to simply
-                    // delegate to the parent subscription, which is what we do if we return null.
-                    return isCatchupLayer(ctx) ? null : StartAt.subscriptionModelDefault();
-                });
+                // The model default at every layer, as in agnosticStartAt
+                case DEFAULT -> StartAt.subscriptionModelDefault();
             };
         };
     }

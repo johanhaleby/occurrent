@@ -47,9 +47,6 @@ import static java.util.Objects.requireNonNull;
  * {@code @Projection(recordAppliedAppends = true)} registrar. {@code public} for the same reason
  * {@code PushCatchupStatusImpl} is, the auto-configuration and the registrar that use it live in different packages.
  * <p>
- * The reactor stack's equivalent of the blocking stack's {@code ComposedDefaultStartPosition}, which carries the
- * {@code DEFAULT} fact alone because that stack's capability lookup finds the catch-up layer by itself.
- * <p>
  * <a href="https://github.com/johanhaleby/occurrent/issues/842">#842</a> tracks fixing the underlying capability-lookup
  * gap. This class is the workaround ADR 132 sanctions until then, not a replacement for it.
  */

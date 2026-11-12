@@ -4,7 +4,7 @@ Date: 2026-11-05
 
 ## Status
 
-Accepted. Amends decision 9 of [ADR 132](0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md),
+Accepted. Amends decisions 7 and 9 of [ADR 132](0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md),
 which shipped in 0.34.0 and is therefore amended by reference rather than edited. Part of
 [#1404](https://github.com/johanhaleby/occurrent/issues/1404).
 
@@ -25,11 +25,16 @@ finish, replays on the next boot. On the reactive stack an unset `startAt` start
 registrar cannot know which kind of checkpoint a later boot finds, so it cannot promise that the projection never
 replays.
 
-On the blocking stack an unset `startAt` on a `@DcbSubscription`, a DCB `@Snapshot` or a DCB projection reaches the
-catch-up layer as the model default, so it resumes from such a checkpoint and replays too. On a blocking stream or
-agnostic subscription an unset `startAt` does not replay from such a checkpoint. It starts at the present instead, and
-misses what was written while the application was down. That is a separate defect, older than 0.35.0, and this ADR
-does not change it.
+On the blocking stack an unset `startAt` reaches the catch-up layer as the model default too, on a stream, an agnostic
+or a DCB subscription, so it resumes from such a checkpoint and replays. Up to 0.34.0 a blocking stream or agnostic
+subscription with `startAt` unset started at the present instead, and missed what was written while the application was
+down. [#1418](https://github.com/johanhaleby/occurrent/issues/1418) fixed that by resuming from the catch-up's
+checkpoint.
+
+Decision 7 of ADR 132 makes the same claim about the default start position. On Occurrent's own shipped
+composition, it says, the default start position with no global start position set bypasses the catch-up layer, so
+such a projection never replays and never clears its own records on a rebuild. That holds on neither stack when a
+catch-up stored the subscription's checkpoint, on the blocking stack since #1418.
 
 On the blocking stack, `NOW` with `resumeBehavior = SAME_AS_START_AT` keeps no position on Occurrent's durable and
 competing consumer models. A restart with a catch-up checkpoint in storage gets only the event written after it
@@ -43,9 +48,9 @@ and `DEFAULT` alike.
 
 Decision 9's third case covers `NOW` only with `resumeBehavior = SAME_AS_START_AT`. `NOW` with the default
 `resumeBehavior` is a start that can ask its composition to replay, and it records and clears the way any replaying
-start does. On the reactive stack an unset `startAt` is such a start too, and it is no longer in the third case. On the
-blocking stack it stays there for a stream or an agnostic projection, since that never replays. A DCB projection
-with `startAt` unset is no longer in it.
+start does. An unset `startAt` is such a start too, on both stacks, and it is no longer in the third case. Decision
+7's sentence that the default start position bypasses the catch-up layer on Occurrent's own composition no longer
+holds either.
 
 With no `SubscriptionResumePoints` bean answering for it, `NOW` with `SAME_AS_START_AT` starts at the present on every
 restart, and a resume doesn't replay from a catch-up checkpoint in storage. On the blocking stack it bypasses the
@@ -58,8 +63,7 @@ bean.
 Both registrars' warnings follow this. A push projection with `catchup = NONE` still warns on both stacks, whatever
 beans are declared, since the bean doesn't start it. For a projection that subscribes to the event store:
 
-- The blocking one fires for `NOW` only with `SAME_AS_START_AT`, and for an unset `startAt` on a stream or an
-  agnostic projection on the composition the starter configures. It doesn't fire while a `SubscriptionResumePoints`
+- The blocking one fires for `NOW` only with `SAME_AS_START_AT`. It doesn't fire while a `SubscriptionResumePoints`
   bean is declared.
 - The reactive one fires for `NOW` only with `SAME_AS_START_AT`, and for a composition with no catch-up layer. With
   a `SubscriptionResumePoints` bean declared it fires only for a composition with no catch-up layer, which never
@@ -70,9 +74,10 @@ beans are declared, since the bean doesn't start it. For a projection that subsc
 - A `NOW` projection with the default `resumeBehavior` no longer gets a warning that was false whenever a catch-up
   checkpoint was stored for it. When no such checkpoint is stored it does not replay either, and it now starts without
   the warning that would have been true. The registrar cannot tell the two apart at startup. The same holds for a
-  reactive projection, and a blocking DCB projection, with `startAt` unset.
+  projection with `startAt` unset, on either stack.
 - `ComposedCatchupModel.defaultBypassesCatchup` still records that a first start with `startAt` unset doesn't replay,
-  but the reactive warning no longer reads it.
+  but the reactive warning no longer reads it. The blocking stack's `ComposedDefaultStartPosition` recorded the same
+  fact for its warning only, and is removed.
 - On the blocking stack the warning for `NOW` with `SAME_AS_START_AT` rests on Occurrent's own models opting out of
   keeping a position. On the reactive stack it rests on tests of the stream composition the starter configures. In both,
   an application-supplied model of another type that keeps a position is not seen by the registrar.
@@ -80,5 +85,3 @@ beans are declared, since the bean doesn't start it. For a projection that subsc
   `catchup = NONE` and, on the reactive stack, for a composition with no catch-up layer. That holds even for a
   projection whose resume points never answer a checkpoint. The registrar does not ask the bean, since its answer can
   change from one start to the next.
-- If the blocking defect with an unset `startAt` is fixed by resuming from the catch-up checkpoint, that start
-  replays, and the blocking warning for it has to go the way the reactive one did.
