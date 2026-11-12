@@ -481,6 +481,202 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         assertThat(thrown).as("what stop() threw").isSameAs(cannotSay);
     }
 
+    @Test
+    void a_resume_that_a_stop_did_not_wait_for_and_whose_pause_afterwards_throws_an_InterruptedException_leaves_the_thread_of_the_resume_interrupted() throws Exception {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        });
+        model.pauseSubscription("cc");
+        Gate resumeInTheWrappedModel = new Gate();
+        wrapped.nextResume = resumeInTheWrappedModel;
+        wrapped.failures.next("paused cc", new InterruptedException("The wrapped model was interrupted while pausing cc"));
+        CompletableFuture<Outcome> resuming = CompletableFuture.supplyAsync(() -> ranOnAThread(() -> model.resumeSubscription("cc")));
+        assertThat(resumeInTheWrappedModel.awaitEntered()).as("the resume of cc is under way in the wrapped model").isTrue();
+        model.stop();
+
+        // When
+        resumeInTheWrappedModel.open();
+        Outcome outcome = resuming.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+
+        // Then
+        assertThat(outcome.thrown()).as("what resumeSubscription threw").isNull();
+        assertThat(outcome.interrupted()).as("the thread of the resume is interrupted once it returned").isTrue();
+    }
+
+    @Test
+    void a_resume_of_a_subscription_that_does_not_compete_resumes_it_with_its_thread_interrupted_when_the_wrapped_model_throws_an_InterruptedException_on_being_asked_whether_it_runs() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        model.subscribe(SUBSCRIBER, "nc", null, DOES_NOT_COMPETE, __ -> {
+        });
+        model.pauseSubscription("nc");
+        wrapped.failures.next("isRunning", new InterruptedException("The wrapped model was interrupted while saying whether it runs"));
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.resumeSubscription("nc"));
+        boolean interrupted = Thread.interrupted();
+
+        // Then
+        assertThat(thrown).as("what resumeSubscription threw").isNull();
+        assertThat(wrapped.running).as("the subscriptions the wrapped model runs").containsExactly("nc");
+        assertThat(interrupted).as("the thread is interrupted once resumeSubscription returned").isTrue();
+    }
+
+    @Test
+    void a_subscribe_whose_wrapped_model_throws_an_InterruptedException_once_it_made_the_subscription_returns_and_gives_the_lease_back_with_its_thread_interrupted() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        wrapped.onceMade = () -> wrapped.failures.next("isPaused cc", new InterruptedException("The wrapped model was interrupted while saying whether it holds cc paused"));
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        }));
+        boolean interrupted = Thread.interrupted();
+
+        // Then
+        assertThat(thrown).as("what subscribe threw").isNull();
+        assertThat(strategy.calls).as("the calls to the lease strategy").containsExactly("register cc", "release cc");
+        assertThat(interrupted).as("the thread is interrupted once subscribe returned").isTrue();
+    }
+
+    @Test
+    void a_subscribe_that_a_stop_overtook_returns_with_its_thread_interrupted_when_the_wrapped_model_that_started_itself_to_make_it_throws_an_InterruptedException_on_being_asked_whether_it_runs() throws Exception {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        wrapped.startsItselfOnSubscribe = true;
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        Gate subscribeInTheWrappedModel = new Gate();
+        wrapped.nextSubscribe = subscribeInTheWrappedModel;
+        wrapped.onceMade = () -> wrapped.failures.nextOnThisThread("isRunning", new InterruptedException("The wrapped model was interrupted while saying whether it runs"));
+        CompletableFuture<Outcome> subscribing = CompletableFuture.supplyAsync(() -> ranOnAThread(() -> model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        })));
+        assertThat(subscribeInTheWrappedModel.awaitEntered()).as("the wrapped model is making cc").isTrue();
+
+        // When
+        model.stop();
+        subscribeInTheWrappedModel.open();
+        Outcome outcome = subscribing.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+
+        // Then
+        assertThat(outcome.thrown()).as("what subscribe threw").isNull();
+        assertThat(outcome.interrupted()).as("the thread of the subscribe is interrupted once it returned").isTrue();
+    }
+
+    @Test
+    void a_subscribe_whose_wrapped_model_throws_an_InterruptedException_after_pausing_the_subscription_gives_the_lease_back_with_its_thread_interrupted() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        wrapped.startsItselfOnSubscribe = true;
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        wrapped.onceMade = () -> {
+            wrapped.failures.next("isPaused cc", new IOException("The wrapped model cannot say whether it holds cc paused right now"));
+            wrapped.failures.next("paused cc", new InterruptedException("The wrapped model was interrupted while pausing cc"));
+        };
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        }));
+        boolean interrupted = Thread.interrupted();
+
+        // Then
+        assertThat(thrown).as("what subscribe threw").isNull();
+        assertThat(strategy.calls).as("the calls to the lease strategy").containsExactly("register cc", "release cc");
+        assertThat(interrupted).as("the thread is interrupted once subscribe returned").isTrue();
+    }
+
+    @Test
+    void a_subscribe_whose_lease_strategy_throws_an_InterruptedException_on_being_asked_whether_it_holds_the_lease_once_the_subscription_is_paused_returns_with_its_thread_interrupted() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        wrapped.onceMade = () -> {
+            strategy.failures.next("hasLock cc", new IOException("The lease store cannot be reached right now"));
+            strategy.failures.next("hasLock cc", new InterruptedException("The lease store was interrupted"));
+        };
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        }));
+        boolean interrupted = Thread.interrupted();
+
+        // Then
+        assertThat(thrown).as("what subscribe threw").isNull();
+        assertThat(interrupted).as("the thread is interrupted once subscribe returned").isTrue();
+    }
+
+    @Test
+    void a_subscribe_that_lost_its_lease_and_whose_wrapped_model_throws_an_InterruptedException_on_being_asked_whether_it_runs_the_subscription_returns_with_its_thread_interrupted() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        wrapped.onceMade = () -> {
+            strategy.holders.remove("cc");
+            wrapped.failures.next("isRunning cc", new InterruptedException("The wrapped model was interrupted while saying whether it runs cc"));
+        };
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        }));
+        boolean interrupted = Thread.interrupted();
+
+        // Then
+        assertThat(thrown).as("what subscribe threw").isNull();
+        assertThat(interrupted).as("the thread is interrupted once subscribe returned").isTrue();
+    }
+
+    @Test
+    void a_subscribe_that_lost_its_lease_and_whose_wrapped_model_throws_an_InterruptedException_when_asked_again_whether_it_runs_the_subscription_returns_with_its_thread_interrupted() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        wrapped.onceMade = () -> {
+            strategy.holders.remove("cc");
+            wrapped.failures.next("isRunning cc", new IOException("The wrapped model cannot say whether it runs cc right now"));
+            wrapped.failures.next("isRunning cc", new InterruptedException("The wrapped model was interrupted while saying whether it runs cc"));
+        };
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        }));
+        boolean interrupted = Thread.interrupted();
+
+        // Then
+        assertThat(thrown).as("what subscribe threw").isNull();
+        assertThat(interrupted).as("the thread is interrupted once subscribe returned").isTrue();
+    }
+
+    @Test
+    void a_start_runs_a_subscription_waiting_for_its_lease_on_a_thread_that_is_interrupted_when_the_wrapped_model_throws_an_InterruptedException_on_being_asked_whether_it_runs_it_before_the_start() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        wrapped.onceMade = () -> strategy.holders.remove("cc");
+        model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        });
+        wrapped.failures.next("isRunning cc", new InterruptedException("The wrapped model was interrupted while saying whether it runs cc"));
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.start(true));
+
+        // Then
+        assertThat(thrown).as("what start(true) threw").isNull();
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(wrapped.running).as("the subscriptions the wrapped model runs").containsExactly("cc"));
+        assertThat(wrapped.interruptedOnResume).as("the thread that resumed cc in the wrapped model is interrupted when it does").isTrue();
+    }
+
+    private record Outcome(@Nullable Throwable thrown, boolean interrupted) {
+    }
+
+    // Reads the interrupt flag of the thread it ran on, which clears it, so a pooled thread is left as found
+    private static Outcome ranOnAThread(Runnable call) {
+        Throwable thrown = catchThrowable(call::run);
+        return new Outcome(thrown, Thread.interrupted());
+    }
+
     private static boolean aThreadAppliesWhatWasHandedOverFor(String subscriptionId) {
         return Thread.getAllStackTraces().keySet().stream()
                 .anyMatch(thread -> thread.isAlive() && thread.getName().equals("occurrent-competing-consumer-lifecycle-" + subscriptionId));
@@ -586,6 +782,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         private final Set<String> paused = ConcurrentHashMap.newKeySet();
         private volatile boolean started;
         private volatile boolean startsItselfOnSubscribe;
+        private volatile boolean interruptedOnResume;
         private volatile @Nullable Gate nextSubscribe;
         private volatile @Nullable Gate nextIsPaused;
         private volatile @Nullable Gate nextResume;
@@ -674,6 +871,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId) {
+            interruptedOnResume = Thread.currentThread().isInterrupted();
             @Nullable Gate gate = nextResume;
             nextResume = null;
             if (gate != null) {

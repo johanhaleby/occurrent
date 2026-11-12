@@ -61,6 +61,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -271,6 +272,53 @@ class StreamCatchupTakeoverLifecycleTest {
         // Then
         assertThat(threw).as("the storage threw as the takeover stored where it replays from").isTrue();
         assertThat(delivered).as("the event written in between, delivered once the takeover tried again").isTrue();
+    }
+
+    @Test
+    @Timeout(60)
+    void a_takeover_whose_storage_throws_an_InterruptedException_stops_trying_and_leaves_its_thread_interrupted() {
+        // Given
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> write(writtenInTheGap));
+        AtomicReference<Thread> takeoverThread = new AtomicReference<>();
+        AtomicInteger savesByTheTakeover = new AtomicInteger();
+        storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                if (Thread.currentThread().getName().startsWith("occurrent-catchup-takeover-")) {
+                    takeoverThread.set(Thread.currentThread());
+                    if (savesByTheTakeover.incrementAndGet() == 1) {
+                        throw sneaky(new InterruptedException("The checkpoint storage was interrupted"));
+                    }
+                }
+                return super.save(id, checkpoint, condition);
+            }
+        };
+        AtomicBoolean interruptedWhenLogged = new AtomicBoolean();
+        AppenderBase<ILoggingEvent> interruptFlagAtLog = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getThrowableProxy() != null && event.getThrowableProxy().getClassName().equals(InterruptedException.class.getName())) {
+                    interruptedWhenLogged.set(Thread.currentThread().isInterrupted());
+                }
+            }
+        };
+        interruptFlagAtLog.start();
+        catchupLogger.addAppender(interruptFlagAtLog);
+        create(true);
+
+        try {
+            // When
+            catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+            boolean ended = waitUpTo(Duration.ofSeconds(10), () -> takeoverThread.get() != null && !takeoverThread.get().isAlive());
+
+            // Then
+            assertThat(ended).as("the takeover ended").isTrue();
+            assertThat(savesByTheTakeover).as("the saves the takeover made").hasValue(1);
+            assertThat(received).as("what was delivered").doesNotContain(writtenInTheGap);
+            assertThat(interruptedWhenLogged).as("the takeover thread is interrupted as it logs the interrupt").isTrue();
+        } finally {
+            catchupLogger.detachAppender(interruptFlagAtLog);
+        }
     }
 
     @ParameterizedTest(name = "storing={0}")
