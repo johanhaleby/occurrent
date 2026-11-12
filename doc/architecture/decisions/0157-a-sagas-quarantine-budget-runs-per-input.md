@@ -61,8 +61,10 @@ instant as it did before, and the delivery fails, so the next failure of the inp
 
 ADR 134 discarded the record on a lost write instead, because the failing input now meets different state and may
 succeed. Retrying gives that up in one case. An input that has been failing for longer than `quarantineAfter`, on an
-instance a timer has just changed, quarantines the instance without being tried against the new state, where the
-discard rethrew and let the next delivery try it. The retry keeps that cost, because the input has already failed for
+instance another writer changed between the record's read and its write, quarantines the instance without being tried
+against the new state, where the discard rethrew and let the next delivery try it. The writer can be a timer, another
+event delivered at the same time, or another node. A write made before that read was already
+quarantined untried in 0.34.0, because the saga read the instance again just before working out the record. The retry keeps that cost, because the input has already failed for
 the whole budget, which is the evidence ADR 134 asks for, and only running the whole delivery again from the failure
 path would try it. Below the budget nothing is given up, since the retried record doesn't quarantine and the input is
 offered again as before. What the discard did cost was [#977](https://github.com/johanhaleby/occurrent/issues/977).

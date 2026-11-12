@@ -374,7 +374,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * A record whose write loses to another write on the instance is worked out again from what the instance holds now
      * and written again, in {@link SagaRunnerConfig#maxCasAttempts()} attempts at most. Discarding it instead let a
      * timer that fired between every read and write keep the instance from ever being quarantined, which ADR 157
-     * records. An event past its budget is then quarantined without being tried against what the timer changed.
+     * records. An event past its budget, on an instance another writer changed between the record's read and its write,
+     * is then quarantined without being tried against that change.
      * <p>
      * Only the event path calls this, and it is not because the timer path has nothing to gain from it. A timeout
      * has no redelivery key of its own, so there is nothing to quarantine it on.

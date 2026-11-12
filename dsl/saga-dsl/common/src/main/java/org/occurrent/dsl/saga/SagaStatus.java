@@ -85,8 +85,10 @@ public enum SagaStatus {
      *       propagates instead. The runner logs a WARN for a refusal, though not for every repeat of it.</li>
      *   <li>The store read the decision is made on and the write that records it both complete. When either throws, the
      *       runner logs nothing of its own about the quarantine.</li>
-     *   <li>The compare-and-set write wins. When another writer changed the instance first, the write is discarded
-     *       without a log line, and the runner cannot tell what that writer did.</li>
+     *   <li>The compare-and-set write wins within {@code maxCasAttempts} attempts. When another writer changed the
+     *       instance first, the runner reads it again and works the decision out again from what it holds now, so
+     *       nothing is written when that writer applied the event, completed the instance or quarantined it. When every
+     *       attempt loses, the runner logs a WARN saying it could not record the failure.</li>
      * </ul>
      * When every condition holds, the instance is written with this status and the runner returns normally instead of
      * rethrowing. When any one does not, a failure propagates to the subscription model, and whether the event is
@@ -102,7 +104,7 @@ public enum SagaStatus {
      * carrying no redelivery key, one that failed with an {@link OutOfMemoryError}, or one on an instance that already
      * counts the event as handled. A failure also records nothing when the store read the decision is made on or the
      * record write throws, which includes a store that can only read an instance whole failing to decode its state, or
-     * when that write loses its compare-and-set. A later failing event can try that write again.
+     * when every attempt at that write loses its compare-and-set. A later failing event can try that write again.
      */
     QUARANTINED
 }
