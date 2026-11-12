@@ -31,6 +31,9 @@ other sections compile fine and behave differently, so read them first.
   `DcbEventStore` of your own usually does.
 - [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). **Breaks the build** if you
   use a record pattern over `DcbAppendResult`, `DcbEventStream` or `DcbReadOptions`, or call `new DcbEventStream(events, head)`.
+- [`ComposedDefaultStartPosition` and its bean are removed](#composeddefaultstartposition-and-its-bean-are-removed).
+  **Breaks the build** if you inject the `occurrentComposedDefaultStartPosition` bean, name the type, or call or
+  override `occurrentCompetingDurableSubscriptionModel(..)`.
 
 ### Sagas
 
@@ -1740,6 +1743,26 @@ The reactive starter, a `@DcbSubscription`, and a projection or snapshot over DC
 
 Nothing, unless the handler can't take the events the replay delivers. The replay can run long when the checkpoint is
 far behind. To start at the present instead, delete the stored checkpoint before the next boot.
+
+## `ComposedDefaultStartPosition` and its bean are removed
+
+The blocking Spring Boot starter no longer has `ComposedDefaultStartPosition` or the `occurrentComposedDefaultStartPosition`
+bean. The bean recorded that a subscription with no start position never replays on the subscription model the starter
+builds. The `@Projection(recordAppliedAppends = true)` registrar read it to warn at startup that such a projection's
+recordings never reset. Such a subscription now replays when a catch-up stored its checkpoint, see
+[A subscription with no start position resumes from a catch-up's checkpoint](#a-subscription-with-no-start-position-resumes-from-a-catch-ups-checkpoint),
+so the fact the bean reported is no longer true, and nothing in Occurrent reads it.
+
+### Who is affected
+
+Code that injects the bean or names `ComposedDefaultStartPosition`, and code that calls or overrides
+`OccurrentMongoAutoConfiguration.occurrentCompetingDurableSubscriptionModel(..)`, which loses its last parameter. That
+code stops compiling.
+
+### What to do
+
+Remove the reference. Nothing replaces it. Code that asked `isDefaultKnownLiveOnlyFor(..)` whether a projection never
+replays should treat a projection with no `startAt` as one that can replay.
 
 ## A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs
 
