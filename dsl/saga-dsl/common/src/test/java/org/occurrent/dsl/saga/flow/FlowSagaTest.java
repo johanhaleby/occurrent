@@ -408,6 +408,18 @@ class FlowSagaTest {
                     .hasMessageContaining("starts the saga")
                     .hasMessageContaining("correlateAll");
         }
+
+        @Test
+        void build_throws_naming_the_step_when_a_step_declares_a_timeout_but_no_on_branch() {
+            assertThatThrownBy(() -> FlowSaga.<OrderEvent, OrderCommand>builder()
+                    .startsOn(OrderPlaced.class, o -> List.of(new ReservePayment(o.orderId(), o.amount())))
+                    .correlate(OrderPlaced.class, OrderPlaced::orderId)
+                    .step("awaiting-payment", step -> step.timeout(Duration.ofMinutes(30), Continuation.end()))
+                    .build())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("awaiting-payment")
+                    .hasMessageContaining("needs at least one on(...) branch");
+        }
     }
 
     @Nested
