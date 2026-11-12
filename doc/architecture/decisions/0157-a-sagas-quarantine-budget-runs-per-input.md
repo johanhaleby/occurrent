@@ -53,18 +53,21 @@ type, and its `firstFailedAt` moves with it, so that input does not start again 
 
 **A lost write of the record is tried again against the instance as it is now.** When the compare-and-set on the
 record loses to a concurrent writer, most likely a timer that fired, the saga reads the instance again and works the
-record out from what it reads, up to `SagaRunnerConfig.maxCasAttempts()` times, as the executor already does for a lost
-save of an event or a timer. The record names the failing input with that input's own instant and lists the version as
-pending. If the instance has applied the input, completed or been quarantined in the meantime, nothing is written. When
-every attempt loses, the saga logs a WARN, lists the version as pending with its instant as it did before, and the
-delivery fails, so the next failure of the input tries the record again.
+record out from what it reads, making up to `SagaRunnerConfig.maxCasAttempts()` attempts in all, as the executor
+already does for a lost save of an event or a timer. The record names the failing input with that input's own instant
+and lists the version as pending. If the instance has applied the input, completed or been quarantined in the meantime,
+nothing is written. When every attempt loses, the saga logs a WARN, tries to list the version as pending with its
+instant as it did before, and the delivery fails, so the next failure of the input tries the record again.
 
 ADR 134 discarded the record on a lost write instead, because the failing input now meets different state and may
-succeed. That still holds wherever the input is offered again, and the discard no longer adds anything to it, since an
-input's clock already survives every write except the one that applies the input. What the discard did cost was
-[#977](https://github.com/johanhaleby/occurrent/issues/977). Once an input had been failing for longer than
-`quarantineAfter`, a quarantining write that lost on every delivery, to a timer that fired between the saga's read and
-its write each time, never quarantined the instance.
+succeed. Retrying gives that up in one case. An input that has been failing for longer than `quarantineAfter`, on an
+instance a timer has just changed, quarantines the instance without being tried against the new state, where the
+discard rethrew and let the next delivery try it. The retry keeps that cost, because the input has already failed for
+the whole budget, which is the evidence ADR 134 asks for, and only running the whole delivery again from the failure
+path would try it. Below the budget nothing is given up, since the retried record doesn't quarantine and the input is
+offered again as before. What the discard did cost was [#977](https://github.com/johanhaleby/occurrent/issues/977).
+Once an input had been failing for longer than `quarantineAfter`, a quarantining write that lost on every delivery, to
+a timer that fired between the saga's read and its write each time, never quarantined the instance.
 
 ## Consequences
 
@@ -79,7 +82,7 @@ its write each time, never quarantined the instance.
 - A version that failed while quarantine was off is pending with the instant it first failed, since pending is
   recorded whether or not quarantine is on. Once quarantine is turned on, the next failure of that version quarantines
   the instance if it has been failing for longer than `quarantineAfter`.
-- A lost write of the record costs a read and a write per attempt, up to `maxCasAttempts()`, on an instance that is
-  already failing.
+- A lost write of the record costs a read and a write per attempt, up to `maxCasAttempts()` attempts, on an instance
+  that is already failing. When every attempt loses, listing the version as pending takes up to as many again.
 - An event without a stream id and version writes no record, so it is never quarantined. 0.34.0 wrote a record for
   one under a `position:N` key, which [ADR 150](0150-a-global-position-is-not-a-saga-redelivery-key.md) retired.

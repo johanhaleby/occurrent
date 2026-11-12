@@ -372,8 +372,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * other instances exactly the same.
      * <p>
      * A record whose write loses to another write on the instance is worked out again from what the instance holds now
-     * and written again, up to {@link SagaRunnerConfig#maxCasAttempts()} times. Discarding it instead let a timer that
-     * fired between every read and write keep the instance from ever being quarantined, which ADR 157 records.
+     * and written again, in {@link SagaRunnerConfig#maxCasAttempts()} attempts at most. Discarding it instead let a
+     * timer that fired between every read and write keep the instance from ever being quarantined, which ADR 157
+     * records. An event past its budget is then quarantined without being tried against what the timer changed.
      * <p>
      * Only the event path calls this, and it is not because the timer path has nothing to gain from it. A timeout
      * has no redelivery key of its own, so there is nothing to quarantine it on.
@@ -416,7 +417,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         // Checked before the write, not after, because quarantining returns normally and that acknowledges the
                         // event to whatever fed it. An unconfirmed answer is treated as a no, so the exception propagates as
                         // it did before 0.34.0 and the instance goes on failing wherever the model offers the event again.
-                        // Nothing is saved, which leaves the failure record the earlier attempts wrote and lets the next
+                        // Nothing is saved, which leaves the failure record earlier deliveries wrote and lets the next
                         // redelivery ask again. Retention is rechecked every time so a store coming back is noticed, while
                         // the warning is said once per instance.
                         if (firstRefusalForThisInstance) {
@@ -447,7 +448,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return true;
             }
             log.warn("Saga '{}' instance '{}' failed on the event '{}' and could not record the failure, because the instance kept changing under {} attempts. "
-                            + "The exception goes back to whatever feeds this subscription, and the next failure of the event records it.",
+                            + "The exception goes back to whatever feeds this subscription, and the next failure of the event tries again.",
                     subscriptionId, sagaId, meta.redeliveryKey(), config.maxCasAttempts(), failure);
             // Still listed as pending, so the event keeps its clock and a replay long after is applied
             recordPending(sagaId, meta, failure);
