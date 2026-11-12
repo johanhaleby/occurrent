@@ -19,6 +19,8 @@ package org.occurrent.application.service.reactor.dcb;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.service.dcb.TagGenerator;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
+import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -43,11 +45,18 @@ public final class DcbExecuteOptions<E> {
     private final @Nullable Function<List<E>, Mono<Void>> sideEffect;
     private final @Nullable TagGenerator<E> tagGenerator;
     private final @Nullable Long fromPosition;
+    private final boolean versionsRequested;
+    private final @Nullable DcbMarkerVersions fromVersions;
+    private final long highestFoldedPosition;
 
-    private DcbExecuteOptions(@Nullable Function<List<E>, Mono<Void>> sideEffect, @Nullable TagGenerator<E> tagGenerator, @Nullable Long fromPosition) {
+    private DcbExecuteOptions(@Nullable Function<List<E>, Mono<Void>> sideEffect, @Nullable TagGenerator<E> tagGenerator, @Nullable Long fromPosition,
+                              boolean versionsRequested, @Nullable DcbMarkerVersions fromVersions, long highestFoldedPosition) {
         this.sideEffect = sideEffect;
         this.tagGenerator = tagGenerator;
         this.fromPosition = fromPosition;
+        this.versionsRequested = versionsRequested;
+        this.fromVersions = fromVersions;
+        this.highestFoldedPosition = highestFoldedPosition;
     }
 
     /**
@@ -57,7 +66,7 @@ public final class DcbExecuteOptions<E> {
      * @return Empty execute options.
      */
     public static <E> DcbExecuteOptions<E> empty() {
-        return new DcbExecuteOptions<>(null, null, null);
+        return new DcbExecuteOptions<>(null, null, null, false, null, 0);
     }
 
     /**
@@ -87,7 +96,7 @@ public final class DcbExecuteOptions<E> {
      */
     @SuppressWarnings("unchecked")
     public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> sideEffect(Function<List<E_SPECIFIC>, Mono<Void>> sideEffect) {
-        return new DcbExecuteOptions<>(Objects.requireNonNull(sideEffect, "sideEffect cannot be null"), (TagGenerator<E_SPECIFIC>) this.tagGenerator, this.fromPosition);
+        return new DcbExecuteOptions<>(Objects.requireNonNull(sideEffect, "sideEffect cannot be null"), (TagGenerator<E_SPECIFIC>) this.tagGenerator, this.fromPosition, this.versionsRequested, this.fromVersions, this.highestFoldedPosition);
     }
 
     /**
@@ -104,7 +113,7 @@ public final class DcbExecuteOptions<E> {
      */
     @SuppressWarnings("unchecked")
     public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> tagGenerator(TagGenerator<E_SPECIFIC> tagGenerator) {
-        return new DcbExecuteOptions<>((Function<List<E_SPECIFIC>, Mono<Void>>) (Function<?, ?>) this.sideEffect, Objects.requireNonNull(tagGenerator, "tagGenerator cannot be null"), this.fromPosition);
+        return new DcbExecuteOptions<>((Function<List<E_SPECIFIC>, Mono<Void>>) (Function<?, ?>) this.sideEffect, Objects.requireNonNull(tagGenerator, "tagGenerator cannot be null"), this.fromPosition, this.versionsRequested, this.fromVersions, this.highestFoldedPosition);
     }
 
     /**
@@ -118,12 +127,70 @@ public final class DcbExecuteOptions<E> {
      *
      * @param fromPosition The exclusive global DCB position to start reading after (0 reads the whole boundary).
      * @return New options that read the boundary from the given position.
+     * @throws IllegalStateException if these options already ask for marker versions
+     * @deprecated A position is no safe place to resume from on MongoDB. The store reserves a position before the
+     * append commits, so an append that reserved a lower position can commit after a read that saw a higher one, and a
+     * read after that higher position never returns it. Use {@link #fromVersions(DcbMarkerVersions, long)} instead.
      */
+    @Deprecated(forRemoval = true)
     public DcbExecuteOptions<E> fromPosition(long fromPosition) {
         if (fromPosition < 0) {
             throw new IllegalArgumentException("fromPosition cannot be negative");
         }
-        return new DcbExecuteOptions<>(this.sideEffect, this.tagGenerator, fromPosition);
+        if (versionsRequested) {
+            throw new IllegalStateException("fromPosition cannot be combined with withVersions or fromVersions");
+        }
+        return new DcbExecuteOptions<>(this.sideEffect, this.tagGenerator, fromPosition, false, null, 0);
+    }
+
+    /**
+     * Ask the store for the marker versions of the boundary on the read. The read takes the whole boundary unless
+     * {@link #fromVersions(DcbMarkerVersions, long)} was set on these options, which this keeps. When the store
+     * reports them, and the read and the append report the same epoch for every marker key, the returned
+     * {@link org.occurrent.eventstore.api.dcb.DcbAppendResult#markerVersions()} holds the versions after this append.
+     * Otherwise they are empty. A snapshot saves them and passes them to {@link #fromVersions(DcbMarkerVersions, long)} on
+     * the next execute.
+     *
+     * @return New options that ask for marker versions.
+     * @throws IllegalStateException if these options read from a position
+     * @see DcbReadOptions#withVersions()
+     */
+    public DcbExecuteOptions<E> withVersions() {
+        requireNoPosition();
+        return new DcbExecuteOptions<>(this.sideEffect, this.tagGenerator, null, true, this.fromVersions, this.highestFoldedPosition);
+    }
+
+    /**
+     * Read only the events of the boundary appended after {@code markerVersions}, the versions a previous append or read
+     * reported, and ask for marker versions as {@link #withVersions()} does. The domain function receives only those
+     * events, so it folds them onto the state the caller saved at {@code markerVersions}, not onto the initial state.
+     * The read still takes the whole boundary's consistency token, so the append condition doesn't change.
+     * <p>
+     * The read throws {@link org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException} when the store can't compare
+     * {@code markerVersions} with its own, for example after its markers were pruned, and when it returns an event below
+     * {@code highestFoldedPosition}. That event committed late, and folding it last could give another state than a read
+     * in position order. Execute again without this method, with only {@link #withVersions()}, and fold from the initial state then.
+     *
+     * @param markerVersions        the versions to read after
+     * @param highestFoldedPosition the highest position among the events folded into the saved state. After an append
+     *                              that is {@link org.occurrent.eventstore.api.dcb.DcbAppendResult#lastSequencePosition()}.
+     * @return New options that read after the given marker versions.
+     * @throws IllegalStateException if these options read from a position
+     * @see DcbReadOptions#afterVersions(DcbMarkerVersions)
+     */
+    public DcbExecuteOptions<E> fromVersions(DcbMarkerVersions markerVersions, long highestFoldedPosition) {
+        Objects.requireNonNull(markerVersions, "markerVersions cannot be null");
+        if (highestFoldedPosition < 0) {
+            throw new IllegalArgumentException("highestFoldedPosition cannot be negative");
+        }
+        requireNoPosition();
+        return new DcbExecuteOptions<>(this.sideEffect, this.tagGenerator, null, true, markerVersions, highestFoldedPosition);
+    }
+
+    private void requireNoPosition() {
+        if (fromPosition != null) {
+            throw new IllegalStateException("withVersions and fromVersions cannot be combined with fromPosition");
+        }
     }
 
     /**
@@ -142,9 +209,35 @@ public final class DcbExecuteOptions<E> {
 
     /**
      * Return the configured global position to start reading after, or {@code null} if the whole boundary should be read.
+     *
+     * @deprecated See {@link #fromPosition(long)}.
      */
+    @Deprecated(forRemoval = true)
     public @Nullable Long fromPosition() {
         return fromPosition;
+    }
+
+    /**
+     * Return whether the read asks the store for marker versions, set by {@link #withVersions()} and
+     * {@link #fromVersions(DcbMarkerVersions, long)}.
+     */
+    public boolean versionsRequested() {
+        return versionsRequested;
+    }
+
+    /**
+     * Return the marker versions to read after, or {@code null} if the whole boundary should be read.
+     */
+    public @Nullable DcbMarkerVersions fromVersions() {
+        return fromVersions;
+    }
+
+    /**
+     * Return the highest position among the events folded into the saved state, or {@code 0} if the whole boundary should
+     * be read.
+     */
+    public long highestFoldedPosition() {
+        return highestFoldedPosition;
     }
 
     // sideEffect and tagGenerator are lambda-typed fields, so they are compared by identity here.
@@ -157,16 +250,20 @@ public final class DcbExecuteOptions<E> {
         DcbExecuteOptions<?> that = (DcbExecuteOptions<?>) obj;
         return Objects.equals(this.sideEffect, that.sideEffect) &&
                 Objects.equals(this.tagGenerator, that.tagGenerator) &&
-                Objects.equals(this.fromPosition, that.fromPosition);
+                Objects.equals(this.fromPosition, that.fromPosition) &&
+                this.versionsRequested == that.versionsRequested &&
+                Objects.equals(this.fromVersions, that.fromVersions) &&
+                this.highestFoldedPosition == that.highestFoldedPosition;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(sideEffect, tagGenerator, fromPosition);
+        return Objects.hash(sideEffect, tagGenerator, fromPosition, versionsRequested, fromVersions, highestFoldedPosition);
     }
 
     @Override
     public String toString() {
-        return "DcbExecuteOptions[sideEffect=" + sideEffect + ", tagGenerator=" + tagGenerator + ", fromPosition=" + fromPosition + ']';
+        return "DcbExecuteOptions[sideEffect=" + sideEffect + ", tagGenerator=" + tagGenerator + ", fromPosition=" + fromPosition
+                + ", versionsRequested=" + versionsRequested + ", fromVersions=" + fromVersions + ", highestFoldedPosition=" + highestFoldedPosition + ']';
     }
 }

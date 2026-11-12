@@ -69,7 +69,9 @@ import java.lang.annotation.*;
  * <p>
  * A factory method may return a {@code SnapshotView} to maintain a stream or capability-agnostic snapshot, or a
  * {@code DcbSnapshotView} to maintain a DCB snapshot, one per boundary. DCB snapshots do not support the synchronous
- * {@link #mode()}.
+ * {@link #mode()}. A DCB snapshot is saved at the marker versions of the boundary, so each delivery reads the events
+ * appended after the saved versions. A {@code DcbSnapshotView} over {@code DcbCriteria.all()} has no marker versions,
+ * so it keeps no snapshot and logs a warning at start.
  * </p>
  */
 @Target({ElementType.METHOD})
@@ -118,8 +120,8 @@ public @interface Snapshot {
     StartupMode startupMode() default StartupMode.DEFAULT;
 
     /**
-     * Save the snapshot at most once every {@code n} stream versions instead of on every handled event. The default of
-     * 1 saves after every handled event. A larger value trades snapshot freshness for fewer writes: the snapshot then
+     * Save the snapshot at most once every {@code n} stream versions, or for a DCB snapshot once every {@code n} events
+     * of the boundary, instead of on every handled event. The default of 1 saves after every handled event. A larger value trades snapshot freshness for fewer writes: the snapshot then
      * lags by up to {@code n} events, which a snapshot-accelerated read simply folds on top. When a save does happen
      * after skipped events, the intervening events are folded from the store so the saved state stays correct.
      * <p>

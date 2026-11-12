@@ -18,6 +18,10 @@ package org.occurrent.dsl.snapshot.internal;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.snapshot.Snapshot;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbEventStream;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
+import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -40,10 +44,64 @@ public final class SnapshotSupport {
      * changed state shape falls back to a full replay rather than being read into the new shape.
      *
      * @param state   the state to start folding the tail onto
-     * @param version the version the state is folded up to, {@code 0} when starting from the initial state
+     * @param version the stream version the state is folded up to, {@code 0} when starting from the initial state
      * @param <S>     the state type
      */
     public record Base<S extends @Nullable Object>(S state, long version) {
+    }
+
+    /**
+     * The state of a DCB boundary to resume folding from, and the marker versions it was folded up to. The versions are
+     * empty when starting from the initial state.
+     *
+     * @param state          the state to start folding the events read after {@code markerVersions} onto
+     * @param markerVersions the marker versions to read after, empty to read the whole boundary
+     * @param highestFoldedPosition the highest position among the events folded into {@code state}, {@code 0} when
+     *                       starting from the initial state
+     * @param <S>            the state type
+     */
+    public record DcbBase<S extends @Nullable Object>(S state, Optional<DcbMarkerVersions> markerVersions, long highestFoldedPosition) {
+        public DcbBase {
+            requireNonNull(markerVersions, "markerVersions cannot be null");
+        }
+
+        /**
+         * The initial state, with no marker versions.
+         */
+        public static <S extends @Nullable Object> DcbBase<S> initial(Supplier<? extends S> initialState) {
+            requireNonNull(initialState, "initialState cannot be null");
+            return new DcbBase<>(initialState.get(), Optional.empty(), 0);
+        }
+    }
+
+    /**
+     * Resolves the {@link DcbBase} to resume a DCB boundary from. Returns the snapshot's state and marker versions when
+     * {@code loaded} is present, its {@link Snapshot#schemaVersion()} equals {@code expectedSchemaVersion}, and it has
+     * marker versions, otherwise the {@code initialState} with no versions. A snapshot without marker versions was
+     * saved at a position, which is no safe place to resume from, so its state is never used.
+     */
+    public static <S extends @Nullable Object> DcbBase<S> resolveDcbBase(Optional<Snapshot<S>> loaded, int expectedSchemaVersion, Supplier<? extends S> initialState) {
+        requireNonNull(loaded, "loaded cannot be null");
+        requireNonNull(initialState, "initialState cannot be null");
+        if (loaded.isPresent() && loaded.get().schemaVersion() == expectedSchemaVersion && loaded.get().markerVersions().isPresent()) {
+            return new DcbBase<>(loaded.get().state(), loaded.get().markerVersions(), loaded.get().highestFoldedPosition());
+        }
+        return DcbBase.initial(initialState);
+    }
+
+    /**
+     * Refuses a read after the marker versions of {@code base} when it returned an event below the highest position
+     * folded into the state of {@code base}, so the caller reads the whole boundary as it does for any refused read.
+     *
+     * @throws DcbSnapshotInvalidException when {@code read} holds such an event
+     */
+    public static void refuseEventBelowFoldedPosition(DcbCriteria criteria, DcbBase<?> base, DcbEventStream read) {
+        requireNonNull(criteria, "criteria cannot be null");
+        requireNonNull(base, "base cannot be null");
+        requireNonNull(read, "read cannot be null");
+        if (base.markerVersions().isPresent() && read.hasEventBelow(base.highestFoldedPosition())) {
+            throw DcbSnapshotInvalidException.eventBelowFoldedPosition(criteria, base.markerVersions().get(), base.highestFoldedPosition());
+        }
     }
 
     /**
@@ -67,7 +125,7 @@ public final class SnapshotSupport {
      * Discarding it and folding from the initial state instead is the only correct choice. Pass {@link Long#MAX_VALUE} (or
      * use the 3-argument overload) when the head is not known and the snapshot is trusted unconditionally.
      *
-     * @param observedHead the true current head the snapshot must not be ahead of (stream version, or DCB position)
+     * @param observedHead the stream version the snapshot must not be ahead of
      */
     public static <S extends @Nullable Object> Base<S> resolveBase(Optional<Snapshot<S>> loaded, int expectedSchemaVersion, long observedHead, Supplier<? extends S> initialState) {
         requireNonNull(loaded, "loaded cannot be null");
@@ -84,7 +142,7 @@ public final class SnapshotSupport {
      * to {@link #isRedelivery(Optional, int, long, long)} with an unbounded observed head, for callers that trust the
      * snapshot's version unconditionally.
      *
-     * @param deliveredVersion the version (stream version, or DCB position) of the event being delivered
+     * @param deliveredVersion the stream version of the event being delivered
      */
     public static <S extends @Nullable Object> boolean isRedelivery(Optional<Snapshot<S>> loaded, int schemaVersion, long deliveredVersion) {
         return isRedelivery(loaded, schemaVersion, deliveredVersion, Long.MAX_VALUE);
@@ -100,7 +158,7 @@ public final class SnapshotSupport {
      * {@code deliveredVersion} normally means the event was already folded, but if that version is also above the true
      * head the stream was truncated and the snapshot is stale, so this is not a redelivery and the caller must rebuild.
      *
-     * @param deliveredVersion the version (stream version, or DCB position) of the event being delivered
+     * @param deliveredVersion the stream version of the event being delivered
      * @param observedHead     the true current head the snapshot must not be ahead of
      */
     public static <S extends @Nullable Object> boolean isRedelivery(Optional<Snapshot<S>> loaded, int schemaVersion, long deliveredVersion, long observedHead) {

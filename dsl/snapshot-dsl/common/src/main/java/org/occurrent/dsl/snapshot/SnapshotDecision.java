@@ -27,7 +27,8 @@ import static java.util.Objects.requireNonNull;
  *
  * @param newState                the state after folding this execute's produced events onto the resumed state
  * @param newEvents               the events this execute produced (empty when the execute wrote nothing)
- * @param newVersion              the version the state is now folded up to (the stream version, or the DCB position)
+ * @param newVersion              the stream version the state is now folded up to, {@code 0} for a DCB snapshot, which
+ *                                is saved at marker versions instead
  * @param eventsSinceSnapshot     how many events have been folded since the last snapshot: the resumed tail length plus
  *                                the number of newly produced events. This is what {@link SnapshotPolicy#everyNEvents(int)} counts.
  * @param <S>                     the state type

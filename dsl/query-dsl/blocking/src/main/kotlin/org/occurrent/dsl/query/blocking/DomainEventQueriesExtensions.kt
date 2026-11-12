@@ -198,6 +198,8 @@ fun <T : Any> DomainEventQueries<in T>.queryOne(
  *
  * @see DomainEventQueries.afterPosition
  */
+@Deprecated("A position isn't a safe place to resume from on MongoDB. Resume a catch-up subscription from the checkpoint it stores instead.")
+@Suppress("DEPRECATION")
 fun <T : Any> DomainEventQueries<T>.afterPositionAsSequence(position: Long): Sequence<T> =
     afterPosition(position).asSequence()
 
