@@ -288,6 +288,34 @@ class CompetingConsumerStartRefusedByTheWrappedModelTest {
     }
 
     @Test
+    void a_handle_waiting_without_a_timeout_is_released_by_the_report_and_throws_the_refusal() throws Exception {
+        // Given the wrapped handle has thrown and the handle waits for the refusal to be acted on with no timeout
+        strategy.grantOnRegister = true;
+        Subscription subscription = subscribe();
+        wrapped.dropAndThrowFromTheHandle(ID);
+        AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+        Thread caller = startThread(() -> {
+            try {
+                subscription.waitUntilStarted();
+            } catch (Throwable e) {
+                thrown.set(e);
+            }
+        });
+        awaitWaitingOrDone(caller);
+
+        // When
+        wrapped.report(ID);
+
+        // Then
+        caller.join(EVENTUALLY.toMillis());
+        assertAll(
+                () -> assertThat(caller.isAlive()).as("call waiting without a timeout is released").isFalse(),
+                () -> assertThat(thrown.get()).as("thrown by the handle").isInstanceOf(UnsupportedStartAtException.class),
+                () -> assertThat(model.subscriptionIds()).as("subscription ids").doesNotContain(ID)
+        );
+    }
+
+    @Test
     void a_cancel_between_the_wrapped_handle_throwing_and_the_refusal_being_reported_releases_a_waiting_handle_at_once() throws Exception {
         // Given the wrapped handle has thrown and the handle waits for the refusal to be acted on
         strategy.grantOnRegister = true;
