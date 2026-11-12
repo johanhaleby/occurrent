@@ -65,6 +65,27 @@ class CompetingConsumerCheckpointWriteVersionSourceUndeclaredCheckedExceptionTes
         assertThat(second).as("the write version once the strategy resolves").isEqualTo(OptionalLong.of(9L));
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_resolution_that_throws_an_InterruptedException_answers_empty_and_leaves_the_thread_interrupted() {
+        // Given
+        ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
+        when(provider.getIfUnique()).thenAnswer(__ -> {
+            throw sneaky(new InterruptedException("The strategy was interrupted while it was built"));
+        });
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
+
+        // When
+        AtomicReference<OptionalLong> version = new AtomicReference<>();
+        Throwable thrown = catchThrowable(() -> version.set(source.writeVersion(SUBSCRIPTION_ID)));
+        boolean interrupted = Thread.interrupted();
+
+        // Then
+        assertThat(thrown).as("what the write version threw while resolving the strategy").isNull();
+        assertThat(version.get()).as("the write version while resolving the strategy throws").isEmpty();
+        assertThat(interrupted).as("the thread is interrupted once the write version returned").isTrue();
+    }
+
     @SuppressWarnings("unchecked")
     private static <E extends Throwable> RuntimeException sneaky(Throwable t) throws E {
         throw (E) t;

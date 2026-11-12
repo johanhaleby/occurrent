@@ -60,6 +60,8 @@ import static org.awaitility.Awaitility.await;
 class CompetingConsumerUndeclaredCheckedExceptionTest {
 
     private static final String SUBSCRIBER = "node";
+    private static final String LIFECYCLE_THREAD_OF_CC = "occurrent-competing-consumer-lifecycle-cc";
+    private static final String TRY_THREAD_OF_CC = "occurrent-competing-consumer-reconcile-cc";
     private static final Duration EVENTUALLY = Duration.ofSeconds(10);
     // Resolves to null for this model, which hands the subscription straight to the wrapped model
     private static final StartAt DOES_NOT_COMPETE = StartAt.dynamic(context -> context.subscriptionModelType() == CompetingConsumerSubscriptionModel.class ? null : StartAt.now());
@@ -650,7 +652,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
     }
 
     @Test
-    void a_start_runs_a_subscription_waiting_for_its_lease_on_a_thread_that_is_interrupted_when_the_wrapped_model_throws_an_InterruptedException_on_being_asked_whether_it_runs_it_before_the_start() {
+    void a_start_runs_a_subscription_waiting_for_its_lease_on_a_thread_that_is_not_interrupted_when_the_wrapped_model_throws_an_InterruptedException_on_being_asked_whether_it_runs_it_before_the_start() {
         // Given
         Wrapped wrapped = new Wrapped(true);
         CompetingConsumerSubscriptionModel model = modelOver(wrapped);
@@ -665,7 +667,86 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         // Then
         assertThat(thrown).as("what start(true) threw").isNull();
         await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(wrapped.running).as("the subscriptions the wrapped model runs").containsExactly("cc"));
-        assertThat(wrapped.interruptedOnResume).as("the thread that resumed cc in the wrapped model is interrupted when it does").isTrue();
+        assertThat(wrapped.interruptedOnResume).as("the thread that resumed cc in the wrapped model is interrupted when it does").isFalse();
+    }
+
+    @Test
+    void a_cancel_whose_lease_strategy_throws_an_InterruptedException_on_unregistering_after_the_wrapped_model_threw_a_checked_exception_throws_the_first_with_the_second_suppressed_and_leaves_the_thread_interrupted() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        });
+        IOException cannotCancel = new IOException("The wrapped model cannot cancel cc right now");
+        InterruptedException interrupted = new InterruptedException("The lease store was interrupted while unregistering cc");
+        wrapped.failures.next("cancelled cc", cannotCancel);
+        strategy.failures.next("unregister cc", interrupted);
+
+        // When
+        Outcome outcome = ranOnAThread(() -> model.cancelSubscription("cc"));
+
+        // Then
+        assertThat(outcome.thrown()).as("what cancelSubscription threw").isSameAs(cannotCancel);
+        assertThat(outcome.thrown().getSuppressed()).as("what was suppressed in it").containsExactly(interrupted);
+        assertThat(outcome.interrupted()).as("the thread is interrupted once cancelSubscription threw").isTrue();
+    }
+
+    @Test
+    void a_thread_a_start_and_a_stop_were_handed_to_stays_while_a_resume_waits_for_the_lock_when_the_wrapped_model_throws_an_InterruptedException_on_being_asked_whether_it_runs_the_subscription_for_the_start() throws Exception {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        wrapped.onceMade = () -> strategy.holders.remove("cc");
+        model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        });
+        Gate grantHoldingTheLock = new Gate();
+        strategy.nextHasLock = grantHoldingTheLock;
+        CompletableFuture<@Nullable Throwable> granting = CompletableFuture.supplyAsync(() -> catchThrowable(() -> model.onConsumeGranted("cc", SUBSCRIBER)));
+        assertThat(grantHoldingTheLock.awaitEntered()).as("the grant holds the lock of cc").isTrue();
+        Gate resumeWaiting = new Gate();
+        model.runBeforeACallWaitsForTheLock(resumeWaiting::pass);
+        wrapped.failures.next("isRunning cc", new InterruptedException("The wrapped model was interrupted while saying whether it runs cc"));
+        model.start(true);
+        CompletableFuture<@Nullable Throwable> resuming = CompletableFuture.supplyAsync(() -> catchThrowable(() -> model.resumeSubscription("cc")));
+        assertThat(resumeWaiting.awaitEntered()).as("the resume of cc counts as waiting for its lock").isTrue();
+        model.stop();
+
+        try {
+            // When
+            grantHoldingTheLock.open();
+            granting.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+            await().atMost(EVENTUALLY).until(() -> strategy.calls.contains("release cc"));
+
+            // Then
+            await().during(Duration.ofSeconds(1)).atMost(EVENTUALLY).untilAsserted(() ->
+                    assertThat(aThreadAppliesWhatWasHandedOverFor("cc")).as("a thread applies the stop() handed over for cc while the resume waits").isTrue());
+        } finally {
+            resumeWaiting.open();
+            resuming.get(EVENTUALLY.toMillis(), TimeUnit.MILLISECONDS);
+        }
+    }
+
+    @Test
+    void a_try_of_a_competing_consumer_tries_again_after_the_wrapped_model_throws_an_InterruptedException_on_being_asked_whether_it_runs_the_subscription_before_a_resume_that_fails() {
+        // Given
+        Wrapped wrapped = new Wrapped(true);
+        CompetingConsumerSubscriptionModel model = modelOver(wrapped);
+        model.subscribe(SUBSCRIBER, "cc", null, StartAt.now(), __ -> {
+        });
+        wrapped.running.remove("cc");
+        wrapped.failures.nextOnThisThread("isRunning cc", new IOException("The wrapped model cannot say whether it runs cc right now"));
+        wrapped.failures.nextAnswersOnAThreadNamed("isRunning cc", TRY_THREAD_OF_CC);
+        wrapped.failures.nextOnAThreadNamed("isRunning cc", TRY_THREAD_OF_CC, new InterruptedException("The wrapped model was interrupted while saying whether it runs cc"));
+        wrapped.failures.nextOnAThreadNamed("resume cc", TRY_THREAD_OF_CC, new IOException("The wrapped model cannot resume cc right now"));
+        strategy.failures.next("release cc", new IOException("The lease store cannot be reached right now"));
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.onConsumeGranted("cc", SUBSCRIBER));
+        await().atMost(EVENTUALLY).until(() -> wrapped.running.contains("cc") || !aThreadNamed(TRY_THREAD_OF_CC));
+
+        // Then
+        assertThat(thrown).as("what onConsumeGranted threw").isNull();
+        assertThat(wrapped.running).as("the subscriptions the wrapped model runs once the try of cc is done").containsExactly("cc");
     }
 
     private record Outcome(@Nullable Throwable thrown, boolean interrupted) {
@@ -678,8 +759,11 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
     }
 
     private static boolean aThreadAppliesWhatWasHandedOverFor(String subscriptionId) {
-        return Thread.getAllStackTraces().keySet().stream()
-                .anyMatch(thread -> thread.isAlive() && thread.getName().equals("occurrent-competing-consumer-lifecycle-" + subscriptionId));
+        return aThreadNamed("occurrent-competing-consumer-lifecycle-" + subscriptionId);
+    }
+
+    private static boolean aThreadNamed(String name) {
+        return Thread.getAllStackTraces().keySet().stream().anyMatch(thread -> thread.isAlive() && thread.getName().equals(name));
     }
 
     private static boolean waitsOnAMonitor(Thread thread) {
@@ -699,7 +783,18 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
 
     // The failures armed for each call, each thrown once without being declared, as Kotlin code throws a checked exception
     private static final class Failures {
+        private static final Throwable ANSWERS = new Throwable("answers");
         private final Map<String, Queue<Throwable>> armed = new ConcurrentHashMap<>();
+
+        // The next call on a thread of that name answers as it does, so a failure armed after it is thrown by the call
+        // after that
+        private void nextAnswersOnAThreadNamed(String call, String threadName) {
+            next(onAThreadNamed(call, threadName), ANSWERS);
+        }
+
+        private void nextOnAThreadNamed(String call, String threadName, Throwable failure) {
+            next(onAThreadNamed(call, threadName), failure);
+        }
 
         private void next(String call, Throwable failure) {
             armed.computeIfAbsent(call, __ -> new ConcurrentLinkedQueue<>()).add(failure);
@@ -712,7 +807,13 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         private void throwIfArmed(String call) {
             @Nullable Throwable failure = take(onThisThread(call));
             if (failure == null) {
+                failure = take(onAThreadNamed(call, Thread.currentThread().getName()));
+            }
+            if (failure == null) {
                 failure = take(call);
+            }
+            if (failure == ANSWERS) {
+                return;
             }
             if (failure != null) {
                 throw sneaky(failure);
@@ -722,6 +823,10 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         private @Nullable Throwable take(String call) {
             @Nullable Queue<Throwable> failures = armed.get(call);
             return failures == null ? null : failures.poll();
+        }
+
+        private static String onAThreadNamed(String call, String threadName) {
+            return call + " on thread named " + threadName;
         }
 
         private static String onThisThread(String call) {
@@ -734,6 +839,7 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         private final Failures failures = new Failures();
         private final List<String> calls = new CopyOnWriteArrayList<>();
         private final Set<String> holders = ConcurrentHashMap.newKeySet();
+        private volatile @Nullable Gate nextHasLock;
 
         @Override
         public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
@@ -753,11 +859,17 @@ class CompetingConsumerUndeclaredCheckedExceptionTest {
         @Override
         public void releaseCompetingConsumer(String subscriptionId, String subscriberId) {
             calls.add("release " + subscriptionId);
+            failures.throwIfArmed("release " + subscriptionId);
             holders.remove(subscriptionId);
         }
 
         @Override
         public boolean hasLock(String subscriptionId, String subscriberId) {
+            @Nullable Gate gate = nextHasLock;
+            if (gate != null && subscriptionId.equals("cc")) {
+                nextHasLock = null;
+                gate.pass();
+            }
             failures.throwIfArmed("hasLock " + subscriptionId);
             return holders.contains(subscriptionId);
         }
