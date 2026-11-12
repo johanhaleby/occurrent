@@ -286,6 +286,69 @@ class CompetingConsumerStartRefusedByTheWrappedModelTest {
                 .withThrowableOfType(ExecutionException.class).havingCause().isInstanceOf(UnsupportedStartAtException.class).isSameAs(wrapped.thrownByAHandle.get());
     }
 
+    @Test
+    void a_cancel_between_the_wrapped_handle_throwing_and_the_refusal_being_reported_releases_a_waiting_handle_at_once() throws Exception {
+        // Given the wrapped handle has thrown and the handle waits for the refusal to be acted on
+        strategy.grantOnRegister = true;
+        Subscription subscription = subscribe();
+        wrapped.dropAndThrowFromTheHandle(ID);
+        AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+        Thread caller = startThread(() -> {
+            try {
+                subscription.waitUntilStarted(Duration.ofSeconds(30));
+            } catch (Throwable e) {
+                thrown.set(e);
+            }
+        });
+        awaitWaitingOrDone(caller);
+
+        // When the consumer is cancelled before the refusal is reported
+        model.cancelSubscription(ID);
+
+        // Then
+        caller.join(EVENTUALLY.toMillis());
+        assertAll(
+                () -> assertThat(thrown.get()).as("thrown by the handle well before its timeout").isInstanceOf(UnsupportedStartAtException.class),
+                () -> assertThat(model.subscriptionIds()).as("subscription ids").doesNotContain(ID),
+                () -> assertThat(strategy.registrations).as("registered with the strategy").isEmpty()
+        );
+    }
+
+    @Test
+    void a_handle_returned_by_a_resume_the_wrapped_model_refuses_throws_only_once_the_id_is_free() throws Exception {
+        // Given a paused consumer whose resume the wrapped model refuses after the resume returned
+        strategy.grantOnRegister = true;
+        subscribe();
+        model.pauseSubscription(ID);
+        Subscription resumed = model.resumeSubscription(ID);
+        wrapped.dropAndThrowFromTheHandle(ID);
+        AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+        AtomicReference<@Nullable Snapshot> atTheThrow = new AtomicReference<>();
+        Thread caller = startThread(() -> {
+            try {
+                resumed.waitUntilStarted(Duration.ofSeconds(30));
+            } catch (Throwable e) {
+                thrown.set(e);
+                atTheThrow.set(snapshot());
+            }
+        });
+
+        // When the report is delivered from another thread after the handle has started waiting
+        awaitWaitingOrDone(caller);
+        wrapped.report(ID);
+
+        // Then
+        caller.join(EVENTUALLY.toMillis());
+        assertThat(thrown.get()).as("thrown by the resume handle").isInstanceOf(UnsupportedStartAtException.class);
+        Snapshot snapshot = requireNonNull(atTheThrow.get());
+        assertAll(
+                () -> assertThat(snapshot.subscriptionIds()).as("subscription ids when the resume handle threw").doesNotContain(ID),
+                () -> assertThat(snapshot.registrations()).as("registered with the strategy when the resume handle threw").isEmpty(),
+                () -> assertThat(snapshot.holders()).as("holding the lease when the resume handle threw").isEmpty(),
+                () -> assertThat(snapshot.subscribeAgain()).as("subscribing the same id right after the throw").isNull()
+        );
+    }
+
     private record Snapshot(Set<String> subscriptionIds, Set<String> registrations, Set<String> holders, @Nullable Throwable subscribeAgain) {
     }
 
