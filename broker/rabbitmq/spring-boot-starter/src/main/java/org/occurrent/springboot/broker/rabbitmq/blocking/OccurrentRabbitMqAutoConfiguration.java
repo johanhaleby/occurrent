@@ -18,6 +18,7 @@ package org.occurrent.springboot.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ShutdownSignalException;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
@@ -26,18 +27,25 @@ import org.occurrent.broker.rabbitmq.blocking.RabbitMqOutboundMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqPublishException;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqPublishTimeoutException;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqSinkListener;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqSourceListener;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqUnroutableEventException;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.broker.rabbitmq.blocking.domain.RabbitMqDomainBrokerConfiguration;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEnabledHealthIndicator;
+import org.springframework.boot.health.contributor.CompositeHealthContributor;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Fallback;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Lazy;
@@ -98,7 +106,8 @@ public class OccurrentRabbitMqAutoConfiguration {
 
     /**
      * The zero-config {@code CloudEventSink}, publishing through the application's {@link RabbitMqOutboundMapper} bean
-     * when it declares one. {@code @Lazy} so a consume-only deployment, one that never publishes
+     * when it declares one, and reporting to the {@link RabbitMqSinkListener} bean when there is one, the
+     * application's or the Micrometer one. {@code @Lazy} so a consume-only deployment, one that never publishes
      * and so never needs {@code occurrent.broker.rabbitmq.exchange} configured, is never forced to satisfy this
      * bean's {@link DestinationResolver} requirement just because the starter is on the classpath. Instantiated,
      * and so validated, only the first time something actually asks for a {@code CloudEventSink}.
@@ -107,7 +116,8 @@ public class OccurrentRabbitMqAutoConfiguration {
     @Lazy
     @Fallback
     RabbitMqCloudEventSink occurrentRabbitMqCloudEventSink(Connection connection, DestinationResolver<RabbitMqDestination> resolver, RabbitMqBrokerProperties properties,
-                                                         ObjectProvider<RabbitMqOutboundMapper> outboundMapperProvider) {
+                                                         ObjectProvider<RabbitMqOutboundMapper> outboundMapperProvider,
+                                                         ObjectProvider<RabbitMqSinkListener> listenerProvider) {
         RabbitMqBrokerProperties.Retry retry = properties.getSink().getRetry();
         RabbitMqCloudEventSink.Builder builder = RabbitMqCloudEventSink.builder(connection, resolver)
                 .acknowledgementTimeout(properties.getSink().getAcknowledgementTimeout())
@@ -116,6 +126,10 @@ public class OccurrentRabbitMqAutoConfiguration {
         RabbitMqOutboundMapper outboundMapper = outboundMapperProvider.getIfAvailable();
         if (outboundMapper != null) {
             builder.outboundMapper(outboundMapper);
+        }
+        RabbitMqSinkListener listener = listenerProvider.getIfAvailable();
+        if (listener != null) {
+            builder.listener(listener);
         }
         return builder.build();
     }
@@ -138,8 +152,8 @@ public class OccurrentRabbitMqAutoConfiguration {
     /**
      * Pre-seeds {@link RabbitMqCloudEventSourceFactory} with the connection, the resolver bean if one exists (a
      * source whose {@code occurrent.broker.rabbitmq.source.declare-topology} is {@code false}, or whose caller
-     * supplies its own bindings, needs none), the {@link RabbitMqInboundMapper} bean if one exists, which every
-     * builder the factory returns starts with, and every
+     * supplies its own bindings, needs none), the {@link RabbitMqInboundMapper} and {@link RabbitMqSourceListener}
+     * beans if they exist, which every builder the factory returns starts with, and every
      * {@code occurrent.broker.rabbitmq.source.*} default,
      * including a zero-config {@code readinessSource} that defers to whichever
      * {@code CatchupThenPushSubscriptionModel} bean, if any, owns the source's subscription id, see
@@ -151,7 +165,62 @@ public class OccurrentRabbitMqAutoConfiguration {
     RabbitMqCloudEventSourceFactory occurrentRabbitMqCloudEventSourceFactory(Connection connection, RabbitMqBrokerProperties properties,
                                                                               ObjectProvider<DestinationResolver<RabbitMqDestination>> resolver,
                                                                               ApplicationContext applicationContext,
-                                                                              ObjectProvider<RabbitMqInboundMapper> inboundMapper) {
-        return new DefaultRabbitMqCloudEventSourceFactory(connection, properties, resolver, applicationContext, inboundMapper);
+                                                                              ObjectProvider<RabbitMqInboundMapper> inboundMapper,
+                                                                              ObjectProvider<RabbitMqSourceListener> listener) {
+        return new DefaultRabbitMqCloudEventSourceFactory(connection, properties, resolver, applicationContext, inboundMapper, listener);
+    }
+
+    /**
+     * Micrometer counters and a timer for the sink, and counters for every source the factories build, when the
+     * application has a {@link MeterRegistry} bean. A {@link RabbitMqSinkListener} or {@link RabbitMqSourceListener}
+     * bean of the application's own replaces the matching one here. The meters are named in ADR 171.
+     * <p>
+     * {@code @ConditionalOnBean(MeterRegistry.class)} can see a registry that Spring Boot's metrics
+     * auto-configuration registers, since {@link OccurrentRabbitMqBrokerImportSelector} has no order and Spring
+     * processes it after Spring Boot's auto-configuration selector, which has one.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(MeterRegistry.class)
+    @ConditionalOnBean(MeterRegistry.class)
+    static class MetricsConfiguration {
+
+        @Bean
+        @ConditionalOnMissingBean
+        RabbitMqSinkListener occurrentRabbitMqMicrometerSinkListener(MeterRegistry registry) {
+            return new MicrometerRabbitMqSinkListener(registry);
+        }
+
+        @Bean
+        @ConditionalOnMissingBean
+        RabbitMqSourceListener occurrentRabbitMqMicrometerSourceListener(MeterRegistry registry) {
+            return new MicrometerRabbitMqSourceListener(registry);
+        }
+    }
+
+    /**
+     * A health contributor named {@code rabbitMqBroker}, with one indicator per sink and source bean already
+     * created, when {@code spring-boot-health} is on the classpath. A sink is down once it is closed or its
+     * connection is, and a source is down when it has stopped, been closed or lost its connection. Turned off by
+     * {@code management.health.rabbitmqbroker.enabled=false}, or by {@code management.health.defaults.enabled=false}
+     * unless {@code management.health.rabbitmqbroker.enabled} is {@code true}. The key is lowercase like Spring Boot's
+     * own, such as {@code diskspace}, so it also works written {@code rabbitMqBroker} or {@code rabbit-mq-broker}, or
+     * as the environment variable {@code MANAGEMENT_HEALTH_RABBITMQBROKER_ENABLED}. A health group and the health
+     * response use the name {@code rabbitMqBroker}.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(CompositeHealthContributor.class)
+    static class HealthConfiguration {
+
+        // On the method, since Spring loads every condition class on the configuration class before evaluating any,
+        // which fails without spring-boot-health before @ConditionalOnClass can skip it. Spring Boot names the
+        // contributor after the bean without its HealthContributor suffix, which gives rabbitMqBroker. An application
+        // bean under any of the three names that give rabbitMqBroker replaces the starter's, since two fail startup
+        @Bean
+        @ConditionalOnEnabledHealthIndicator("rabbitmqbroker")
+        @ConditionalOnMissingBean(name = {"rabbitMqBroker", "rabbitMqBrokerHealthIndicator",
+                "rabbitMqBrokerHealthContributor"})
+        CompositeHealthContributor rabbitMqBrokerHealthContributor(ConfigurableListableBeanFactory beanFactory) {
+            return new RabbitMqBrokerHealthContributor(beanFactory);
+        }
     }
 }

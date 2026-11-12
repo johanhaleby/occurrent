@@ -220,6 +220,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     private final RabbitMqDeliveryWorker worker;
     private final Duration closeTimeout;
     private final RabbitMqInboundMapper inboundMapper;
+    private final RabbitMqSourceListenerCalls listener;
 
     private final Lock consumeLock = new ReentrantLock();
     private final AtomicReference<@Nullable String> consumerTag = new AtomicReference<>();
@@ -246,6 +247,8 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     // pace it, so it still applies immediately, through failureAction, from the point of failure.
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
+    // Set first thing in close(), which sets permanentlyStopped too, so status() tells the two apart
+    private volatile boolean closed;
     // Raised by onChannelShutdown for every close of the channel that a connection recovery reopens. The client adds the
     // listener again to every channel a recovery opens, so this counts each drop, and the end of a recovery counts
     // nothing.
@@ -278,6 +281,16 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     RabbitMqCloudEventSource(PushSubscriptionModel model, Channel consumeChannel,
                                       String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
                                       Predicate<String> readinessSource, Duration closeTimeout, RabbitMqInboundMapper inboundMapper) {
+        this(model, consumeChannel, queue, prefetchCount, pollInterval, failureAction, readinessSource, closeTimeout,
+                inboundMapper, RabbitMqSourceListenerCalls.none());
+    }
+
+    // The listener is the one failureAction was built with, so both report to the same one
+    RabbitMqCloudEventSource(PushSubscriptionModel model, Channel consumeChannel,
+                                      String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
+                                      Predicate<String> readinessSource, Duration closeTimeout, RabbitMqInboundMapper inboundMapper,
+                                      RabbitMqSourceListenerCalls listener) {
+        this.listener = listener;
         this.inboundMapper = inboundMapper;
         this.model = model;
         this.consumeChannel = consumeChannel;
@@ -641,7 +654,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
                 Thread.currentThread().interrupt();
             }
             log.debug("Failed to rebuild a CloudEvent from a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
-            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
+            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody(), e);
             return;
         }
         RoutingOutcome outcome;
@@ -652,7 +665,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             // policy like any other handler failure. Any other Error stops this source instead, see
             // handleDeliveryOrStop. Only a filter or a handler failure throws, a refusal comes back as an outcome.
             log.debug("A filter or handler failed for a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
-            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
+            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody(), e);
             return;
         }
         route(outcome, deliveryTag, delivery.getProperties(), delivery.getBody());
@@ -688,7 +701,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
                 // NOT_DELIVERABLE, a refusal the model decided before dispatch without promising it is permanent
                 log.debug("A message on queue \"{}\", delivery tag {}, could not be delivered. Routing it " +
                         "through the configured delivery failure policy.", queue, deliveryTag);
-                routeFailure(deliveryTag, properties, body);
+                routeFailure(deliveryTag, properties, body, null);
                 yield RoutingOutcome.Disposition.FAIL;
             }
             case STOP -> {
@@ -707,7 +720,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     }
 
     // Under consumeLock, the lock reconcileConsumption also holds across its own blocking Channel calls, so two
-    // threads never talk to consumeChannel at once.
+    // threads never talk to consumeChannel at once. The listener runs after the lock is released.
     private void ackNow(long deliveryTag) {
         consumeLock.lock();
         try {
@@ -718,6 +731,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         } finally {
             consumeLock.unlock();
         }
+        listener.delivered();
     }
 
     // Routes a genuine failure (UNAVAILABLE and a permanent catch-up refusal are both handled
@@ -726,7 +740,10 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     // to pace it. REDELIVER is paced instead, held and released once per poll exactly like a DEFERRED delivery, via
     // a second deque, so a message that fails on every attempt is bounded to one redelivery per pollInterval rather
     // than nacking as fast as the broker round-trips it. See heldFailedDeliveryTags's own javadoc.
-    private void routeFailure(long deliveryTag, BasicProperties properties, byte[] body) {
+    //
+    // The listener hears of the failure before the policy runs, and failureAction reports the park or the redelivery.
+    private void routeFailure(long deliveryTag, BasicProperties properties, byte[] body, @Nullable Throwable failure) {
+        listener.failed(failure);
         if (failureAction.policy() == DeliveryFailurePolicy.REDELIVER) {
             heldFailedDeliveryTags.add(deliveryTag);
         } else {
@@ -810,6 +827,32 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
     }
 
     /**
+     * Whether this source still works. {@link RabbitMqSourceStatus#CLOSED} once {@link #close()} has started,
+     * {@link RabbitMqSourceStatus#STOPPED} once the source has stopped for good on its own, and
+     * {@link RabbitMqSourceStatus#OPEN} otherwise. {@code OPEN} includes a source waiting for its subscription to
+     * start or to be ready, and one whose connection is down, which {@link #isConnected()} tells.
+     * A channel that closed for good stops the source on its next poll, so this can say {@code OPEN} for up to
+     * one {@link Builder#pollInterval(Duration)} after it.
+     */
+    public RabbitMqSourceStatus status() {
+        // permanentlyStopped first, since close() sets closed before it, so a close in between reads as CLOSED
+        boolean stopped = permanentlyStopped;
+        if (closed) {
+            return RabbitMqSourceStatus.CLOSED;
+        }
+        return stopped ? RabbitMqSourceStatus.STOPPED : RabbitMqSourceStatus.OPEN;
+    }
+
+    /**
+     * Whether the connection under this source's channel is open. {@code false} while an automatic connection
+     * recovery is under way, and {@code true} again once it has reopened the channel.
+     */
+    public boolean isConnected() {
+        Connection connection = consumeChannel.getConnection();
+        return connection != null && connection.isOpen();
+    }
+
+    /**
      * Stops the background poll, cancels this source's consumer if it has one, waits up to
      * {@link Builder#closeTimeout(Duration)} for a delivery already being handled to finish, releases any
      * {@code DEFERRED} delivery still held unacked, and closes the {@link Channel} (and, with
@@ -841,6 +884,7 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         boolean[] workerFinished = {false};
         // Every step runs, also after one throws, like stopPermanently()'s. The first failure is thrown with the later
         // ones suppressed on it.
+        closed = true;
         new RabbitMqTeardown(null)
                 .run(() -> bringCloseDeadlineForwardTo(deadline))
                 .run(scheduler::shutdownNow)
@@ -943,6 +987,8 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
         private Duration closeTimeout = Duration.ofSeconds(30);
         private RetryStrategy retryStrategy;
         private RabbitMqInboundMapper inboundMapper = RabbitMqInboundMapper.cloudEventHeaders();
+        private RabbitMqSourceListener listener = new RabbitMqSourceListener() {
+        };
 
         private Builder(Connection connection, PushSubscriptionModel model, String queue) {
             this.connection = requireNonNull(connection, "connection cannot be null");
@@ -1129,6 +1175,15 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Told what happened to each delivery, for example to count deliveries as metrics. Does nothing by default.
+         * See {@link RabbitMqSourceListener} for when each method is called.
+         */
+        public Builder listener(RabbitMqSourceListener listener) {
+            this.listener = requireNonNull(listener, RabbitMqSourceListener.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
         public RabbitMqCloudEventSource build() {
             if (declareTopology && bindings == null && resolver == null) {
                 throw new IllegalStateException("A resolver(...), or explicit bindings(...), is required unless declareTopology(false) is set");
@@ -1157,9 +1212,10 @@ public final class RabbitMqCloudEventSource implements AutoCloseable {
             RabbitMqDeliveryFailureAction failureAction = null;
             RabbitMqCloudEventSource source = null;
             try {
-                failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
+                RabbitMqSourceListenerCalls listenerCalls = new RabbitMqSourceListenerCalls(listener, queue, log);
+                failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log, listenerCalls);
                 source = new RabbitMqCloudEventSource(model, channel, queue, prefetchCount,
-                        pollInterval, failureAction, readinessSource, closeTimeout, inboundMapper);
+                        pollInterval, failureAction, readinessSource, closeTimeout, inboundMapper, listenerCalls);
                 source.start(this, destinations);
                 return source;
             } catch (RuntimeException e) {

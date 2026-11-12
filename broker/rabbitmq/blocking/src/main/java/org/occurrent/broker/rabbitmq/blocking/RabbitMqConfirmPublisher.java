@@ -274,6 +274,13 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
     }
 
     /**
+     * Whether the {@link Connection} this publisher was given is open. Reads no lock and opens no channel.
+     */
+    boolean isConnectionOpen() {
+        return connection.isOpen();
+    }
+
+    /**
      * Closes the {@link Channel} this publisher created. Does not close the {@link Connection} it was built from. A
      * publish after this throws {@link RabbitMqPublishException}.
      */
