@@ -80,7 +80,8 @@ public final class CompetingConsumerCheckpointWriteVersionSource implements Chec
                 resolved = CompetingConsumerStrategies.resolveUnique(strategyProvider);
             } catch (AmbiguousCompetingConsumerStrategyException e) {
                 throw e;
-            } catch (RuntimeException e) {
+            } catch (Exception e) {
+                // Exception, since a strategy provider written in Kotlin can throw a checked exception
                 return OptionalLong.empty();
             }
             if (resolved == null) {
