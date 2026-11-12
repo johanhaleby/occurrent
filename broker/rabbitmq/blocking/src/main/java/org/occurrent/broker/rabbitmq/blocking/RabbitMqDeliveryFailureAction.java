@@ -77,8 +77,12 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
     private final @Nullable RabbitMqConfirmPublisher parkingPublisher;
     private final @Nullable RabbitMqDestination parkingDestination;
     private final Logger log;
+    private final RabbitMqSourceListenerCalls listener;
 
     /**
+     * Calls no listener. See
+     * {@link #RabbitMqDeliveryFailureAction(Channel, DeliveryFailurePolicy, RabbitMqConfirmPublisher, RabbitMqDestination, Logger, RabbitMqSourceListenerCalls)}.
+     *
      * @param consumeChannel   The channel the failing delivery arrived on. Acknowledgement and negative
      *                         acknowledgement must happen on this exact channel.
      * @param policy           What to do with a delivery nothing consumed.
@@ -89,6 +93,22 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      */
     public RabbitMqDeliveryFailureAction(Channel consumeChannel, DeliveryFailurePolicy policy, @Nullable RabbitMqConfirmPublisher parkingPublisher,
                                           @Nullable RabbitMqDestination parkingDestination, Logger log) {
+        this(consumeChannel, policy, parkingPublisher, parkingDestination, log, RabbitMqSourceListenerCalls.none());
+    }
+
+    /**
+     * @param consumeChannel   The channel the failing delivery arrived on. Acknowledgement and negative
+     *                         acknowledgement must happen on this exact channel.
+     * @param policy           What to do with a delivery nothing consumed.
+     * @param parkingPublisher Publishes to the parking destination. Required when {@code policy} is
+     *                         {@link DeliveryFailurePolicy#PARK}, otherwise ignored.
+     * @param parkingDestination The exchange and routing key {@code parkingPublisher} publishes to. Required
+     *                         together with {@code parkingPublisher} when {@code policy} is {@code PARK}.
+     * @param listener         Told when a delivery is parked or redelivered.
+     */
+    public RabbitMqDeliveryFailureAction(Channel consumeChannel, DeliveryFailurePolicy policy, @Nullable RabbitMqConfirmPublisher parkingPublisher,
+                                          @Nullable RabbitMqDestination parkingDestination, Logger log, RabbitMqSourceListenerCalls listener) {
+        this.listener = requireNonNull(listener, "listener cannot be null");
         this.consumeChannel = requireNonNull(consumeChannel, "consumeChannel cannot be null");
         this.policy = requireNonNull(policy, DeliveryFailurePolicy.class.getSimpleName() + " cannot be null");
         this.parkingPublisher = parkingPublisher;
@@ -109,14 +129,25 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      */
     public static RabbitMqDeliveryFailureAction create(Connection connection, Channel consumeChannel, DeliveryFailurePolicy policy,
                                                          @Nullable RabbitMqDestination parkingDestination, Logger log) {
+        return create(connection, consumeChannel, policy, parkingDestination, log, RabbitMqSourceListenerCalls.none());
+    }
+
+    /**
+     * {@link #create(Connection, Channel, DeliveryFailurePolicy, RabbitMqDestination, Logger)}, with a listener that
+     * {@link #apply(long, BasicProperties, byte[])} and {@link #redeliverFailure(long)} tell when a delivery is parked
+     * or redelivered.
+     */
+    public static RabbitMqDeliveryFailureAction create(Connection connection, Channel consumeChannel, DeliveryFailurePolicy policy,
+                                                         @Nullable RabbitMqDestination parkingDestination, Logger log,
+                                                         RabbitMqSourceListenerCalls listener) {
         if (policy == DeliveryFailurePolicy.PARK && parkingDestination == null) {
             throw new IllegalStateException("A parkingDestination is required when onDeliveryFailure(PARK) is set");
         }
         if (policy != DeliveryFailurePolicy.PARK) {
-            return new RabbitMqDeliveryFailureAction(consumeChannel, policy, null, null, log);
+            return new RabbitMqDeliveryFailureAction(consumeChannel, policy, null, null, log, listener);
         }
         RabbitMqConfirmPublisher parkingPublisher = new RabbitMqConfirmPublisher(connection, PARK_ACKNOWLEDGEMENT_TIMEOUT);
-        return new RabbitMqDeliveryFailureAction(consumeChannel, policy, parkingPublisher, parkingDestination, log);
+        return new RabbitMqDeliveryFailureAction(consumeChannel, policy, parkingPublisher, parkingDestination, log, listener);
     }
 
     /**
@@ -124,7 +155,9 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * {@code properties} and {@code body}, plus the parking destination's own configured headers, when
      * {@link DeliveryFailurePolicy#PARK} is configured, whether or not the source managed to rebuild a CloudEvent
      * from them. {@link DeliveryFailurePolicy#PARK} acknowledges {@code deliveryTag} only once that publish has
-     * been confirmed and not returned as unroutable. Never acknowledges {@code deliveryTag} directly.
+     * been confirmed and not returned as unroutable, and then tells the listener it was parked. Never acknowledges
+     * {@code deliveryTag} directly. A park that fails puts the delivery back on the queue instead, and tells the
+     * listener it was redelivered.
      */
     public void apply(long deliveryTag, BasicProperties properties, byte[] body) {
         requireNonNull(properties, "properties cannot be null");
@@ -144,11 +177,13 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
         } catch (RuntimeException e) {
             log.warn("Failed to park a delivery nothing consumed. Redelivering it instead of losing it.", e);
             redeliver(deliveryTag);
+            listener.redelivered();
             return;
         }
         ack(deliveryTag);
         log.warn("Parked a copy of delivery tag {} to exchange \"{}\" routing key \"{}\" and sent the acknowledgement " +
                 "for the original.", deliveryTag, destination.exchange(), destination.routingKey());
+        listener.parked();
     }
 
     /**
@@ -288,11 +323,13 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * failure rather than pacing: a handler or filter that failed, say. The one line an operator needs for that
      * event. A caller reaching this must not also log the same failure itself, the same way a caller of
      * {@link #apply(long, BasicProperties, byte[])}'s {@code PARK} branch already relies on {@link #park} alone to
-     * log it.
+     * log it. Tells the listener the delivery was redelivered once the negative acknowledgement was handed to the
+     * client, and not when it throws.
      */
     public void redeliverFailure(long deliveryTag) {
         redeliver(deliveryTag);
         log.warn("Sent a negative acknowledgement with requeue for delivery tag {} after it failed.", deliveryTag);
+        listener.redelivered();
     }
 
     /**

@@ -18,9 +18,12 @@
 package org.occurrent.springboot.mongo.blocking;
 
 import jakarta.annotation.PostConstruct;
+import org.bson.BsonTimestamp;
+import org.bson.Document;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -38,17 +41,24 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.dsl.snapshot.mongodb.spring.blocking.SpringMongoSnapshotStore;
+import org.occurrent.subscription.CatchupTimeCheckpoint;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -199,6 +209,107 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
         }
     }
 
+    // A BEGINNING start that has caught up leaves a live checkpoint in storage. A NOW start with DEFAULT continues from
+    // it, so it is delivered the event written while down but not the history again.
+    @Test
+    void now_with_default_resume_behavior_continues_from_the_live_checkpoint_an_earlier_beginning_start_left_in_storage() {
+        List<String> handledBySecondBoot = restartWithLeftOverCheckpoint("now-left-over-live", "now", storage -> {});
+
+        assertThat(handledBySecondBoot).containsExactly("while-down-1", "live-2");
+    }
+
+    // A catch-up that was interrupted leaves a catch-up checkpoint. A test cannot stop a catch-up halfway, so the
+    // checkpoint a BEGINNING catch-up on this store stores after historic-1 is written here, with the live start the
+    // first boot left in storage. A NOW start with DEFAULT continues from it, so historic-2 is replayed once and
+    // historic-1 is not.
+    @Test
+    void now_with_default_resume_behavior_replays_from_the_catch_up_checkpoint_an_earlier_beginning_start_left_in_storage() {
+        List<String> handledBySecondBoot = restartWithLeftOverCheckpoint("now-left-over-catch-up", "now",
+                NowStartAtResumeBehaviorAnnotationMongoTest::leaveCatchUpCheckpointAfterHistoric1);
+
+        // The live start precedes the events written while down and after start, so the replay reaches them and the live feed
+        // can deliver them too, which is why no count is asserted for them.
+        assertThat(handledBySecondBoot).containsSubsequence("historic-2", "while-down-1", "live-2");
+        assertThat(handledBySecondBoot).filteredOn(name -> name.startsWith("historic")).containsExactly("historic-2");
+    }
+
+    // Pausing and resuming is not a restart. The subscription is NOW with SAME_AS_START_AT and a catch-up checkpoint is
+    // planted while it is paused. A resume does not start over from storage, so historic-2 is not replayed from the
+    // planted checkpoint before live-2.
+    @Test
+    void now_with_same_as_start_at_does_not_replay_from_a_catch_up_checkpoint_planted_while_paused_when_it_is_resumed() {
+        try (ConfigurableApplicationContext context = SpringApplication.run(RestartApplication.class,
+                leftOverBootArgs("now-left-over-paused", "now-same-as-start-at", "historic-1,historic-2", "live-1"))) {
+            LeftOverNowSameAsStartAt handler = context.getBean(LeftOverNowSameAsStartAt.class);
+            awaitHandled(handler, "live-1");
+            CheckpointStorage storage = context.getBean(CheckpointStorage.class);
+            SubscriptionModel subscriptionModel = context.getBean(SubscriptionModel.class);
+
+            subscriptionModel.pauseSubscription(LEFT_OVER_ID);
+            await().atMost(ofSeconds(10)).pollInterval(ofMillis(50)).until(() -> subscriptionModel.isPaused(LEFT_OVER_ID));
+            storage.save(LEFT_OVER_ID, GlobalCheckpoint.of(1, liveFromTheDatabaseClock(context.getBean(MongoOperations.class)), 0, 2));
+            assertThat(isCatchupCheckpoint(storage.read(LEFT_OVER_ID))).as("catch-up checkpoint").isTrue();
+            subscriptionModel.resumeSubscription(LEFT_OVER_ID).waitUntilStarted(ofSeconds(30));
+            context.getBean(ApplicationService.class).execute("live-2", __ -> List.of(new TestEvent("live-2")));
+            awaitHandled(handler, "live-2");
+
+            assertThat(handler.names()).containsExactly("live-1", "live-2");
+        }
+    }
+
+    // With SAME_AS_START_AT the second boot gets only the event written after it started, although the same catch-up
+    // checkpoint is in storage.
+    @Test
+    void now_with_same_as_start_at_does_not_replay_from_a_catch_up_checkpoint_an_earlier_beginning_start_left_in_storage() {
+        List<String> handledBySecondBoot = restartWithLeftOverCheckpoint("now-left-over-same", "now-same-as-start-at",
+                NowStartAtResumeBehaviorAnnotationMongoTest::leaveCatchUpCheckpointAfterHistoric1);
+
+        assertThat(handledBySecondBoot).containsExactly("live-2");
+    }
+
+    // Historic-1 is the first event written, so it is global position 1 and the live start is the one the first boot's handover stored.
+    private static void leaveCatchUpCheckpointAfterHistoric1(CheckpointStorage storage) {
+        Checkpoint live = storage.read(LEFT_OVER_ID);
+        storage.save(LEFT_OVER_ID, GlobalCheckpoint.of(1, live, 0, 2));
+        assertThat(isCatchupCheckpoint(storage.read(LEFT_OVER_ID))).as("catch-up checkpoint").isTrue();
+    }
+
+    // NOW with SAME_AS_START_AT stores no checkpoint, so the live start the planted one carries is read from the database.
+    private static Checkpoint liveFromTheDatabaseClock(MongoOperations mongoOperations) {
+        BsonTimestamp now = mongoOperations.executeCommand("{ hello: 1 }").get("$clusterTime", Document.class).get("clusterTime", BsonTimestamp.class);
+        return new StringBasedCheckpoint("{\"operationTime\": {\"$timestamp\": {\"t\": " + now.getTime() + ", \"i\": " + now.getInc() + "}}}");
+    }
+
+    private static boolean isCatchupCheckpoint(Checkpoint checkpoint) {
+        return GlobalCheckpoint.isGlobalCheckpoint(checkpoint) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(checkpoint);
+    }
+
+    private static List<String> restartWithLeftOverCheckpoint(String databaseName, String secondBootStartsAt, Consumer<CheckpointStorage> inspectAndLeaveBehind) {
+        try (ConfigurableApplicationContext firstBoot = SpringApplication.run(RestartApplication.class,
+                leftOverBootArgs(databaseName, "beginning", "historic-1,historic-2", ""))) {
+            awaitHandled(firstBoot.getBean(LeftOverBeginning.class), "historic-2");
+            CheckpointStorage checkpointStorage = firstBoot.getBean(CheckpointStorage.class);
+            // The catch-up stores a checkpoint of its own while it replays, so one existing says nothing about the handover.
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> {
+                Checkpoint stored = checkpointStorage.read(LEFT_OVER_ID);
+                assertThat(stored).isNotNull();
+                assertThat(isCatchupCheckpoint(stored)).as("catch-up checkpoint %s", stored.asString()).isFalse();
+            });
+            inspectAndLeaveBehind.accept(checkpointStorage);
+        }
+        try (ConfigurableApplicationContext secondBoot = SpringApplication.run(RestartApplication.class,
+                leftOverBootArgs(databaseName, secondBootStartsAt, "while-down-1", "live-2"))) {
+            Class<? extends Handled> handlerType = secondBootStartsAt.equals("now") ? LeftOverNow.class : LeftOverNowSameAsStartAt.class;
+            Handled handler = secondBoot.getBean(handlerType);
+            awaitHandled(handler, "live-2");
+            return handler.names();
+        }
+    }
+
+    private static String[] leftOverBootArgs(String databaseName, String startsAt, String beforeSubscribe, String afterStart) {
+        return Stream.concat(Stream.of(bootArgs(databaseName, beforeSubscribe, afterStart)), Stream.of("--test.left-over=" + startsAt)).toArray(String[]::new);
+    }
+
     private static void restart(String databaseName, Class<? extends Handled> handlerType,
                                 List<String> expectedFirstBoot, List<String> expectedSecondBoot) {
         ConfigurableApplicationContext firstBoot = SpringApplication.run(RestartApplication.class,
@@ -272,8 +383,9 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
         @Bean
         EventWriter eventWriter(ApplicationService<TestEvent> applicationService,
                                 @Value("${test.before-subscribe}") String beforeSubscribe,
-                                @Value("${test.after-start}") String afterStart) {
-            return new EventWriter(applicationService, beforeSubscribe, afterStart);
+                                @Value("${test.after-start}") String afterStart,
+                                MongoTemplate mongoOperations) {
+            return new EventWriter(applicationService, beforeSubscribe, afterStart, mongoOperations);
         }
 
         @Bean
@@ -312,6 +424,24 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
         }
 
         @Bean
+        @ConditionalOnProperty(name = "test.left-over", havingValue = "beginning")
+        LeftOverBeginning leftOverBeginning() {
+            return new LeftOverBeginning();
+        }
+
+        @Bean
+        @ConditionalOnProperty(name = "test.left-over", havingValue = "now")
+        LeftOverNow leftOverNow() {
+            return new LeftOverNow();
+        }
+
+        @Bean
+        @ConditionalOnProperty(name = "test.left-over", havingValue = "now-same-as-start-at")
+        LeftOverNowSameAsStartAt leftOverNowSameAsStartAt() {
+            return new LeftOverNowSameAsStartAt();
+        }
+
+        @Bean
         SnapshotNowDefault snapshotNowDefault(MongoOperations mongoOperations) {
             return new SnapshotNowDefault(mongoOperations);
         }
@@ -326,24 +456,25 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
         private final ApplicationService<TestEvent> applicationService;
         private final List<String> beforeSubscribe;
         private final List<String> afterStart;
+        private final MongoTemplate mongoOperations;
 
-        EventWriter(ApplicationService<TestEvent> applicationService, String beforeSubscribe, String afterStart) {
+        EventWriter(ApplicationService<TestEvent> applicationService, String beforeSubscribe, String afterStart, MongoTemplate mongoOperations) {
             this.applicationService = applicationService;
             this.beforeSubscribe = names(beforeSubscribe);
             this.afterStart = names(afterStart);
+            this.mongoOperations = mongoOperations;
         }
 
         private static List<String> names(String commaSeparated) {
             return Stream.of(commaSeparated.split(",")).filter(name -> !name.isBlank()).toList();
         }
 
-        // Subscriptions register once every singleton exists, so these are written before any of them starts. A
-        // subscription starting at the present can still receive what the same MongoClient wrote up to a second
-        // earlier, so the pause keeps them out of reach of the NOW subscribers.
+        // Subscriptions register once every singleton exists, so these are written before any of them starts. The check
+        // confirms that a NOW subscription would open after them.
         @PostConstruct
-        void writeBeforeSubscribe() throws InterruptedException {
+        void writeBeforeSubscribe() {
             beforeSubscribe.forEach(this::write);
-            Thread.sleep(1500);
+            HistoryBeforeThePresent.awaitedWith(mongoOperations);
         }
 
         @Override
@@ -385,6 +516,31 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
 
     static class SubscriptionNowSameAsStartAt extends Recording {
         @Subscription(id = "now-sub-same", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        void on(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    // The same subscription id started at BEGINNING by one boot and at NOW by the next, as when the annotation is edited
+    // between two deployments. Only the one named by test.left-over exists in a boot.
+    private static final String LEFT_OVER_ID = "now-left-over";
+
+    static class LeftOverBeginning extends Recording {
+        @Subscription(id = LEFT_OVER_ID, startAt = StartPosition.BEGINNING, resumeBehavior = ResumeBehavior.DEFAULT)
+        void on(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    static class LeftOverNow extends Recording {
+        @Subscription(id = LEFT_OVER_ID, startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.DEFAULT)
+        void on(TestEvent event) {
+            record(event.name());
+        }
+    }
+
+    static class LeftOverNowSameAsStartAt extends Recording {
+        @Subscription(id = LEFT_OVER_ID, startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
         void on(TestEvent event) {
             record(event.name());
         }

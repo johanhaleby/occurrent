@@ -154,10 +154,11 @@ final class ApplicationRestart {
     // The checkpoint is stored after the handler returned, so the marker being delivered does not mean it is stored.
     static void awaitCheckpointed(ConfigurableApplicationContext context, String subscriptionId, Recorder subscriber, String marker) {
         CheckpointStorage storage = context.getBean(CheckpointStorage.class);
-        String markerCheckpoint = subscriber.checkpointOf(marker);
-        assertThat(markerCheckpoint).describedAs("the checkpoint %s was delivered with", marker).isNotNull();
-        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                assertThat(storage.read(subscriptionId).blockOptional().map(Checkpoint::asString)).contains(markerCheckpoint));
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> {
+            String markerCheckpoint = subscriber.checkpointOf(marker);
+            assertThat(markerCheckpoint).describedAs("the checkpoint %s was delivered with", marker).isNotNull();
+            assertThat(storage.read(subscriptionId).blockOptional().map(Checkpoint::asString)).contains(markerCheckpoint);
+        });
     }
 
     // Booted with SpringApplication.run rather than @SpringBootTest, so there is no @ServiceConnection and the url is
@@ -185,8 +186,16 @@ final class ApplicationRestart {
         private final Consumer<String> write;
         private final List<String> beforeSubscribe;
         private final List<String> afterStart;
+        private final Runnable beforeAfterStart;
 
         EventWriter(Consumer<String> write, String beforeSubscribe, String afterStart) {
+            this(write, beforeSubscribe, afterStart, () -> {
+            });
+        }
+
+        // beforeAfterStart runs once every subscription has started and before the first event named by afterStart is written
+        EventWriter(Consumer<String> write, String beforeSubscribe, String afterStart, Runnable beforeAfterStart) {
+            this.beforeAfterStart = beforeAfterStart;
             this.write = write;
             this.beforeSubscribe = List.of(beforeSubscribe.split(","));
             this.afterStart = afterStart.isEmpty() ? List.of() : List.of(afterStart.split(","));
@@ -203,6 +212,7 @@ final class ApplicationRestart {
 
         @Override
         public void run(ApplicationArguments args) {
+            beforeAfterStart.run();
             afterStart.forEach(write);
         }
     }

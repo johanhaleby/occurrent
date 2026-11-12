@@ -30,8 +30,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 /**
- * The reactor twin of {@code ComposedDefaultStartPositionTest}, with the extra thing this holder owns, a catch-up
- * layer rather than the {@code DEFAULT} fact alone. Both answers are about one composition and are bound to that
+ * The holder answers with a catch-up layer and the {@code DEFAULT} fact. Both answers are about one composition and are bound to that
  * composition's identity, so a projection running on some other model the context also holds gets neither
  * (<a href="https://github.com/johanhaleby/occurrent/issues/996">#996</a>).
  * <p>

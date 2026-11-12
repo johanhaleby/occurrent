@@ -23,6 +23,9 @@ import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoCommandException;
+import com.mongodb.ServerAddress;
+import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import com.mongodb.reactivestreams.client.ChangeStreamPublisher;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
@@ -30,7 +33,12 @@ import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.BsonDocument;
+import org.bson.BsonDocumentReader;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
+import org.bson.codecs.DecoderContext;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -50,8 +58,12 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
+import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.reactor.HistoryLostException;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -59,6 +71,8 @@ import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
+import org.springframework.data.mongodb.core.ChangeStreamEvent;
+import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.transaction.ReactiveTransactionManager;
@@ -67,6 +81,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
@@ -79,6 +94,7 @@ import java.util.List;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -301,6 +317,310 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     }
 
     @Test
+    void a_dynamic_position_answering_a_catchup_position_is_refused_when_the_model_reads_through_the_change_stream_of_spring() {
+        // Given a model that has fallen back to the change stream of Spring, and a dynamic position answering a global checkpoint
+        useTheChangeStreamOfSpring();
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        GlobalCheckpoint answered = GlobalCheckpoint.of(0);
+
+        // When it subscribes
+        Subscription subscription = subscriptionModel.subscribe("refused", StartAt.dynamic(ctx -> StartAt.checkpoint(answered)), event -> Mono.fromRunnable(() -> delivered.add(event.getId())));
+
+        // Then the subscription stops with the refusal and delivers nothing
+        StepVerifier.create(subscription.waitUntilStarted())
+                .expectErrorSatisfies(throwable -> assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                        .hasMessageContaining("\"" + answered.asString() + "\""))
+                .verify(Duration.ofSeconds(10));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning("refused")).isFalse());
+        assertThat(delivered).isEmpty();
+    }
+
+    @Test
+    void a_catchup_position_answered_after_a_first_answer_the_server_rejects_is_refused_when_the_model_reads_through_the_change_stream_of_spring() throws InterruptedException {
+        // Given a model that has fallen back to the change stream of Spring, and a dynamic position whose first answer is a resume token the server rejects
+        useTheChangeStreamOfSpring();
+        AtomicInteger answers = new AtomicInteger();
+        CountDownLatch askedAgain = new CountDownLatch(1);
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        GlobalCheckpoint catchup = GlobalCheckpoint.of(0);
+        StartAt startAt = StartAt.dynamic(ctx -> {
+            if (answers.incrementAndGet() == 1) {
+                return StartAt.checkpoint(new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("not-a-token"))));
+            }
+            askedAgain.countDown();
+            return StartAt.checkpoint(catchup);
+        });
+
+        // When it subscribes, so the retry asks the position again, and the answer is a catch-up's
+        subscriptionModel.subscribe("not-accepted", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId())));
+        assertThat(askedAgain.await(10, SECONDS)).as("the position was asked again").isTrue();
+
+        // Then the server never accepted the first answer, so the second is refused instead of opening at the present, and nothing is replayed
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning("not-accepted")).isFalse());
+        write(nameDefined());
+        assertThat(delivered).isEmpty();
+    }
+
+    @Test
+    void a_resume_before_the_change_stream_of_spring_read_a_document_opens_where_the_dynamic_position_first_answered() {
+        // Given a model that has fallen back to the change stream of Spring, and a dynamic position that answers a live checkpoint first and a global checkpoint after
+        useTheChangeStreamOfSpring();
+        Checkpoint live = liveCheckpoint();
+        AtomicInteger answers = new AtomicInteger();
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1 ? StartAt.checkpoint(live) : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        waitUntilStarted(subscriptionModel.subscribe("resumed-before-a-read", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId()))));
+
+        // When it is paused before it reads a document, an event is written, and it is resumed
+        subscriptionModel.pauseSubscription("resumed-before-a-read");
+        NameDefined written = nameDefined();
+        write(written);
+        Subscription resumed = subscriptionModel.resumeSubscription("resumed-before-a-read");
+
+        // Then it opens at the live checkpoint without asking the position again, so it isn't refused and delivers the event
+        waitUntilStarted(resumed);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(written.eventId()));
+        assertThat(answers).hasValue(1);
+    }
+
+    @Test
+    void a_first_answer_the_server_cannot_find_is_asked_again_when_the_model_reads_through_the_change_stream_of_spring() {
+        // Given a model that has fallen back to the change stream of Spring, and a dynamic position whose first answer is a
+        // token of another collection, which the server accepts as the stream opens and can't find once it reads an event
+        useTheChangeStreamOfSpring();
+        Checkpoint live = liveCheckpoint();
+        Checkpoint ofAnotherCollection = tokenOfAnotherCollection();
+        AtomicInteger answers = new AtomicInteger();
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1 ? StartAt.checkpoint(ofAnotherCollection) : StartAt.checkpoint(live));
+
+        // When it subscribes and an event is written
+        waitUntilStarted(subscriptionModel.subscribe("not-found", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId()))));
+        NameDefined written = nameDefined();
+        write(written);
+
+        // Then the position is asked again, the second answer opens the stream and the event is delivered
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(written.eventId()));
+        assertThat(answers).hasValue(2);
+        assertThat(subscriptionModel.isRunning("not-found")).isTrue();
+    }
+
+    @Test
+    void a_first_answer_the_server_cannot_find_is_asked_again_after_a_pause_opened_the_change_stream_of_spring_at_it_again() {
+        // Given a model that has fallen back to the change stream of Spring, and a dynamic position whose first answer is a
+        // token of another collection, which the server accepts as the stream opens and can't find once it reads an event
+        useTheChangeStreamOfSpring();
+        Checkpoint live = liveCheckpoint();
+        Checkpoint ofAnotherCollection = tokenOfAnotherCollection();
+        AtomicInteger answers = new AtomicInteger();
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1 ? StartAt.checkpoint(ofAnotherCollection) : StartAt.checkpoint(live));
+        waitUntilStarted(subscriptionModel.subscribe("not-found-after-a-pause", startAt, event -> Mono.fromRunnable(() -> delivered.add(event.getId()))));
+
+        // When it is paused and resumed before it reads a document, so the stream opens at the token of the other collection again, and an event is written
+        subscriptionModel.pauseSubscription("not-found-after-a-pause");
+        waitUntilStarted(subscriptionModel.resumeSubscription("not-found-after-a-pause"));
+        NameDefined written = nameDefined();
+        write(written);
+
+        // Then the position is asked again, the second answer opens the stream and the event is delivered
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(written.eventId()));
+        assertThat(answers).hasValue(2);
+        assertThat(subscriptionModel.isRunning("not-found-after-a-pause")).isTrue();
+    }
+
+    @Test
+    void a_run_that_was_paused_while_its_dynamic_position_answered_leaves_the_resumed_run_to_ask_again_when_the_server_cannot_find_its_answer() throws InterruptedException {
+        // Given a model that has fallen back to the change stream of Spring
+        useTheChangeStreamOfSpring();
+
+        // When it is paused and resumed while the first answer waits, so the resumed run opens at the token of the other
+        // collection, and the first answer is let go on the run the pause closed
+        PausedWhileItAnswered paused = pauseWhileTheFirstAnswerWaits(() -> {
+        });
+
+        // Then the resumed run asks the position again once the server can't find the token, and the event is delivered
+        assertThat(paused.answers()).hasValue(3);
+        assertThat(paused.delivered()).containsExactly(paused.written().eventId());
+    }
+
+    @Test
+    void a_run_a_pause_closed_before_its_change_stream_failed_leaves_the_opening_the_resumed_run_recorded_to_be_given_back() throws InterruptedException {
+        // Given a run a pause closes while its dynamic position answers, whose change stream then fails with code 280 as
+        // it opens, before the subscribe that started the run has returned
+        AtomicReference<Flux<ChangeStreamEvent<Document>>> nextChangeStream = new AtomicReference<>();
+        useTheChangeStreamOfSpring(nextChangeStream);
+
+        // When the resumed run has opened at a token the server can't find once it reads an event
+        Flux<ChangeStreamEvent<Document>> failing = Flux.error(new MongoCommandException(
+                new BsonDocument("ok", new BsonInt32(0)).append("code", new BsonInt32(280)).append("errmsg", new BsonString("cannot open")), new ServerAddress()));
+        PausedWhileItAnswered paused = pauseWhileTheFirstAnswerWaits(() -> nextChangeStream.set(failing));
+        assertThat(nextChangeStream).as("the paused run opened its change stream").hasNullValue();
+
+        // Then the resumed run gives its opening back once the server can't find the token, asks the position again, and
+        // the event is delivered
+        assertThat(paused.answers()).hasValue(3);
+        assertThat(paused.delivered()).containsExactly(paused.written().eventId());
+    }
+
+    @Test
+    void a_run_a_pause_closed_before_its_change_stream_read_a_document_leaves_the_opening_the_resumed_run_recorded_to_be_given_back() throws InterruptedException {
+        // Given a run a pause closes while its dynamic position answers, whose change stream then reads a document as it
+        // opens, before the subscribe that started the run has returned
+        AtomicReference<Flux<ChangeStreamEvent<Document>>> nextChangeStream = new AtomicReference<>();
+        useTheChangeStreamOfSpring(nextChangeStream);
+        BsonDocument drop = new BsonDocument("_id", resumeTokenOf(tokenOfAnotherCollection())).append("operationType", new BsonString("drop"));
+        ChangeStreamDocument<Document> dropped = ChangeStreamDocument.createCodec(Document.class, MongoClientSettings.getDefaultCodecRegistry())
+                .decode(new BsonDocumentReader(drop), DecoderContext.builder().build());
+        ChangeStreamEvent<Document> read = new ChangeStreamEvent<>(dropped, Document.class, new ReactiveMongoTemplate(mongoClient, databaseName).getConverter());
+
+        // When the resumed run has opened at a token the server can't find once it reads an event
+        PausedWhileItAnswered paused = pauseWhileTheFirstAnswerWaits(() -> nextChangeStream.set(Flux.concat(Flux.just(read), Flux.never())));
+        assertThat(nextChangeStream).as("the paused run opened its change stream").hasNullValue();
+
+        // Then the resumed run gives its opening back once the server can't find the token, asks the position again, and
+        // the event is delivered
+        assertThat(paused.answers()).hasValue(3);
+        assertThat(paused.delivered()).containsExactly(paused.written().eventId());
+    }
+
+    @Test
+    void the_flux_opened_again_before_it_read_a_document_opens_where_its_dynamic_position_first_answered() {
+        // Given a dynamic position that answers a live checkpoint first and a global checkpoint after, and a first read of the change stream that fails
+        Checkpoint live = liveCheckpoint();
+        AtomicInteger answers = new AtomicInteger();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1 ? StartAt.checkpoint(live) : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("errorCode", 2));
+        NameDefined written = nameDefined();
+
+        // When the flux is subscribed to, and an event is written once the first read has failed
+        StepVerifier.create(subscriptionModel.subscribe(startAt))
+                .then(() -> {
+                    await().atMost(10, SECONDS).until(() -> !commands.failed("getMore").isEmpty());
+                    write(written);
+                })
+
+                // Then it opens again at the live checkpoint, so it isn't refused and delivers the event
+                .expectNextMatches(cloudEvent -> cloudEvent.getId().equals(written.eventId()))
+                .thenCancel()
+                .verify(Duration.ofSeconds(15));
+        // And the position wasn't asked again
+        assertThat(answers).hasValue(1);
+    }
+
+    @Test
+    void the_flux_asks_its_dynamic_position_again_when_the_server_cannot_read_the_first_answer() {
+        // Given a dynamic position whose first answer is a token the server can't read, and a live checkpoint after
+        Checkpoint live = liveCheckpoint();
+        AtomicInteger answers = new AtomicInteger();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1
+                ? StartAt.checkpoint(new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("not-a-token"))))
+                : StartAt.checkpoint(live));
+        NameDefined written = nameDefined();
+
+        // When the flux is subscribed to, and an event is written once the position has been asked again
+        StepVerifier.create(subscriptionModel.subscribe(startAt))
+                .then(() -> {
+                    await().atMost(10, SECONDS).until(() -> answers.get() >= 2);
+                    write(written);
+                })
+
+                // Then the second answer opens the stream and the event is delivered
+                .expectNextMatches(cloudEvent -> cloudEvent.getId().equals(written.eventId()))
+                .thenCancel()
+                .verify(Duration.ofSeconds(15));
+    }
+
+    @Test
+    void the_flux_asks_its_dynamic_position_again_when_the_server_cannot_read_the_first_answer_after_a_failed_read_opened_it_again() {
+        // Given a dynamic position whose first answer is a token of another collection, which the server accepts as the stream opens and can't find once it reads an event, and a live checkpoint after, and a first read of the change stream that fails
+        Checkpoint live = liveCheckpoint();
+        Checkpoint ofAnotherCollection = tokenOfAnotherCollection();
+        AtomicInteger answers = new AtomicInteger();
+        StartAt startAt = StartAt.dynamic(ctx -> answers.incrementAndGet() == 1 ? StartAt.checkpoint(ofAnotherCollection) : StartAt.checkpoint(live));
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("errorCode", 2));
+        NameDefined written = nameDefined();
+
+        // When the flux is subscribed to, and an event is written once the first read has failed and the flux has opened again
+        StepVerifier.create(subscriptionModel.subscribe(startAt))
+                .then(() -> {
+                    await().atMost(10, SECONDS).until(() -> !commands.failed("getMore").isEmpty());
+                    write(written);
+                })
+
+                // Then the position is asked again once the server can't read the first answer, the second answer opens the stream and the event is delivered
+                .expectNextMatches(cloudEvent -> cloudEvent.getId().equals(written.eventId()))
+                .thenCancel()
+                .verify(Duration.ofSeconds(15));
+        assertThat(answers).hasValue(2);
+    }
+
+    @Test
+    void the_flux_failing_on_history_loss_names_where_its_dynamic_position_opened_when_the_history_is_lost_after_a_failed_read_opened_it_again() {
+        // Given a dynamic position answering a live checkpoint, and a first read of the change stream that fails
+        Checkpoint live = liveCheckpoint();
+        StartAt startAt = StartAt.dynamic(ctx -> StartAt.checkpoint(live));
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("errorCode", 2));
+
+        // When the flux is subscribed to, and the server has lost the history once the first read has failed and the flux has opened again
+        StepVerifier.create(subscriptionModel.subscribeFailingOnHistoryLoss(null, startAt))
+                .then(() -> {
+                    await().atMost(10, SECONDS).until(() -> !commands.failed("getMore").isEmpty());
+                    FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("errorCode", 286));
+                })
+
+                // Then the flux fails with the position its dynamic answer opened at
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOfSatisfying(HistoryLostException.class, lost -> assertThat(lost.lostFrom()).isEqualTo(live)))
+                .verify(Duration.ofSeconds(15));
+    }
+
+    @Test
+    void a_named_subscription_asks_its_history_loss_listener_where_its_dynamic_position_opened_when_the_history_is_lost_after_a_pause_opened_it_again() {
+        // Given a model that has fallen back to the change stream of Spring, a listener that takes a subscription over, and a dynamic position answering a live checkpoint
+        useTheChangeStreamOfSpring();
+        Checkpoint live = liveCheckpoint();
+        CopyOnWriteArrayList<String> asked = new CopyOnWriteArrayList<>();
+        subscriptionModel.addHistoryLossListener((subscriptionId, lostFrom) -> {
+            asked.add(subscriptionId + "@" + lostFrom.asString());
+            return HistoryLossHandling.takeOver(() -> {
+            });
+        });
+        StartAt startAt = StartAt.dynamic(ctx -> StartAt.checkpoint(live));
+        waitUntilStarted(subscriptionModel.subscribe("history-lost-after-a-pause", startAt, event -> Mono.empty()));
+
+        // When it is paused and resumed before it reads a document, and the server has lost the history
+        subscriptionModel.pauseSubscription("history-lost-after-a-pause");
+        waitUntilStarted(subscriptionModel.resumeSubscription("history-lost-after-a-pause"));
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("errorCode", 286));
+
+        // Then the listener is asked with the live checkpoint the resumed run opened at, and takes the subscription over
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(asked).containsExactly("history-lost-after-a-pause@" + live.asString()));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isPaused("history-lost-after-a-pause")).isTrue());
+    }
+
+    @Test
+    void a_dynamic_position_answering_a_catchup_position_is_refused_when_the_model_falls_back_to_the_change_stream_of_spring_while_it_subscribes() {
+        // Given a model whose driver cursor turns out unreadable on the first subscription, and a dynamic position that answers the present first and a global checkpoint when it is asked again
+        subscriptionModel.shutdown();
+        subscriptionModel = modelOver(templateWithoutBatchCursors(), configuration());
+        AtomicInteger asked = new AtomicInteger();
+        GlobalCheckpoint answered = GlobalCheckpoint.of(0);
+        StartAt startAt = StartAt.dynamic(ctx -> asked.incrementAndGet() == 1 ? StartAt.now() : StartAt.checkpoint(answered));
+
+        // When it subscribes
+        Subscription subscription = subscriptionModel.subscribe("refused-after-falling-back", startAt, event -> Mono.empty());
+
+        // Then the subscription stops with the refusal, after the handle has answered that it started, since the driver's cursor was asked to open before the position was asked again
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning("refused-after-falling-back")).isFalse());
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(10)).block()).as("subscription started").isTrue();
+        assertThat(asked).as("times the position was asked").hasValue(2);
+        assertThat(modelLog.list).filteredOn(event -> event.getLevel() == Level.ERROR && event.getThrowableProxy() != null)
+                .extracting(event -> event.getThrowableProxy().getClassName())
+                .as("exceptions logged as errors").containsOnly(UnsupportedStartAtException.class.getName());
+        assertThat(subscriptionModel.readsQuietPositions()).as("reads quiet positions").isFalse();
+    }
+
+    @Test
     void a_model_that_cannot_read_the_cursor_of_the_driver_warns_once_however_many_subscriptions_fall_back() {
         // Given
         subscriptionModel.shutdown();
@@ -412,10 +732,21 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     // The model opens its change stream on the collection this template hands out, and a publisher that
     // isn't the driver's own has no cursor to read the resume token from
     private ReactiveMongoTemplate templateWithoutBatchCursors() {
+        return templateWithoutBatchCursors(new AtomicReference<>());
+    }
+
+    private ReactiveMongoTemplate templateWithoutBatchCursors(AtomicReference<Flux<ChangeStreamEvent<Document>>> nextChangeStream) {
         return new ReactiveMongoTemplate(subscriberClient, databaseName) {
             @Override
             public Mono<MongoCollection<Document>> getCollection(String collectionName) {
                 return super.getCollection(collectionName).map(ReactorMongoSubscriptionModelDriverCursorTest::collectionWithoutBatchCursors);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> Flux<ChangeStreamEvent<T>> changeStream(String database, String collectionName, ChangeStreamOptions options, Class<T> targetType) {
+                Flux<ChangeStreamEvent<Document>> instead = nextChangeStream.getAndSet(null);
+                return instead == null ? super.changeStream(database, collectionName, options, targetType) : (Flux<ChangeStreamEvent<T>>) (Flux<?>) instead;
             }
         };
     }
@@ -438,6 +769,83 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
             }
             return result;
         };
+    }
+
+    private Checkpoint liveCheckpoint() {
+        return requireNonNull(subscriptionModel.globalCheckpoint().block(Duration.ofSeconds(10)));
+    }
+
+    // A token of a document inserted into another collection
+    private Checkpoint tokenOfAnotherCollection() {
+        MongoCollection<Document> other = mongoClient.getDatabase(databaseName).getCollection("other-" + UUID.randomUUID());
+        BsonTimestamp before = requireNonNull(Mono.from(mongoClient.getDatabase(databaseName).runCommand(new Document("ping", 1))).block()).get("operationTime", BsonTimestamp.class);
+        Mono.from(other.insertOne(new Document("marker", 1))).block();
+        ChangeStreamDocument<Document> inserted = requireNonNull(Flux.from(other.watch().startAtOperationTime(before)).blockFirst(Duration.ofSeconds(10)));
+        return new MongoResumeTokenCheckpoint(requireNonNull(inserted.getResumeToken()));
+    }
+
+    // The first subscription finds out that the driver's cursor can't be read, and the model reads through Spring's changeStream from then on
+    private void useTheChangeStreamOfSpring() {
+        useTheChangeStreamOfSpring(new AtomicReference<>());
+    }
+
+    // The next change stream the model opens is the one nextChangeStream holds when it holds one
+    private void useTheChangeStreamOfSpring(AtomicReference<Flux<ChangeStreamEvent<Document>>> nextChangeStream) {
+        subscriptionModel.shutdown();
+        subscriptionModel = modelOver(templateWithoutBatchCursors(nextChangeStream), configuration());
+        waitUntilStarted(subscriptionModel.subscribe("first-to-fall-back", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.empty()));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.readsQuietPositions()).as("reads quiet positions").isFalse());
+    }
+
+    private record PausedWhileItAnswered(AtomicInteger answers, List<String> delivered, NameDefined written) {
+    }
+
+    // Subscribes at a dynamic position whose first answer waits until the subscription has been paused and resumed and is
+    // then a live checkpoint, whose second answer, the resumed run's, is a token of another collection, which the server
+    // accepts as the stream opens and can't find once it reads an event, and whose answers after that are the live
+    // checkpoint. beforeTheFirstAnswerIsLetGo runs after the resume, and an event is written once the subscribe that
+    // started the run the pause closed has returned
+    private PausedWhileItAnswered pauseWhileTheFirstAnswerWaits(Runnable beforeTheFirstAnswerIsLetGo) throws InterruptedException {
+        Checkpoint live = liveCheckpoint();
+        Checkpoint ofAnotherCollection = tokenOfAnotherCollection();
+        AtomicInteger answers = new AtomicInteger();
+        CountDownLatch firstAnswerAsked = new CountDownLatch(1);
+        CountDownLatch letFirstAnswerGo = new CountDownLatch(1);
+        StartAt startAt = StartAt.dynamic(ctx -> {
+            int answer = answers.incrementAndGet();
+            if (answer == 1) {
+                firstAnswerAsked.countDown();
+                try {
+                    // Bounded, so a failure before the test lets it go doesn't leave the subscriber thread blocked
+                    letFirstAnswerGo.await(30, SECONDS);
+                } catch (InterruptedException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+            return answer == 2 ? StartAt.checkpoint(ofAnotherCollection) : StartAt.checkpoint(live);
+        });
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch eventDelivered = new CountDownLatch(1);
+        AtomicReference<Throwable> subscribeFailure = new AtomicReference<>();
+        Thread subscriber = new Thread(() -> subscriptionModel.subscribe("paused-while-it-answered", startAt, event -> Mono.fromRunnable(() -> {
+            delivered.add(event.getId());
+            eventDelivered.countDown();
+        })));
+        subscriber.setUncaughtExceptionHandler((thread, throwable) -> subscribeFailure.set(throwable));
+        subscriber.start();
+        assertThat(firstAnswerAsked.await(10, SECONDS)).isTrue();
+        subscriptionModel.pauseSubscription("paused-while-it-answered");
+        waitUntilStarted(subscriptionModel.resumeSubscription("paused-while-it-answered"));
+        beforeTheFirstAnswerIsLetGo.run();
+        letFirstAnswerGo.countDown();
+        subscriber.join(SECONDS.toMillis(10));
+        assertThat(subscriber.isAlive()).isFalse();
+        assertThat(subscribeFailure).hasNullValue();
+        NameDefined written = nameDefined();
+        write(written);
+        // The wait doesn't fail on its own, so the assertions of the test say what went wrong
+        eventDelivered.await(15, SECONDS);
+        return new PausedWhileItAnswered(answers, delivered, written);
     }
 
     private static void waitUntilStarted(Subscription subscription) {

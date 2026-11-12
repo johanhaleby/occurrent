@@ -225,15 +225,17 @@ public @interface Projection {
      * poll under {@code occurrent.projection.applied-append}.
      * <p>
      * Whether a rebuilt read model clears its recorded memberships automatically depends on {@link #startAt()} as
-     * well as the composition. For a {@link Source#EVENT_STORE} projection on Occurrent's own shipped composition,
-     * the default start position never replays, so a projection left there records but never clears on its own, and
-     * a startup warning names it. A custom or third-party composition's own default behavior is its own to declare,
-     * so this warning stays silent there rather than guessing. A {@link Source#PUSH} projection uses
-     * {@link #catchup()} instead, and is unaffected either way. Set {@link #startAt()} to
-     * {@link StartPosition#BEGINNING} to have a rebuild replay and clear correctly, but clear its stored checkpoint
-     * too. The default {@link #resumeBehavior()} resumes from an existing checkpoint instead of replaying again, so
-     * a read model wiped without its checkpoint stays stale. Clear stale memberships with an operator step instead
-     * if a replay is not what you want.
+     * well as the composition. A {@link Source#EVENT_STORE} projection at {@link StartPosition#NOW} with
+     * {@link ResumeBehavior#SAME_AS_START_AT} never replays, so it records but never clears on its own, and a startup
+     * warning names it unless the application declares a {@code SubscriptionResumePoints} bean. The default start
+     * position replays only when a catch-up stored the subscription's checkpoint, to finish that replay, so a rebuild
+     * there doesn't clear on its own either, and no warning names it. On the reactor starter, a composition with no
+     * catch-up layer gets the warning whatever the start and whether or not that bean exists.
+     * A {@link Source#PUSH} projection uses {@link #catchup()} instead, and is unaffected either way. Set
+     * {@link #startAt()} to {@link StartPosition#BEGINNING} to have a rebuild replay and clear correctly, but clear
+     * its stored checkpoint too. The default {@link #resumeBehavior()} resumes from an existing checkpoint instead of
+     * replaying again, so a read model wiped without its checkpoint stays stale. Clear stale memberships with an
+     * operator step instead if a replay is not what you want.
      * <p>
      * Recording happens after the first handled event that carries an append id, not after every event the append
      * wrote. An append whose events this projection handles across several deliveries can therefore have

@@ -22,6 +22,7 @@ import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.DcbSnapshotView;
@@ -54,6 +55,7 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 
 import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 
@@ -157,10 +159,10 @@ class SnapshotAnnotationRegistrar {
         startPositionSupport.applyStartupWorkarounds();
         if (stream) {
             StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
-            streamSubscriptions.subscribe(id, filter(eventFilter), startAt, waitUntilStarted, consumer);
+            BackgroundStartup.subscribe(annotation.startupMode(), () -> streamSubscriptions.subscribe(id, filter(eventFilter), startAt, waitUntilStarted, consumer));
         } else {
             Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
-            subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, consumer);
+            BackgroundStartup.subscribe(annotation.startupMode(), () -> subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, consumer));
         }
     }
 
@@ -189,7 +191,7 @@ class SnapshotAnnotationRegistrar {
         DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
         startPositionSupport.applyStartupWorkarounds();
         DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
-        var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, (dcbMetadata, event) -> {
+        BiConsumer<DcbEventMetadata, E> fold = (dcbMetadata, event) -> {
             SnapshotSupport.DcbBase<S> base = SnapshotSupport.resolveDcbBase(store.findLatest(key), schemaVersion, view::initialState);
             DcbEventStream read;
             try {
@@ -213,11 +215,14 @@ class SnapshotAnnotationRegistrar {
             }
             S newState = foldWithMetadata(view, base.state(), events, converter);
             store.save(key, org.occurrent.dsl.snapshot.Snapshot.atMarkerVersions(newState, read.markerVersions().get(), Math.max(base.highestFoldedPosition(), read.highestEventPosition()), schemaVersion));
-        });
+        };
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-        if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext) && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
-            subscription.waitUntilStarted();
-        }
+        BackgroundStartup.subscribe(annotation.startupMode(), () -> {
+            var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, fold);
+            if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext) && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
+                subscription.waitUntilStarted();
+            }
+        });
     }
 
     @SuppressWarnings("unchecked")

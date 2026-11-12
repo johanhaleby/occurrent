@@ -21,6 +21,11 @@ saying the blocking stacks filled no cache from history is true of the three blo
 of `BlockingHandover`, and decision 5 does not mention that the reactive Mongo store refuses a wait on a non-blocking
 thread before its first read.
 
+Amended by [ADR 166](0166-a-now-start-asks-to-replay-unless-it-starts-at-the-present-on-every-start.md). Decision 9's
+third case holds for `NOW` only with `resumeBehavior = SAME_AS_START_AT`, never for an unset `startAt`, and not while
+a `SubscriptionResumePoints` bean is declared. Decision 7's sentence that the default start position bypasses the
+catch-up layer no longer holds.
+
 ## Context
 
 A caller that has just written wants to know when an asynchronous projection has applied that write.

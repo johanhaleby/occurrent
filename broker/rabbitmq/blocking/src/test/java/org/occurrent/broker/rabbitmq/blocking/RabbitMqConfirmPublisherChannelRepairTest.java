@@ -35,6 +35,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -56,10 +57,11 @@ import static org.mockito.Mockito.when;
 /**
  * A publish never uses a channel it has observed closed, and a reopen that failed on one publish is repaired by the
  * next one that can open a channel. {@code RabbitMqCloudEventSinkChannelRetirementTest} covers the retirement itself
- * and a reopen that succeeds. This covers a reopen that fails, which leaves the closed channel in place, over every
- * way a publish can end in a retirement and every way the reopen can fail. A {@link Channel} mock here refuses to
- * publish once closed, the way a real one does, so a publish that reaches a closed channel fails visibly instead of
- * passing by accident.
+ * and a reopen that succeeds. This covers a reopen that fails, which leaves the closed channel in place, after a
+ * confirm wait that times out, is interrupted or ends in a channel or connection shutdown, for every way the reopen
+ * can fail. A {@code basicPublish} that throws, followed by a reopen that fails, is not covered. A {@link Channel}
+ * mock here refuses to publish once closed, the way a real one does, so a publish that reaches a closed channel
+ * fails visibly instead of passing by accident.
  */
 class RabbitMqConfirmPublisherChannelRepairTest {
 
@@ -190,6 +192,36 @@ class RabbitMqConfirmPublisherChannelRepairTest {
 
         verify(connection, times(1)).openChannel();
         verify(only.channel, times(3)).basicPublish(anyString(), anyString(), anyBoolean(), any(BasicProperties.class), any(byte[].class));
+    }
+
+    /**
+     * A shutdown signal thrown by {@code basicPublish} is handled by the shutdown catch that wraps it, not by the
+     * catch for the other encoding failures around the call. If both retired the channel, one publish would open two
+     * replacements and close the first of them unused.
+     */
+    @Test
+    void a_shutdown_signal_thrown_by_basicPublish_retires_the_channel_exactly_once_and_a_later_publish_uses_the_replacement() throws Exception {
+        Connection connection = mock(Connection.class);
+        FakeChannel retired = new FakeChannel();
+        FakeChannel replacement = new FakeChannel();
+        FakeChannel spare = new FakeChannel();
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, false, null, null);
+        doThrow(shutdown).when(retired.channel).basicPublish(anyString(), anyString(), anyBoolean(), any(BasicProperties.class), any(byte[].class));
+        AtomicInteger channelsOpened = new AtomicInteger();
+        Channel[] handedOut = {retired.channel, replacement.channel, spare.channel};
+        when(connection.openChannel()).thenAnswer(invocation -> Optional.of(handedOut[channelsOpened.getAndIncrement()]));
+        RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
+
+        assertThatThrownBy(() -> publisher.publish(EXCHANGE, ROUTING_KEY, PROPERTIES, BODY))
+                .isInstanceOf(RabbitMqPublishException.class)
+                .hasCause(shutdown);
+        retired.awaitClosed();
+        assertThat(channelsOpened.get()).as("channels opened: the publisher's own plus one replacement for the single retirement").isEqualTo(2);
+
+        assertThatCode(() -> publisher.publish(EXCHANGE, ROUTING_KEY, PROPERTIES, BODY)).doesNotThrowAnyException();
+
+        verify(replacement.channel).basicPublish(eq(EXCHANGE), eq(ROUTING_KEY), eq(true), any(BasicProperties.class), eq(BODY));
+        assertThat(channelsOpened.get()).as("channels opened after the later publish").isEqualTo(2);
     }
 
     /**

@@ -682,12 +682,13 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     /**
      * A subscribe of the id while another subscribe of it still runs its dynamic start position starts, since the
      * durable model refuses neither when nothing of the id waits to be handed over. The other subscribe then throws what
-     * its start position threw, or, when the start position answers, the DuplicateSubscriptionIdException the Mongo
-     * model throws for a subscribe of an id it has, so over the Mongo model only one of the two delivers.
+     * its start position threw, or, when the start position answers StartAt.now(), the DuplicateSubscriptionIdException
+     * the durable model throws once the Mongo model reports the id, so the Mongo model gets only the first subscribe and
+     * only one of the two delivers.
      */
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void a_subscribe_of_the_id_while_another_runs_its_start_position_starts_and_the_mongo_model_refuses_the_other_once_its_start_position_answers(boolean theStartPositionThrows) throws Exception {
+    void a_subscribe_of_the_id_while_another_runs_its_start_position_starts_and_the_other_is_refused_once_its_start_position_answers(boolean theStartPositionThrows) throws Exception {
         // Given
         CountDownLatch inTheStartPosition = new CountDownLatch(1);
         CountDownLatch startPositionLetGo = new CountDownLatch(1);
@@ -719,9 +720,9 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         // Then
         SoftAssertions.assertSoftly(softly -> {
             softly.assertThat(subscribeFailed).as("how the subscribe while the other ran its start position ended").isNull();
-            softly.assertThat(otherFailed).as("how the other subscribe ended, in its start position or refused by the Mongo model")
+            softly.assertThat(otherFailed).as("how the other subscribe ended, in its start position or refused as a duplicate")
                     .isInstanceOf(theStartPositionThrows ? IllegalStateException.class : DuplicateSubscriptionIdException.class);
-            softly.assertThat(mongoModel.subscribes.get()).as("subscribes of the id that reached the Mongo model").isEqualTo(theStartPositionThrows ? 1 : 2);
+            softly.assertThat(mongoModel.subscribes.get()).as("subscribes of the id that reached the Mongo model").isEqualTo(1);
             softly.assertThat(notDelivered).as("how waiting for the event written once it started ended").isNull();
             softly.assertThat(lastNotDelivered).as("how waiting for the event written after it ended").isNull();
             softly.assertThat(Stream.of(delivered, deliveredToTheOther).filter(events -> !events.isEmpty()).count())
