@@ -139,8 +139,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * active and a session already bound, a read with that mark reports no versions. So does a read without it once the
  * store has written in that session, and a read after marker versions is refused there. Without a write of the store's
  * in the bound session, a read without the mark reads in a snapshot transaction of its own. That rests on nothing else
- * writing event or marker documents through the template in that session. The store answers {@link DcbAppendConfirmation} with a majority read on
- * the primary from
+ * writing event or marker documents through the template in that session. The store answers
+ * {@link DcbAppendConfirmation} with a majority read on the primary from
  * {@link org.springframework.data.mongodb.MongoDatabaseFactory#getMongoDatabase()}, which joins no session. A store
  * built on a template from {@link MongoTemplate#withSession(ClientSession)} isn't supported for DCB snapshot deciders.
  */
@@ -377,14 +377,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return runsOnReplicaSet ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
         }
         Object boundSession = TransactionSynchronizationManager.isSynchronizationActive() ? TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) : null;
-        if (boundSession != null && BOUND_SESSIONS_WRITTEN_IN.contains(boundSession)) {
-            // Through the template the read joins the bound session and sees the store's writes in it
-            return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization that the event store wrote in, whose writes may still abort", null);
+        if (boundSession != null && (options.confirmsAppendBeforeSaving() || BOUND_SESSIONS_WRITTEN_IN.contains(boundSession))) {
+            // Through the template the read would join the bound session, which may hold the store's writes
+            return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
         }
         if (options.confirmsAppendBeforeSaving() && TransactionSynchronizationManager.isSynchronizationActive()) {
-            if (boundSession != null) {
-                return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
-            }
             if (runsOnReplicaSet) {
                 return readMarkerVersionsWith(mongoTemplate, criteria, options);
             }

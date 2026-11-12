@@ -140,10 +140,10 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * reports no versions. So does a read without it once the store has written in that session, and a read after marker
  * versions is refused there. Without a write of the store's in the bound session, a read without the mark reads in a
  * snapshot transaction of its own. That rests on nothing else writing event or marker documents through the template
- * in that session. The store answers
- * {@link DcbAppendConfirmation} with a majority read on the primary from
- * {@link org.springframework.data.mongodb.ReactiveMongoDatabaseFactory#getMongoDatabase()}, which joins no session. A store built on a template from {@link ReactiveMongoTemplate#withSession(ClientSession)}
- * isn't supported for DCB snapshot deciders.
+ * in that session. The store answers {@link DcbAppendConfirmation} with a majority read on the primary from
+ * {@link org.springframework.data.mongodb.ReactiveMongoDatabaseFactory#getMongoDatabase()}, which joins no session. A
+ * store built on a template from {@link ReactiveMongoTemplate#withSession(ClientSession)} isn't supported for DCB
+ * snapshot deciders.
  */
 @NullMarked
 public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader, DcbAppendConfirmation, CatchupReads, DcbCatchupReads {
@@ -478,12 +478,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         INACTIVE, NO_SESSION, SESSION_BOUND, SESSION_BOUND_WRITTEN_IN
     }
 
-    // A session still bound after a write held it, since a transaction of the store's own unbinds its session when it ends. The
-    // record before the write covers a write cancelled in a session bound already.
+    // A session still bound after a write held it, since a transaction of the store's own unbinds its session when it ends.
+    // The record runs after completion, error and cancellation alike, in the subscriber's context.
     private <T> Mono<T> recordingAWriteInABoundSession(Mono<T> write) {
-        return recordBoundSession().then(write.materialize())
-                .flatMap(signal -> recordBoundSession().thenReturn(signal))
-                .dematerialize();
+        return Mono.usingWhen(Mono.just(write), __ -> write,
+                __ -> recordBoundSession(),
+                (__, error) -> recordBoundSession(),
+                __ -> recordBoundSession());
     }
 
     private Mono<Void> recordBoundSession() {
@@ -562,7 +563,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 clientSession -> Mono.defer(() -> {
                     ReactiveMongoOperations template = mongoTemplate.withSession(clientSession);
                     if (!(template instanceof ReactiveMongoTemplate sessionTemplate)) {
-                        // NEVER can't be set on it, so the read goes through the template as it did before it kept out of the synchronization
+                        // NEVER can't be set on it, so the read goes through the template and may bind a session rather than fail
                         return readWithoutMarkerVersions(criteria, options);
                     }
                     sessionTemplate.setSessionSynchronization(NEVER);
