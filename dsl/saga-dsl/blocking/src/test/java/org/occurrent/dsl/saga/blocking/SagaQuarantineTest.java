@@ -1207,6 +1207,35 @@ class SagaQuarantineTest {
     }
 
     @Nested
+    class WhenAnotherWriteLandsBetweenItsReadAndItsWrite {
+
+        private final Instant start = Instant.parse("2026-01-01T00:00:00Z");
+        private final AtomicReference<Instant> now = new AtomicReference<>(start);
+        private final LosesItsFirstFailureWriteToAnotherWrite store = new LosesItsFirstFailureWriteToAnotherWrite();
+
+        @Test
+        void quarantines_the_instance_once_the_budget_is_used_up_even_when_every_failure_write_first_loses_to_another_write() {
+            stateStore = store;
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>("orders", orderFulfillment(), stateStore,
+                    dispatched::add, converter, CONFIG, event -> true, now::get);
+            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
+
+            for (Duration elapsed : List.of(Duration.ZERO, BUDGET.plusMillis(1), BUDGET.multipliedBy(2), BUDGET.multipliedBy(3))) {
+                now.set(start.plus(elapsed));
+                store.nextFailureWriteLosesToAnotherWrite();
+                try {
+                    execution.onCloudEvent(poisonEvent);
+                } catch (IllegalStateException expectedWhileTheInstanceIsNotQuarantined) {
+                    // The delivery that quarantines returns normally, the ones before it rethrow
+                }
+            }
+
+            assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED);
+        }
+    }
+
+    @Nested
     class WhenItIsQuarantined {
 
         @Test
@@ -1455,6 +1484,52 @@ class SagaQuarantineTest {
                     () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
             ));
+        }
+    }
+
+    /**
+     * Makes the first failure write of a delivery lose by really changing the instance first, which is what a timer
+     * firing between the read and the write does, so a retry has to read the instance again to get anywhere.
+     */
+    private static final class LosesItsFirstFailureWriteToAnotherWrite implements SagaStateStore<OrderState> {
+
+        private final SagaStateStore<OrderState> delegate = SagaStateStore.inMemory();
+        private final AtomicBoolean armed = new AtomicBoolean();
+
+        void nextFailureWriteLosesToAnotherWrite() {
+            armed.set(true);
+        }
+
+        @Override
+        public Optional<SagaEnvelope<OrderState>> find(String sagaId) {
+            return delegate.find(sagaId);
+        }
+
+        @Override
+        public boolean compareAndSave(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
+            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        }
+
+        @Override
+        public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
+            if (armed.compareAndSet(true, false)) {
+                SagaEnvelope<OrderState> current = delegate.find(sagaId).orElseThrow();
+                SagaEnvelope<OrderState> bumped = new SagaEnvelope<>(current.sagaId(), current.state(), current.status(), current.version() + 1,
+                        current.timers(), current.streamWatermarks(), current.positionWatermark(), current.createdAt(), current.updatedAt(),
+                        current.completedAt(), current.currentStep(), current.started(), current.failure(), current.streamMarks());
+                assertThat(delegate.compareAndSave(sagaId, bumped, current.version())).isTrue();
+            }
+            return delegate.compareAndSaveWithoutState(sagaId, envelope, expectedVersion);
+        }
+
+        @Override
+        public List<SagaEnvelope<OrderState>> findWithDueTimers(Instant now, int limit) {
+            return delegate.findWithDueTimers(now, limit);
+        }
+
+        @Override
+        public void delete(String sagaId) {
+            delegate.delete(sagaId);
         }
     }
 
