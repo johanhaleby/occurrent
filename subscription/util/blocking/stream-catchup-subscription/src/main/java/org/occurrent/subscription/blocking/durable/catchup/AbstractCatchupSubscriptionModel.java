@@ -1300,7 +1300,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             try (Claim ignored = claim(subscriptionId)) {
                 takeOverIfAsked(subscriptionId);
                 return;
-            } catch (RuntimeException e) {
+            } catch (Exception e) {
+                // Exception, since a storage or wrapped model written in Kotlin can throw a checked exception
                 log.error("The catch-up couldn't start replaying again for subscription {} after the subscription model lost the history from its live start, so it tries again in {} ms. {}",
                         subscriptionId, MAX_BACKOFF.toMillis(), whileTakenOver(subscriptionId), e);
             }
