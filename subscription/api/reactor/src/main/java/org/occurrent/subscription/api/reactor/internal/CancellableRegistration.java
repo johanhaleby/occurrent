@@ -63,8 +63,11 @@ public interface CancellableRegistration {
      * <p>
      * A subclass can override {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, and a proxy can advise
      * it. Calling the {@code subscribe(..)} of this interface would skip that override or that advice. So a subclass
-     * answers {@code false}, since its class isn't the model's own class. A proxy that forwards this call to the model
-     * it proxies gets {@code false} from that model, since {@code asSeenByCaller} is the proxy. A caller that gets
+     * that doesn't override this method answers {@code false}, since its class isn't the model's own class. A proxy that
+     * forwards this call to the model it proxies gets {@code false} from that model, since {@code asSeenByCaller} is the
+     * proxy. An instance of the model's own class that is changed in place answers {@code true}, a Mockito spy made with
+     * Mockito's default inline mock maker for example, so a stub on its
+     * {@code subscribe(String, SubscriptionFilter, StartAt, Function)} doesn't run for such a caller. A caller that gets
      * {@code false} calls {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, and the model gets the
      * cleanup a model that doesn't implement this interface gets.
      *

@@ -1473,7 +1473,9 @@ another thread can get there first. Only an instance of either exact class takes
 either model, a Spring AOP proxy for example, registers the cancelled `subscribe(..)` as 0.34.0 did, and the catch-up
 then cancels the id there again, as described below. The catch-up can't tell whether a subclass overrides
 `subscribe(String, SubscriptionFilter, StartAt, Function)` or whether a proxy advises it, so it calls that method on a
-subclass or a proxy.
+subclass or a proxy. A Mockito spy of either model is an instance of the exact class with Mockito's default inline mock
+maker, so it takes this path, and a stub or a `verify` on its `subscribe(String, SubscriptionFilter, StartAt, Function)`
+doesn't see a catch-up subscribe that goes straight to live.
 
 If another thread can cancel a subscribe whose start you wait for, `waitUntilStarted()` can fail with an
 `IllegalStateException` because of that cancel. That happens when:

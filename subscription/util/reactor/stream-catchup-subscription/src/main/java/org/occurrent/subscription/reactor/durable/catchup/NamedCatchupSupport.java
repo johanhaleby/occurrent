@@ -103,8 +103,8 @@ import static java.util.Objects.requireNonNull;
  * {@link StartAt} that answered {@code null} here again on the calling thread. A cancel of the id meanwhile goes to the
  * wrapped model at once. A wrapped model whose {@code CancellableRegistration.standsInForSubscribe(Object)} answers
  * {@code true} for the reference this class holds registers nothing for the subscribe when the cancel reaches it before
- * it took the id. Only a {@code ReactorMongoSubscriptionModel} or {@code ReactorDurableSubscriptionModel} of that exact
- * class answers {@code true}. The subscribe then returns a {@link Subscription} whose {@code waitUntilStarted()} fails
+ * it took the id. Of Occurrent's models, only a {@code ReactorMongoSubscriptionModel} or
+ * {@code ReactorDurableSubscriptionModel} of that exact class answers {@code true}. The subscribe then returns a {@link Subscription} whose {@code waitUntilStarted()} fails
  * with an {@link IllegalStateException}. A cancel that reaches {@code ReactorDurableSubscriptionModel} after it took the
  * id fails {@code waitUntilStarted()} with that model's {@code CancellationException}. Any other wrapped model can
  * register the subscribe after the cancel, so the id is cancelled there again once the wrapped {@code subscribe(..)}
@@ -136,7 +136,8 @@ final class NamedCatchupSupport {
 
     private final CheckpointAwareSubscriptionModel wrapped;
     private final @Nullable SubscriptionModel named;
-    // The wrapped model when it answers true to standsInForSubscribe(..) for this reference, so neither a subclass nor a proxy
+    // The wrapped model when it answers true to standsInForSubscribe(..) for this reference, which a Spring AOP proxy of
+    // either shipped model doesn't do
     private final @Nullable CancellableRegistration cancellable;
     private final Class<?> modelClass;
     private final ConcurrentMap<String, CatchupState> catchingUp = new ConcurrentHashMap<>();
