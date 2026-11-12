@@ -54,7 +54,7 @@ public enum SagaStatus {
      * from then on, and either source stops for good on a record the model refuses.
      * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
-     * which input the instance stopped on, when it started failing, and what the saga threw.
+     * which input the instance stopped on, when that input first failed, and what the saga threw.
      * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided not to recover it.
      * <p>
      * Note that {@code findByStatus(ACTIVE, ...)} does not return a quarantined instance. Enumerate this status too when
@@ -74,8 +74,8 @@ public enum SagaStatus {
      *       position has none.</li>
      *   <li>What was thrown is not an {@link OutOfMemoryError}.</li>
      *   <li>The instance is {@link #ACTIVE} and does not already count the event as handled.</li>
-     *   <li>The instance has been failing for at least {@code quarantineAfter}, measured from
-     *       {@link SagaFailure#firstFailedAt()}. The failure that first writes that record is never considered.</li>
+     *   <li>The event has been failing for at least {@code quarantineAfter}, measured from when it first failed. The
+     *       first failure of an event the instance holds no instant for is never considered.</li>
      * </ul>
      * An event that meets all of them is quarantined only when all of these hold as well, and any one of them can refuse
      * on its own.

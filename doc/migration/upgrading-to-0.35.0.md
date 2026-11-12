@@ -44,6 +44,8 @@ other sections compile fine and behave differently, so read them first.
   A saga keeps the highest applied version per stream and event type, and applies a late version instead of skipping
   it. Saga instances store a new `streamMarks` field. Breaks the build only for a record pattern over `SagaEnvelope` or
   `SagaRunnerConfig`.
+- [A saga's quarantine budget runs per failing event](#a-sagas-quarantine-budget-runs-per-failing-event). Each failing
+  event keeps its own clock. Compiles unchanged.
 
 ### DCB
 
@@ -407,8 +409,8 @@ A reaction that ran for a late event runs once. A redelivery of that event is sk
 An event is pending when it was handed to the saga and failed. The instance records its stream version before the
 exception reaches the subscription, whether or not quarantine is on, so a broker that parks the event afterwards does
 not lose it. An operator who replays the parked event after the instance has applied more than a window of later
-versions still gets it applied, once. An instance keeps at most as many pending versions per stream and event type as the
-window, and when one more fails it drops the smallest and logs an error naming the stream.
+versions still gets it applied, once. An instance keeps every pending version until it applies, and logs a warning
+naming the stream and the type when a failure takes one stream's pending versions of one type past the window.
 
 An instance that failed on an event under 0.34.0 or earlier holds that failure in its failure record, which names the
 event but not its type. If another event fails before the first is offered again, the failure record is replaced, and the
@@ -479,6 +481,48 @@ Constructor calls are not affected. The 13-argument `SagaEnvelope` constructor a
 `UpgradeToOccurrent_0_35` does not rewrite these patterns. A record pattern's arity is a compiler-enforced fact, so
 the way `UpgradeToOccurrent_0_34` appends `var appendId` to a `WriteResult` pattern could be extended to these two
 records, but the 0.34.0 change to the same two records got a guide entry and no recipe, and this follows that.
+
+## A saga's quarantine budget runs per failing event
+
+Up to 0.34.0 the quarantine budget belonged to the instance. The first failure wrote a `firstFailedAt`, and a later
+failure of a different event kept it. Under a broker's PARK action a failure parked and forgotten days ago then made the
+first failure of an unrelated event quarantine the instance. 0.35.0 gives each failing event its own clock. The reason
+is in [ADR 157](../architecture/decisions/0157-a-sagas-quarantine-budget-runs-per-input.md), and the report is
+[#1318](https://github.com/johanhaleby/occurrent/issues/1318).
+
+### Who is affected
+
+A saga with quarantine turned on through `SagaRunnerConfig.withQuarantineAfter(Duration)`, and a saga you turn it on for
+while some of its events are failing. An event that failed while quarantine was off keeps the instant it first failed.
+
+### What changes
+
+The saga measures how long an event has been failing from the instant on its pending entry, or from the failure record's
+`firstFailedAt` when the record names that event, or from now. So `SagaFailure.firstFailedAt()` is when the event the
+record names first failed.
+
+| Sequence | 0.34.0 | 0.35.0 |
+| --- | --- | --- |
+| Versions 7, 8, 7, 8 fail in turn | measured from the first failure | each measured from its own first failure, so 7 still reaches the budget |
+| Version 7 fails and is parked, version 8 fails once a week later | 8 quarantines the instance on its first failure | 8 starts its own clock |
+| Version 7 is parked, replayed after `quarantineAfter`, and fails again | measured from the first failure | quarantines the instance on that first replay failure |
+| Version 7 fails while quarantine is off, quarantine is turned on a day later, and 7 fails again | a fresh budget from that failure | quarantines the instance on that failure when a day is past `quarantineAfter` |
+
+The last two rows are intended, since the event has been failing for longer than the budget. Fix the cause before
+replaying a parked event on an instance with quarantine on, or before turning quarantine on for a saga with failing
+events.
+
+### Stored saga state for the clock
+
+Each pending version records when it first failed, in a `pendingSince` list beside `pending` in `streamMarks`. A
+document without it falls back to the failure record's `firstFailedAt` for the event the record names, and any other
+event starts its clock on its next failure.
+
+A `SagaStateStore` implemented outside this repository has to save `StreamMarks.pendingSince()` and read it back in
+`compareAndSave` and `find`, and in `compareAndSaveWithoutState` and `findWithoutState` too when it overrides them. A store that saves only the
+other marks, or rebuilds them with the four-argument `StreamMarks` constructor, loses the instants. An instance whose
+failures alternate between two events, such as versions 7, 8, 7, 8 of one stream, then starts each event's clock again
+on every failure and never reaches its budget.
 
 ## The deprecated `accept(..)` on the projection feeds is removed
 
