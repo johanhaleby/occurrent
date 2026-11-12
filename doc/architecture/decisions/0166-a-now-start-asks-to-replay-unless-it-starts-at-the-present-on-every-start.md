@@ -4,7 +4,7 @@ Date: 2026-11-05
 
 ## Status
 
-Accepted. Amends decision 9 of [ADR 132](0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md),
+Accepted. Amends decisions 7 and 9 of [ADR 132](0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md),
 which shipped in 0.34.0 and is therefore amended by reference rather than edited. Part of
 [#1404](https://github.com/johanhaleby/occurrent/issues/1404).
 
@@ -31,6 +31,11 @@ subscription with `startAt` unset started at the present instead, and missed wha
 down. [#1418](https://github.com/johanhaleby/occurrent/issues/1418) fixed that by resuming from the catch-up's
 checkpoint.
 
+Decision 7 of ADR 132 makes the same claim about the default start position. On Occurrent's own shipped
+composition, it says, the default start position with no global start position set bypasses the catch-up layer, so
+such a projection never replays and never clears its own records on a rebuild. That holds on neither stack when a
+catch-up stored the subscription's checkpoint, on the blocking stack since #1418.
+
 On the blocking stack, `NOW` with `resumeBehavior = SAME_AS_START_AT` keeps no position on Occurrent's durable and
 competing consumer models. A restart with a catch-up checkpoint in storage gets only the event written after it
 started. A pause and a resume replayed, because the catch-up layer read the checkpoint on the resume. On the reactive
@@ -43,7 +48,9 @@ and `DEFAULT` alike.
 
 Decision 9's third case covers `NOW` only with `resumeBehavior = SAME_AS_START_AT`. `NOW` with the default
 `resumeBehavior` is a start that can ask its composition to replay, and it records and clears the way any replaying
-start does. An unset `startAt` is such a start too, on both stacks, and it is no longer in the third case.
+start does. An unset `startAt` is such a start too, on both stacks, and it is no longer in the third case. Decision
+7's sentence that the default start position bypasses the catch-up layer on Occurrent's own composition no longer
+holds either.
 
 With no `SubscriptionResumePoints` bean answering for it, `NOW` with `SAME_AS_START_AT` starts at the present on every
 restart, and a resume doesn't replay from a catch-up checkpoint in storage. On the blocking stack it bypasses the

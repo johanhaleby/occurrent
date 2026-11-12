@@ -1730,9 +1730,14 @@ The reactive starter, a `@DcbSubscription`, and a projection or snapshot over DC
 ### What changes
 
 - With a catch-up's checkpoint stored, the subscription replays from it and then goes live, so it's delivered the
-  events written since. It resumes the way a `BEGINNING` start that restarts from that checkpoint does, and the
-  catch-up refuses it in the same cases. A `resumeSubscription(id)` of such a subscription after a pause replays from
-  that checkpoint too, where it ran no replay before.
+  events written since. The catch-up refuses this start in the same cases as a `BEGINNING` start that restarts from
+  that checkpoint. In `auto` subscription mode, the default, a `BEGINNING` start replays in the background, but a
+  subscription with `startAt` unset can replay before the application finishes starting, unless the annotation sets
+  `startupMode = BACKGROUND`. A `resumeSubscription(id)` of such a subscription after a pause replays from that
+  checkpoint too, where it ran no replay before.
+- With a `TimeBasedCheckpoint` stored that holds no live start, the start is refused, as
+  [A catch-up refuses a start that could skip an event committed below it](#a-catch-up-refuses-a-start-that-could-skip-an-event-committed-below-it)
+  describes.
 - With nothing stored, it starts at the present without a replay, as before.
 - With a live checkpoint stored, it resumes from it, as before. When MongoDB no longer has the history back to that
   checkpoint, the start throws `CatchupCannotResumeException` and the application doesn't start, the same as a
@@ -1745,7 +1750,14 @@ The reactive starter, a `@DcbSubscription`, and a projection or snapshot over DC
 ### What to do
 
 Nothing, unless the handler can't take the events the replay delivers. The replay can run long when the checkpoint is
-far behind. To start at the present instead, delete the stored checkpoint before the next boot.
+far behind, and the application doesn't finish starting until it's done. Set `startupMode = BACKGROUND` on the
+annotation to start the application first. To start at the present instead, delete the stored checkpoint before the
+next boot.
+
+A subscription whose live checkpoint MongoDB no longer has stops the application from starting. Set
+`startupMode = BACKGROUND` to have it paused instead, and see
+[A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now)
+for how to recover it.
 
 ## `ComposedDefaultStartPosition` and its bean are removed
 

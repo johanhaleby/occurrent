@@ -229,7 +229,8 @@ public @interface Projection {
      * {@link ResumeBehavior#SAME_AS_START_AT} never replays, so it records but never clears on its own, and a startup
      * warning names it unless the application declares a {@code SubscriptionResumePoints} bean. The default start
      * position replays only when a catch-up stored the subscription's checkpoint, to finish that replay, so a rebuild
-     * there doesn't clear on its own either, and no warning names it.
+     * there doesn't clear on its own either, and no warning names it. On the reactor starter, a composition with no
+     * catch-up layer gets the warning whatever the start and whether or not that bean exists.
      * A {@link Source#PUSH} projection uses {@link #catchup()} instead, and is unaffected either way. Set
      * {@link #startAt()} to {@link StartPosition#BEGINNING} to have a rebuild replay and clear correctly, but clear
      * its stored checkpoint too. The default {@link #resumeBehavior()} resumes from an existing checkpoint instead of

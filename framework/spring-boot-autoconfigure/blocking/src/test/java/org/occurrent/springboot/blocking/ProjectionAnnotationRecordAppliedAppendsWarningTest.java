@@ -251,7 +251,8 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
 
     @Test
     void a_default_start_position_does_not_warn_when_a_subscription_resume_points_bean_can_replace_the_start_with_a_checkpoint() {
-        // The setup of the default start test above, plus the bean.
+        // The mock model of the default start tests whose composition reports its catch-up phase, plus a
+        // SubscriptionResumePoints bean.
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
