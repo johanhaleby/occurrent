@@ -40,11 +40,9 @@ import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
-import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
-import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.net.URI;
@@ -59,7 +57,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -85,14 +83,17 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
     private static final String SUBSCRIPTION_ID = "sub";
     private static final String POSITION_READ_FAILED = "The position of the feed cannot be read right now";
+    private static final String DYNAMIC_NOW_READ_ANSWERED_NOTHING = "answered StartAt.now(), and the wrapped subscription model "
+                                                                    + NamedFeed.class.getName() + " answered nothing when asked where its feed was when subscribe(..) was called.";
     private static final String DELETE_FAILED = "The storage cannot delete right now";
     private static final String SAVE_FAILED = "The storage cannot save right now";
 
     /**
      * The model is stopped when the subscribe comes, and a cancel of the same id is still deleting its position. The
-     * dynamic start position runs where it would without the delete. StartAt.now() starts from where the feed is at the
-     * start, so what is written after the start is delivered. The model default starts from where the feed was at the
-     * subscribe, so what is written between the subscribe and the start is delivered too.
+     * dynamic start position runs where it would without the delete. Where this model drives the feed itself,
+     * StartAt.now() starts from where the feed is at the start, so what is written after the start is delivered. The
+     * model default starts from where the feed was at the subscribe, and so does StartAt.now() handed to the wrapped
+     * model, so what is written between the subscribe and the start is delivered too.
      */
     @ParameterizedTest
     @CsvSource({"false, now", "false, default", "true, now", "true, default"})
@@ -122,6 +123,8 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             assertThat(delivered).as("events delivered to the subscription").containsAll(ids(writtenAfterTheStart));
             if (answer.equals("default")) {
                 assertThat(delivered).as("events delivered to the subscription from the model default").contains(String.valueOf(writtenBeforeTheStart));
+            } else if (handsOver) {
+                assertThat(delivered).as("events delivered to the subscription from StartAt.now() handed over").contains(String.valueOf(writtenBeforeTheStart));
             } else {
                 assertThat(delivered).as("events delivered to the subscription from StartAt.now()").doesNotContain(String.valueOf(writtenBeforeTheStart));
             }
@@ -239,13 +242,15 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     /**
      * The subscribe comes while the delete of an earlier cancel of the same id runs, with a dynamic start position that
      * answers StartAt.now(), and the read of where the feed is fails or answers nothing. A read that failed is read
-     * again until it answers, and one that answers nothing has the subscription open its feed at StartAt.now(). Either
-     * way the subscription starts, as it does without the delete, and what is written after the subscribe returned is
-     * delivered.
+     * again until it answers, and the subscription starts, as it does without the delete, and delivers what is written
+     * after the subscribe returned. A read that answers nothing has the subscription open its feed at StartAt.now()
+     * where this model drives the feed. Handed to the wrapped model, it fails the start instead, as it does for the
+     * model default, since starting from StartAt.now() at the hand-over would skip what was written after the
+     * subscribe returned.
      */
     @ParameterizedTest
     @CsvSource({"false, fails", "false, empty", "true, fails", "true, empty"})
-    void a_dynamic_start_position_answering_now_starts_while_a_delete_runs_when_the_read_of_where_the_feed_is_fails_or_answers_nothing(boolean handsOver, String read) {
+    void a_dynamic_start_position_answering_now_starts_while_a_delete_runs_after_a_failed_read_and_after_an_empty_one_only_where_this_model_drives_the_feed(boolean handsOver, String read) {
         // Given
         HeldDeleteStorage storage = new HeldDeleteStorage();
         Feed feed = handsOver ? new NamedFeed(true) : new Feed();
@@ -266,6 +271,12 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             written.add(feed.write());
 
             // Then
+            if (handsOver && read.equals("empty")) {
+                assertThat(thrown).as("how waiting for the start of the subscription ended").isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining(DYNAMIC_NOW_READ_ANSWERED_NOTHING);
+                assertThat(feed.started()).as("subscriptions that began reading from the feed").isZero();
+                return;
+            }
             assertThat(thrown).as("how waiting for the start of the subscription ended").isNull();
             await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(written.getLast())));
             assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(ids(written));
@@ -798,7 +809,7 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     /**
      * The first reads of where the feed was fail, each after a moment, for a subscription from StartAt.now(). A failed
      * read is forgotten, and each retry reads once more, so the subscription starts after one read for each failure and
-     * one that answers, with one warning for each retry.
+     * one that answers. Each failed read logs one warning, numbered by the reads that failed.
      */
     @Test
     void a_read_of_where_the_feed_was_that_fails_is_read_again_once_for_each_retry() {
@@ -817,9 +828,295 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             // Then
             assertThat(startEnded).as("how waiting for the start of the subscription ended").isNull();
             assertThat(feed.reads.get()).as("reads of where the feed was").isEqualTo(failingReads + 1);
-            assertThat(retryWarnings(logged)).as("warnings logged for a retry of the read").isEqualTo(failingReads);
+            assertThat(failedReadWarnings(logged)).as("warnings logged for a failed read").containsExactly(failedRead(1), failedRead(2));
         } finally {
             model.shutdown();
+        }
+    }
+
+    /**
+     * The wrapped model throws when asked where its feed is, for a subscription from StartAt.now() and for a dynamic
+     * start position that answers StartAt.now(). The subscribe returns, and waiting for the start fails at once with
+     * what it threw, an Error or a checked exception too. Nothing is read, and the id can be subscribed again once it
+     * answers.
+     */
+    @ParameterizedTest
+    @CsvSource({"false, runtime exception", "true, runtime exception", "false, error", "true, error", "false, checked exception", "true, checked exception"})
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_the_start_at_once_with_what_it_threw_and_leaves_the_id_free(boolean dynamic, String kind) {
+        // Given
+        Feed feed = new Feed();
+        Throwable threw = ThrownAtTheCall.of(kind, POSITION_READ_FAILED);
+        feed.throwsAtTheCall = threw;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        AtomicReference<Subscription> subscription = new AtomicReference<>();
+
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            // When
+            Throwable atTheCall = catchThrowable(() -> subscription.set(model.subscribe(SUBSCRIPTION_ID, null, startFromNow(dynamic), __ -> Mono.empty())));
+            Throwable startEnded = catchThrowable(() -> subscription.get().waitUntilStarted().toFuture().get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+
+            // Then
+            assertThat(atTheCall).as("what the subscribe threw at the call").isNull();
+            assertThat(startEnded).as("how waiting for the start of the subscription ended").isInstanceOf(ExecutionException.class).hasCauseReference(threw);
+            assertThat(feed.reads.get()).as("reads of where the feed was").isZero();
+            assertThat(failedReadWarnings(logged)).as("warnings logged for a failed read").isEmpty();
+            assertThat(logged.at(Level.WARN)).as("warnings logged that nothing read where the feed was")
+                    .noneMatch(message -> message.startsWith("The wrapped model"));
+
+            feed.throwsAtTheCall = null;
+            Throwable startAgainEnded = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, startFromNow(dynamic), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT));
+            assertThat(startAgainEnded).as("how waiting for the start of the id subscribed again ended").isNull();
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    /**
+     * The wrapped model throws when asked where its feed is, for a subscription from StartAt.now() registered on a
+     * stopped model. A start that resumes nothing keeps the subscription paused, so waiting for its start fails only
+     * once it is resumed.
+     */
+    @Test
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_the_start_of_a_subscription_registered_on_a_stopped_model_once_it_is_resumed() {
+        // Given
+        Feed feed = new Feed();
+        Throwable threw = ThrownAtTheCall.of("runtime exception", POSITION_READ_FAILED);
+        feed.throwsAtTheCall = threw;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        model.stop();
+
+        try {
+            CompletableFuture<Void> started = model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> Mono.empty()).waitUntilStarted().toFuture();
+
+            // When
+            model.start(false);
+            letTimePass(Duration.ofMillis(300));
+            boolean endedBeforeTheResume = started.isDone();
+            model.resumeSubscription(SUBSCRIPTION_ID);
+
+            // Then
+            assertThat(endedBeforeTheResume).as("waiting for the start ended after a start that resumes nothing").isFalse();
+            assertThat(started).as("waiting for the start once the subscription is resumed")
+                    .failsWithin(TIMEOUT).withThrowableOfType(ExecutionException.class).havingCause().isSameAs(threw);
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    /**
+     * The wrapped model throws when asked where its feed is at the subscribe of a dynamic start position that answers
+     * StartAt.now(), which reads it in case the function answers the model default, and the subscribe comes while a
+     * cancel of the same id deletes its checkpoint. The subscription starts from where the feed is at its first start,
+     * so an event written after that checkpoint and before the subscribe is not delivered. A subscribe from the model
+     * default after a cancel of it starts at its call.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"runtime exception", "error", "checked exception"})
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_at_the_subscribe_starts_a_dynamic_now_that_waited_for_the_delete_of_a_cancel(String kind)
+            throws InterruptedException {
+        // Given
+        HeldDeleteStorage storage = new HeldDeleteStorage();
+        Feed feed = new Feed();
+        // The first call is the read at the subscribe for the model default
+        feed.throwingCallNumber = 1;
+        feed.throwsAtTheCall = ThrownAtTheCall.of(kind, POSITION_READ_FAILED);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        storage.save(SUBSCRIPTION_ID, checkpoint(0)).block(TIMEOUT);
+        long writtenAfterTheCheckpoint = feed.write();
+        model.cancelSubscription(SUBSCRIPTION_ID);
+        AtomicReference<Subscription> subscription = new AtomicReference<>();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        List<String> deliveredAgain = new CopyOnWriteArrayList<>();
+
+        try {
+            assertThat(storage.deleteHeld.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the storage holds a delete").isTrue();
+
+            // When
+            Throwable atTheCall = catchThrowable(() -> subscription.set(model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::now), deliveredTo(delivered))));
+            storage.releaseDelete.countDown();
+
+            // Then
+            assertThat(atTheCall).as("what the subscribe threw at the call").isNull();
+            assertThat(subscription.get().waitUntilStarted().toFuture()).as("waiting for the start of the subscription").succeedsWithin(TIMEOUT);
+            long writtenAfterTheStart = feed.write();
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered to the subscription").contains(String.valueOf(writtenAfterTheStart)));
+            assertThat(delivered).as("events delivered to the subscription, with " + writtenAfterTheCheckpoint + " written after the checkpoint and before the subscribe")
+                    .containsExactly(String.valueOf(writtenAfterTheStart));
+
+            model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
+            assertThatASubscribeFromTheModelDefaultStartsAtItsCall(model, feed, deliveredAgain);
+        } finally {
+            storage.releaseDelete.countDown();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * The wrapped model throws when asked where its feed is at the first start of a dynamic start position that answers
+     * StartAt.now(), and the subscribe comes while a cancel of the same id deletes its checkpoint. Waiting for the start
+     * fails with what it threw, the delete of the cancel goes ahead, and a subscribe from the model default after that
+     * starts at its call.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"runtime exception", "error", "checked exception"})
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_at_the_first_start_of_a_dynamic_now_that_waited_for_the_delete_of_a_cancel_lets_that_delete_go_ahead(String kind)
+            throws InterruptedException {
+        // Given
+        HeldDeleteStorage storage = new HeldDeleteStorage();
+        Feed feed = new Feed();
+        // The first call is the read at the subscribe for the model default, the second the read at the first start
+        feed.throwingCallNumber = 2;
+        Throwable threw = ThrownAtTheCall.of(kind, POSITION_READ_FAILED);
+        feed.throwsAtTheCall = threw;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        storage.save(SUBSCRIPTION_ID, checkpoint(0)).block(TIMEOUT);
+        model.cancelSubscription(SUBSCRIPTION_ID);
+        AtomicReference<Subscription> subscription = new AtomicReference<>();
+        List<String> deliveredAgain = new CopyOnWriteArrayList<>();
+
+        try {
+            assertThat(storage.deleteHeld.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the storage holds a delete").isTrue();
+
+            // When
+            Throwable atTheCall = catchThrowable(() -> subscription.set(model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::now), __ -> Mono.empty())));
+            storage.releaseDelete.countDown();
+
+            // Then
+            Throwable startEnded = catchThrowable(() -> subscription.get().waitUntilStarted().toFuture().get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT))
+                    .as("the checkpoint stored once the delete of the cancel was released").isNull());
+            assertThatASubscribeFromTheModelDefaultStartsAtItsCall(model, feed, deliveredAgain);
+            assertThat(atTheCall).as("what the subscribe threw at the call").isNull();
+            assertThat(startEnded).as("how waiting for the start of the subscription ended").isInstanceOf(ExecutionException.class).hasCauseReference(threw);
+        } finally {
+            storage.releaseDelete.countDown();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * The wrapped model throws an Error when asked where its feed is, for a subscription that starts without reading
+     * that position. Such a subscription starts from the checkpoint stored for it, from a checkpoint of its own, from a
+     * dynamic start position that answers a checkpoint, or from StartAt.now() handed to the wrapped model as it is. It
+     * starts, and each call that threw is logged at WARN with what it threw. Where this model drives the feed, a
+     * dynamic start position asks once at the subscribe and once at its first start.
+     */
+    @ParameterizedTest
+    @CsvSource({"false, default, 1", "false, dynamic, 2", "true, default, 1", "true, checkpoint, 1", "true, now, 1", "true, dynamic, 1"})
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_for_a_subscription_that_never_reads_it_logs_what_it_threw_at_warn(
+            boolean handsOver, String startAt, int callsThatThrew) {
+        // Given
+        Feed feed = handsOver ? new NamedFeed(true) : new Feed();
+        Throwable threw = ThrownAtTheCall.of("error", POSITION_READ_FAILED);
+        feed.throwsAtTheCall = threw;
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        storage.save(SUBSCRIPTION_ID, checkpoint(0)).block(TIMEOUT);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        StartAt from = switch (startAt) {
+            case "default" -> StartAt.subscriptionModelDefault();
+            case "checkpoint" -> StartAt.checkpoint(checkpoint(0));
+            case "now" -> StartAt.now();
+            case "dynamic" -> StartAt.dynamic(() -> StartAt.checkpoint(checkpoint(0)));
+            default -> throw new IllegalArgumentException(startAt);
+        };
+        String unread = "The wrapped model " + feed.getClass().getName() + " threw when asked where its feed was for subscription " + SUBSCRIPTION_ID
+                        + ". Nothing has read that position to report what it threw.";
+        AtomicReference<Subscription> subscription = new AtomicReference<>();
+
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            // When
+            Throwable atTheCall = catchThrowable(() -> subscription.set(model.subscribe(SUBSCRIPTION_ID, null, from, __ -> Mono.empty())));
+
+            // Then
+            assertThat(atTheCall).as("what the subscribe threw at the call").isNull();
+            assertThat(subscription.get().waitUntilStarted().toFuture()).as("waiting for the start of the subscription").succeedsWithin(TIMEOUT);
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(logged.thrownWith(unread)).as("warnings that nothing read where the feed was, before the shutdown")
+                    .hasSizeGreaterThanOrEqualTo(callsThatThrew));
+            model.shutdown();
+            assertThat(logged.thrownWith(unread)).as("what was logged with each warning that nothing read where the feed was, up to the shutdown")
+                    .hasSize(callsThatThrew).containsOnly(threw);
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    /**
+     * The wrapped model throws when asked where its feed is, for a subscription from the model default with nothing stored.
+     * That start needs the position, so it fails with what was thrown. Only that failure reports the throw, so no WARN says
+     * that nothing read the position.
+     */
+    @Test
+    void a_wrapped_model_that_throws_when_asked_where_its_feed_is_fails_a_start_from_the_model_default_with_nothing_stored_with_what_it_threw_and_reports_it_once() {
+        // Given
+        NamedFeed feed = new NamedFeed(true);
+        Throwable threw = ThrownAtTheCall.of("error", POSITION_READ_FAILED);
+        feed.throwsAtTheCall = threw;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        AtomicReference<Subscription> subscription = new AtomicReference<>();
+
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            // When
+            Throwable atTheCall = catchThrowable(() -> subscription.set(model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty())));
+            Throwable startEnded = catchThrowable(() -> subscription.get().waitUntilStarted().toFuture().get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+
+            // Then
+            assertThat(atTheCall).as("what the subscribe threw at the call").isNull();
+            assertThat(startEnded).as("how waiting for the start of the subscription ended").isInstanceOf(ExecutionException.class).hasCauseReference(threw);
+            assertThat(feed.subscriptions).as("subscriptions the wrapped model took").isEmpty();
+            assertThat(logged.at(Level.WARN)).as("warnings logged that nothing read where the feed was")
+                    .noneMatch(message -> message.startsWith("The wrapped model"));
+            assertThat(logged.at(Level.ERROR)).as("errors logged").hasSize(1)
+                    .allSatisfy(message -> assertThat(message).startsWith("Subscription " + SUBSCRIPTION_ID + " could not be started"));
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    // Subscribes the id from the model default, which delivers only what is written after the subscribe returned
+    private static void assertThatASubscribeFromTheModelDefaultStartsAtItsCall(ReactorDurableSubscriptionModel model, Feed feed, List<String> delivered) {
+        long writtenBefore = feed.write();
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)).waitUntilStarted().block(TIMEOUT);
+        long writtenAfter = feed.write();
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered to a subscribe from the model default").contains(String.valueOf(writtenAfter)));
+        assertThat(delivered).as("events delivered to a subscribe from the model default, with " + writtenBefore + " written before it")
+                .containsExactly(String.valueOf(writtenAfter));
+    }
+
+    /**
+     * A read of where the feed was that always fails, for a subscription from StartAt.now() and for a dynamic start
+     * position that answers StartAt.now(). Each read again comes after a wait the model documents. The read at the
+     * subscribe of StartAt.now() fails before the start waits for it, and the start reads again with no wait. A dynamic
+     * start position takes the moment it starts from at its first start, so no read of that moment comes before it.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_read_of_where_the_feed_was_that_keeps_failing_is_read_again_after_waits_that_start_between_100_and_150_ms_and_about_double_up_to_5_s(boolean dynamic) {
+        // Given
+        HeldDelays delays = new HeldDelays();
+        Schedulers.Snapshot schedulers = Schedulers.setFactoryWithSnapshot(delays);
+        Feed feed = new Feed();
+        feed.readFails = true;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            // When
+            CompletableFuture<Void> started = model.subscribe(SUBSCRIPTION_ID, null, startFromNow(dynamic), __ -> Mono.empty()).waitUntilStarted().toFuture();
+            await().atMost(TIMEOUT).until(() -> delays.waiting() == 1 || started.isDone());
+            // Each wait let go reads again on this thread, the read fails, and the next wait is then held
+            while (failedReadWarnings(logged).size() < 8 && !started.isDone()) {
+                delays.letGo();
+                await().atMost(TIMEOUT).until(() -> delays.waiting() == 1 || started.isDone());
+            }
+            int failedReads = failedReadWarnings(logged).size();
+            List<Duration> asked = delays.asked();
+
+            // Then
+            assertThat(started).as("waiting for the start while the read kept failing").isNotDone();
+            assertThat(asked).as("waits asked for after " + failedReads + " failed reads").hasSize(dynamic ? failedReads : failedReads - 1);
+            ReadAgainWaits.assertDocumented(asked);
+        } finally {
+            model.shutdown();
+            Schedulers.resetFrom(schedulers);
         }
     }
 
@@ -1016,6 +1313,15 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     private static long retryWarnings(LoggedByTheModel logged) {
         return logged.at(Level.WARN).stream().filter(message -> message.startsWith("Could not read where the feed was when subscription " + SUBSCRIPTION_ID + " asked to start from the present, on attempt")).count();
+    }
+
+    private static List<String> failedReadWarnings(LoggedByTheModel logged) {
+        return logged.at(Level.WARN).stream().filter(message -> message.startsWith("Could not read where the feed")).toList();
+    }
+
+    private static String failedRead(int attempt) {
+        return "Could not read where the feed was when subscription " + SUBSCRIPTION_ID + " asked to start from the present, on attempt " + attempt
+               + ". It is read again before the subscription opens its feed.";
     }
 
     private static String stillWaiting(String subscriptionId) {
@@ -1396,12 +1702,13 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     /**
      * The wrapped model is stopped at the subscribe, the read of where its feed is fails or answers nothing, and the
-     * delete of an earlier cancel of the same id runs. A dynamic start position answering StartAt.now() needs no such
-     * read, so the subscription starts when the wrapped model is started, as it does without the delete.
+     * delete of an earlier cancel of the same id runs. A dynamic start position answering StartAt.now() starts from
+     * that read. A read that failed is read again, and the subscription starts when the wrapped model is started, as it
+     * does without the delete. A read that answers nothing fails the start, as it does for the model default.
      */
     @ParameterizedTest
     @ValueSource(strings = {"fails", "empty"})
-    void a_dynamic_start_position_answering_now_starts_with_a_stopped_wrapped_model_while_a_delete_runs_when_the_read_of_where_the_feed_is_fails_or_answers_nothing(String read) {
+    void a_dynamic_start_position_answering_now_with_a_stopped_wrapped_model_while_a_delete_runs_starts_after_a_failed_read_and_fails_after_an_empty_one(String read) {
         // Given
         HeldDeleteStorage storage = new HeldDeleteStorage();
         NamedFeed feed = new NamedFeed(false);
@@ -1421,6 +1728,12 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
             // Then
             assertThat(startEnded).as("how the start ended").isNull();
+            if (read.equals("empty")) {
+                assertThat(thrown).as("how waiting for the start of the subscription ended").isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining(DYNAMIC_NOW_READ_ANSWERED_NOTHING);
+                assertThat(feed.started()).as("subscriptions that began reading from the feed").isZero();
+                return;
+            }
             assertThat(thrown).as("how waiting for the start of the subscription ended").isNull();
             assertThat(feed.started()).as("subscriptions that began reading from the feed").isEqualTo(1);
         } finally {
@@ -2227,6 +2540,11 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
         // The reads numbered up to this fail, each after failureDelay
         volatile int readsToFail;
         volatile Duration failureDelay = Duration.ZERO;
+        // What globalCheckpointAsOfNow() throws at the call instead of returning a read
+        volatile @Nullable Throwable throwsAtTheCall;
+        // Set, only the call of globalCheckpointAsOfNow() with this number throws throwsAtTheCall
+        volatile int throwingCallNumber;
+        final AtomicInteger callsAsOfNow = new AtomicInteger();
         // A read that answers only once releaseReads() is called, as from a database that responds late
         volatile boolean readHeld;
         final Sinks.Empty<Void> readsReleased = Sinks.empty();
@@ -2259,6 +2577,11 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
         // Where the feed is at the call, answered as late as globalCheckpoint() answers
         @Override
         public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            int call = callsAsOfNow.incrementAndGet();
+            Throwable thrown = throwsAtTheCall;
+            if (thrown != null && (throwingCallNumber == 0 || throwingCallNumber == call)) {
+                throw ThrownAtTheCall.undeclared(thrown);
+            }
             long atTheCall = present.get();
             return read(() -> atTheCall).doOnSubscribe(__ -> readsAsOfNow.incrementAndGet());
         }
@@ -2295,102 +2618,6 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             long position = present.incrementAndGet();
             written.tryEmitNext(eventAt(position));
             return position;
-        }
-    }
-
-    /**
-     * The parallel scheduler of Reactor, which {@code Mono.delay} runs on, with each task it is asked to run after a
-     * delay held until {@link #letGo()} runs it on the calling thread. A held task that is disposed never runs.
-     */
-    private static final class HeldDelays implements Schedulers.Factory {
-        private final List<HeldDelay> held = new CopyOnWriteArrayList<>();
-
-        @Override
-        public Scheduler newParallel(int parallelism, ThreadFactory threadFactory) {
-            return new Holding(Schedulers.Factory.super.newParallel(parallelism, threadFactory));
-        }
-
-        int waiting() {
-            return (int) held.stream().filter(delay -> !delay.isDisposed()).count();
-        }
-
-        // Runs each task waiting now. One that such a task schedules waits for the next call
-        void letGo() {
-            for (HeldDelay delay : List.copyOf(held)) {
-                if (delay.state.compareAndSet(HeldDelay.WAITING, HeldDelay.RAN)) {
-                    delay.task.run();
-                }
-            }
-        }
-
-        private final class Holding implements Scheduler {
-            private final Scheduler scheduler;
-
-            private Holding(Scheduler scheduler) {
-                this.scheduler = scheduler;
-            }
-
-            @Override
-            public Disposable schedule(Runnable task) {
-                return scheduler.schedule(task);
-            }
-
-            @Override
-            public Disposable schedule(Runnable task, long delay, TimeUnit unit) {
-                if (delay <= 0) {
-                    return scheduler.schedule(task);
-                }
-                HeldDelay heldDelay = new HeldDelay(task);
-                held.add(heldDelay);
-                return heldDelay;
-            }
-
-            @Override
-            public Disposable schedulePeriodically(Runnable task, long initialDelay, long period, TimeUnit unit) {
-                return scheduler.schedulePeriodically(task, initialDelay, period, unit);
-            }
-
-            @Override
-            public Worker createWorker() {
-                return scheduler.createWorker();
-            }
-
-            @Override
-            public void init() {
-                scheduler.init();
-            }
-
-            @Override
-            public void dispose() {
-                scheduler.dispose();
-            }
-
-            @Override
-            public boolean isDisposed() {
-                return scheduler.isDisposed();
-            }
-        }
-    }
-
-    private static final class HeldDelay implements Disposable {
-        private static final int WAITING = 0;
-        private static final int RAN = 1;
-        private static final int DISPOSED = 2;
-        private final Runnable task;
-        private final AtomicInteger state = new AtomicInteger(WAITING);
-
-        private HeldDelay(Runnable task) {
-            this.task = task;
-        }
-
-        @Override
-        public void dispose() {
-            state.compareAndSet(WAITING, DISPOSED);
-        }
-
-        @Override
-        public boolean isDisposed() {
-            return state.get() != WAITING;
         }
     }
 

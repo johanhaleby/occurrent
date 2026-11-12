@@ -16,7 +16,12 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -24,6 +29,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
@@ -34,7 +40,13 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.LostStartHold;
+import org.slf4j.LoggerFactory;
+import org.slf4j.helpers.MessageFormatter;
 
+import java.net.URI;
+import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
@@ -57,6 +69,8 @@ class DcbCatchupHistoryLossOwnershipTest {
     private static final Checkpoint TOKEN = new StringBasedCheckpoint("token-1");
     private static final Checkpoint LATER_TOKEN = new StringBasedCheckpoint("later-token");
 
+    private final Logger catchupLogger = (Logger) LoggerFactory.getLogger("org.occurrent.subscription.blocking.durable.catchup");
+    private final LoggedEvents logged = new LoggedEvents();
     private final CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
     private InMemorySubscriptionModel inMemorySubscriptionModel;
@@ -77,10 +91,13 @@ class DcbCatchupHistoryLossOwnershipTest {
         liveModel = new HistoryLosingLiveModel();
         CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
         catchup = new DcbCatchupSubscriptionModel(liveModel, new InMemoryEventStore(inMemorySubscriptionModel), DcbCriteria.tags(Tag.parse("name:1")), config);
+        logged.start();
+        catchupLogger.addAppender(logged);
     }
 
     @AfterEach
     void shutdown() {
+        catchupLogger.detachAppender(logged);
         catchup.shutdown();
         inMemorySubscriptionModel.shutdown();
     }
@@ -130,7 +147,123 @@ class DcbCatchupHistoryLossOwnershipTest {
         assertThat(catchup.isRunning(ID)).as("running").isTrue();
     }
 
+    @Test
+    void throws_CatchupCannotResumeException_from_subscribePaused_when_a_live_start_checkpoint_is_older_than_the_history_of_the_live_model() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.subscribePaused(ID, null, StartAt.checkpoint(TOKEN), action()));
+
+        // Then
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
+        assertAll(
+                () -> assertThat(liveModel.subscribePausedCalls).as("paused subscribes on the live model").isEmpty(),
+                () -> assertThat(liveModel.isPaused(ID)).as("paused on the live model").isFalse(),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
+    }
+
+    @Test
+    void holds_a_lost_live_start_paused_with_one_error_when_the_hold_is_asked_for_subscribe() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+
+        // When
+        Throwable thrown = catchThrowable(() -> LostStartHold.askedDuring(() -> catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action())));
+
+        // Then
+        assertThat(thrown).as("thrown by the subscribe").isNull();
+        assertHeldPausedAfterALostLiveStart();
+        assertThat(liveModel.subscribeCalls).as("running subscribes on the live model").isEmpty();
+    }
+
+    @Test
+    void holds_a_lost_live_start_paused_with_one_error_when_the_hold_is_asked_for_subscribePaused() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+
+        // When
+        Throwable thrown = catchThrowable(() -> LostStartHold.askedDuring(() -> catchup.subscribePaused(ID, null, StartAt.checkpoint(TOKEN), action())));
+
+        // Then
+        assertThat(thrown).as("thrown by the subscribe").isNull();
+        assertHeldPausedAfterALostLiveStart();
+    }
+
+    @Test
+    void throws_CatchupCannotResumeException_when_resuming_a_lost_live_start_held_paused() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        LostStartHold.askedDuring(() -> catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action()));
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
+        assertAll(
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").isEmpty(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(errorsLogged()).as("errors logged").hasSize(1)
+        );
+    }
+
+    @Test
+    void runs_a_lost_live_start_held_paused_and_delivers_a_later_event_when_resumed_at_a_checkpoint_the_live_model_has_the_history_back_to() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        LostStartHold.askedDuring(() -> catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action()));
+        CloudEvent later = DcbCloudEvents.withTags(CloudEventBuilder.v1().withId("later").withSource(URI.create("urn:test")).withType("test").build(), List.of(Tag.parse("name:1")));
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN)));
+        liveModel.deliver(ID, later);
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(received).as("events delivered").containsExactly(later),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged, only the one for the loss").hasSize(1)
+        );
+    }
+
+    private void assertHeldPausedAfterALostLiveStart() {
+        assertAll(
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isFalse(),
+                () -> assertThat(liveModel.isPaused(ID)).as("paused on the live model").isTrue(),
+                () -> assertThat(liveModel.subscribePausedCalls).as("paused subscribes on the live model").containsExactly(ID),
+                () -> assertThat(errorsLogged()).as("errors logged").containsExactly(terminalFailureLog(ID, TOKEN)),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(received).as("events delivered").isEmpty(),
+                () -> assertThat(saved).as("positions stored").isEmpty(),
+                () -> assertThat(storage.read(ID)).as("stored position").isNull()
+        );
+    }
+
     private Consumer<CloudEvent> action() {
         return received::add;
+    }
+
+    private List<String> errorsLogged() {
+        return logged.events.stream().filter(event -> event.getLevel().equals(Level.ERROR)).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    private static String terminalFailureLog(String subscriptionId, Checkpoint lostFrom) {
+        String lost = lostFrom.asString();
+        return MessageFormatter.arrayFormat(HistoryLossMessages.TERMINAL_FAILURE_LOG, new Object[]{subscriptionId, lost, lost}).getMessage();
+    }
+
+    private static final class LoggedEvents extends AppenderBase<ILoggingEvent> {
+        private final List<ILoggingEvent> events = new CopyOnWriteArrayList<>();
+
+        @Override
+        protected void append(ILoggingEvent event) {
+            events.add(event);
+        }
     }
 }

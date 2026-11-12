@@ -68,6 +68,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     private volatile @Nullable Runnable deferredAfterPause;
 
     final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
+    final List<String> subscribePausedCalls = new CopyOnWriteArrayList<>();
     final List<String> resumeCalls = new CopyOnWriteArrayList<>();
     final List<String> restartedFromNow = new CopyOnWriteArrayList<>();
     final List<Checkpoint> lossesReported = new CopyOnWriteArrayList<>();
@@ -157,6 +158,22 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
             open(subscriptionId, open);
         }
         return handle(subscriptionId);
+    }
+
+    @Override
+    public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        subscribePausedCalls.add(subscriptionId);
+        paused.put(subscriptionId, new Open(filter, action, startAt));
+        return handle(subscriptionId);
+    }
+
+    // Hands an event to the action of a running subscription, as the live model does for an event it reads
+    void deliver(String subscriptionId, CloudEvent cloudEvent) {
+        Open open = running.get(subscriptionId);
+        if (open == null) {
+            throw new IllegalStateException("Subscription " + subscriptionId + " does not run");
+        }
+        open.action().accept(cloudEvent);
     }
 
     @Override

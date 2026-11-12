@@ -38,7 +38,9 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.reactive.TransactionalOperator;
+import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -54,6 +56,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -377,6 +380,31 @@ class ReactorMongoEventStoreDcbTest {
                 .verify();
 
         assertThat(requireNonNull(eventStore.read("name:1").block()).eventList().block()).isEmpty();
+    }
+
+    @Test
+    void a_read_that_is_the_first_command_of_a_transaction_reads_the_stored_events() {
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
+        TransactionalOperator caller = TransactionalOperator.create(transactionManager);
+        TransactionalOperator requiresNew = TransactionalOperator.create(transactionManager, new DefaultTransactionDefinition(TransactionDefinition.PROPAGATION_REQUIRES_NEW));
+        List<Integer> eventsRead = new CopyOnWriteArrayList<>();
+        List<Throwable> failures = new CopyOnWriteArrayList<>();
+
+        // Repeated, since a read that sent its two finds at once failed only when the one that doesn't start the transaction arrived first
+        for (int attempt = 0; attempt < 100; attempt++) {
+            caller.execute(__ -> requiresNew.transactional(eventStore.read(tags(Tag.parse("name:1")))))
+                    .doOnNext(eventStream -> eventsRead.add(eventStream.events().size()))
+                    .onErrorResume(failure -> {
+                        failures.add(failure);
+                        return Mono.empty();
+                    })
+                    .blockLast(Duration.ofSeconds(10));
+        }
+
+        assertAll(
+                () -> assertThat(failures).as("reads that failed").isEmpty(),
+                () -> assertThat(eventsRead).as("events each read returned").hasSize(100).containsOnly(1)
+        );
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {

@@ -38,6 +38,7 @@ import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -63,6 +64,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalCheckpointErrorMessage;
@@ -75,7 +77,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, StartRefusalReportingSubscriptions, SmartLifecycle {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -215,8 +217,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         }
 
         @Override
-        public Subscription subscription(String subscriptionId, CountDownLatch started) {
-            return new SpringMongoSubscription(subscriptionId, started, () -> subscriptions.isShutdown());
+        public Subscription subscription(String subscriptionId, CountDownLatch started, Supplier<@Nullable RuntimeException> startFailure) {
+            return new SpringMongoSubscription(subscriptionId, started, startFailure, () -> subscriptions.isShutdown());
         }
 
         @Override
@@ -376,7 +378,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     /**
      * {@code false} for a checkpoint the change stream can't open at, such as a catch-up's position
-     * ({@code GlobalCheckpoint}) or a time, since a subscription subscribed at one starts at the present.
+     * ({@code GlobalCheckpoint}, {@code CatchupTimeCheckpoint}) or a {@code TimeBasedCheckpoint}. A subscribe at a
+     * catch-up's position is refused, a subscribe at a {@code TimeBasedCheckpoint} starts at the present, and a resume at
+     * any of them goes on from the position the subscription has read to.
      */
     @Override
     public boolean restartsAt(Checkpoint checkpoint) {
@@ -421,8 +425,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * change stream won't open at all, because its {@code RetryStrategy} gave up or its change stream history was lost
      * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off.
      * <p>
-     * When a resume or a wait throws, every other subscription is still resumed and waited for, and then this method
-     * throws the first exception with the others added as suppressed.
+     * A wait throws for a start position the model refuses. When a resume or a wait throws, every other subscription
+     * is still resumed and waited for, and then this method throws the first exception with the others added as
+     * suppressed.
      * <p>
      * A subscription made while the model is stopped is paused until this call or a resume starts it. For one given
      * {@link StartAt#now()}, no position, or a {@code StartAt.dynamic(..)} position that resolves to one of those,
@@ -466,6 +471,16 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public void removeHistoryLossListener(HistoryLossListener listener) {
         subscriptions.removeHistoryLossListener(listener);
+    }
+
+    @Override
+    public void addStartRefusalListener(StartRefusalListener listener) {
+        subscriptions.addStartRefusalListener(listener);
+    }
+
+    @Override
+    public void removeStartRefusalListener(StartRefusalListener listener) {
+        subscriptions.removeStartRefusalListener(listener);
     }
 
     @Override
