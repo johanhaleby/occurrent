@@ -41,7 +41,9 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -49,6 +51,8 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static java.util.Objects.requireNonNull;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
@@ -197,6 +201,113 @@ class CompetingConsumerStartRefusedByTheWrappedModelTest {
         assertThat(wrapped.listeners).as("listeners left after shutdown").isEmpty();
     }
 
+    @Test
+    void a_handle_of_a_consumer_that_won_the_lease_throws_only_once_the_refusal_is_acted_on_and_the_id_is_free() throws Exception {
+        // Given the wrapped handle throws as soon as the subscription was dropped, and the wrapped model reports later
+        strategy.grantOnRegister = true;
+        Subscription subscription = subscribe();
+        wrapped.dropAndThrowFromTheHandle(ID);
+        AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+        AtomicReference<@Nullable Snapshot> atTheThrow = new AtomicReference<>();
+        Thread caller = startThread(() -> {
+            try {
+                subscription.waitUntilStarted(Duration.ofSeconds(30));
+            } catch (Throwable e) {
+                thrown.set(e);
+                atTheThrow.set(snapshot());
+            }
+        });
+
+        // When the report is delivered from another thread after the handle has started waiting
+        awaitWaitingOrDone(caller);
+        wrapped.report(ID);
+
+        // Then
+        caller.join(EVENTUALLY.toMillis());
+        assertThat(thrown.get()).as("thrown by the handle").isInstanceOf(UnsupportedStartAtException.class);
+        Snapshot snapshot = requireNonNull(atTheThrow.get());
+        assertAll(
+                () -> assertThat(snapshot.subscriptionIds()).as("subscription ids when the handle threw").doesNotContain(ID),
+                () -> assertThat(snapshot.registrations()).as("registered with the strategy when the handle threw").isEmpty(),
+                () -> assertThat(snapshot.holders()).as("holding the lease when the handle threw").isEmpty(),
+                () -> assertThat(snapshot.subscribeAgain()).as("subscribing the same id right after the throw").isNull()
+        );
+    }
+
+    @Test
+    void a_handle_over_a_wrapped_model_that_does_not_report_refusals_throws_the_wrapped_refusal_at_once() {
+        // Given
+        WrappedModel inner = new WrappedModel();
+        Strategy ownStrategy = new Strategy();
+        ownStrategy.grantOnRegister = true;
+        CompetingConsumerSubscriptionModel ownModel = new CompetingConsumerSubscriptionModel(new NonReportingModel(inner), ownStrategy);
+        try {
+            Subscription subscription = ownModel.subscribe(NODE, ID, null, StartAt.subscriptionModelDefault(), __ -> {
+            });
+            inner.dropAndThrowFromTheHandle(ID);
+
+            // When
+            long before = System.nanoTime();
+            Throwable thrown = catchThrowable(() -> subscription.waitUntilStarted(Duration.ofSeconds(30)));
+            Duration waited = Duration.ofNanos(System.nanoTime() - before);
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).as("thrown by the handle").isInstanceOf(UnsupportedStartAtException.class).isSameAs(inner.thrownByAHandle.get()),
+                    () -> assertThat(waited).as("time the handle waited").isLessThan(Duration.ofSeconds(1))
+            );
+        } finally {
+            ownModel.shutdown();
+        }
+    }
+
+    @Test
+    void shutdown_releases_a_handle_waiting_for_a_refusal_that_nothing_reports() {
+        // Given
+        strategy.grantOnRegister = true;
+        Subscription subscription = subscribe();
+        wrapped.dropAndThrowFromTheHandle(ID);
+        CompletableFuture<Void> waiting = new CompletableFuture<>();
+        Thread caller = startThread(() -> {
+            try {
+                subscription.waitUntilStarted(Duration.ofSeconds(30));
+                waiting.complete(null);
+            } catch (Throwable e) {
+                waiting.completeExceptionally(e);
+            }
+        });
+        awaitWaitingOrDone(caller);
+
+        // When
+        model.shutdown();
+
+        // Then
+        assertThat(waiting).as("call waiting for the refusal").failsWithin(Duration.ofSeconds(5))
+                .withThrowableOfType(ExecutionException.class).havingCause().isInstanceOf(UnsupportedStartAtException.class).isSameAs(wrapped.thrownByAHandle.get());
+    }
+
+    private record Snapshot(Set<String> subscriptionIds, Set<String> registrations, Set<String> holders, @Nullable Throwable subscribeAgain) {
+    }
+
+    private Snapshot snapshot() {
+        Set<String> subscriptionIds = Set.copyOf(model.subscriptionIds());
+        Set<String> registrations = Set.copyOf(strategy.registrations);
+        Set<String> holders = Set.copyOf(strategy.holders);
+        return new Snapshot(subscriptionIds, registrations, holders, catchThrowable(this::subscribe));
+    }
+
+    private static Thread startThread(Runnable runnable) {
+        Thread thread = new Thread(runnable);
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
+    }
+
+    // Parked in a timed wait, or finished, which is what a handle that doesn't wait for the refusal ends up as
+    private static void awaitWaitingOrDone(Thread thread) {
+        await().atMost(EVENTUALLY).until(() -> thread.getState() == Thread.State.TIMED_WAITING || !thread.isAlive());
+    }
+
     private Subscription subscribe() {
         return model.subscribe(NODE, ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
@@ -281,6 +392,8 @@ class CompetingConsumerStartRefusedByTheWrappedModelTest {
         private final Set<String> runningIds = ConcurrentHashMap.newKeySet();
         private final Set<String> pausedIds = ConcurrentHashMap.newKeySet();
         private final List<StartRefusalListener> listeners = new CopyOnWriteArrayList<>();
+        private final Set<String> handlesThatThrow = ConcurrentHashMap.newKeySet();
+        private final AtomicReference<@Nullable UnsupportedStartAtException> thrownByAHandle = new AtomicReference<>();
         // Run once, by the next subscribe before it returns
         private final AtomicReference<@Nullable Consumer<String>> whileSubscribing = new AtomicReference<>();
 
@@ -297,6 +410,13 @@ class CompetingConsumerStartRefusedByTheWrappedModelTest {
         private void refuse(String subscriptionId) {
             drop(subscriptionId);
             report(subscriptionId);
+        }
+
+        // The handle throws from waitUntilStarted the way the MongoDB one does once it dropped the subscription, whether
+        // or not the listeners are told
+        private void dropAndThrowFromTheHandle(String subscriptionId) {
+            handlesThatThrow.add(subscriptionId);
+            drop(subscriptionId);
         }
 
         private void drop(String subscriptionId) {
@@ -361,12 +481,82 @@ class CompetingConsumerStartRefusedByTheWrappedModelTest {
         public boolean isPaused(String subscriptionId) {
             return pausedIds.contains(subscriptionId);
         }
+
+        private final class WrappedSubscription implements Subscription {
+            private final String id;
+
+            private WrappedSubscription(String id) {
+                this.id = id;
+            }
+
+            @Override
+            public String id() {
+                return id;
+            }
+
+            @Override
+            public boolean waitUntilStarted(Duration timeout) {
+                if (handlesThatThrow.contains(id)) {
+                    UnsupportedStartAtException refusal = new UnsupportedStartAtException(StartAt.subscriptionModelDefault(), "Refused the start of " + id);
+                    thrownByAHandle.set(refusal);
+                    throw refusal;
+                }
+                return true;
+            }
+        }
     }
 
-    private record WrappedSubscription(String id) implements Subscription {
+    // Delegates to a model that does not report refusals, so nothing here would act on one
+    private static final class NonReportingModel implements SubscriptionModel {
+        private final SubscriptionModel delegate;
+
+        private NonReportingModel(SubscriptionModel delegate) {
+            this.delegate = delegate;
+        }
+
         @Override
-        public boolean waitUntilStarted(Duration timeout) {
-            return true;
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return delegate.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            delegate.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            delegate.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public void stop() {
+            delegate.stop();
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            delegate.start(resumeSubscriptionsAutomatically);
+        }
+
+        @Override
+        public boolean isRunning() {
+            return delegate.isRunning();
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return delegate.isRunning(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return delegate.isPaused(subscriptionId);
         }
     }
 }
