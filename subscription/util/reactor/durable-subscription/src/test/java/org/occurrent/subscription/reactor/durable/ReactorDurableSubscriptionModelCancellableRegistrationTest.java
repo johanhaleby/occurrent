@@ -34,6 +34,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
@@ -125,7 +126,7 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
         }
 
         @Test
-        void returns_null_when_the_call_was_cancelled_and_the_model_is_shut_down() {
+        void throws_when_the_call_was_cancelled_and_the_model_is_shut_down() {
             // Given
             ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new NamedRecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage());
             model.shutdown();
@@ -135,7 +136,7 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
 
             // Then
             assertAll(
-                    () -> assertThat(result.thrown).as("what the call threw").isNull(),
+                    () -> assertThat(result.thrown).as("what the call threw").isInstanceOf(SubscriptionModelShutdownException.class),
                     () -> assertThat(result.returned).as("the subscription returned").isNull());
         }
 
@@ -234,7 +235,7 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
         }
 
         @Test
-        void returns_null_when_the_call_was_cancelled_and_the_model_is_shut_down() {
+        void throws_when_the_call_was_cancelled_and_the_model_is_shut_down() {
             // Given
             ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel("feed"), new InMemoryCheckpointStorage());
             model.shutdown();
@@ -244,7 +245,7 @@ class ReactorDurableSubscriptionModelCancellableRegistrationTest {
 
             // Then
             assertAll(
-                    () -> assertThat(result.thrown).as("what the call threw").isNull(),
+                    () -> assertThat(result.thrown).as("what the call threw").isInstanceOf(SubscriptionModelShutdownException.class),
                     () -> assertThat(result.returned).as("the subscription returned").isNull());
         }
 
