@@ -47,9 +47,6 @@ import static java.util.Objects.requireNonNull;
  * {@code @Projection(recordAppliedAppends = true)} registrar. {@code public} for the same reason
  * {@code PushCatchupStatusImpl} is, the auto-configuration and the registrar that use it live in different packages.
  * <p>
- * The reactor stack's equivalent of the blocking stack's {@code ComposedDefaultStartPosition}, which carries the
- * {@code DEFAULT} fact alone because that stack's capability lookup finds the catch-up layer by itself.
- * <p>
  * <a href="https://github.com/johanhaleby/occurrent/issues/842">#842</a> tracks fixing the underlying capability-lookup
  * gap. This class is the workaround ADR 132 sanctions until then, not a replacement for it.
  */
@@ -127,8 +124,10 @@ public final class ComposedCatchupModel {
 
     /**
      * Records, as a known fact, that {@link org.occurrent.annotation.StartPosition#DEFAULT} bypasses this
-     * composition's catch-up layer unconditionally. {@code StartAt.subscriptionModelDefault()} never replays here,
-     * the checkpoint is never consulted, so a wiped checkpoint changes nothing (ADR 132 decision 7). Called at most
+     * composition's catch-up layer when no checkpoint is stored for the subscription, so a first start does not
+     * replay (ADR 132 decision 7). It is not a fact about every start. A start after a catch-up stored a checkpoint
+     * resumes from it and replays, so the never-resets warning no longer reads this
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0166-a-now-start-asks-to-replay-unless-it-starts-at-the-present-on-every-start.md">ADR 166</a>). Called at most
      * once, by the same bean method that calls {@link #suppliedBy}, since only the auto-configuration that composed
      * this model actually knows how it resolves that marker. Never inferred here, and never assumed true for a
      * composition an application supplied itself, whose own {@code DEFAULT} semantics are its own to declare.
@@ -140,8 +139,8 @@ public final class ComposedCatchupModel {
     /**
      * Whether {@link #defaultBypassesCatchup} was called for the composition {@code candidate} is. {@code false}
      * until both it and {@link #suppliedBy} were called, and {@code false} for any composition that is not the one
-     * this holder was told about, including one an application supplied itself. A warning keyed on this answers
-     * honestly rather than by inferring composition-specific behavior it cannot verify.
+     * this holder was told about, including one an application supplied itself. {@code true} says only what
+     * {@link #defaultBypassesCatchup} records, that a first start does not replay.
      */
     public boolean isDefaultKnownLiveOnlyFor(@Nullable SubscriptionModelCapability candidate) {
         return defaultBypassesCatchup && isSuppliedFor(candidate);

@@ -31,6 +31,7 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.subscription.api.blocking.CancellableSubscriptions;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.DcbSubscriptionModel;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
@@ -40,6 +41,7 @@ import org.occurrent.subscription.api.blocking.Pushable;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.StreamSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -84,12 +86,14 @@ class WrapperCapabilityLookupTest {
             CheckpointAwareSubscriptionModel.class, StreamSubscriptionModel.class, DcbSubscriptionModel.class,
             SubscriptionModelWrapper.class, RepositionableSubscriptions.class, IntrospectableSubscriptions.class,
             ReplayAwareSubscriptions.class, HistoryRetainingSubscriptions.class, QuietPositionReportingSubscriptions.class,
-            Pushable.class, HistoryLossReportingSubscriptions.class);
+            Pushable.class, HistoryLossReportingSubscriptions.class, StartRefusalReportingSubscriptions.class,
+            CommitOrderedSubscriptions.class);
 
     // The capabilities a wrapper is looked past for when it doesn't implement them
     private static final Set<Class<?>> UNWRAPPED = Set.of(
             IntrospectableSubscriptions.class, ReplayAwareSubscriptions.class, HistoryRetainingSubscriptions.class,
-            QuietPositionReportingSubscriptions.class, Pushable.class, HistoryLossReportingSubscriptions.class);
+            QuietPositionReportingSubscriptions.class, Pushable.class, HistoryLossReportingSubscriptions.class,
+            StartRefusalReportingSubscriptions.class);
 
     // The wrapper, built over a model beneath it, and the capabilities the wrapper's own declaration gives it, taking
     // RepositionableSubscriptions for a wrapper that answers it only when the model beneath it can reposition
@@ -169,7 +173,7 @@ class WrapperCapabilityLookupTest {
         return unused(CheckpointAwareSubscriptionModel.class, StreamSubscriptionModel.class, DcbSubscriptionModel.class,
                 RepositionableSubscriptions.class, IntrospectableSubscriptions.class, ReplayAwareSubscriptions.class,
                 HistoryRetainingSubscriptions.class, QuietPositionReportingSubscriptions.class, Pushable.class,
-                HistoryLossReportingSubscriptions.class);
+                HistoryLossReportingSubscriptions.class, StartRefusalReportingSubscriptions.class, CommitOrderedSubscriptions.class);
     }
 
     // An implementation of the interfaces that runs the methods an interface defaults, does nothing for a void method,

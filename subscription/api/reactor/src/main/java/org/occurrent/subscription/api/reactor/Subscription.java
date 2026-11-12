@@ -52,7 +52,8 @@ public interface Subscription {
      * replay that {@code stop()} interrupted. Unlike the blocking stack, a parked replay that a later
      * {@code start(..)} relaunches does complete here, because the relaunch runs through this same signal.
      * <p>
-     * A start that failed and will not be retried errors the {@link Mono} rather than leaving it incomplete.
+     * A start that failed and will not be retried errors the {@link Mono} rather than leaving it incomplete. A start
+     * that fails after this has completed, such as a start position refused on a retry, doesn't change it.
      *
      * @return A {@link Mono} that completes once the subscription has started.
      */

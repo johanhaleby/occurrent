@@ -50,6 +50,8 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
+import java.util.function.BiPredicate;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -526,19 +528,70 @@ public class MongoCommons {
      * present for them, which skips every event written before it.
      * <p>
      * A subscription model calls it when a subscription starts, not when one resumes. A durable subscription model
-     * wrapping a MongoDB subscription model resumes a subscription at the position a catch-up stored on purpose, and
-     * the change stream then goes on from the position the subscription has read to. A dynamic {@link StartAt} is not
-     * checked, for the reason {@link #checkStartPosition(StartAt, SubscriptionModelContext)} gives.
+     * wrapping a blocking MongoDB subscription model resumes a subscription at the position a catch-up stored on
+     * purpose, and the change stream then goes on from the position the subscription has read to. A dynamic
+     * {@link StartAt} is not checked here, for the reason {@link #checkStartPosition(StartAt, SubscriptionModelContext)}
+     * gives. {@link #refusingCatchupPositionUntilOpened(StartAt, String, BooleanSupplier)} checks the positions it
+     * answers instead.
      *
      * @throws UnsupportedStartAtException If {@code startAt} is a position a catch-up subscription model stores.
      */
     public static void refuseCatchupPosition(@Nullable StartAt startAt) {
-        if (startAt instanceof StartAtCheckpoint position
-                && (GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(position.checkpoint))) {
-            throw new UnsupportedStartAtException(startAt, "Cannot open a change stream at checkpoint \"" + position.checkpoint.asString()
-                    + "\", which is a position a catch-up subscription model stores and not a change stream position. Opening it at the present instead would skip every event written before it. "
-                    + "Start the subscription through the catch-up subscription model that stored the checkpoint.");
+        if (catchupPositionIn(startAt) instanceof Checkpoint checkpoint) {
+            throw new UnsupportedStartAtException(startAt, "Cannot open a change stream at checkpoint \"" + checkpoint.asString()
+                    + "\", " + NOT_A_CHANGE_STREAM_POSITION + "Start the subscription through the catch-up subscription model that stored the checkpoint.");
         }
+    }
+
+    /**
+     * {@code startAt} itself when it isn't dynamic. A dynamic one is wrapped, so that a position its function answers
+     * before a change stream of the subscription has opened is refused when it is a position a catch-up subscription
+     * model stores, as {@link #refuseCatchupPosition(StartAt)} refuses a fixed one. What counts as opened is up to the
+     * subscription model. A blocking one counts a run that reported its cursor open, so an answer whose opening a pause
+     * or a failure stopped doesn't end the check. The reactor one counts a driver cursor that opened for a subscription
+     * that reads through one. Where it has no such cursor to wait for it counts the first document the change stream
+     * reads, since a subscribe doesn't say the server accepted the position, so an answer the server rejects doesn't end
+     * it. The {@link UnsupportedStartAtException} is thrown where the subscription model resolves the position, as the
+     * change stream opens.
+     * <p>
+     * An answer after that isn't checked. Once a change stream has opened, the subscription model records the position it opened
+     * at with {@link #recordWhereItOpened(OpenedAt, BiPredicate)} and doesn't ask the function again. A blocking one asks
+     * again only after a stream opened at the present without an operation time to record, and a catch-up answer then
+     * opens at the present as well. The reactor one stops a subscription it can't find an operation time to open at.
+     *
+     * @param subscriptionId The id the exception message names, or {@code null} for a subscription that has none
+     * @param opened         Whether a change stream of the subscription has opened, as the subscription model counts it
+     */
+    public static StartAt refusingCatchupPositionUntilOpened(StartAt startAt, @Nullable String subscriptionId, BooleanSupplier opened) {
+        if (!startAt.isDynamic()) {
+            return startAt;
+        }
+        return StartAt.dynamic(ctx -> {
+            StartAt resolved = startAt.get(ctx);
+            if (!opened.getAsBoolean() && catchupPositionIn(resolved) instanceof Checkpoint checkpoint) {
+                String subscription = subscriptionId == null ? "a subscription" : "subscription \"" + subscriptionId + "\"";
+                throw new UnsupportedStartAtException(requireNonNull(resolved), "The dynamic start position of " + subscription + " answered checkpoint \""
+                        + checkpoint.asString() + "\", " + NOT_A_CHANGE_STREAM_POSITION + "Start the subscription through a catch-up subscription model. "
+                        + "When one already wraps this model, restore the start position its replay had or remove the stored checkpoint.");
+            }
+            return resolved;
+        });
+    }
+
+    private static final String NOT_A_CHANGE_STREAM_POSITION = "which is a position a catch-up subscription model stores and not a change stream position. "
+            + "Opening it at the present instead would skip every event written before it. ";
+
+    /**
+     * Whether {@code startAt} is a position a catch-up subscription model stores, which a change stream can't open at.
+     */
+    public static boolean isCatchupPosition(@Nullable StartAt startAt) {
+        return catchupPositionIn(startAt) != null;
+    }
+
+    private static @Nullable Checkpoint catchupPositionIn(@Nullable StartAt startAt) {
+        return startAt instanceof StartAtCheckpoint position
+                && (GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(position.checkpoint))
+                ? position.checkpoint : null;
     }
 
     /**
@@ -684,8 +737,9 @@ public class MongoCommons {
     /**
      * The position a subscription records in place of {@code tracked} once a change stream opened from it at the
      * present, at {@code operationTime}. Opening the stream again then starts at {@code operationTime} and not at a
-     * later present. A dynamic {@code tracked} stays dynamic, so it is still evaluated on every opening, and only
-     * the answers that would have opened at the present are replaced by {@code operationTime}.
+     * later present. A dynamic {@code tracked} stays dynamic until {@link #recordWhereItOpened(OpenedAt, BiPredicate)}
+     * replaces it, so an opening before that still evaluates it, and only the answers that would have opened at the
+     * present are replaced by {@code operationTime}.
      */
     public static StartAt pinnedTo(StartAt tracked, BsonTimestamp operationTime) {
         StartAt pinned = StartAt.checkpoint(new MongoOperationTimeCheckpoint(operationTime));
@@ -733,11 +787,27 @@ public class MongoCommons {
     }
 
     /**
-     * Where a change stream opened, as {@code openingPosition}, and the position the subscription recorded right after
-     * the opening, as {@code tracked}. A model keeps one for each opening, so a loss of history can tell whether the
+     * Where a change stream opened, as {@code openingPosition}, and the position the subscription tracked as it
+     * opened, as {@code tracked}, before {@link MongoCommons#recordWhereItOpened(OpenedAt, BiPredicate)} replaced a
+     * dynamic one. A model keeps one for each opening, so a loss of history can tell whether the
      * position it lost is the one the stream opened at.
      */
     public record OpenedAt(StartAt openingPosition, StartAt tracked) {
+    }
+
+    /**
+     * Records the position a change stream opened at in place of the dynamic position the subscription tracked, once
+     * the stream has opened, or as it opens when the subscription model can't tell when the server accepted the
+     * position. Opening again then starts at that position and doesn't call the dynamic position's function again,
+     * which could answer another position. Nothing is recorded when the tracked position isn't dynamic,
+     * when the stream opened at the present without an operation time, or when the tracked position has changed since
+     * {@code openedAt} was read, so a checkpoint written from another thread is kept.
+     *
+     * @param compareAndSet Sets the tracked position to its second argument when it still holds its first
+     * @return What {@code compareAndSet} answered, or {@code false} when it wasn't asked
+     */
+    public static boolean recordWhereItOpened(OpenedAt openedAt, BiPredicate<StartAt, StartAt> compareAndSet) {
+        return openedAt.tracked().isDynamic() && !opensAtThePresent(openedAt.openingPosition()) && compareAndSet.test(openedAt.tracked(), openedAt.openingPosition());
     }
 
     /**

@@ -34,6 +34,7 @@ import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.OptionalLong;
@@ -297,6 +298,28 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
         }
 
         @Test
+        void puts_back_the_checkpoint_stored_before_when_the_wrapped_model_throws_a_checked_exception_without_declaring_it() {
+            // Given
+            InMemoryCheckpointStorage storage = storageHolding(OLDER);
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            IOException wrappedFailure = new IOException("the wrapped model could not reopen its feed");
+            wrapped.beforeResumeAtPosition = () -> {
+                throw sneaky(wrappedFailure);
+            };
+
+            // When
+            Throwable thrown = catchThrowable(() -> repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(NEWER)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).isSameAs(wrappedFailure),
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(OLDER)
+            );
+        }
+
+        @Test
         void throws_what_the_wrapped_model_throws_and_keeps_the_new_checkpoint_when_none_was_stored_before() {
             // Given nothing stored for the subscription when the resume at a position runs
             InMemoryCheckpointStorage storage = storageHolding(OLDER);
@@ -313,6 +336,30 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isSameAs(wrappedFailure),
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(NEWER)
+            );
+        }
+
+        @Test
+        void throws_what_the_wrapped_model_throws_with_the_checked_exception_the_put_back_threw_without_declaring_it_as_suppressed() {
+            // Given a storage that takes the new position and then throws a checked exception from the save that puts the old one back
+            PutBackFailingStorage storage = new PutBackFailingStorage();
+            storage.save(SUBSCRIPTION_ID, OLDER);
+            RepositionableFake wrapped = new RepositionableFake();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeAndPause(model);
+            IllegalStateException wrappedFailure = new IllegalStateException("the wrapped model could not reopen its feed");
+            wrapped.failResumeAtPositionWith = wrappedFailure;
+            IOException putBackFailure = new IOException("the storage lost its connection");
+            storage.failSaveNumber(2, putBackFailure);
+
+            // When
+            Throwable thrown = catchThrowable(() -> repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(NEWER)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).as("thrown").isSameAs(wrappedFailure),
+                    () -> assertThat(thrown.getSuppressed()).as("suppressed").containsExactly(putBackFailure),
                     () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(NEWER)
             );
         }
@@ -568,17 +615,22 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
         return RepositionableSubscriptions.findIn(model).orElseThrow();
     }
 
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException sneaky(Throwable throwable) throws E {
+        throw (E) throwable;
+    }
+
     /**
      * A storage that fails the nth save counted from {@link #failSaveNumber}, and every delete after {@link #failDeletes}
      * while counting the deletes it is asked for.
      */
     private static class PutBackFailingStorage extends InMemoryCheckpointStorage {
         private int savesLeftBeforeFailure = Integer.MAX_VALUE;
-        @Nullable private RuntimeException saveFailure = null;
+        @Nullable private Throwable saveFailure = null;
         @Nullable private RuntimeException deleteFailure = null;
         private final AtomicInteger deletesAttempted = new AtomicInteger();
 
-        void failSaveNumber(int number, RuntimeException failure) {
+        void failSaveNumber(int number, Throwable failure) {
             savesLeftBeforeFailure = number - 1;
             saveFailure = failure;
         }
@@ -594,7 +646,7 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
         @Override
         public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
             if (saveFailure != null && savesLeftBeforeFailure-- == 0) {
-                throw saveFailure;
+                throw sneaky(saveFailure);
             }
             return super.save(subscriptionId, checkpoint, condition);
         }

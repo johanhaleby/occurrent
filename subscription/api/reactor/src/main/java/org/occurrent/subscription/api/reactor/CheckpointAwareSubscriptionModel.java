@@ -56,8 +56,16 @@ public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel,
      * moment it answers for.
      * <p>
      * The answer may be earlier than the call, so a subscription started from it can also receive some events written
-     * just before the call. When an implementation knows it can't work out the position at the call, it fails the
-     * {@code Mono} rather than answer with a later position.
+     * just before the call. When an implementation can't work out the position at the call, it fails the {@code Mono}
+     * rather than answer with a later position. The failure gives no position, and it may be transient, so a caller can
+     * subscribe to the same {@code Mono} again to read the position at the call once more. An implementation should
+     * not cache a failure in the returned {@code Mono}, since each read again would then get that same failure back.
+     * {@code ReactorDurableSubscriptionModel} reads again after each failure where it reads the position for a
+     * subscription from {@code StartAt.now()}, or from a {@code StartAt.dynamic(..)} function that answers
+     * {@code StartAt.now()}. Where it reads the position for such a subscription and this method throws instead of
+     * returning a {@code Mono}, it fails the start of the subscription with what was thrown. A read for the
+     * subscription-model default is not made again, and a failure of it fails the start of a subscription from that
+     * default that has no checkpoint stored.
      * <p>
      * An implementation that answers with a later position, for example by returning {@link #globalCheckpoint()} where
      * that works out where the feed is only when it runs, makes {@code ReactorDurableSubscriptionModel} skip the events
@@ -70,8 +78,8 @@ public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel,
      * thread that must not block, such as a Netty event loop thread.
      *
      * @return A {@link Mono} that emits a position no later than where the feed was at the call, within the limits the
-     * implementation documents, fails when the implementation knows it can't work out that position, or completes
-     * empty for a problem it can't resolve, as {@link #globalCheckpoint()} does.
+     * implementation documents, fails when the implementation can't work out that position when subscribed to, or
+     * completes empty for a problem it can't resolve, as {@link #globalCheckpoint()} does.
      */
     Mono<Checkpoint> globalCheckpointAsOfNow();
 
