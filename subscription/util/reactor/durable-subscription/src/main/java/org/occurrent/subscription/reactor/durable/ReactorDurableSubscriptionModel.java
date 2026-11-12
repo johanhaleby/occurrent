@@ -560,12 +560,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
 
         // Checked before the read below, so a duplicate subscribe and one on a shut-down model do not ask the wrapped
-        // model where the feed is, and checked again under the monitor where the id is taken. A cancelled call on a
-        // model that isn't shut down returns null before both, so it takes over no delete of the id and reads nothing.
-        // A subscribe of the id made after the cancel takes the id under this monitor, so this check sees that cancel
-        // whenever it sees that subscribe.
+        // model where the feed is, and checked again under the monitor where the id is taken. A cancelled call returns
+        // null before both, so it takes over no delete of the id and reads nothing. A subscribe of the id made after the
+        // cancel takes the id under this monitor, so this check sees that cancel whenever it sees that subscribe.
         synchronized (this) {
-            if (cancelled.getAsBoolean() && !shutdown) {
+            if (returnsNullAsCancelled(cancelled)) {
                 return null;
             }
             requireIdFreeAndNotShutDown(subscriptionId);
@@ -607,7 +606,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         final @Nullable Reservation reservation;
         try {
             synchronized (this) {
-                if (cancelled.getAsBoolean() && !shutdown) {
+                if (returnsNullAsCancelled(cancelled)) {
                     reservation = null;
                 } else {
                     requireIdFreeAndNotShutDown(subscriptionId);
@@ -647,6 +646,18 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Called under the monitor, when this model drives the feed itself
+    // Whether a cancelled call returns null. On a model shut down by then it throws SubscriptionModelShutdownException
+    // instead, see CancellableRegistration.
+    private boolean returnsNullAsCancelled(BooleanSupplier cancelled) {
+        if (!cancelled.getAsBoolean()) {
+            return false;
+        }
+        if (shutdown) {
+            throw new SubscriptionModelShutdownException();
+        }
+        return true;
+    }
+
     private void requireIdFreeAndNotShutDown(String subscriptionId) {
         if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
@@ -673,8 +684,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // before the start position is recorded, see startAtTheCall.
         if (heldByTheWrappedModel(delegate, subscriptionId)) {
             // Asked again, since the cancel and a subscribe of the id made after it can both come after
-            // subscribe(..) asked. A model shut down meanwhile refuses the call as it refuses one that wasn't cancelled.
-            if (cancelled.getAsBoolean() && !shutdown) {
+            // subscribe(..) asked
+            if (returnsNullAsCancelled(cancelled)) {
                 return null;
             }
             throw new DuplicateSubscriptionIdException(subscriptionId);
@@ -2381,8 +2392,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private @Nullable PositionWriter startingPositionWriter(String subscriptionId, BooleanSupplier cancelled) {
         PositionWriter writer = new PositionWriter();
         synchronized (positionLock) {
-            // A model shut down meanwhile goes on as it does for a call that wasn't cancelled
-            if (cancelled.getAsBoolean() && !shutdown) {
+            if (returnsNullAsCancelled(cancelled)) {
                 return null;
             }
             if (refusesSubscribeOf(subscriptionId) || keepsForAnotherWriter(subscriptionId, writer)) {

@@ -47,12 +47,12 @@ public interface CancellableRegistration {
      * {@code cancelled} answers {@code true}. The model asks {@code cancelled} while it holds the lock it registers the
      * subscription with, and its {@code cancelSubscription(subscriptionId)} takes that lock too. So a caller that makes
      * {@code cancelled} answer {@code true} before it calls {@code cancelSubscription(subscriptionId)} has that cancel
-     * find the subscription, or has nothing registered. A model that is shut down throws
-     * {@code SubscriptionModelShutdownException} as {@code SubscriptionModel.subscribe(..)} does, whatever
-     * {@code cancelled} answers.
+     * find the subscription, or has nothing registered. Where {@code cancelled} answers {@code true} on a model that is
+     * shut down by then, the model throws {@code SubscriptionModelShutdownException} instead of returning {@code null}.
      *
      * @param cancelled Whether the caller cancelled this subscribe.
-     * @return The subscription, or {@code null} when {@code cancelled} answered {@code true} and nothing was registered.
+     * @return The subscription, or {@code null} when {@code cancelled} answered {@code true} on a model that isn't shut
+     * down and nothing was registered.
      */
     @Nullable Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
                                      Function<CloudEvent, Mono<Void>> action, BooleanSupplier cancelled);
