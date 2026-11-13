@@ -448,7 +448,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private static boolean declaresAnyOccurrentAnnotation(Class<?> type) {
         try {
             return !SubscriptionAnnotations.handlerMethods(type, HANDLER_ANNOTATIONS).isEmpty();
-        } catch (IllegalStateException e) {
+        } catch (IllegalStateException | IllegalArgumentException e) {
             return true;
         }
     }

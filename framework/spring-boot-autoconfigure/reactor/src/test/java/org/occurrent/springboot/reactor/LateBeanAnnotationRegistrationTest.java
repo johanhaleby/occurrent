@@ -31,6 +31,7 @@ import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Source;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.reactor.DomainEventFeed;
@@ -57,6 +58,7 @@ import org.springframework.core.NestedExceptionUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -141,6 +143,19 @@ class LateBeanAnnotationRegistrationTest {
             context.getBean("hiddenProductFactory");
 
             verify(subscriptions).subscribe(eq("reactive-factory-product-handler"), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
+        });
+    }
+
+    // A prediction that is a JDK proxy class listing two interfaces that declare one signature under different
+    // handler annotations is refused by SubscriptionAnnotations with an IllegalArgumentException. A refusal read
+    // from a prediction counts as an annotation, so the factory's product is built and its own class decides, the
+    // same as for the IllegalStateException refusals. The product here is an ordinary class with one handler.
+    @Test
+    void a_predicted_jdk_proxy_class_with_conflicting_handler_annotations_leaves_the_decision_to_the_built_product() {
+        runner.withUserConfiguration(ProxyPredictingFactoryBeanConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            verify(context.getBean(Subscriptions.class)).subscribe(eq("reactive-factory-product-handler"), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
         });
     }
 
@@ -504,6 +519,55 @@ class LateBeanAnnotationRegistrationTest {
 
         @Subscription(id = "reactive-factory-product-handler", startupMode = StartupMode.BACKGROUND)
         void on(TestEvent event) {
+        }
+    }
+
+    interface ConflictingAsynchronousOn {
+        @Subscription(id = "reactive-conflicting-a", startupMode = StartupMode.BACKGROUND)
+        void on(TestEvent event);
+    }
+
+    interface ConflictingSynchronousOn {
+        @SynchronousSubscription(id = "reactive-conflicting-b")
+        void on(TestEvent event);
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class ProxyPredictingFactoryBeanConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        ProxyPredictingProductFactory proxyPredictingProductFactory() {
+            return new ProxyPredictingProductFactory();
+        }
+    }
+
+    // Predicts a JDK proxy class over the two conflicting interfaces and builds an ordinary object instead, which is
+    // all getObjectType() is allowed to be, a prediction.
+    static class ProxyPredictingProductFactory implements SmartFactoryBean<Marker> {
+        private static final Class<?> PREDICTED = Proxy.newProxyInstance(
+                ProxyPredictingProductFactory.class.getClassLoader(),
+                new Class<?>[]{ConflictingAsynchronousOn.class, ConflictingSynchronousOn.class},
+                (proxy, method, args) -> null).getClass();
+
+        @Override
+        public Marker getObject() {
+            return new FactoryProductSubscriber();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return PREDICTED;
         }
     }
 

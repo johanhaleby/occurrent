@@ -444,7 +444,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     private static boolean declaresAnyOccurrentAnnotation(Class<?> type, boolean subscribableExists) {
         try {
             return !SubscriptionAnnotations.handlerMethods(type, subscribableExists ? HANDLER_ANNOTATIONS : SUBSCRIPTION_ANNOTATIONS).isEmpty();
-        } catch (IllegalStateException e) {
+        } catch (IllegalStateException | IllegalArgumentException e) {
             return true;
         }
     }
