@@ -777,6 +777,32 @@ class ReactorStreamCatchupSubscriptionModelTest {
     }
 
     @Test
+    @Timeout(30)
+    void refuses_a_resume_of_a_named_catch_up_whose_replay_from_above_the_beginning_lost_its_live_start_without_naming_that_live_start_as_where_it_stopped() {
+        // Given
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.answersTrueToTheFirstProbes = 1;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new ThreeEventReader());
+        Checkpoint liveStart = new StringBasedCheckpoint("stored live start");
+        try {
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(1, liveStart, 1, 3)), cloudEvent -> Mono.empty());
+            StepVerifier.create(subscription.waitUntilStarted()).expectError(CatchupCannotResumeException.class).verify(Duration.ofSeconds(20));
+            wrapped.answersTrueToTheFirstProbes = Integer.MAX_VALUE;
+
+            // When
+            Throwable resume = org.assertj.core.api.Assertions.catchThrowable(() -> catchup.resumeSubscription("sub"));
+
+            // Then
+            assertThat(resume).as("what the resume throws").isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessage(HistoryLossMessages.liveStartLostOnResume("sub", liveStart).getMessage())
+                    .hasMessageNotContaining("where it stopped");
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_named_start_after_a_bare_position_above_0_is_refused_with_the_advice_to_cancel_first_and_hands_nothing_over() {
         // Given
         NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();

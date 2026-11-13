@@ -1350,7 +1350,7 @@ class StreamCatchupResumeReplayMongoTest {
         assertThat(catchupB.isPaused(subscriptionId)).as("paused").isTrue();
         assertThat(catchupB.isRunning(subscriptionId)).as("running").isFalse();
         assertThat(catchupB.isCatchingUp(subscriptionId)).as("catching up").isFalse();
-        String heldLog = MessageFormatter.arrayFormat(HistoryLossMessages.TERMINAL_FAILURE_LOG, new Object[]{subscriptionId, LiveStartLosingModel.LOST, LiveStartLosingModel.LOST}).getMessage();
+        String heldLog = MessageFormatter.arrayFormat(HistoryLossMessages.LIVE_START_LOST_LOG, new Object[]{subscriptionId, LiveStartLosingModel.LOST, LiveStartLosingModel.LOST}).getMessage();
         await("the loss is logged once").during(2, SECONDS).atMost(6, SECONDS)
                 .untilAsserted(() -> assertThat(errorLog.messagesAbout(subscriptionId)).containsExactly(heldLog));
         assertThat(errorLog.failures).as("the failure of the held replay").singleElement().asString()

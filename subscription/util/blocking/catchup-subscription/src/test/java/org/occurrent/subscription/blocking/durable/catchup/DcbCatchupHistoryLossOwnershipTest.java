@@ -268,7 +268,8 @@ class DcbCatchupHistoryLossOwnershipTest {
 
         // Then
         assertThat(thrown).as("thrown by the subscribe").isNull();
-        assertThat(resume).as("thrown by the resume").isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
+        assertThat(resume).as("thrown by the resume").isInstanceOf(CatchupCannotResumeException.class).hasMessage(HistoryLossMessages.liveStartLostOnResume(ID, TOKEN).getMessage())
+                .hasMessageNotContaining("where it stopped");
         assertAll(
                 () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
                 () -> assertThat(liveModel.isPaused(ID)).as("paused on the live model").isTrue(),
@@ -276,7 +277,7 @@ class DcbCatchupHistoryLossOwnershipTest {
                 () -> assertThat(liveModel.subscribePausedStartAts).as("starts the live model was subscribed paused at").hasSize(1).allSatisfy(startAt -> assertThat(startAt.get(new SubscriptionModelContext(HistoryLosingLiveModel.class)))
                         .isInstanceOfSatisfying(StartAtCheckpoint.class, at -> assertThat(at.checkpoint).isEqualTo(TOKEN))),
                 () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").isEmpty(),
-                () -> assertThat(errorsLogged()).as("errors logged").containsExactly(terminalFailureLog(ID, TOKEN)),
+                () -> assertThat(errorsLogged()).as("errors logged").containsExactly(liveStartLostLog(ID, TOKEN)),
                 () -> assertThat(received).as("events delivered").isEmpty(),
                 () -> assertThat(storage.read(ID)).as("stored position").isNull()
         );
@@ -332,6 +333,11 @@ class DcbCatchupHistoryLossOwnershipTest {
     private static String terminalFailureLog(String subscriptionId, Checkpoint lostFrom) {
         String lost = lostFrom.asString();
         return MessageFormatter.arrayFormat(HistoryLossMessages.TERMINAL_FAILURE_LOG, new Object[]{subscriptionId, lost, lost}).getMessage();
+    }
+
+    private static String liveStartLostLog(String subscriptionId, Checkpoint liveStart) {
+        String lost = liveStart.asString();
+        return MessageFormatter.arrayFormat(HistoryLossMessages.LIVE_START_LOST_LOG, new Object[]{subscriptionId, lost, lost}).getMessage();
     }
 
     private static final class LoggedEvents extends AppenderBase<ILoggingEvent> {
