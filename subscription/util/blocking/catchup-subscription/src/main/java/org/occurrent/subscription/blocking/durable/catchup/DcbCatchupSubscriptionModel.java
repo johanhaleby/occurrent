@@ -248,7 +248,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         });
     }
 
-    private ReplayScope<DcbCatchupReadScope> openScope(@Nullable String notBefore) {
+    @Override
+    protected ReplayScope<DcbCatchupReadScope> openScope(@Nullable String notBefore) {
         DcbCatchupReadScope scope = dcbCatchupReads.openDcbCatchupReadScope(notBefore);
         return new ReplayScope<>(scope, scope.liveStart(), scope::close);
     }

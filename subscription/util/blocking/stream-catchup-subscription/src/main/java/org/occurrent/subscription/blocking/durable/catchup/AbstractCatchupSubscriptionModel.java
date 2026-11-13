@@ -925,8 +925,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
+    // The live start the event store reports, as a replay reads it, or the live delegate's present position when the
+    // event store reports none
     private Checkpoint presentPositionToResumeAt(String subscriptionId) {
-        Checkpoint present = subscriptionModel.globalCheckpoint();
+        String liveStart;
+        try (ReplayScope<?> scope = openScope(null)) {
+            liveStart = scope.liveStart();
+        }
+        Checkpoint present = liveStart == null ? subscriptionModel.globalCheckpoint() : new StringBasedCheckpoint(liveStart);
         if (present == null) {
             throw new IllegalStateException("The live subscription model " + subscriptionModel.getClass().getName() + " answered nothing when asked for the current position, so subscription "
                                             + subscriptionId + " can't be resumed at StartAt.now() with the position stored. " + NOTHING_CHANGED);
@@ -2611,6 +2617,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
          */
         ReplayScope<R> open(@Nullable String notBefore);
     }
+
+    /**
+     * Opens the {@link ReplayScope} of one replay, as {@link ReplayScopes#open} describes.
+     */
+    protected abstract ReplayScope<?> openScope(@Nullable String notBefore);
 
     /**
      * The reads of one replay and the live start they are consistent with. Closing it releases what the event store

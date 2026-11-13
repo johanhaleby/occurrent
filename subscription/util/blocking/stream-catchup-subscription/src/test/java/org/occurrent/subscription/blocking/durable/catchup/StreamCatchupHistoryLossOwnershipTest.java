@@ -37,6 +37,8 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
+import org.jspecify.annotations.Nullable;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.CatchupListener;
@@ -1110,6 +1112,38 @@ class StreamCatchupHistoryLossOwnershipTest {
         assertThat(stored).as("stored position").isNotNull();
         assertAll(
                 () -> assertThat(stored.asString()).as("stored position, the one the live model answered").startsWith("live-start-"),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue()
+        );
+    }
+
+    @Test
+    void takes_the_present_position_of_a_replay_held_before_it_went_live_and_resumed_at_now_from_the_event_store_when_the_live_model_cannot_answer() {
+        // Given
+        String reportedByTheEventStore = "event-store-live-start";
+        eventStore = new InMemoryEventStore(inMemorySubscriptionModel) {
+            @Override
+            public CatchupReadScope openCatchupReadScope(@Nullable String notBefore) {
+                return new ForwardingCatchupReadScope(super.openCatchupReadScope(notBefore)) {
+                    @Override
+                    public @Nullable String liveStart() {
+                        return reportedByTheEventStore;
+                    }
+                };
+            }
+        };
+        history.forEach(this::write);
+        heldPausedBeforeItWentLive();
+        liveModel.answeringNothingForTheCurrentPosition();
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(storage.read(ID)).as("stored position, the live start the event store reported").isEqualTo(new StringBasedCheckpoint(reportedByTheEventStore)),
+                () -> assertThat(liveModel.startOf(ID)).as("start the live model was subscribed at").isInstanceOfSatisfying(StartAtCheckpoint.class,
+                        startAt -> assertThat(startAt.checkpoint).as("position the live model was subscribed at").isEqualTo(new StringBasedCheckpoint(reportedByTheEventStore))),
                 () -> assertThat(catchup.isRunning(ID)).as("running").isTrue()
         );
     }

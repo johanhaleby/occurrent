@@ -386,7 +386,8 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         });
     }
 
-    private ReplayScope<CatchupReadScope> openScope(@Nullable String notBefore) {
+    @Override
+    protected ReplayScope<CatchupReadScope> openScope(@Nullable String notBefore) {
         CatchupReadScope scope = catchupReads.openCatchupReadScope(notBefore);
         return new ReplayScope<>(scope, scope.liveStart(), scope::close);
     }

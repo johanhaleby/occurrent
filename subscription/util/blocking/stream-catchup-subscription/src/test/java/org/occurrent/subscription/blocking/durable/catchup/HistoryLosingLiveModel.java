@@ -65,6 +65,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     private final Map<String, Long> positionsRead = new ConcurrentHashMap<>();
     private final AtomicLong commits = new AtomicLong();
     private volatile boolean running_ = true;
+    private volatile boolean answersNothingForTheCurrentPosition;
     private volatile @Nullable Checkpoint lossReportedInsideSubscribe;
     private volatile @Nullable Throwable nextSubscribeThrows;
     private volatile @Nullable RuntimeException nextRepositioningResumeThrows;
@@ -324,8 +325,17 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         listeners.remove(listener);
     }
 
+    // As a live model does when the call that reads its current position was refused
+    HistoryLosingLiveModel answeringNothingForTheCurrentPosition() {
+        answersNothingForTheCurrentPosition = true;
+        return this;
+    }
+
     @Override
     public @Nullable Checkpoint globalCheckpoint() {
+        if (answersNothingForTheCurrentPosition) {
+            return null;
+        }
         String position = "live-start-" + liveStartsRead.incrementAndGet();
         positionsRead.put(position, commits.get());
         return new StringBasedCheckpoint(position);
