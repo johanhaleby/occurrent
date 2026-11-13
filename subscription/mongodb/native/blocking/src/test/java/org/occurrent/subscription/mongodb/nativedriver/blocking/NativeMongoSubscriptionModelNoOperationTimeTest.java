@@ -132,6 +132,8 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
     private final AtomicReference<Supplier<MongoChangeStreamCursor<ChangeStreamDocument<Document>>>> presentRead = new AtomicReference<>();
     private final AtomicInteger presentReads = new AtomicInteger();
     private final AtomicBoolean historyLost = new AtomicBoolean();
+    // Loses the history as the next change stream with the subscription's pipeline opens, rather than when its cursor is read
+    private final AtomicBoolean historyLostWhenOpening = new AtomicBoolean();
     // The change streams the model opened with its subscription's pipeline, as spies, so the position each opened at can be read back
     private final List<ChangeStreamIterable<Document>> opened = new CopyOnWriteArrayList<>();
     private final List<CountDownLatch> heldReads = new CopyOnWriteArrayList<>();
@@ -512,6 +514,157 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         assertThat(refused).isEmpty();
     }
 
+    @Test
+    void a_resumed_run_that_loses_its_history_as_it_opens_is_held_paused_when_the_read_of_the_change_stream_gives_no_position_and_resuming_it_asks_again() {
+        // Given: a paused subscription
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        List<String> refused = new CopyOnWriteArrayList<>();
+        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId())).waitUntilStarted(Duration.ofSeconds(10));
+        subscriptionModel.pauseSubscription(subscriptionId);
+        presentRead.set(() -> cursorReading(null, null));
+        historyLostWhenOpening.set(true);
+
+        // When: its history is lost as the resumed run opens its change stream, while the server gives no position to restart from
+        subscriptionModel.resumeSubscription(subscriptionId);
+        waitAtMostFor(TEN_SECONDS, () -> presentReads.get() > 0 && subscriptionModel.isPaused(subscriptionId));
+
+        // Then
+        assertThat(presentReads).as("reads of the change stream that records the present").hasValue(1);
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+        assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isFalse();
+        assertThat(subscriptionModel.subscriptionIds()).as("known subscriptions").contains(subscriptionId);
+        assertThat(refused).as("start refusals told").isEmpty();
+
+        // And when it is resumed once the server gives a position again
+        presentRead.set(null);
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+        NameDefined e1 = nameDefined("name1");
+        mongoEventStore.write("1", 0, serialize(e1));
+        waitAtMostFor(TEN_SECONDS, () -> handled.contains(e1.eventId()));
+        assertThat(handled).containsExactly(e1.eventId());
+        assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+        assertThat(refused).isEmpty();
+    }
+
+    @Test
+    void a_held_subscription_stays_held_paused_when_it_is_resumed_and_the_read_of_the_change_stream_still_gives_no_position() {
+        // Given: a subscription held paused after its history was lost while the server gave no position
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        List<String> refused = new CopyOnWriteArrayList<>();
+        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
+        }).waitUntilStarted(Duration.ofSeconds(10));
+        presentRead.set(() -> cursorReading(null, null));
+        historyLost.set(true);
+        waitAtMostFor(TEN_SECONDS, () -> subscriptionModel.isPaused(subscriptionId));
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("held paused before the resume").isTrue();
+        int readsBeforeTheResume = presentReads.get();
+
+        // When: it is resumed without a position and the server still gives none
+        subscriptionModel.resumeSubscription(subscriptionId);
+        waitAtMostFor(TEN_SECONDS, () -> presentReads.get() > readsBeforeTheResume && subscriptionModel.isPaused(subscriptionId));
+
+        // Then
+        assertThat(presentReads.get()).as("reads of the change stream that records the present, the resume asking again").isGreaterThan(readsBeforeTheResume);
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+        assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isFalse();
+        assertThat(subscriptionModel.subscriptionIds()).as("known subscriptions").contains(subscriptionId);
+        assertThat(refused).as("start refusals told").isEmpty();
+    }
+
+    @Test
+    void a_subscription_at_a_checkpoint_that_loses_its_history_as_it_first_opens_is_held_paused_when_the_read_of_the_change_stream_gives_no_position() {
+        // Given: a checkpoint, and a server whose change stream gives no position
+        MongoOperationTimeCheckpoint checkpoint = new MongoOperationTimeCheckpoint(requireNonNull(MongoCommons.operationTimeAfter(database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND))));
+        presentRead.set(() -> cursorReading(null, null));
+        historyLostWhenOpening.set(true);
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        List<String> refused = new CopyOnWriteArrayList<>();
+        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+
+        // When: its history is lost as it opens for the first time
+        Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter(), StartAt.checkpoint(checkpoint), cloudEvent -> handled.add(cloudEvent.getId()));
+        waitAtMostFor(TEN_SECONDS, () -> presentReads.get() > 0 && subscriptionModel.isPaused(subscriptionId));
+        AtomicBoolean startedAnswer = new AtomicBoolean(true);
+        Throwable thrownByTheHandle = catchThrowable(() -> startedAnswer.set(subscription.waitUntilStarted(Duration.ofSeconds(1))));
+
+        // Then
+        assertThat(presentReads).as("reads of the change stream that records the present").hasValue(1);
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+        assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isFalse();
+        assertThat(subscriptionModel.subscriptionIds()).as("known subscriptions").contains(subscriptionId);
+        assertThat(refused).as("start refusals told").isEmpty();
+        assertThat(thrownByTheHandle).as("thrown by the handle it was subscribed on").isNull();
+        assertThat(startedAnswer).as("answer of the handle it was subscribed on").isFalse();
+
+        // And when it is resumed once the server gives a position again
+        presentRead.set(null);
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+        NameDefined e1 = nameDefined("name1");
+        mongoEventStore.write("1", 0, serialize(e1));
+        waitAtMostFor(TEN_SECONDS, () -> handled.contains(e1.eventId()));
+        assertThat(handled).containsExactly(e1.eventId());
+        assertThat(refused).isEmpty();
+    }
+
+    @Test
+    void a_held_subscription_resumed_at_the_present_is_refused_when_the_read_of_the_change_stream_still_gives_no_position() {
+        // Given: a subscription held paused after its history was lost while the server gave no position
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        List<String> refused = new CopyOnWriteArrayList<>();
+        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
+        }).waitUntilStarted(Duration.ofSeconds(10));
+        presentRead.set(() -> cursorReading(null, null));
+        historyLost.set(true);
+        waitAtMostFor(TEN_SECONDS, () -> subscriptionModel.isPaused(subscriptionId));
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("held paused before the resume").isTrue();
+
+        // When: it is resumed at the present and the server still gives no position
+        Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId, StartAt.now());
+        Throwable thrown = catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(10)));
+        waitAtMostFor(TEN_SECONDS, () -> refused.contains(subscriptionId));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
+        assertThat(refused).as("start refusals told").containsExactly(subscriptionId);
+        assertThat(subscriptionModel.subscriptionIds()).as("known subscriptions").doesNotContain(subscriptionId);
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isFalse();
+        assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isFalse();
+    }
+
+    @Test
+    void a_dynamic_position_that_resolves_to_the_present_is_refused_when_the_read_of_the_change_stream_gives_no_position() {
+        // Given: a server whose change stream gives no position
+        presentRead.set(() -> cursorReading(null, null));
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        List<String> refused = new CopyOnWriteArrayList<>();
+        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        String subscriptionId = UUID.randomUUID().toString();
+
+        // When
+        Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter(), StartAt.dynamic(ctx -> StartAt.now()), cloudEvent -> {
+        });
+        Throwable thrown = catchThrowable(() -> subscription.waitUntilStarted(Duration.ofSeconds(10)));
+        waitAtMostFor(TEN_SECONDS, () -> refused.contains(subscriptionId));
+
+        // Then
+        assertThat(thrown).as("thrown by the handle").isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
+        assertThat(refused).as("start refusals told").containsExactly(subscriptionId);
+        assertThat(subscriptionModel.subscriptionIds()).as("known subscriptions").doesNotContain(subscriptionId);
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isFalse();
+        assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isFalse();
+        long cursorsOpened = opened.stream().filter(iterable -> mockingDetails(iterable).getInvocations().stream().anyMatch(invocation -> invocation.getMethod().getName().equals("cursor"))).count();
+        assertThat(cursorsOpened).as("cursors of the subscription's change streams opened").isZero();
+    }
+
     private NativeMongoSubscriptionModel modelOver(MongoDatabase databaseToAsk, RetryStrategy retryStrategy) {
         return modelOver(databaseToAsk, eventCollection, retryStrategy);
     }
@@ -545,7 +698,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
      * Wraps the event collection so that the change stream with an empty pipeline, which is the read that records the
      * present, is answered by {@link #presentRead} when it holds an answer and by the real collection otherwise. A
      * change stream with a pipeline is the real one, as a spy kept in {@link #opened}, which also loses its history
-     * once {@link #historyLost} is set.
+     * once {@link #historyLost} is set, or when it opens once {@link #historyLostWhenOpening} is set.
      */
     @SuppressWarnings("unchecked")
     private MongoCollection<Document> collectionThatAnswersThePresentRead() {
@@ -557,7 +710,12 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
                 return answer == null ? invocation.callRealMethod() : iterableReading(readCounted(answer));
             }
             ChangeStreamIterable<Document> recorded = spy((ChangeStreamIterable<Document>) invocation.callRealMethod());
-            doAnswer(cursorInvocation -> losingItsHistoryWhenAsked((MongoChangeStreamCursor<ChangeStreamDocument<Document>>) cursorInvocation.callRealMethod())).when(recorded).cursor();
+            doAnswer(cursorInvocation -> {
+                if (historyLostWhenOpening.compareAndSet(true, false)) {
+                    throw historyLostError();
+                }
+                return losingItsHistoryWhenAsked((MongoChangeStreamCursor<ChangeStreamDocument<Document>>) cursorInvocation.callRealMethod());
+            }).when(recorded).cursor();
             opened.add(recorded);
             return recorded;
         }).when(wrapped).watch(anyList(), eq(Document.class));
@@ -600,12 +758,16 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = mock(MongoChangeStreamCursor.class, delegatesTo(real));
         doAnswer(invocation -> {
             if (historyLost.compareAndSet(true, false)) {
-                List<BsonElement> elements = List.of(new BsonElement("code", new BsonInt32(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE)), new BsonElement("codeName", new BsonString("ChangeStreamHistoryLost")));
-                throw new MongoCommandException(new BsonDocument(elements), new ServerAddress());
+                throw historyLostError();
             }
             return real.tryNext();
         }).when(cursor).tryNext();
         return cursor;
+    }
+
+    private static MongoCommandException historyLostError() {
+        List<BsonElement> elements = List.of(new BsonElement("code", new BsonInt32(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE)), new BsonElement("codeName", new BsonString("ChangeStreamHistoryLost")));
+        return new MongoCommandException(new BsonDocument(elements), new ServerAddress());
     }
 
     /**

@@ -556,8 +556,9 @@ public class MongoCommons {
      * <p>
      * An answer after that isn't checked. Once a change stream has opened, the subscription model records the position it opened
      * at with {@link #recordWhereItOpened(OpenedAt, BiPredicate)} and doesn't ask the function again. A blocking one
-     * refuses to start a subscription when it can't record a position for the present, and the reactor one stops a
-     * subscription it can't find an operation time to open at.
+     * refuses to start a subscription when it can't record a position for the present, and holds one paused when that
+     * happens as it restarts after its history was lost. The reactor one stops a subscription it can't find an
+     * operation time to open at.
      *
      * @param subscriptionId The id the exception message names, or {@code null} for a subscription that has none
      * @param opened         Whether a change stream of the subscription has opened, as the subscription model counts it
@@ -826,7 +827,7 @@ public class MongoCommons {
      */
     public static String noOperationTimeToPinToMessage(Document reply) {
         return "The reply to " + CURRENT_OPERATION_TIME_COMMAND.toJson() + " carried no " + OPERATION_TIME + ", so the subscription reads the change stream once to record where the present is. " +
-                "When that read returns neither an event nor a resume token, the subscription can't start at the present, and waiting for it to start throws. Reply was: " + reply.toJson();
+                "When that read returns neither an event nor a resume token, a subscription starting at the present is refused and waiting for it to start throws, and one restarting after its history was lost is held paused. Reply was: " + reply.toJson();
     }
 
     public static Checkpoint calculateCheckpointFromMongoStreamPositionDocument(Document checkpointDocument) {

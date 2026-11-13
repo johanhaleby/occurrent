@@ -2319,7 +2319,8 @@ When that read returns neither an event nor a resume token, the subscription can
   way. A subscription that had already run is then removed from the model too, and has to be subscribed again.
 * With `restartSubscriptionsOnChangeStreamHistoryLost` on, a restart from the present after the history was lost that
   gets neither holds the subscription paused. `isPaused(id)` answers `true`, an error in the log names it, and
-  `resumeSubscription(id)` reads the change stream again.
+  `resumeSubscription(id)` reads the change stream again. Under a `CompetingConsumerSubscriptionModel` the node that
+  holds it keeps the lease, so no other node runs the subscription until it is resumed on that node.
 
 In 0.34.0 such a subscription opened at the present.
 
