@@ -82,8 +82,9 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * Store the version in {@code envelope}. It is usually {@code expectedVersion + 1}, but the write that marks a
      * failed timer (see {@link #findWithDueTimers(Instant, int)}) holds {@code expectedVersion} itself, so it doesn't
      * make an event that read the instance before it lose its compare-and-set. A store that refuses a save at the same
-     * version refuses every mark. The executor then logs a {@code WARN} for each failed fire and the failing timers keep
-     * their place at the front of the due-timer query, as in 0.34.0, and nothing else changes.
+     * version refuses every mark. The executor then reads the instance and tries the mark up to
+     * {@code maxCasAttempts} times for each failed fire, logs a {@code WARN}, and the failing timers keep their place at
+     * the front of the due-timer query, as in 0.34.0.
      */
     boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion);
 

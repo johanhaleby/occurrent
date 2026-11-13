@@ -42,7 +42,10 @@ contract does not say in which order instances due at the same instant come back
 A failed timer is then due just after the poll that tried it, which puts it behind every instance that was already
 due at that poll, one due at exactly the poll's instant included. Every instance ahead of a healthy due instance is tried at most once before it, so the
 healthy instance fires within `ceil(ahead / timerBatchLimit) + 1` polls, where `ahead` is the number of instances
-due before it, however many of them fail.
+due before it, however many of them fail. That holds while every failure is recorded and nothing removes the record
+before the timer is tried again. An event saved after a record removes it when the event read the instance before the
+record, so an instance that fails its timer and receives such an event between two polls is tried ahead of its turn
+once more.
 
 The record belongs to the timer, so the objections to the instance hold-off in ADR 134 do not apply. Cancelling,
 consuming or re-arming a timer to another instant replaces its entry, and the record goes with it. A re-arm to the

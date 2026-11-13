@@ -656,8 +656,8 @@ public final class SagaExecutionSupport {
      * The instance with the timer {@code attempted} due again from {@code nextAttemptAt}, so the due-timer query orders
      * it behind the instances due before that. Save it with
      * {@code compareAndSaveWithoutState(..., current.version())}. It changes the timer and nothing else the executor
-     * reads. The version stays the same, so an event read before the mark still saves at that version instead of
-     * losing its compare-and-set to every poll. That save writes the timers it read, so it drops the mark, and the
+     * reads. The version stays the same, so an event that read the instance before the mark still wins its
+     * compare-and-set instead of losing it to every poll. That save writes the timers it read, so it drops the mark, and the
      * timer is due at its {@code firesAt} again until it fails once more. {@code updatedAt} stays where it was, because
      * a failed fire is no progress.
      * <p>
