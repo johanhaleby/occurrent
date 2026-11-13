@@ -45,6 +45,7 @@ import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionMo
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
 import org.occurrent.subscription.blocking.durable.catchup.StartAtTime;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.occurrent.subscription.internal.LostStartHold;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
@@ -70,6 +71,7 @@ class CompetingConsumerHoldsALostLiveStartOverCatchupTest {
 
     private static final String NODE = "node";
     private static final String ID = "subscription";
+    private static final String OTHER = "other subscription";
     private static final Duration EVENTUALLY = Duration.ofSeconds(20);
 
     private final Logger modelLogger = (Logger) LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class);
@@ -116,6 +118,27 @@ class CompetingConsumerHoldsALostLiveStartOverCatchupTest {
                 () -> assertThat(strategy.holders).as("holding the lease").isEmpty()
         ));
         assertThat(logged.errors()).as("errors logged").singleElement().asString().contains("replays the subscription from the beginning again");
+    }
+
+    @Test
+    void a_subscribe_of_another_id_asked_to_hold_a_lost_start_is_not_answered_as_held_paused_when_the_catchup_model_holds_a_replay_from_the_beginning_paused_meanwhile() {
+        // Given
+        strategy.grantOnRegister = true;
+        competing.subscribe(NODE, ID, null, StartAt.dynamic(context -> context.hasSubscriptionModelType(CatchupSubscriptionModel.class) ? StartAtTime.beginningOfTime() : StartAt.now()), __ -> {
+        });
+
+        // When
+        LostStartHold.Answer<Subscription> answer = LostStartHold.askedDuringCall(() -> competing.subscribe(NODE, OTHER, null, StartAt.now(), __ -> {
+        }));
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(competing.isPaused(ID)).as("first subscription held paused").isTrue());
+
+        // Then
+        assertAll(
+                () -> assertThat(answer.heldPaused()).as("held paused during the subscribe of the other id").isFalse(),
+                () -> assertThat(competing.isRunning(OTHER)).as("other subscription running").isTrue(),
+                () -> assertThat(competing.isPaused(OTHER)).as("other subscription paused").isFalse(),
+                () -> assertThat(strategy.holders).as("holding the lease").containsExactly(OTHER)
+        );
     }
 
     private static final class LoggedErrors extends AppenderBase<ILoggingEvent> {
