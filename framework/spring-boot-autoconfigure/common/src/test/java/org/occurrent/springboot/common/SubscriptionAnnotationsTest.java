@@ -41,6 +41,8 @@ import org.springframework.aop.TargetSource;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.context.support.GenericApplicationContext;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.annotation.Annotation;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -1213,6 +1215,49 @@ class SubscriptionAnnotationsTest {
         assertThat(SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(SamePackageMethods.class.getDeclaredMethod("packagePrivate"), SamePackageMethods.class)).isFalse();
     }
 
+    static class PackagePrivateInALoader {
+        void packagePrivate() {
+        }
+    }
+
+    static class DefinesPackagePrivateInALoaderItself extends ClassLoader {
+        DefinesPackagePrivateInALoaderItself() {
+            super(PackagePrivateInALoader.class.getClassLoader());
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            if (!name.equals(PackagePrivateInALoader.class.getName())) {
+                return super.loadClass(name, resolve);
+            }
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null) {
+                    try (InputStream bytes = getParent().getResourceAsStream(name.replace('.', '/') + ".class")) {
+                        byte[] definition = bytes.readAllBytes();
+                        loaded = defineClass(name, definition, 0, definition.length);
+                    } catch (IOException e) {
+                        throw new ClassNotFoundException(name, e);
+                    }
+                }
+                return loaded;
+            }
+        }
+    }
+
+    @Test
+    void isPackagePrivateOutsidePackageOf_is_true_for_a_package_private_method_declared_in_the_same_package_name_in_another_class_loader() throws Exception {
+        Class<?> inAnotherLoader = new DefinesPackagePrivateInALoaderItself().loadClass(PackagePrivateInALoader.class.getName());
+
+        assertThat(inAnotherLoader.getPackageName()).isEqualTo(SamePackageMethods.class.getPackageName());
+        assertThat(SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(PackagePrivateInALoader.class.getDeclaredMethod("packagePrivate"), inAnotherLoader)).isTrue();
+    }
+
+    @Test
+    void isPackagePrivateOutsidePackageOf_is_false_for_a_package_private_method_declared_in_the_same_package_name_in_the_same_class_loader() throws Exception {
+        assertThat(SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(PackagePrivateInALoader.class.getDeclaredMethod("packagePrivate"), SamePackageMethods.class)).isFalse();
+    }
+
     @Test
     void isPackagePrivateOutsidePackageOf_is_false_for_a_public_protected_or_private_method_declared_in_another_package() throws Exception {
         for (String name : List.of("publicMethod", "protectedMethod", "privateMethod")) {
@@ -1501,6 +1546,16 @@ class SubscriptionAnnotationsTest {
         @Override
         @Subscription(id = "proxied-redeclared-c")
         void on(String event);
+    }
+
+    interface ProxiedPlainOn {
+        void on(String event);
+    }
+
+    @Test
+    void handlerMethods_gives_the_annotated_method_for_a_jdk_proxy_listing_an_unannotated_interface_before_an_annotated_one_declaring_the_same_signature() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(ProxiedPlainOn.class, UnrelatedProxiedHandler.class), List.of(Subscription.class)))
+                .containsExactly(UnrelatedProxiedHandler.class.getDeclaredMethod("on", String.class));
     }
 
     @Test

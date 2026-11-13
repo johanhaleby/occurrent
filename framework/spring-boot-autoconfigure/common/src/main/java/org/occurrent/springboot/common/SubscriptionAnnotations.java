@@ -516,8 +516,9 @@ public final class SubscriptionAnnotations {
     }
 
     /**
-     * Answers whether {@code method} is package-private and declared in another package than {@code implementation}.
-     * A CGLIB proxy of {@code implementation} is generated in {@code implementation}'s package, so it cannot override
+     * Answers whether {@code method} is package-private and declared in another runtime package than
+     * {@code implementation}, which is another package or the same package name in another class loader. A CGLIB proxy
+     * of {@code implementation} is generated in {@code implementation}'s runtime package, so it cannot override
      * such a method, and invoking the method on the proxy runs the method's own body on the proxy instance, with no
      * advice and none of the bean's state.
      *
@@ -528,7 +529,7 @@ public final class SubscriptionAnnotations {
     public static boolean isPackagePrivateOutsidePackageOf(Method method, Class<?> implementation) {
         int modifiers = method.getModifiers();
         return !Modifier.isPublic(modifiers) && !Modifier.isProtected(modifiers) && !Modifier.isPrivate(modifiers)
-                && !method.getDeclaringClass().getPackageName().equals(implementation.getPackageName());
+                && !inSameRuntimePackage(method.getDeclaringClass(), implementation);
     }
 
     /**
@@ -602,7 +603,7 @@ public final class SubscriptionAnnotations {
         if (!AnnotationUtils.isCandidateClass(type, annotationTypes)) {
             return Set.of();
         }
-        return MethodIntrospector.selectMethods(type, (MethodIntrospector.MetadataLookup<Boolean>) method -> {
+        Set<Method> handlers = MethodIntrospector.selectMethods(type, (MethodIntrospector.MetadataLookup<Boolean>) method -> {
             if (Modifier.isStatic(method.getModifiers()) && method.getDeclaringClass().isInterface()) {
                 return null;
             }
@@ -633,6 +634,19 @@ public final class SubscriptionAnnotations {
             }
             return annotated ? Boolean.TRUE : null;
         }).keySet();
+        return java.lang.reflect.Proxy.isProxyClass(type) ? firstOfEachSignature(handlers) : handlers;
+    }
+
+    // A JDK proxy hands its invocation handler one method for each name and parameter types, the one from the first
+    // interface it lists that has that signature, so two annotated interface methods of one signature are one method
+    // the proxy runs. MethodIntrospector gives the methods in the order the proxy lists its interfaces, so the first
+    // annotated one is kept, the way an annotation search on a class implementing those interfaces finds the first
+    private static Set<Method> firstOfEachSignature(Set<Method> methods) {
+        Map<List<Object>, Method> bySignature = new LinkedHashMap<>();
+        for (Method method : methods) {
+            bySignature.putIfAbsent(List.of(method.getName(), List.of(method.getParameterTypes())), method);
+        }
+        return new LinkedHashSet<>(bySignature.values());
     }
 
     // The method the JVM runs when method is invoked on an instance of type, bridges resolved to the method they
@@ -646,18 +660,12 @@ public final class SubscriptionAnnotations {
             return method;
         }
         // A JDK proxy class hands every interface method to its invocation handler, so the interface method is the one
-        // that runs, not the proxy class's generated method. When several interfaces the proxy lists have a method of
-        // the same name and parameter types, the handler gets the one from the first of them, so the method resolves
-        // against the first interface that extends the method's interface or has a method of that signature. A
-        // sub-interface may redeclare the method, which is why it resolves against that interface
+        // that runs, not the proxy class's generated method. A sub-interface the proxy implements may redeclare it, so
+        // it resolves against the first interface the proxy lists that extends the method's interface
         if (declaringClass.isInterface() && java.lang.reflect.Proxy.isProxyClass(type)) {
             for (Class<?> proxiedInterface : type.getInterfaces()) {
                 if (declaringClass.isAssignableFrom(proxiedInterface)) {
                     return BridgeMethodResolver.findBridgedMethod(AopUtils.getMostSpecificMethod(method, proxiedInterface));
-                }
-                Method sameSignature = ClassUtils.getMethodIfAvailable(proxiedInterface, method.getName(), method.getParameterTypes());
-                if (sameSignature != null) {
-                    return BridgeMethodResolver.findBridgedMethod(sameSignature);
                 }
             }
             return BridgeMethodResolver.findBridgedMethod(method);
