@@ -295,6 +295,11 @@ A catch-up model whose live delegate is a `DurableSubscriptionModel` now has the
 durable model at one. [Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it) says such a resume stores nothing until the first live
 position or the quiet save. That section stays as it was released, and over a durable model it no longer holds.
 
+A blocking catch-up model with checkpoint storage that resumes a subscription at a checkpoint or at now also replaces a
+stored position a catch-up replays from, such as the one its replay stored, whatever its live delegate. So a
+`resumeSubscription(subscriptionId)` after a later pause doesn't replay from that position, as it could in 0.34.0. At
+now it stores the present position, and throws `IllegalStateException` when it can read none.
+
 There is nothing to change in your code unless it depends on the checkpoint staying where it was after a resume at a
 position. A `DurableSubscriptionModel` over a repositionable subscription model you wrote yourself stores nothing on a
 resume at a position, as in 0.34.0. To have the position stored, override `RepositionableSubscriptions.restartsAt(..)`
@@ -1313,17 +1318,23 @@ replays too, it fails with `CatchupCannotResumeException`, an `IllegalStateExcep
 replay, from reading its live start to checking it. Size the change stream history to reach back at least that far. On
 MongoDB that is the oplog, which you can keep for a minimum time with the `oplogMinRetentionHours` setting.
 
-The catch-up then holds the subscription paused on both stacks and logs the failure once at error level. In 0.34.0 a
-blocking subscription ended when its subscribe started the replay, and the replay ran again after a backoff when a
-resume started it. `waitUntilStarted()` fails with the exception, and the id stays taken, so cancel the subscription
-before you subscribe the id again. Resuming the subscription replays again from the beginning, and so does `start(true)`.
-Over a `CompetingConsumerSubscriptionModel` the node gives up the lease and stops competing for it until you resume the
-subscription.
+A blocking catch-up and a named reactor catch-up then hold the subscription paused and log the failure once at error
+level, and the `Flux` of an unnamed reactor catch-up fails with the exception. In 0.34.0 a blocking subscription ended
+when its subscribe started the replay, and the replay ran again after a backoff when a resume started it. A named
+reactor subscription ended and freed its id unless a takeover started the replay. `waitUntilStarted()` fails with the
+exception, and the id stays taken, so a subscribe of the same id throws `DuplicateSubscriptionIdException` until you
+cancel the subscription. Resuming the subscription replays again from the beginning, and so does `start(true)`. Over a
+`CompetingConsumerSubscriptionModel` around a blocking catch-up the node gives up the lease and stops competing for it
+until you resume the subscription.
 
 A replay that started later and loses its live start is held paused the same way. A replay again from its start would
 skip events, so `resumeSubscription(id)` throws `CatchupCannotResumeException` until you cancel the subscription, and so
-does `start(true)` on the blocking stack. On the blocking stack `resumeSubscription(id, startAt)` at a position the change
-stream history still reaches resumes it.
+does `start(true)` on the blocking stack. On a blocking catch-up subscription model you call
+directly, `resumeSubscription(id, startAt)` at a position the change stream history still reaches resumes it. With
+checkpoint storage that position replaces the one the catch-up stored, so a resume after a later pause doesn't replay
+from where the lost replay got to. A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts
+around its catch-up, can't resume a subscription at a position. Through one, cancel the subscription and subscribe it
+again from the beginning or from a checkpoint you kept.
 
 A DCB catch-up and the reactor catch-ups replay only by position, and throw the same exception when you start them from
 a time replay's checkpoint in the new form.
