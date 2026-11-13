@@ -51,8 +51,8 @@ other sections compile fine and behave differently, so read them first.
 - [A saga's quarantine budget runs per failing event](#a-sagas-quarantine-budget-runs-per-failing-event). Each failing
   event keeps its own clock. Compiles unchanged.
 - [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due). A failed
-  timer is tried again after every instance that was already due, so it can't keep other instances' timers from
-  firing. Compiles unchanged unless you use a record pattern over `TimerEntry`.
+  timer is tried again after every instance that was already due. Compiles unchanged unless you use a record pattern
+  over `TimerEntry`.
 
 ### DCB
 
@@ -579,7 +579,9 @@ report is [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
   `SagaEnvelope.earliestDueAtEpochMilli()`. A store that does neither keeps working, with the 0.34.0 order.
 - In a store of your own, store the version in the envelope as it comes, even when it equals `expectedVersion`. A
   store that refuses that save refuses every record of a failed timer, so the poller logs a `WARN` for each failed fire
-  and the instance keeps the 0.34.0 order.
+  and the instance keeps the 0.34.0 order. A store that sets the version itself, for example with a JPA `@Version`
+  column, raises it on the record too, and an event that takes longer than the poll interval between its read and its
+  save can then lose its compare and set on every attempt and fail with `SagaConcurrencyException`.
 - Point a monitoring query at `SagaInstance.nextTimerAt()` rather than at `nextTimerFiresAt`, if it looks for instances
   whose timers have been due for a long time.
 

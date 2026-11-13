@@ -556,7 +556,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * get their timers fired.
      * <p>
      * Read without the state and written without it, so an instance whose state no longer decodes is marked too. A lost
-     * compare-and-set is read again and retried up to {@link SagaRunnerConfig#maxCasAttempts()} times. The write keeps
+     * compare-and-set is read again and retried up to {@link SagaRunnerConfig#maxCasAttempts()} times, and not at all
+     * when the read finds the version the write lost at, since only a store that refuses a save at the same version
+     * loses that way. The write keeps
      * the instance's version, so a slow event delivery that read the instance before the mark still saves. When the
      * write cannot be made, the timer keeps the due time it had and the next poll tries it as early as before. Nothing is
      * thrown, because the exception that matters is the one the fire threw.
@@ -564,15 +566,25 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private void markFailedAttempt(String sagaId, TimerEntry timer, Instant polledAt) {
         Instant nextAttemptAt = polledAt.plusMillis(1);
         try {
+            @Nullable Long lostAtVersion = null;
             for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
                 SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
+                // Lost at a version that is still stored, so nothing changed it and the store refused a save at the same
+                // version. Every further attempt would be refused too
+                if (current != null && lostAtVersion != null && current.version() == lostAtVersion) {
+                    log.warn("Saga '{}' instance '{}' could not record that its timer '{}' failed, because the state store refuses a save "
+                             + "that keeps the version. The timer keeps its due time, so the next poll tries it before instances that "
+                             + "became due after it.",
+                            subscriptionId, sagaId, timer.name());
+                    return;
+                }
                 SagaEnvelope<S> marked = SagaExecutionSupport.withFailedTimerAttempt(current, timer, nextAttemptAt);
                 if (current == null || marked == null || stateStore.compareAndSaveWithoutState(sagaId, marked, current.version())) {
                     return;
                 }
+                lostAtVersion = current.version();
             }
-            log.warn("Saga '{}' instance '{}' could not record that its timer '{}' failed, because the instance kept changing under {} attempts "
-                     + "or the store refuses a save at the same version. "
+            log.warn("Saga '{}' instance '{}' could not record that its timer '{}' failed, because the instance kept changing under {} attempts. "
                      + "The timer keeps its due time, so the next poll tries it before instances that became due after it.",
                     subscriptionId, sagaId, timer.name(), config.maxCasAttempts());
         } catch (Throwable storeFailure) {

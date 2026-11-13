@@ -88,6 +88,14 @@ I rejected three other designs.
   write, and nothing in Occurrent reads it as one. A `SagaStateStore` of your own has to store the version in the
   envelope even when it equals `expectedVersion`. One that refuses that save refuses every record, the poller logs a
   `WARN` for each failed fire, and that store keeps the order of 0.34.0.
+- **Two pollers can replace each other's records.** Without a `CompetingConsumerStrategy` every node polls, and a
+  lease handover can overlap two pollers too. When both record failures on one instance at the same version, both
+  writes succeed and the later one keeps only what its own read held. The record of a timer that only the other poller
+  tried is lost, and a record from an earlier poll can replace one from a later poll. Either way the instance is tried
+  ahead of its turn once more, and the next failure records it again. Making the record a write of its own that compares
+  on the timer would close this, at the cost of a new `SagaStateStore` method, and I did not add one.
+- **A store that sets the version itself raises it on the record too**, as one built on a JPA `@Version` column does.
+  On such a store a slow event loses its compare and set to the records again.
 - **A 0.34.0 MongoDB document needs no migration.** Its timer subdocuments have no `nextAttemptAtEpochMilli`, which
   reads as a timer that has not failed, and its `nextTimerFiresAt` is already the earliest due time.
 - **A rolling deploy works both ways.** 0.34.0 reads only `name` and `firesAtEpochMilli` from a timer subdocument, so
