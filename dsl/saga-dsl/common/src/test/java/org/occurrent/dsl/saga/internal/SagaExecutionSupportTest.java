@@ -400,6 +400,18 @@ class SagaExecutionSupportTest {
         }
 
         @Test
+        void a_startTimeout_effect_for_a_timer_marked_as_failed_re_arms_it_without_the_marker() {
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1,
+                    List.of(new TimerEntry(PAYMENT_TIMER, NOW.toEpochMilli() - 1_000, NOW.toEpochMilli() - 500)), Map.of(), null);
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    orderFulfillment(), "o1", current, SagaInput.event(new OrderPlaced("o1", 100)), EventMeta.NONE, NOW);
+
+            assertThat(outcome.envelope().timers())
+                    .containsExactly(new TimerEntry(PAYMENT_TIMER, NOW.plus(Duration.ofMinutes(5)).toEpochMilli(), null));
+        }
+
+        @Test
         void a_cancelTimeout_effect_removes_a_previously_started_timer() {
             SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1,
                     List.of(new TimerEntry(PAYMENT_TIMER, NOW.plus(Duration.ofMinutes(5)).toEpochMilli())), Map.of(), null);
