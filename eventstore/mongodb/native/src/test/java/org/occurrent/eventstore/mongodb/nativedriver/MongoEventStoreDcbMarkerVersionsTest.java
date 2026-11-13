@@ -34,6 +34,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
 import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
@@ -49,6 +50,8 @@ import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.tck.ConcurrentRendezvous;
+import org.occurrent.tck.ConcurrentRendezvous.Outcome;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.HoldingMongoClient;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -584,6 +587,43 @@ class MongoEventStoreDcbMarkerVersionsTest {
 
             assertThatThrownBy(() -> reader.append(List.of(taggedEvent(UUID.randomUUID().toString(), type)), failIfEventsMatch(criteria, token)))
                     .as("the append %d of the type %s after a competitor that wrote it", i, type)
+                    .isInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+    }
+
+    @Test
+    void exactly_one_of_two_racing_type_only_conditional_appends_wins_when_the_first_store_does_not_spread_and_the_second_spreads() {
+        racingTypeOnlyConditionalAppendsHaveOneWinner(false, true);
+    }
+
+    @Test
+    void exactly_one_of_two_racing_type_only_conditional_appends_wins_when_the_first_store_spreads_and_the_second_does_not_spread() {
+        racingTypeOnlyConditionalAppendsHaveOneWinner(true, false);
+    }
+
+    private void racingTypeOnlyConditionalAppendsHaveOneWinner(boolean firstSpreads, boolean secondSpreads) {
+        MongoEventStore first = storeOver(mongoClient, config -> config.spreadTypeMarkerWrites(firstSpreads));
+        MongoEventStore second = storeOver(mongoClient, config -> config.spreadTypeMarkerWrites(secondSpreads));
+        for (int i = 0; i < 16; i++) {
+            String type = "Raced" + UUID.randomUUID();
+            DcbCriteria criteria = DcbCriteria.types(type);
+            DcbAppendCondition firstCondition = failIfEventsMatch(criteria, first.read(criteria).consistencyToken());
+            DcbAppendCondition secondCondition = failIfEventsMatch(criteria, second.read(criteria).consistencyToken());
+            // The tags are disjoint on purpose. A shared tag would put a common tag marker under both writers and
+            // serialise them whatever the type stripes do, so only the stripes of the type are left to conflict on.
+            CloudEvent firstEvent = taggedEvent(UUID.randomUUID().toString(), type, "writer:first" + i);
+            CloudEvent secondEvent = taggedEvent(UUID.randomUUID().toString(), type, "writer:second" + i);
+
+            List<Outcome<DcbAppendResult>> outcomes = ConcurrentRendezvous.collide(2, index -> () -> index == 0
+                    ? first.append(List.of(firstEvent), firstCondition)
+                    : second.append(List.of(secondEvent), secondCondition));
+
+            assertThat(outcomes.stream().filter(Outcome::succeeded).count())
+                    .as("the winners of two racing type-only conditional appends of %s, iteration %d", type, i)
+                    .isEqualTo(1);
+            assertThat(outcomes.stream().filter(outcome -> !outcome.succeeded()).map(Outcome::failure).toList())
+                    .as("the loser of the race over %s, iteration %d", type, i)
+                    .singleElement()
                     .isInstanceOf(DcbAppendConditionNotFulfilledException.class);
         }
     }
