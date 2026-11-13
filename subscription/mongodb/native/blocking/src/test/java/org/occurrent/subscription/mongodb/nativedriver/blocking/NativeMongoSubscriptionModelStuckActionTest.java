@@ -56,8 +56,8 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -106,7 +106,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
     private MongoCollection<Document> eventCollection;
     private MongoDatabase database;
     private MongoEventStore mongoEventStore;
-    private ExecutorService subscriptionExecutor;
+    private ThreadPoolExecutor subscriptionExecutor;
     private NativeMongoSubscriptionModel subscriptionModel;
 
     @BeforeEach
@@ -116,7 +116,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
         database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
         eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
-        subscriptionExecutor = Executors.newCachedThreadPool(runnable -> {
+        subscriptionExecutor = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60, TimeUnit.SECONDS, new SynchronousQueue<>(), runnable -> {
             Thread thread = new Thread(runnable);
             executorThreads.add(thread);
             return thread;
@@ -177,6 +177,61 @@ class NativeMongoSubscriptionModelStuckActionTest {
         waitAtMostFor(TEN_SECONDS, () -> calls.contains("E2 returned"));
         assertThat(calls).as("calls once the stuck call was released").containsExactly("E1 started", "E1 returned", "E1 started", "E1 returned", "E2 started", "E2 returned");
         assertThat(mostInFlight).as("most calls running at once").hasValue(1);
+    }
+
+    @Test
+    void a_resumed_run_paused_again_while_it_waits_for_the_stuck_call_ends_and_frees_its_thread() {
+        // Given: the first call for E1 is stuck, and a resumed run waits for it, so two executor threads are busy
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, StartAt.now(), this::action).waitUntilStarted(Duration.ofSeconds(10));
+        mongoEventStore.write("1", 0, serialize(e1));
+        await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
+        subscriptionModel.pauseSubscription(subscriptionId);
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+        await().atMost(FIVE_SECONDS).until(() -> subscriptionExecutor.getActiveCount() == 2);
+
+        // When
+        subscriptionModel.pauseSubscription(subscriptionId);
+
+        // Then: the run that waited ended and freed its thread, while the stuck call still runs
+        waitAtMostFor(FIVE_SECONDS, () -> subscriptionExecutor.getActiveCount() == 1);
+        assertThat(subscriptionExecutor.getActiveCount()).as("executor threads in use while the first call for E1 is stuck").isEqualTo(1);
+        assertThat(calls).as("calls while the first call for E1 is stuck").containsExactly("E1 started");
+
+        // And: a resume after that still holds back the action until the stuck call has returned
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+        mongoEventStore.write("2", 0, serialize(e2));
+        waitAtMostFor(Duration.ofSeconds(3), () -> calls.size() > 1);
+        assertThat(calls).as("calls while the first call for E1 is stuck").containsExactly("E1 started");
+        releaseFirstCallOfE1.countDown();
+        waitAtMostFor(TEN_SECONDS, () -> calls.contains("E2 returned"));
+        assertThat(calls).as("calls once the stuck call was released").containsExactly("E1 started", "E1 returned", "E1 started", "E1 returned", "E2 started", "E2 returned");
+        assertThat(mostInFlight).as("most calls running at once").hasValue(1);
+    }
+
+    @Test
+    void a_cancel_while_a_resumed_run_waits_for_the_stuck_call_ends_that_run_and_frees_its_thread() {
+        // Given: the first call for E1 is stuck, and a resumed run waits for it, so two executor threads are busy
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, StartAt.now(), this::action).waitUntilStarted(Duration.ofSeconds(10));
+        mongoEventStore.write("1", 0, serialize(e1));
+        await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
+        subscriptionModel.pauseSubscription(subscriptionId);
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+        await().atMost(FIVE_SECONDS).until(() -> subscriptionExecutor.getActiveCount() == 2);
+
+        // When
+        subscriptionModel.cancelSubscription(subscriptionId);
+
+        // Then: the run that waited ended and freed its thread, while the stuck call still runs
+        waitAtMostFor(FIVE_SECONDS, () -> subscriptionExecutor.getActiveCount() == 1);
+        assertThat(subscriptionExecutor.getActiveCount()).as("executor threads in use while the first call for E1 is stuck").isEqualTo(1);
+        assertThat(calls).as("calls while the first call for E1 is stuck").containsExactly("E1 started");
+
+        // And: nothing is delivered to the cancelled subscription once the stuck call has returned
+        releaseFirstCallOfE1.countDown();
+        waitAtMostFor(Duration.ofSeconds(2), () -> calls.size() > 2);
+        assertThat(calls).as("calls once the stuck call was released").containsExactly("E1 started", "E1 returned");
     }
 
     @Test
