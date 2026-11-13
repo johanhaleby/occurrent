@@ -91,6 +91,7 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     final List<Checkpoint> restartedFromThePresent = new CopyOnWriteArrayList<>();
     final List<Checkpoint> resumeProbes = new CopyOnWriteArrayList<>();
     final AtomicInteger resumeCalls = new AtomicInteger();
+    final List<String> resumedInTheDelegate = new CopyOnWriteArrayList<>();
     final AtomicInteger takeOversAsked = new AtomicInteger();
 
     LiveStartLosingSubscriptionModel(InMemorySubscriptionModel delegate, boolean restartSubscriptionsOnHistoryLost, boolean opensOnTheCallingThread, Runnable writtenInTheGap) {
@@ -336,6 +337,12 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
+        // An open the delegate made runs there, so a pause pauses it there and a resume resumes it there
+        if (!paused.containsKey(subscriptionId) && delegate.isPaused(subscriptionId)) {
+            resumeCalls.incrementAndGet();
+            resumedInTheDelegate.add(subscriptionId);
+            return delegate.resumeSubscription(subscriptionId);
+        }
         Runnable beforeTheResumedOpen = resumesWhereItWasHeldOnceThisReturns;
         return beforeTheResumedOpen == null ? resumeSubscription(subscriptionId, StartAt.now()) : resume(subscriptionId, Held::heldAt, beforeTheResumedOpen);
     }
