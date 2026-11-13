@@ -469,8 +469,9 @@ final class NamedCatchupSupport {
                             // that never blocks on waitUntilStarted() would otherwise get a dead subscription with no trace.
                             log.error("The catch-up replay for subscription {} failed; the subscription is dead until it is subscribed again.", subscriptionId, throwable);
                         } else if (replay.owned().historyLost != null) {
-                            String lost = requireNonNull(replay.owned().historyLost).asString();
-                            log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, lost, lost, throwable);
+                            RecordedLoss recorded = requireNonNull(replay.owned().historyLost);
+                            String lost = recorded.lostFrom().asString();
+                            log.error(HistoryLossMessages.terminalFailureLog(recorded.liveStart()), subscriptionId, lost, lost, throwable);
                         } else if (requireNonNull(named).isPaused(subscriptionId)) {
                             log.error("The catch-up replay for subscription {} after the subscription model lost the history from its live start failed, so the subscription stays paused, and resuming it replays again.",
                                     subscriptionId, throwable);
@@ -990,7 +991,7 @@ final class NamedCatchupSupport {
             // never reaches a subscription made since. A resume before it is recorded reopens at the lost position and is
             // paused again.
             return HistoryLossHandling.takeOver(() -> {
-                record.historyLost = lostFrom;
+                record.historyLost = new RecordedLoss(lostFrom, false);
                 String lost = lostFrom.asString();
                 log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, lost, lost);
             });
@@ -1242,9 +1243,9 @@ final class NamedCatchupSupport {
 
     private void refuseIfHistoryLost(String subscriptionId) {
         Owned record = owned.get(subscriptionId);
-        Checkpoint historyLost = record == null ? null : record.historyLost;
+        RecordedLoss historyLost = record == null ? null : record.historyLost;
         if (historyLost != null) {
-            throw HistoryLossMessages.historyLost(subscriptionId, historyLost);
+            throw HistoryLossMessages.resumeRefused(subscriptionId, historyLost.lostFrom(), historyLost.liveStart());
         }
     }
 
@@ -1596,7 +1597,7 @@ final class NamedCatchupSupport {
                 underIdLock(subscriptionId, () -> {
                     synchronized (state) {
                         if (!shutdown && !state.cancelled.get() && state.episode.get() == launched && catchingUp.get(subscriptionId) == state && handedOver.get(subscriptionId) == takenOver) {
-                            replay.owned().historyLost = lost;
+                            replay.owned().historyLost = new RecordedLoss(lost, true);
                         }
                     }
                     return null;
@@ -1617,7 +1618,7 @@ final class NamedCatchupSupport {
                 state.heldForLostLiveStart = true;
                 state.resumeSkipsEvents = lost != null;
                 if (lost != null) {
-                    replay.owned().historyLost = lost;
+                    replay.owned().historyLost = new RecordedLoss(lost, true);
                 }
                 return true;
             }
@@ -1627,7 +1628,7 @@ final class NamedCatchupSupport {
         }
         if (lost != null) {
             String at = lost.asString();
-            log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, at, at, failure);
+            log.error(HistoryLossMessages.LIVE_START_LOST_LOG, subscriptionId, at, at, failure);
         } else {
             log.error("The catch-up replay for subscription {} failed, so the subscription is held paused, and resuming it or start(true) on this model replays again from the beginning.", subscriptionId, failure);
         }
@@ -1648,12 +1649,16 @@ final class NamedCatchupSupport {
         }
     }
 
+    // liveStart says lostFrom is the live start a replay would go live from, which the last event delivered is at or before
+    private record RecordedLoss(Checkpoint lostFrom, boolean liveStart) {
+    }
+
     // A subscription this model made by name
     private static final class Owned {
         // The position the wrapped model lost the history from, recorded only where a resume would skip events, which is
         // when no replay could take the loss over, or when a replay that started above position 0 lost its live start. A resume
         // then refuses with CatchupCannotResumeException until the subscription is cancelled
-        volatile @Nullable Checkpoint historyLost;
+        volatile @Nullable RecordedLoss historyLost;
         // Set while the wrapped subscribe(..) of a straight-to-live subscribe runs, changed under the per-id lock
         volatile boolean subscribing;
         // A cancel came while that subscribe ran, set under the per-id lock

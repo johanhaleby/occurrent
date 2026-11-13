@@ -360,26 +360,34 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
-    // The position the live delegate lost the history from, how many times a resume at a given position cleared it, and
-    // the position the last such resume gave. A loss reported before such a resume must not be recorded after it, which
-    // would mark a subscription it has resumed as lost, unless it is a loss of the position that resume gave.
+    // The position the live delegate lost the history from, whether it is the live start a replay would go live from,
+    // how many times a resume at a given position cleared it, and the position the last such resume gave. A loss
+    // reported before such a resume must not be recorded after it, which would mark a subscription it has resumed as
+    // lost, unless it is a loss of the position that resume gave.
     private static final class HistoryLost {
-        private record State(int clears, @Nullable Checkpoint lostFrom, @Nullable String resumedAt) {
+        private record State(int clears, @Nullable Checkpoint lostFrom, boolean liveStart, @Nullable String resumedAt) {
         }
 
-        private final AtomicReference<State> state = new AtomicReference<>(new State(0, null, null));
+        private final AtomicReference<State> state = new AtomicReference<>(new State(0, null, false, null));
 
         @Nullable Checkpoint get() {
             return state.get().lostFrom();
+        }
+
+        // What a resume refuses with while a loss is recorded, or null
+        @Nullable CatchupCannotResumeException refusal(String subscriptionId) {
+            State seen = state.get();
+            return seen.lostFrom() == null ? null : HistoryLossMessages.resumeRefused(subscriptionId, seen.lostFrom(), seen.liveStart());
         }
 
         int clears() {
             return state.get().clears();
         }
 
-        // False when it was cleared since clearsWhenReported by a resume at a position other than lostFrom
-        boolean recordUnlessCleared(int clearsWhenReported, Checkpoint lostFrom) {
-            State before = state.getAndUpdate(it -> records(it, clearsWhenReported, lostFrom) ? new State(it.clears(), lostFrom, it.resumedAt()) : it);
+        // False when it was cleared since clearsWhenReported by a resume at a position other than lostFrom. liveStart says
+        // lostFrom is the live start a replay would go live from
+        boolean recordUnlessCleared(int clearsWhenReported, Checkpoint lostFrom, boolean liveStart) {
+            State before = state.getAndUpdate(it -> records(it, clearsWhenReported, lostFrom) ? new State(it.clears(), lostFrom, liveStart, it.resumedAt()) : it);
             return records(before, clearsWhenReported, lostFrom);
         }
 
@@ -397,7 +405,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             String at = resumedAt == null ? null : resumedAt.asString();
             while (true) {
                 State seen = state.get();
-                State after = new State(seen.clears() + 1, isAt(seen.lostFrom(), at) ? seen.lostFrom() : null, at);
+                boolean kept = isAt(seen.lostFrom(), at);
+                State after = new State(seen.clears() + 1, kept ? seen.lostFrom() : null, kept && seen.liveStart(), at);
                 if (state.compareAndSet(seen, after)) {
                     return new Cleared(seen, after);
                 }
@@ -1150,9 +1159,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     @Nullable Subscription replayToResume(String subscriptionId, String whatChanged) {
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             Subscribed subscription = subscribed.get(subscriptionId);
-            Checkpoint historyLost = subscription == null || subscription.owner() != this ? null : subscription.historyLost().get();
+            CatchupCannotResumeException historyLost = subscription == null || subscription.owner() != this ? null : subscription.historyLost().refusal(subscriptionId);
             if (historyLost != null) {
-                throw HistoryLossMessages.historyLost(subscriptionId, historyLost);
+                throw historyLost;
             }
             Subscription takenOver = takeOverIfAsked(subscriptionId);
             if (takenOver != null) {
@@ -1472,7 +1481,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         HistoryLost historyLost = subscription.historyLost();
         int clearsWhenReported = historyLost.clears();
         return HistoryLossHandling.takeOver(() -> {
-            if (historyLost.recordUnlessCleared(clearsWhenReported, lostFrom)) {
+            if (historyLost.recordUnlessCleared(clearsWhenReported, lostFrom, false)) {
                 String lost = lostFrom.asString();
                 log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, lost, lost);
             }
@@ -1493,7 +1502,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         if (firstStartAt.isDynamic() || !(firstStartAt instanceof StartAtCheckpoint at) || isCatchupCheckpoint(at.checkpoint) || subscriptionModel.canResumeFrom(at.checkpoint)) {
             return subscribeLive.apply(holdPaused);
         }
-        return refuseOrHoldPaused(subscriptionId, HistoryLossMessages.cannotStartFrom(subscriptionId, at.checkpoint), at.checkpoint, () -> subscribeLive.apply(true));
+        return refuseOrHoldPaused(subscriptionId, HistoryLossMessages.cannotStartFrom(subscriptionId, at.checkpoint), at.checkpoint, false, () -> subscribeLive.apply(true));
     }
 
     /**
@@ -1515,14 +1524,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         if (liveFrom == null || origin == null || subscriptionModel.canResumeFrom(liveFrom)) {
             return null;
         }
-        return refuseOrHoldPaused(subscriptionId, liveStartLostAfterTheBeginning(subscriptionId, origin, liveFrom), liveFrom,
+        return refuseOrHoldPaused(subscriptionId, liveStartLostAfterTheBeginning(subscriptionId, origin, liveFrom), liveFrom, true,
                 () -> subscribeLivePausedAt.apply(StartAt.checkpoint(liveFrom)));
     }
 
     // Throws refusal, or, when LostStartHold asks it on this thread, has the live delegate hold the subscription paused
     // and records lost, since a resume would skip events, so a resume refuses until the subscription is cancelled or
-    // resumed at a given position
-    private Subscription refuseOrHoldPaused(String subscriptionId, CatchupCannotResumeException refusal, Checkpoint lost, Supplier<Subscription> subscribeLivePaused) {
+    // resumed at a given position. liveStart says lost is the live start the replay would go live from
+    private Subscription refuseOrHoldPaused(String subscriptionId, CatchupCannotResumeException refusal, Checkpoint lost, boolean liveStart, Supplier<Subscription> subscribeLivePaused) {
         if (!LostStartHold.isAsked()) {
             throw refusal;
         }
@@ -1532,9 +1541,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // delegate holding it paused and the loss being recorded. A start(true) takes no claim and can resume it in
         // that window. MongoDB then reports the loss when the change stream opens, which pauses it again
         Subscribed made = subscribed.get(subscriptionId);
-        if (made != null && made.owner() == this && made.historyLost().recordUnlessCleared(made.historyLost().clears(), lost)) {
+        if (made != null && made.owner() == this && made.historyLost().recordUnlessCleared(made.historyLost().clears(), lost, liveStart)) {
             String at = lost.asString();
-            log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, at, at);
+            log.error(HistoryLossMessages.terminalFailureLog(liveStart), subscriptionId, at, at);
         }
         return heldPaused;
     }
@@ -2086,9 +2095,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public void relaunchParkedReplays() {
         runEach(List.copyOf(parkedReplays.keySet()), subscriptionId -> {
             try (Claim ignored = claim(subscriptionId, STARTED_BUT_NOT_RUN_AGAIN)) {
-                Checkpoint lost = recordedHistoryLoss(subscriptionId);
+                Subscribed made = subscribed.get(subscriptionId);
+                CatchupCannotResumeException lost = made == null || made.owner() != this ? null : made.historyLost().refusal(subscriptionId);
                 if (lost != null && hasParkedReplay(subscriptionId)) {
-                    throw HistoryLossMessages.historyLost(subscriptionId, lost);
+                    throw lost;
                 }
                 relaunchParkedReplay(subscriptionId);
             }
@@ -3706,9 +3716,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         hold(subscriptionId, attempt);
         Checkpoint lost = HistoryLossMessages.lostFromWhereAResumeSkipsEvents(failure);
         Subscribed made = subscribed.get(subscriptionId);
-        if (lost != null && made != null && made.owner() == this && made.historyLost().recordUnlessCleared(made.historyLost().clears(), lost)) {
+        if (lost != null && made != null && made.owner() == this && made.historyLost().recordUnlessCleared(made.historyLost().clears(), lost, true)) {
             String at = lost.asString();
-            log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, at, at, failure);
+            log.error(HistoryLossMessages.LIVE_START_LOST_LOG, subscriptionId, at, at, failure);
         } else {
             logFailure(subscriptionId, failure, lost == null ? "the subscription is held paused, and resuming it or start(true) on this model replays again from the beginning"
                     : "the subscription is held paused");
