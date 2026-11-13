@@ -1221,10 +1221,7 @@ final class NamedCatchupSupport {
         if (record != null && record.cancelled) {
             throw new UnknownSubscriptionException(subscriptionId);
         }
-        Checkpoint historyLost = record == null ? null : record.historyLost;
-        if (historyLost != null) {
-            throw HistoryLossMessages.historyLost(subscriptionId, historyLost);
-        }
+        refuseIfHistoryLost(subscriptionId);
         // Resuming one subscription starts a stopped model without resuming the others, as the life-cycle contract
         // says, whether its replay is parked or it has handed over. A start that throws resumes nothing.
         if (stopped && isPaused(subscriptionId) && !startUnlessShutdown(false)) {
@@ -1243,6 +1240,14 @@ final class NamedCatchupSupport {
         return new NamedCatchupSubscription(subscriptionId, started);
     }
 
+    private void refuseIfHistoryLost(String subscriptionId) {
+        Owned record = owned.get(subscriptionId);
+        Checkpoint historyLost = record == null ? null : record.historyLost;
+        if (historyLost != null) {
+            throw HistoryLossMessages.historyLost(subscriptionId, historyLost);
+        }
+    }
+
     // The replay a resume runs, with the launch it runs once the lock of the id is released, or null for none
     private record Resumed(CatchupState state, @Nullable Object launched) {
     }
@@ -1254,6 +1259,9 @@ final class NamedCatchupSupport {
     // the wrapped model would open the subscription where it lost the history, so the takeover is registered instead,
     // and runs unless this model is stopped or shut down meanwhile.
     private @Nullable Resumed resumeHoldingIdLock(String subscriptionId) {
+        // Again under the lock, since a replay that loses its live start records the loss under it, and a resume that
+        // read no loss before it took the lock would otherwise get the handle of the failed start
+        refuseIfHistoryLost(subscriptionId);
         CatchupState state = catchingUp.get(subscriptionId);
         if (state != null) {
             synchronized (state) {

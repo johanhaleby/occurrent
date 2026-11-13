@@ -662,6 +662,74 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
     @Test
     @Timeout(30)
+    void a_resume_that_read_no_loss_before_it_waited_for_the_lock_of_the_id_while_a_replay_from_above_the_beginning_recorded_its_loss_refuses_instead_of_returning_the_failed_start() throws InterruptedException {
+        // Given a replay in flight from above the beginning, whose live start the model has when it starts, and loses by the end
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.answersTrueToTheFirstProbes = 1;
+        ReleasablePositionOrderedReader reader = new ReleasablePositionOrderedReader();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        Checkpoint stored = GlobalCheckpoint.of(1, new StringBasedCheckpoint("stored live start"), 1, 3);
+        // A second subscribe of the id asks the wrapped model whether it holds the id while it holds the lock of the id, so
+        // it keeps the hold of the loss and the resume waiting for that lock until the test lets it go
+        CountDownLatch holdsTheLockOfTheId = new CountDownLatch(1);
+        CountDownLatch letGoOfTheLockOfTheId = new CountDownLatch(1);
+        AtomicReference<Thread> holder = new AtomicReference<>();
+        AtomicReference<Throwable> resumeFailure = new AtomicReference<>();
+        AtomicReference<Subscription> resumed = new AtomicReference<>();
+        try {
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(stored), cloudEvent -> Mono.empty());
+            wrapped.whenAskedWhetherRunning = () -> {
+                boolean underTheLockOfTheId = StackWalker.getInstance().walk(frames -> frames.anyMatch(frame -> frame.getMethodName().equals("underIdLock")));
+                if (Thread.currentThread() == holder.get() && underTheLockOfTheId) {
+                    holdsTheLockOfTheId.countDown();
+                    try {
+                        letGoOfTheLockOfTheId.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            };
+            Thread holding = new Thread(() -> org.assertj.core.api.Assertions.catchThrowable(() -> catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(stored), cloudEvent -> Mono.empty())));
+            holder.set(holding);
+            holding.start();
+            assertThat(holdsTheLockOfTheId.await(10, TimeUnit.SECONDS)).as("the lock of the id is held").isTrue();
+
+            // When the replay loses its live start and waits for the lock of the id to record it
+            // The release runs the rest of the replay on the thread that calls it
+            Thread releasing = new Thread(reader::release);
+            releasing.start();
+            await().atMost(Duration.ofSeconds(10)).until(() -> Thread.getAllStackTraces().entrySet().stream()
+                    .anyMatch(entry -> entry.getKey().getState() == Thread.State.WAITING
+                            && Stream.of(entry.getValue()).anyMatch(frame -> frame.getMethodName().equals("holdForLostLiveStart"))
+                            && Stream.of(entry.getValue()).anyMatch(frame -> frame.getMethodName().equals("underIdLock"))));
+            // And a resume that has read no loss queues for the lock after it, which hands the lock on in the order of the queue
+            Thread resuming = new Thread(() -> resumeFailure.set(org.assertj.core.api.Assertions.catchThrowable(() -> resumed.set(catchup.resumeSubscription("sub")))));
+            resuming.start();
+            await().atMost(Duration.ofSeconds(10)).until(() -> resuming.getState() == Thread.State.WAITING
+                    && Stream.of(resuming.getStackTrace()).anyMatch(frame -> frame.getMethodName().equals("underIdLock")));
+            letGoOfTheLockOfTheId.countDown();
+            resuming.join(10_000);
+            holding.join(10_000);
+            releasing.join(10_000);
+
+            // Then the resume refuses with the loss, instead of returning the start that failed with it
+            assertThat(resumeFailure.get()).as("thrown by the resume").isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining("stored live start");
+            assertThat(resumed.get()).as("returned by the resume").isNull();
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOf(CatchupCannotResumeException.class))
+                    .verify(Duration.ofSeconds(10));
+            assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
+        } finally {
+            letGoOfTheLockOfTheId.countDown();
+            reader.release();
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
     void a_named_catch_up_that_started_above_the_beginning_and_lost_its_live_start_is_held_paused_and_recorded_so_a_resume_refuses_and_a_start_replays_nothing_until_it_is_cancelled() {
         // Given a stored position above 0 whose live start the model still has when the replay starts, and loses during it
         NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
