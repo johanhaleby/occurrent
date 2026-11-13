@@ -28,7 +28,10 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
+import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.util.function.Consumer;
@@ -92,6 +95,45 @@ class DurableSubscriptionModelCommitOrderTest {
         assertThat(found).containsSame(model);
     }
 
+    @Test
+    void a_manual_start_model_over_it_delivers_every_event_in_commit_order_when_the_wrapped_model_declares_that_it_does() {
+        // Given
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(new DeclaringModel(true), new InMemoryCheckpointStorage());
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(durable);
+
+        // When
+        boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
+
+        // Then
+        assertThat(deliversInCommitOrder).isTrue();
+    }
+
+    @Test
+    void a_manual_start_model_over_it_does_not_deliver_every_event_in_commit_order_when_the_wrapped_model_declares_that_it_does_not() {
+        // Given
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(new DeclaringModel(false), new InMemoryCheckpointStorage());
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(durable);
+
+        // When
+        boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
+
+        // Then
+        assertThat(deliversInCommitOrder).isFalse();
+    }
+
+    @Test
+    void does_not_deliver_every_event_in_commit_order_when_a_wrapper_that_does_not_declare_it_sits_between_it_and_a_model_that_does() {
+        // Given
+        PlainWrapper wrapper = new PlainWrapper(new DeclaringModel(true));
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapper, new InMemoryCheckpointStorage());
+
+        // When
+        boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
+
+        // Then
+        assertThat(deliversInCommitOrder).isFalse();
+    }
+
     private static class SilentModel implements CheckpointAwareSubscriptionModel {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -150,6 +192,19 @@ class DurableSubscriptionModelCommitOrderTest {
         @Override
         public boolean deliversEveryEventInCommitOrder() {
             return deliversEveryEventInCommitOrder;
+        }
+    }
+
+    private static final class PlainWrapper extends SilentModel implements SubscriptionModelWrapper {
+        private final SubscriptionModel wrapped;
+
+        private PlainWrapper(SubscriptionModel wrapped) {
+            this.wrapped = wrapped;
+        }
+
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return wrapped;
         }
     }
 }
