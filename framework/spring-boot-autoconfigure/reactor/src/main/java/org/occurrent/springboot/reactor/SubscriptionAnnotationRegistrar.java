@@ -89,10 +89,10 @@ class SubscriptionAnnotationRegistrar {
     //
     // A JDK interface proxy (spring.aop.proxy-target-class=false) may not implement the handler method at all, when
     // the method was declared on the concrete class rather than an interface. A final handler method is never
-    // overridden by a CGLIB proxy either, but that is only a problem once a CGLIB proxy is actually somewhere in the
-    // chain: a final method on a bean nothing proxies runs directly, with no advice to lose. Both proxy cases leave
-    // no way to invoke the method through the proxy at all, so both are refused rather than silently invoked on the
-    // raw bean with no advice applied.
+    // overridden by a CGLIB proxy either, and neither is a package-private one a superclass in another package
+    // declares, but that is only a problem once a CGLIB proxy is actually somewhere in the chain. Such a method on a
+    // bean nothing proxies runs directly, with no advice to lose. Both proxy cases leave no way to invoke the method
+    // through the proxy at all, so both are refused rather than silently invoked on the raw bean with no advice applied.
     //
     // Checking bean itself for a CGLIB proxy is not enough: a JDK interface proxy forwards reflectively using the
     // interface's Method, so Java's own virtual dispatch resolves it against whatever bean wraps, a nested CGLIB
@@ -121,11 +121,26 @@ class SubscriptionAnnotationRegistrar {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The proxy does not implement it. Either the method is private, so a CGLIB proxy cannot override it, or the bean is a JDK interface proxy implementing none of the interfaces the method is declared on. Make the method non-private, expose it on an interface, or set spring.aop.proxy-target-class=true so a CGLIB proxy is used instead.");
         }
-        if (Modifier.isFinal(method.getModifiers()) && SubscriptionAnnotations.anyProxyLayerIsCglib(bean)) {
+        refuseWhatACglibProxyCannotOverride(method, bean);
+        return new HandlerInvocation(handlerTarget, method, invocableMethod, bean.getClass());
+    }
+
+    // A CGLIB proxy cannot override a final method, or a package-private one declared outside the package of the class
+    // it subclasses, so invoking either on the proxy runs the method's own body on the proxy instance with no advice
+    private static void refuseWhatACglibProxyCannotOverride(Method method, Object bean) {
+        if (!SubscriptionAnnotations.anyProxyLayerIsCglib(bean)) {
+            return;
+        }
+        if (Modifier.isFinal(method.getModifiers())) {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The method is final, so a CGLIB proxy in the chain cannot override it. Remove final from the method.");
         }
-        return new HandlerInvocation(handlerTarget, method, invocableMethod, bean.getClass());
+        Class<?> implementation = SubscriptionAnnotations.implementationClassOf(bean);
+        if (SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(method, implementation)) {
+            throw new SubscriptionHandlerNotInvocableException(method,
+                    "The method is package-private and declared in package %s, so a CGLIB proxy in the chain, which subclasses %s in package %s, cannot override it. Make the method public or protected.".formatted(
+                            method.getDeclaringClass().getPackageName(), implementation.getName(), implementation.getPackageName()));
+        }
     }
 
     private static void requireImplementationOf(Method method, Object bean) {
@@ -172,14 +187,12 @@ class SubscriptionAnnotationRegistrar {
                 throw new SubscriptionHandlerNotInvocableException(declaredMethod,
                         "The proxy does not implement it. Either the method is private, so a CGLIB proxy cannot override it, or the bean is a JDK interface proxy implementing none of the interfaces the method is declared on. Make the method non-private, expose it on an interface, or set spring.aop.proxy-target-class=true so a CGLIB proxy is used instead.");
             }
-            // The same guard registration ran, against the object actually in hand. A CGLIB proxy added after
-            // registration cannot override a final method, so selecting one succeeds while invoking it reaches the
-            // inherited method directly and every layer's advice is skipped. Refusing here is the only place left
-            // to catch that, since the proxy did not exist when the guards first ran.
-            if (Modifier.isFinal(declaredMethod.getModifiers()) && SubscriptionAnnotations.anyProxyLayerIsCglib(target)) {
-                throw new SubscriptionHandlerNotInvocableException(declaredMethod,
-                        "The method is final, so a CGLIB proxy in the chain cannot override it. Remove final from the method.");
-            }
+            // The same checks registration ran, against the object actually in hand. A CGLIB proxy added after
+            // registration cannot override a final method, or a package-private one from another package, so
+            // selecting one succeeds while invoking it reaches the inherited method directly and every layer's
+            // advice is skipped. Refusing here is the only place left to catch that, since the proxy did not exist
+            // when the checks first ran.
+            refuseWhatACglibProxyCannotOverride(declaredMethod, target);
             resolution = new Resolution(targetClass, method);
             return method;
         }
@@ -430,7 +443,7 @@ class SubscriptionAnnotationRegistrar {
         final List<SubscriptionAnnotations.HandlerParameter> parameters;
         if (method.getParameterCount() >= 1) {
             CloudEventConverter<E> cloudEventConverter = applicationContext.getBean(CloudEventConverter.class);
-            parameters = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations::isDcbMetadataParameter, false);
+            parameters = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations.implementationClassOf(bean), SubscriptionAnnotations::isDcbMetadataParameter, false);
             Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameters);
             List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, annotation.eventTypes(), "@DcbSubscription");
             List<String> cloudEventTypes = domainEventTypesToSubscribeTo.stream().map(cloudEventConverter::getCloudEventType).toList();

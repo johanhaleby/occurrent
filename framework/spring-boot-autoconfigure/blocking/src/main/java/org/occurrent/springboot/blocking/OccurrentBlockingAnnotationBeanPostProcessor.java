@@ -40,6 +40,7 @@ import org.springframework.util.ClassUtils;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -503,10 +504,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
     }
 
-    // A handler is identified by its bean name and the method the scan found, declaring class included. Every pass
-    // calls SubscriptionAnnotations.handlerMethods on the bean's class, which returns the same Method each time, so a
-    // rescan skips it. The declaring class tells apart two private methods of one signature, one on the bean's class
-    // and one on a superclass, which are two handlers.
+    // A handler is keyed by bean name, method name and parameter types, so a rescan skips it, and so do two passes
+    // that read one handler as different Methods, the bean's class method and a JDK proxy's interface method. The
+    // declaring class joins the key only for a private method, the one case where a class and its superclass declare
+    // two handlers of one signature, and a private method is never an interface or proxy method.
     private boolean isAlreadyRegistered(String beanName, Method method) {
         return registeredHandlers.contains(handlerKey(beanName, method));
     }
@@ -517,7 +518,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     private static String handlerKey(String beanName, Method method) {
-        return beanName + '#' + method.getDeclaringClass().getName() + '#' + method.getName() + Arrays.toString(method.getParameterTypes());
+        String owner = Modifier.isPrivate(method.getModifiers()) ? method.getDeclaringClass().getName() + '#' : "";
+        return beanName + '#' + owner + method.getName() + Arrays.toString(method.getParameterTypes());
     }
 
     // getType(beanName) predicts the type from the bean definition without forcing creation, which is what lets a

@@ -33,6 +33,7 @@ import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.MethodIntrospector;
+import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
 
@@ -40,6 +41,9 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
 import java.util.*;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -103,13 +107,33 @@ public final class SubscriptionAnnotations {
      * parameter is rejected, because a DCB handler's stream id/version are internal partition values, not domain ones.
      */
     public static List<HandlerParameter> analyzeParameters(Method method, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
+        return analyzeParameters(method, method.getDeclaringClass(), isMetadataParameter, supportsStreamAccessors);
+    }
+
+    /**
+     * Classify each parameter of a subscription handler as {@link #analyzeParameters(Method, Predicate, boolean)}
+     * does, reading each parameter's type as {@code implementation} sees it. A handler that {@code implementation}
+     * inherits from a generic superclass or interface, such as {@code on(E event)} in a {@code Base<E>} that
+     * {@code implementation} extends as {@code Base<OrderPlaced>}, then has {@code OrderPlaced} as its event type. A type
+     * variable that {@code implementation} does not bind, through a raw supertype for example, keeps the type the
+     * method declares, its bound or {@code Object}.
+     *
+     * @param method                  the handler method
+     * @param implementation          the class whose instances the handler runs on, see {@link #implementationClassOf(Object)}
+     * @param isMetadataParameter     whether a parameter type is a metadata parameter
+     * @param supportsStreamAccessors whether {@code @StreamId}/{@code @StreamVersion} parameters are allowed
+     * @return the classified parameters, in declaration order
+     */
+    public static List<HandlerParameter> analyzeParameters(Method method, Class<?> implementation, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
         List<HandlerParameter> parameters = new ArrayList<>();
         boolean hasEvent = false;
         boolean hasMetadata = false;
         boolean hasStreamId = false;
         boolean hasStreamVersion = false;
-        for (Parameter parameter : method.getParameters()) {
-            Class<?> type = parameter.getType();
+        Parameter[] declaredParameters = method.getParameters();
+        for (int index = 0; index < declaredParameters.length; index++) {
+            Parameter parameter = declaredParameters[index];
+            Class<?> type = ResolvableType.forMethodParameter(method, index, implementation).resolve(parameter.getType());
             boolean streamIdAnnotated = parameter.isAnnotationPresent(StreamId.class);
             boolean streamVersionAnnotated = parameter.isAnnotationPresent(StreamVersion.class);
             if (streamIdAnnotated && streamVersionAnnotated) {
@@ -197,7 +221,7 @@ public final class SubscriptionAnnotations {
      * {@link #buildDcbCriteria(List, List)} instead.
      *
      * @param id                            the subscription id
-     * @param bean                          the bean declaring the handler
+     * @param bean                          the bean the handler runs on, whose class the event parameter's type is read against
      * @param method                        the handler method
      * @param eventTypesSpecifiedInAnnotation the annotation's {@code eventTypes} (empty to derive from the parameter)
      * @param annotationName                the annotation name, for error messages
@@ -209,7 +233,7 @@ public final class SubscriptionAnnotations {
         if (method.getParameterCount() < 1) {
             throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
         }
-        List<HandlerParameter> parameters = analyzeParameters(method, SubscriptionAnnotations::isStreamMetadataParameter, true);
+        List<HandlerParameter> parameters = analyzeParameters(method, implementationClassOf(bean), SubscriptionAnnotations::isStreamMetadataParameter, true);
         @SuppressWarnings("unchecked")
         Class<E> specifiedEventType = (Class<E>) eventTypeOf(parameters);
         List<Class<E>> domainEventTypes = resolveDomainEventTypes(id, bean, method, specifiedEventType, eventTypesSpecifiedInAnnotation, annotationName);
@@ -296,12 +320,17 @@ public final class SubscriptionAnnotations {
      * usefully observe, and invoking it through a proxy is a hazard rather than a feature. The scan reads
      * {@code method} from the bean's class, its superclasses and its interfaces, so the factory runs when the
      * unwrapped target's own user class, {@link ClassUtils#getUserClass}, declares {@code method} or inherits it
-     * unchanged. Otherwise the factory refuses instead of guessing which method to run. That happens for a JDK
-     * interface proxy that could not be unwrapped to a fixed target, and for a factory bean that built a different
-     * implementation than the one the scan recorded, such as a subclass overriding {@code method}, which would run
-     * code the scan never read. A CGLIB proxy left proxied by {@link #ultimateTarget}, because its target source is
-     * not a fixed singleton, still passes this check, since {@code getUserClass} of the proxy's own class is the class
-     * it subclasses, so a factory invoked through such a proxy still runs its advice.
+     * unchanged. Otherwise the factory refuses instead of guessing which method to run. That happens for a factory
+     * bean that built a different implementation than the one the scan recorded, such as a subclass overriding
+     * {@code method}, which would run code the scan never read.
+     * <p>
+     * Two proxies are left proxied by {@link #ultimateTarget}, because their target source is not a fixed singleton.
+     * A JDK interface proxy runs the factory through the proxy when {@code method} is declared on one of the proxy's
+     * interfaces, which is the method the scan reads from such a proxy's class, and refuses any other method, since the
+     * proxy does not implement it. A CGLIB proxy passes the check above, since {@code getUserClass} of the proxy's own
+     * class is the class it subclasses, so a factory invoked through it still runs its advice. It refuses a
+     * package-private {@code method} declared in another package than that class, which the proxy cannot override,
+     * so invoking it would run the method's body on the proxy instance instead of on a target.
      *
      * @param annotationName the annotation name for error messages, for example {@code "@Projection"}
      * @param bean           the (possibly proxied) bean the factory method was found on
@@ -310,9 +339,19 @@ public final class SubscriptionAnnotations {
      */
     public static Object invokeDescriptorFactory(String annotationName, Object bean, Method method) {
         Object target = ultimateTarget(bean);
-        Class<?> targetUserClass = ClassUtils.getUserClass(target.getClass());
-        if (java.lang.reflect.Proxy.isProxyClass(target.getClass()) || !runsUnchanged(targetUserClass, method)) {
-            throw new IllegalStateException("%s factory %s#%s cannot run because %s does not implement %s. This happens when the bean is an interface proxy whose target is not a fixed singleton, so it cannot be unwrapped safely (set spring.aop.proxy-target-class=true so this bean is proxied by subclassing instead of by interface, or move the factory method off the advised bean), or when the factory bean built a different implementation than the one the scan recorded (return the same implementation on every call).".formatted(annotationName, bean.getClass().getName(), method.getName(), targetUserClass.getName(), method.getDeclaringClass().getName()));
+        Class<?> declaringClass = method.getDeclaringClass();
+        if (java.lang.reflect.Proxy.isProxyClass(target.getClass())) {
+            if (!declaringClass.isInterface() || !declaringClass.isAssignableFrom(target.getClass())) {
+                throw new IllegalStateException("%s factory %s#%s cannot run because the bean is a JDK interface proxy whose target is not a fixed singleton, so it cannot be unwrapped safely, and the proxy does not implement %s, which declares the factory. Set spring.aop.proxy-target-class=true so this bean is proxied by subclassing instead of by interface, or move the factory method off the advised bean.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName()));
+            }
+        } else {
+            Class<?> targetUserClass = ClassUtils.getUserClass(target.getClass());
+            if (!runsUnchanged(targetUserClass, method)) {
+                throw new IllegalStateException("%s factory %s#%s cannot run because %s does not run the factory the scan read from %s, it either overrides it or does not inherit it. This happens when the factory bean built a different implementation than the one the scan recorded, so return the same implementation on every call.".formatted(annotationName, bean.getClass().getName(), method.getName(), targetUserClass.getName(), declaringClass.getName()));
+            }
+            if (AopUtils.isCglibProxy(target) && isPackagePrivateOutsidePackageOf(method, targetUserClass)) {
+                throw new IllegalStateException("%s factory %s#%s cannot run because it is package-private and declared in %s, outside the package of %s, so the CGLIB proxy around the bean cannot override it and would run it on the proxy instead of on the bean. Make the method public or protected.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName(), targetUserClass.getName()));
+            }
         }
         try {
             method.setAccessible(true);
@@ -400,12 +439,83 @@ public final class SubscriptionAnnotations {
     }
 
     /**
+     * The class whose code runs when a handler or factory is invoked on {@code bean}: the user class,
+     * {@link ClassUtils#getUserClass}, of {@link #ultimateTarget}. A proxy whose target source is not a fixed singleton
+     * is not unwrapped, so a JDK interface proxy like that answers with its own class.
+     *
+     * @param bean the (possibly proxied) bean
+     * @return the class a handler's or factory's generic types are read against
+     */
+    public static Class<?> implementationClassOf(Object bean) {
+        return ClassUtils.getUserClass(ultimateTarget(bean).getClass());
+    }
+
+    /**
+     * Answers whether {@code method} is package-private and declared in another package than {@code implementation}.
+     * A CGLIB proxy of {@code implementation} is generated in {@code implementation}'s package, so it cannot override
+     * such a method, and invoking the method on the proxy runs the method's own body on the proxy instance, with no
+     * advice and none of the bean's state.
+     *
+     * @param method         the handler or factory method
+     * @param implementation the class a CGLIB proxy in the bean's chain subclasses
+     * @return {@code true} if a CGLIB proxy of {@code implementation} cannot override {@code method} for being package-private
+     */
+    public static boolean isPackagePrivateOutsidePackageOf(Method method, Class<?> implementation) {
+        int modifiers = method.getModifiers();
+        return !Modifier.isPublic(modifiers) && !Modifier.isProtected(modifiers) && !Modifier.isPrivate(modifiers)
+                && !method.getDeclaringClass().getPackageName().equals(implementation.getPackageName());
+    }
+
+    /**
+     * Read type argument {@code index} of {@code method}'s return type against {@code implementation} and return its
+     * class. A factory that {@code implementation} inherits from a generic superclass or interface, such as
+     * {@code Projection<S, MyEvent, String> projection()} in a {@code Base<S>} that {@code implementation} extends as
+     * {@code Base<MyView>}, then names {@code MyView}. A parameterized argument names its raw class.
+     *
+     * @param method         the factory method
+     * @param implementation the class whose instance the factory runs on, see {@link #implementationClassOf(Object)}
+     * @param index          the type argument to read
+     * @return the class, or {@code null} when the return type has no such type argument, or the argument is a wildcard
+     * or a type variable that {@code implementation} does not bind, through a raw supertype or a type parameter of its
+     * own for example, or one the method itself declares
+     */
+    public static @Nullable Class<?> returnTypeArgument(Method method, Class<?> implementation, int index) {
+        if (!(method.getGenericReturnType() instanceof ParameterizedType returnType) || returnType.getActualTypeArguments().length <= index) {
+            return null;
+        }
+        Type argument = returnType.getActualTypeArguments()[index];
+        // ResolvableType.resolve() falls back to a variable's bound, which names no class the factory chose, so the
+        // binding is followed by hand and an unbound variable answers null
+        while (argument instanceof TypeVariable<?> variable) {
+            if (!(variable.getGenericDeclaration() instanceof Class<?> declaringClass)) {
+                return null;
+            }
+            int position = Arrays.asList(declaringClass.getTypeParameters()).indexOf(variable);
+            Type binding = ResolvableType.forClass(implementation).as(declaringClass).getGeneric(position).getType();
+            if (binding.equals(variable)) {
+                return null;
+            }
+            argument = binding;
+        }
+        if (argument instanceof Class<?> type) {
+            return type;
+        }
+        if (argument instanceof ParameterizedType parameterized && parameterized.getRawType() instanceof Class<?> raw) {
+            return raw;
+        }
+        return null;
+    }
+
+    /**
      * The methods of {@code type} annotated with any of {@code annotationTypes}, read from {@code type}, its
      * superclasses and its interfaces, so an inherited handler and an interface default method count the way a
      * declared one does.
      * Each method is the one {@code type} actually runs, so an override is found once, under its own annotation if it
      * repeats one and under the overridden method's if it doesn't. Bridge methods are left out, so a generic handler
-     * is found once too. Both annotation post-processors call this, so they find the same methods.
+     * is found once too. A static method an interface declares is left out, since a class does not inherit it. A
+     * static method a superclass declares is returned like any other, so a static subscription handler there is
+     * refused the way one the class declares is. Both annotation post-processors call this, so they find the same
+     * methods.
      *
      * @param type            the concrete class the scan reads
      * @param annotationTypes the handler annotations to look for, searched with {@link AnnotationUtils#findAnnotation(Method, Class)}
@@ -415,8 +525,12 @@ public final class SubscriptionAnnotations {
         if (!AnnotationUtils.isCandidateClass(type, annotationTypes)) {
             return Set.of();
         }
-        return MethodIntrospector.selectMethods(type, (MethodIntrospector.MetadataLookup<Boolean>) method ->
-                annotationTypes.stream().anyMatch(annotationType -> AnnotationUtils.findAnnotation(method, annotationType) != null) ? Boolean.TRUE : null).keySet();
+        return MethodIntrospector.selectMethods(type, (MethodIntrospector.MetadataLookup<Boolean>) method -> {
+            if (Modifier.isStatic(method.getModifiers()) && method.getDeclaringClass().isInterface()) {
+                return null;
+            }
+            return annotationTypes.stream().anyMatch(annotationType -> AnnotationUtils.findAnnotation(method, annotationType) != null) ? Boolean.TRUE : null;
+        }).keySet();
     }
 
     /**

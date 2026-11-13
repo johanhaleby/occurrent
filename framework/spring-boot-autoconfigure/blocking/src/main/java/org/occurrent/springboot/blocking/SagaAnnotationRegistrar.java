@@ -53,8 +53,6 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import java.lang.reflect.Method;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -142,7 +140,7 @@ class SagaAnnotationRegistrar {
         // supplies its own asynchronous model without marking it @Primary (see AsynchronousSubscribables, and #541).
         Subscribable subscribable = push ? pushFeed(annotation, id)
                 : AsynchronousSubscribables.resolve(applicationContext, Subscribable.class, RegisteringSubscribable.class);
-        SagaStateStore<S> stateStore = resolveSagaStateStore(annotation, method, id);
+        SagaStateStore<S> stateStore = resolveSagaStateStore(annotation, method, SubscriptionAnnotations.implementationClassOf(bean), id);
         CommandDispatcher<C> commandDispatcher = resolveCommandDispatcher(annotation, id);
         // A push model ignores StartAt, and a replay in front of it always starts at the beginning, so there is no
         // start position to compute. rejectStartPositionAttributes has already refused the four that would imply one.
@@ -524,7 +522,7 @@ class SagaAnnotationRegistrar {
     // Resolve the SagaStateStore: by store()/storeName() reference, else the unique SagaStateStore bean, else the
     // store starter's zero-config default, whose state type is read from the factory return type.
     @SuppressWarnings("unchecked")
-    private <S> SagaStateStore<S> resolveSagaStateStore(org.occurrent.annotation.Saga annotation, Method factoryMethod, String id) {
+    private <S> SagaStateStore<S> resolveSagaStateStore(org.occurrent.annotation.Saga annotation, Method factoryMethod, Class<?> implementation, String id) {
         Class<?> storeType = annotation.store();
         String storeName = annotation.storeName();
         boolean byType = storeType != Void.class;
@@ -545,7 +543,7 @@ class SagaAnnotationRegistrar {
         }
         // The state type is reflected first, so a factory that declares none reports that (the actionable fix) rather
         // than a missing provider.
-        Class<S> stateType = (Class<S>) reflectSagaStateType(factoryMethod, id);
+        Class<S> stateType = (Class<S>) reflectSagaStateType(factoryMethod, implementation, id);
         // getIfAvailable() applies @Primary and @Fallback resolution and only throws when the container genuinely
         // cannot pick, so an ambiguous seam is reported with the annotation id rather than as a bare Spring failure.
         final DefaultSagaStateStoreProvider provider;
@@ -652,19 +650,10 @@ class SagaAnnotationRegistrar {
     }
 
     // The saga state type is the second type argument of the factory return type Saga<E, S, C>.
-    private static Class<?> reflectSagaStateType(Method factoryMethod, String id) {
-        Type returnType = factoryMethod.getGenericReturnType();
-        if (returnType instanceof ParameterizedType parameterizedType) {
-            Type[] arguments = parameterizedType.getActualTypeArguments();
-            if (arguments.length >= 2) {
-                Type stateArgument = arguments[1];
-                if (stateArgument instanceof Class<?> stateClass) {
-                    return stateClass;
-                }
-                if (stateArgument instanceof ParameterizedType stateParameterized && stateParameterized.getRawType() instanceof Class<?> rawState) {
-                    return rawState;
-                }
-            }
+    private static Class<?> reflectSagaStateType(Method factoryMethod, Class<?> implementation, String id) {
+        Class<?> stateType = SubscriptionAnnotations.returnTypeArgument(factoryMethod, implementation, 1);
+        if (stateType != null) {
+            return stateType;
         }
         throw new IllegalArgumentException(("@Saga '%s' needs a state store: either name one with store/storeName (a SagaStateStore), " +
                 "or declare the factory return type with a concrete state type (for example Saga<MyEvent, MyState, MyCommand>) so the state store can use the zero-config default.").formatted(id));

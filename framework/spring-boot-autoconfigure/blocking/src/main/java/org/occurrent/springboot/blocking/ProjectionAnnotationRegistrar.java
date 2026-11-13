@@ -68,8 +68,6 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.data.repository.CrudRepository;
 
 import java.lang.reflect.Method;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -604,15 +602,16 @@ class ProjectionAnnotationRegistrar {
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
         Object descriptor = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", bean, method);
+        Class<?> implementation = SubscriptionAnnotations.implementationClassOf(bean);
 
         if (annotation.source() == org.occurrent.annotation.Source.PUSH) {
             // The feed bean's type decides the flavor: a PushSubscriptionModel feeds CloudEvents, a DomainEventFeed
             // feeds domain events directly.
             Object feedBean = SubscriptionAnnotations.resolveFeedBean(applicationContext, "@Projection", annotation.subscriptionModel(), annotation.subscriptionModelName(), id, PushSubscriptionModel.class, DomainEventFeed.class);
             if (feedBean instanceof PushSubscriptionModel pushModel) {
-                registerPushProjection(method, annotation, id, converter, descriptor, synchronous, pushModel);
+                registerPushProjection(method, implementation, annotation, id, converter, descriptor, synchronous, pushModel);
             } else if (feedBean instanceof DomainEventFeed<?> domainFeed) {
-                registerDomainPushProjection(method, annotation, id, converter, descriptor, synchronous, domainFeed);
+                registerDomainPushProjection(method, implementation, annotation, id, converter, descriptor, synchronous, domainFeed);
             } else {
                 throw new IllegalArgumentException("@Projection '%s' with source=PUSH resolved a %s, which is neither a PushSubscriptionModel nor a DomainEventFeed.".formatted(id, feedBean.getClass().getName()));
             }
@@ -628,7 +627,7 @@ class ProjectionAnnotationRegistrar {
             DcbProjection<S, E, ID> dcbProjection = (DcbProjection<S, E, ID>) raw;
             // Resolved once, in the same place it always was, before any subscription bean: a raw return type with
             // no store bean has to fail here regardless of which subscription bean this projection would go on to need.
-            MaterializedView<E> resolvedView = resolveStoreView(annotation, method, dcbProjection.projection(), id);
+            MaterializedView<E> resolvedView = resolveStoreView(annotation, method, implementation, dcbProjection.projection(), id);
             boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
             if (synchronous) {
                 // The synchronous subscription model is capability-neutral and applies no DCB criteria, so a DCB
@@ -660,7 +659,7 @@ class ProjectionAnnotationRegistrar {
             Projection<S, E, ID> projection = (Projection<S, E, ID>) raw;
             // Resolved once, in the same place it always was, before any subscription bean: a raw return type with
             // no store bean has to fail here regardless of which subscription bean this projection would go on to need.
-            MaterializedView<E> resolvedView = resolveStoreView(annotation, method, projection, id);
+            MaterializedView<E> resolvedView = resolveStoreView(annotation, method, implementation, projection, id);
             Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
             boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
             boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
@@ -704,9 +703,9 @@ class ProjectionAnnotationRegistrar {
     // catch-up so a new or rebuilt projection is backfilled from the event store first, unless catchup = NONE, where
     // the bare model is used directly and no event store is touched at all.
     @SuppressWarnings("unchecked")
-    private <E, S, ID> void registerPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, PushSubscriptionModel pushModel) {
+    private <E, S, ID> void registerPushProjection(Method method, Class<?> implementation, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, PushSubscriptionModel pushModel) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
-        MaterializedView<E> resolvedView = resolveStoreView(annotation, method, projection, id);
+        MaterializedView<E> resolvedView = resolveStoreView(annotation, method, implementation, projection, id);
         boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
         Subscribable subscribable;
         ReplayAwareSubscriptions catchupModel;
@@ -816,7 +815,7 @@ class ProjectionAnnotationRegistrar {
     // (no CloudEvent conversion on the live path). Catches up from the event store unless catchup = NONE, where it goes
     // live immediately instead and touches no event store at all.
     @SuppressWarnings("unchecked")
-    private <E, S, ID> void registerDomainPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, DomainEventFeed<?> feedBean) {
+    private <E, S, ID> void registerDomainPushProjection(Method method, Class<?> implementation, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, DomainEventFeed<?> feedBean) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         // Computed early: catchesUp is what actually decides whether this projection replays (it drives the view-DSL
         // replay lifecycle below, not a subscription model), so warnIfRecordingNeverResets
@@ -826,7 +825,7 @@ class ProjectionAnnotationRegistrar {
         // Listens to no model: a domain feed's own ReplayAware lifecycle (forwarded to the recording wrapper
         // through CatchupProjectionFeed's instanceof probe) is this composition's only replay signal, and there is
         // no subscription model behind it to hear the same catch-up from twice (ADR 132 decisions 8 and 12).
-        MaterializedView<E> materializedView = wrapForRecording(annotation, id, resolveStoreView(annotation, method, projection, id), null, catchesUp);
+        MaterializedView<E> materializedView = wrapForRecording(annotation, id, resolveStoreView(annotation, method, implementation, projection, id), null, catchesUp);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
         Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
         // Only read below where catchesUp is true, where a goLive() branch runs instead.
@@ -877,7 +876,7 @@ class ProjectionAnnotationRegistrar {
     // the unique bean of type MaterializedView, then ViewStateRepository, then Spring Data CrudRepository (any backend),
     // and finally the zero-config default the store starter contributes. All non-default options are first-class.
     @SuppressWarnings("unchecked")
-    private <E, S, ID> MaterializedView<E> resolveStoreView(org.occurrent.annotation.Projection annotation, Method factoryMethod, Projection<S, E, ID> projection, String id) {
+    private <E, S, ID> MaterializedView<E> resolveStoreView(org.occurrent.annotation.Projection annotation, Method factoryMethod, Class<?> implementation, Projection<S, E, ID> projection, String id) {
         Object referencedStore = resolveStoreBeanByReference(annotation, id);
         if (referencedStore != null) {
             return toMaterializedView(referencedStore, projection, id);
@@ -897,7 +896,7 @@ class ProjectionAnnotationRegistrar {
         // No candidate store bean of any type exists, so fall back to the store starter's zero-config default. The
         // state type is reflected first, so a factory that declares none reports that (the actionable fix) rather than
         // a missing provider.
-        Class<S> stateType = (Class<S>) reflectStateType(factoryMethod, id);
+        Class<S> stateType = (Class<S>) reflectStateType(factoryMethod, implementation, id);
         return Projections.materializedView(projection, defaultProjectionStore(stateType, id), id);
     }
 
@@ -988,19 +987,10 @@ class ProjectionAnnotationRegistrar {
                 (instanceId, state) -> crudRepository.save(state));
     }
 
-    private static Class<?> reflectStateType(Method factoryMethod, String id) {
-        Type returnType = factoryMethod.getGenericReturnType();
-        if (returnType instanceof ParameterizedType parameterizedType) {
-            Type[] arguments = parameterizedType.getActualTypeArguments();
-            if (arguments.length >= 1) {
-                Type stateArgument = arguments[0];
-                if (stateArgument instanceof Class<?> stateClass) {
-                    return stateClass;
-                }
-                if (stateArgument instanceof ParameterizedType stateParameterized && stateParameterized.getRawType() instanceof Class<?> rawState) {
-                    return rawState;
-                }
-            }
+    private static Class<?> reflectStateType(Method factoryMethod, Class<?> implementation, String id) {
+        Class<?> stateType = SubscriptionAnnotations.returnTypeArgument(factoryMethod, implementation, 0);
+        if (stateType != null) {
+            return stateType;
         }
         throw new IllegalArgumentException(("@Projection '%s' needs a read-model store: either name one with store=\"beanName\" (a MaterializedView, ViewStateRepository, or CrudRepository), " +
                 "or declare the factory return type with a concrete state type (for example Projection<MyView, MyEvent, String>) so the read model can use the store's zero-config default.").formatted(id));

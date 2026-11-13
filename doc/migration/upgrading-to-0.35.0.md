@@ -162,8 +162,9 @@ other sections compile fine and behave differently, so read them first.
   was down when a catch-up's replay stopped before it went live. Compiles unchanged.
 - [A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered). An annotated
   method that a bean's class inherits from a superclass, or gets as an interface default method, starts running, and
-  replays the history on its first start when its `startAt` asks for that. Two beans that inherit one annotated method fail at
-  startup with `DuplicateSubscriptionIdException`. Compiles unchanged.
+  replays the history on its first start when its `startAt` or `source = PUSH` asks for that. The application fails
+  at startup when two beans inherit one annotated method, or when a bean behind a CGLIB proxy inherits a final one.
+  Compiles unchanged.
 
 ### Brokers
 
@@ -2078,8 +2079,8 @@ that the class inherits from a superclass, or gets as an interface default metho
 didn't override it, and nothing was logged. Both starters now register it.
 
 This covers `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@SynchronousSubscription`, `@Projection` and
-`@Snapshot`, and `@Saga` on the blocking starter. An inherited `@Projection`, `@Snapshot` or `@Saga` factory method
-runs too, where it used to be refused with an `IllegalStateException`.
+`@Snapshot`, and `@Saga` on the blocking starter. An inherited `@Projection`, `@Snapshot` or `@Saga` factory method,
+which was never found either, runs too.
 
 An override registered before and still does. Without an annotation of its own, it runs under the overridden method's
 annotation, and when it repeats the annotation, it uses its own.
@@ -2097,13 +2098,22 @@ Applications on either starter with one of these:
 - An inherited handler starts running on the first start after the upgrade, from its own start settings. It never
   ran, so nothing is stored for its id. With `startAt = BEGINNING`, or `startAt = BEGINNING_OF_TIME` on
   `@StreamSubscription`, it replays the whole history. So does a `@Snapshot`, whose `startAt` is `BEGINNING` by
-  default.
+  default, and a `@Projection` or `@Saga` with `source = PUSH`, which replays the event store's history before it
+  goes live unless it sets `catchup = NONE`.
+- A handler declared with a type variable, such as `on(E event)` on `Base<E>`, takes its event type from the bean's
+  class. A class that extends `Base<Placed>` subscribes to `Placed`. An inherited factory method declared with a type
+  variable reads its state type the same way.
 - Two beans that inherit one annotated method register two handlers with the same id, so the application fails at
   startup with `DuplicateSubscriptionIdException`. The id is the key the subscription's checkpoint is stored under,
   so two handlers can't share it.
-- A subscription annotation on a superclass method that is static, or that is private on a bean behind a CGLIB proxy,
-  now fails startup with `SubscriptionHandlerNotInvocableException`, the way it already did on a method the bean's
-  class declares.
+- An inherited handler that is static fails at startup with `SubscriptionHandlerNotInvocableException`. So does one
+  on a bean behind a CGLIB proxy when it is private, final, or package-private in another package than the bean's
+  class, since the proxy can't override it. A method the bean's class declares already got the same refusal, except
+  the package-private case, which can't happen there.
+- In Kotlin a superclass method is final unless it is marked `open`, and the `kotlin-spring` plugin opens a class only
+  when the class itself has a Spring annotation such as `@Component`. So an annotated method on a plain Kotlin
+  superclass fails at startup when the bean that inherits it is behind a CGLIB proxy, for example because it has a
+  `@Transactional` method.
 - A class that overrides a generic handler with a concrete parameter type, such as `on(String event)` in a class that
   extends `Base<String>` and overrides `on(E event)`, failed at startup with `DuplicateSubscriptionIdException`. The
   scan also found the bridge method `on(Object)` that the compiler adds, under the same id. The handler now registers
@@ -2116,9 +2126,13 @@ methods. For each one a bean inherits without overriding it:
 
 - If the handler should run, check where its `startAt` starts it. `BEGINNING` replays the history it missed, and
   `NOW` starts at the present.
-- If it shouldn't run, remove the annotation from the method. An override without the annotation still runs, under
-  the annotation of the method it overrides.
-- If it's static, make it an instance method. If it's private and the bean is a CGLIB proxy, make it non-private.
+- If it shouldn't run on any bean, remove the annotation from the method.
+- If only some of the classes that inherit it should run it, move the annotation off the superclass method. Then
+  override the method in each class that should run it and repeat the annotation there. An override without the
+  annotation runs under the annotation of the method it overrides, so leaving the annotation on the superclass keeps
+  it running everywhere.
+- If it's static, make it an instance method. If the bean is behind a CGLIB proxy and the method is private, final,
+  or package-private in another package, make it public or protected and not final. In Kotlin, mark it `open`.
 - If two or more beans inherit it, override the method in each class and repeat the annotation with an id of its own.
 
 The code compiles unchanged, and nothing stored changes. There is no OpenRewrite recipe, because nothing in the code
