@@ -1070,8 +1070,8 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
      * subscription needs the checkpoint. The first cancel completes once the subscribe has given the delete back, and
      * a delete has removed the checkpoint, whether the subscribe waits for the delete to write back on the path that
      * drives the feed or reads the store where a wrapped model is. That outcome held before the decisions on deletes
-     * existed, so this test fails if a change breaks it. Only the assertions on the awaited decision are new behaviour.
-     * The id awaits one until the subscribe is ended, and none once both cancels completed.
+     * existed. Only the assertions on the awaited decision are new behaviour. The id awaits one until the subscribe is
+     * ended, and none once both cancels completed.
      */
     @ParameterizedTest
     @ValueSource(strings = {"drives-the-feed", "reads-the-store"})
