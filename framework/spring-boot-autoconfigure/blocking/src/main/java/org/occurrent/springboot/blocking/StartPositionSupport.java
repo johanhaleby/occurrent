@@ -22,18 +22,26 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.springboot.common.SubscriptionResumePoints;
+import org.occurrent.springboot.common.internal.LiveStartCheckpoints;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.internal.StartPositionPin;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedCheckpoint;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
 
@@ -43,7 +51,10 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -54,13 +65,70 @@ import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME;
  * start knobs into a {@link StartAt}/{@link DcbStartAt} (with the replay-then-resume behavior), decides whether a
  * subscription should block until started, and applies the Spring startup workarounds. The reactive stack rejects
  * time-based start positions, so this logic is deliberately not shared with it.
+ * <p>
+ * It also holds the start boundary of the application context, the live start the event store reports when its bean
+ * is created. A first start that goes straight to live begins there, so an event written while the application starts
+ * reaches it. A bean built after startup begins at a boundary read when it is created.
  */
 class StartPositionSupport {
 
     private final ApplicationContext applicationContext;
+    // Set once, from the first unproxied bean that opens catch-up read scopes, the event store
+    private volatile @Nullable Supplier<@Nullable String> liveStartReader;
+    private volatile @Nullable String contextLiveStart;
+    // The boundary of each subscription a bean built after startup registers, in place of the context's
+    private final Map<String, String> lateLiveStarts = new ConcurrentHashMap<>();
 
     StartPositionSupport(ApplicationContext applicationContext) {
         this.applicationContext = applicationContext;
+    }
+
+    // Only the bean itself, never a proxy, so reading the boundary invokes no advice and looks nothing up by name.
+    // The first such bean decides, and a store with no live start, such as the in-memory one, gives no boundary. A
+    // failed read fails the bean, since starting without the boundary would skip what is written during startup.
+    synchronized void recordStartBoundaryOf(Object bean) {
+        if (liveStartReader != null || AopUtils.isAopProxy(bean)) {
+            return;
+        }
+        @Nullable Supplier<@Nullable String> reader = liveStartReaderOf(bean);
+        if (reader == null) {
+            return;
+        }
+        contextLiveStart = reader.get();
+        liveStartReader = reader;
+    }
+
+    private static @Nullable Supplier<@Nullable String> liveStartReaderOf(Object bean) {
+        if (bean instanceof CatchupReads reads) {
+            return () -> {
+                try (CatchupReadScope scope = reads.openCatchupReadScope(null)) {
+                    return scope.liveStart();
+                }
+            };
+        } else if (bean instanceof DcbCatchupReads reads) {
+            return () -> {
+                try (DcbCatchupReadScope scope = reads.openDcbCatchupReadScope(null)) {
+                    return scope.liveStart();
+                }
+            };
+        }
+        return null;
+    }
+
+    // The boundary for a bean built after startup, read from the same event store, or null when there is none
+    @Nullable String readLateLiveStart() {
+        @Nullable Supplier<@Nullable String> reader = liveStartReader;
+        return reader == null ? null : reader.get();
+    }
+
+    void startAtLateBoundary(String subscriptionId, @Nullable String liveStart) {
+        if (liveStart != null) {
+            lateLiveStarts.put(subscriptionId, liveStart);
+        }
+    }
+
+    void forgetLateBoundary(String subscriptionId) {
+        lateLiveStarts.remove(subscriptionId);
     }
 
     // TODO Also check resume behavior if subscription exists!
@@ -92,10 +160,70 @@ class StartPositionSupport {
             return replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(startAtGlobalPosition)), resumeBehavior);
         }
         return switch (startPosition) {
-            case NOW -> nowThenResume(resumeBehavior);
-            case DEFAULT -> StartAt.subscriptionModelDefault();
+            case NOW -> liveOnlyStart(subscriptionId, true, resumeBehavior);
+            case DEFAULT -> liveOnlyStart(subscriptionId, false, resumeBehavior);
             case BEGINNING -> replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), resumeBehavior);
         };
+    }
+
+    // A first start at NOW, or at DEFAULT with nothing stored, goes straight to live, so it begins at the start
+    // boundary instead of wherever the feed has reached when the model subscribes (issue 979). NOW under
+    // SAME_AS_START_AT stores nothing and starts the live model at the boundary. Every other one pins the boundary as
+    // the first checkpoint and starts at the model default, which resumes from it. Without a boundary, or with a
+    // checkpoint already stored, the start is the one it was before.
+    private StartAt liveOnlyStart(String subscriptionId, boolean now, ResumeBehavior resumeBehavior) {
+        @Nullable Checkpoint boundary = startBoundaryFor(subscriptionId);
+        if (boundary != null) {
+            if (now && resumeBehavior == ResumeBehavior.SAME_AS_START_AT) {
+                return StartAt.dynamic(ctx -> leavesNowToTheLiveModel(ctx) ? null : StartAt.checkpoint(boundary));
+            }
+            if (pinnedOverNothingStored(subscriptionId, boundary)) {
+                return StartAt.subscriptionModelDefault();
+            }
+        }
+        return now ? nowThenResume(resumeBehavior) : StartAt.subscriptionModelDefault();
+    }
+
+    private DcbStartAt dcbLiveOnlyStart(String subscriptionId, boolean now, ResumeBehavior resumeBehavior) {
+        @Nullable Checkpoint boundary = startBoundaryFor(subscriptionId);
+        if (boundary != null) {
+            if (now && resumeBehavior == ResumeBehavior.SAME_AS_START_AT) {
+                String checkpoint = boundary.asString();
+                return DcbStartAt.dynamic(ctx -> leavesNowToTheLiveModel(ctx) ? null : DcbStartAt.checkpoint(checkpoint));
+            }
+            if (pinnedOverNothingStored(subscriptionId, boundary)) {
+                return DcbStartAt.subscriptionModelDefault();
+            }
+        }
+        return now ? dcbNowThenResume(resumeBehavior) : DcbStartAt.subscriptionModelDefault();
+    }
+
+    // Null when there is no boundary, when the store starter cannot turn it into a checkpoint, and when the
+    // application's SubscriptionResumePoints answers for the subscription, since that answer is an explicit start
+    private @Nullable Checkpoint startBoundaryFor(String subscriptionId) {
+        @Nullable String liveStart = lateLiveStarts.getOrDefault(subscriptionId, contextLiveStart);
+        if (liveStart == null) {
+            return null;
+        }
+        @Nullable SubscriptionResumePoints resumePoints = applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable();
+        if (resumePoints != null && resumePoints.resumePointFor(subscriptionId) != null) {
+            return null;
+        }
+        @Nullable LiveStartCheckpoints checkpoints = applicationContext.getBeanProvider(LiveStartCheckpoints.class).getIfUnique();
+        return checkpoints == null ? null : checkpoints.checkpointOf(liveStart);
+    }
+
+    // Pinned whether or not something is stored, since another node may have pinned its own later boundary, and
+    // StartPositionPin settles that race by order. Only a pin over nothing changes the start. Where a checkpoint was
+    // stored already, the subscription resumes from whatever governs, as it did before.
+    private boolean pinnedOverNothingStored(String subscriptionId, Checkpoint boundary) {
+        @Nullable CheckpointStorage checkpointStorage = applicationContext.getBeanProvider(CheckpointStorage.class).getIfUnique();
+        if (checkpointStorage == null) {
+            return false;
+        }
+        boolean checkpointAlreadyExisted = checkpointStorage.exists(subscriptionId);
+        StartPositionPin.pin(checkpointStorage, subscriptionId, checkpointAlreadyExisted, boundary);
+        return !checkpointAlreadyExisted;
     }
 
     // The competing consumer layer lets the instances compete and the durable layer stores and reads a position. A
@@ -170,8 +298,8 @@ class StartPositionSupport {
             return replayThenResume(subscriptionId, DcbStartAt.afterPosition(startAtDcbPosition), resumeBehavior);
         }
         return switch (startPosition) {
-            case NOW -> dcbNowThenResume(resumeBehavior);
-            case DEFAULT -> DcbStartAt.subscriptionModelDefault();
+            case NOW -> dcbLiveOnlyStart(subscriptionId, true, resumeBehavior);
+            case DEFAULT -> dcbLiveOnlyStart(subscriptionId, false, resumeBehavior);
             case BEGINNING -> replayThenResume(subscriptionId, DcbStartAt.beginning(), resumeBehavior);
         };
     }
@@ -253,9 +381,9 @@ class StartPositionSupport {
                         }
                     }
                 };
-                case NOW -> nowThenResume(resumeBehavior);
+                case NOW -> liveOnlyStart(subscriptionId, true, resumeBehavior);
                 // The model default at every layer, as in agnosticStartAt
-                case DEFAULT -> StartAt.subscriptionModelDefault();
+                case DEFAULT -> liveOnlyStart(subscriptionId, false, resumeBehavior);
             };
         };
     }
