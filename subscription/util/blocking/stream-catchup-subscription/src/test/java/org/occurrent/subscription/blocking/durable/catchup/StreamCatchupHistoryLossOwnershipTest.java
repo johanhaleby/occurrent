@@ -1029,6 +1029,27 @@ class StreamCatchupHistoryLossOwnershipTest {
         );
     }
 
+    @Test
+    void a_pause_and_resume_does_not_throw_the_terminal_failure_once_a_subscription_whose_replay_lost_its_live_start_before_it_went_live_is_resumed_at_a_kept_checkpoint_a_dynamic_start_answers() {
+        // Given
+        heldPausedBeforeItWentLive();
+        catchup.resumeSubscription(ID, StartAt.dynamic(context -> StartAt.checkpoint(LATER_TOKEN)));
+        catchup.pauseSubscription(ID);
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").containsExactly(ID),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged").containsExactly(terminalFailureLog(ID, TOKEN))
+        );
+    }
+
     // A replay a subscribe started above the beginning, whose action ages out the live start the replay would go live
     // from, so the live model never gets the subscription and the loss is recorded
     private void heldPausedBeforeItWentLive() {

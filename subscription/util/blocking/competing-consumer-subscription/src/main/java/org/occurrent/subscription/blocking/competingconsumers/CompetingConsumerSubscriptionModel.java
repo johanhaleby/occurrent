@@ -3654,7 +3654,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * throwing until the user acts. A later grant would only be refused again, so the consumer is held as if the user
      * had paused it, which gives up its lease and competes for it again only once the user resumes it. A consumer that
      * waited is held as one paused while it waited, so that resume makes it in the wrapped model again. The refusal is
-     * logged at {@code ERROR} and recorded as logged for the call under way.
+     * logged at {@code ERROR} and recorded as logged for the call under way. A catch-up whose replay from the beginning
+     * lost its live start reports a hold that a resume doesn't refuse, since the replay then runs again from the
+     * beginning, and the log says so.
      */
     private void holdTheRefusedStartPaused(SubscriptionIdAndSubscriberId key, CompetingConsumerState previous, CatchupCannotResumeException refused, boolean registered) {
         competingConsumers.put(key, new CompetingConsumer(key, previous instanceof CompetingConsumerState.Waiting waiting
@@ -3671,9 +3673,16 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         // A start(false) before any start(..) returned keeps it paused, as it keeps one the user paused
         pausedBeforeAStartReturned(key.subscriptionId());
         LostStartHold.heldPaused();
-        log.error("The wrapped subscription model refused to start or resume a subscription from a position it no longer has the history back to, so the subscription is held paused and doesn't compete for the lease, since a grant would only be refused again. A resume competes for the lease again and is refused again when this node gets it."
-                        + " When the subscription's position is stored, stop every instance of the application and delete or replace that stored checkpoint. Otherwise cancel the subscription and subscribe it again from the beginning or from a checkpoint the application kept (subscriberId={}, subscriptionId={})",
-                key.subscriberId(), key.subscriptionId(), refused);
+        if (HistoryLossMessages.isHistoryLost(refused) && HistoryLossMessages.lostFromWhereAResumeSkipsEvents(refused) == null) {
+            // Only a catch-up's replay from the beginning reports a loss that skips nothing, and a resume replays it again
+            log.error("The wrapped subscription model holds a subscription paused because the live start its replay from the beginning would go live from is gone, so the subscription is held paused and doesn't compete for the lease."
+                            + " A resume competes for the lease again, and the wrapped model replays the subscription from the beginning again when this node gets it (subscriberId={}, subscriptionId={})",
+                    key.subscriberId(), key.subscriptionId(), refused);
+        } else {
+            log.error("The wrapped subscription model refused to start or resume a subscription from a position it no longer has the history back to, so the subscription is held paused and doesn't compete for the lease, since a grant would only be refused again. A resume competes for the lease again and is refused again when this node gets it."
+                            + " When the subscription's position is stored, stop every instance of the application and delete or replace that stored checkpoint. Otherwise cancel the subscription and subscribe it again from the beginning or from a checkpoint the application kept (subscriberId={}, subscriptionId={})",
+                    key.subscriberId(), key.subscriptionId(), refused);
+        }
         warnedInThisCall(key, refused);
     }
 

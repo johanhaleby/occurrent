@@ -1565,7 +1565,16 @@ final class NamedCatchupSupport {
         Checkpoint lost = HistoryLossMessages.lostFromWhereAResumeSkipsEvents(failure);
         if (takenOver != null) {
             if (lost != null) {
-                replay.owned().historyLost = lost;
+                // Only while this takeover is still the one in flight for the handover it took over, so a late failure of
+                // a cancelled or replaced takeover doesn't refuse the resume of a subscription a newer run took over
+                underIdLock(subscriptionId, () -> {
+                    synchronized (state) {
+                        if (!shutdown && !state.cancelled.get() && catchingUp.get(subscriptionId) == state && handedOver.get(subscriptionId) == takenOver) {
+                            replay.owned().historyLost = lost;
+                        }
+                    }
+                    return null;
+                });
             }
             return false;
         }

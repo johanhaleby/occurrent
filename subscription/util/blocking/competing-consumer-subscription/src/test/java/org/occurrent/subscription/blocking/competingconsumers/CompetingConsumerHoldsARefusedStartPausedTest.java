@@ -538,7 +538,8 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
 
         // Then
         await().untilAsserted(this::assertHeldPaused);
-        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+        assertThat(errorsLogged()).as("errors logged").singleElement().asString()
+                .contains("replays the subscription from the beginning again").doesNotContain("is refused again");
         grantTheLease();
         model.onConsumeProhibited(ID, NODE);
         await().during(NO_FURTHER_CALLS_FOR).atMost(NO_FURTHER_CALLS_FOR.plusSeconds(5)).untilAsserted(() ->

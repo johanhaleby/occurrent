@@ -780,8 +780,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Resumes the subscription the live delegate holds paused at {@code startAt}, through whichever
      * {@link RepositionableSubscriptions} the live delegate resolves to. Unlike {@link #resumeSubscription(String)}, it
-     * doesn't start this model first or run a parked replay, and it never replays, also not at a position a catch-up
-     * stores. The live delegate handles such a position as one it cannot open its live feed at. A replay that
+     * doesn't start this model first or run a parked replay, and for a subscription the live delegate holds it never
+     * replays, also not at a position a catch-up stores. The live delegate handles such a position as one it cannot open
+     * its live feed at. A subscription held before it reached the live delegate is the exception, described below. A replay that
      * {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
      * and ends once the live delegate has resumed the subscription, so the position given here wins over it, and a later
      * {@link #resumeSubscription(String)} can replay again. When the live delegate throws, a replay this held runs again
@@ -2883,18 +2884,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // The held replay stored the position it replayed to, and a resume after a pause would replay from
                 // there again. The position given here replaces it, and a start from now removes it. Nothing else
                 // stores for the id meanwhile, since the live delegate has no subscription for it and the held
-                // replay's thread stores nothing more.
+                // replay's thread stores nothing more. A dynamic start is decided by what it answers this model, which
+                // answered holds, so its function doesn't run again here.
                 Checkpoint before = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
-                if (answered instanceof StartAt.StartAtCheckpoint given) {
+                @Nullable StartAt forThisModel = answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered;
+                boolean replacesTheStoredPosition = forThisModel instanceof StartAt.StartAtCheckpoint || (forThisModel != null && forThisModel.isNow());
+                if (forThisModel instanceof StartAt.StartAtCheckpoint given) {
                     doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().save(subscriptionId, given.checkpoint, writeConditionFor(cfg, subscriptionId)));
-                } else if (answered.isNow()) {
+                } else if (replacesTheStoredPosition) {
                     deletePositionFromStorage(subscriptionId);
                 }
                 try {
                     return subscribe(subscriptionId, made.filter(), answered, made.action(), false);
                 } catch (Throwable e) {
                     // Throwable, since a live model written in Kotlin can throw a checked exception
-                    if (answered instanceof StartAt.StartAtCheckpoint || answered.isNow()) {
+                    if (replacesTheStoredPosition) {
                         try {
                             if (before == null) {
                                 deletePositionFromStorage(subscriptionId);
