@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * The handlers an annotation post-processor has registered, so a later scan of the same bean skips them. A handler is
  * keyed by its bean name and its {@link HandlerMethod#signature()}. Every scan reads
- * {@link SubscriptionAnnotations#implementationClassOf}, never a proxy class, so two scans of one bean compute the same
+ * {@link SubscriptionAnnotations#implementationClassOf}, the class behind a proxy, so two scans of one bean compute the same
  * signature for the same handler. Internal to the Spring Boot starters, not an API.
  */
 public final class RegisteredHandlers {

@@ -35,6 +35,11 @@ import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.blocking.other.CrossPackageEvent;
+import org.occurrent.springboot.blocking.other.CrossPackageFixedShadowing;
+import org.occurrent.springboot.blocking.other.CrossPackageOverridingMid;
+import org.occurrent.springboot.blocking.other.CrossPackageWideningMid;
+import org.occurrent.springboot.blocking.shadowing.CrossPackageRepeatingShadowing;
+import org.occurrent.springboot.blocking.shadowing.CrossPackageShadowing;
 import org.occurrent.springboot.blocking.other.CrossPackagePackagePrivateHandler;
 import org.occurrent.springboot.blocking.other.CrossPackagePublicHandler;
 import org.occurrent.springboot.common.OccurrentProperties;
@@ -52,6 +57,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Scope;
+import org.springframework.context.annotation.ScopedProxyMode;
 import org.springframework.core.PriorityOrdered;
 import org.springframework.core.NestedExceptionUtils;
 
@@ -181,6 +187,92 @@ class InheritedHandlerRegistrationTest {
             anyHandlerFor(subscriptions, "cross-package-package-private-handler").invoke(null, new CrossPackageEvent());
             anyHandlerFor(subscriptions, "cross-package-subclass-handler").invoke(null, new CrossPackageEvent());
             assertThat(bodies).containsExactlyInAnyOrder("package-private-body", "subclass-body");
+        });
+    }
+
+    @Test
+    void a_package_private_handler_overridden_in_its_own_package_registers_once_and_runs_the_override_for_a_bean_in_another_package_that_declares_nothing() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", InheritsOverrideFromHandlersPackageSubscriber.class, () -> new InheritsOverrideFromHandlersPackageSubscriber(bodies)).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactly("cross-package-package-private-handler");
+            anyHandlerFor(subscriptions, "cross-package-package-private-handler").invoke(null, new CrossPackageEvent());
+            assertThat(bodies).containsExactly("mid-body");
+        });
+    }
+
+    @Test
+    void a_package_private_handler_widened_to_public_in_its_own_package_registers_once_and_runs_the_override_of_a_bean_in_another_package() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", OverridesWidenedHandlerSubscriber.class, () -> new OverridesWidenedHandlerSubscriber(bodies)).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactly("cross-package-package-private-handler");
+            anyHandlerFor(subscriptions, "cross-package-package-private-handler").invoke(null, new CrossPackageEvent());
+            assertThat(bodies).containsExactly("sub-body");
+        });
+    }
+
+    @Test
+    void a_lazy_bean_whose_declared_type_the_scan_refuses_but_whose_instance_overrides_correctly_starts_and_registers_once() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", CrossPackageShadowing.class, () -> new CrossPackageFixedShadowing(bodies), definition -> definition.setLazyInit(true)).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactly("cross-package-package-private-handler");
+            anyHandlerFor(subscriptions, "cross-package-package-private-handler").invoke(null, new CrossPackageEvent());
+            assertThat(bodies).containsExactly("fixed-body");
+        });
+    }
+
+    @Test
+    void a_lazy_bean_whose_declared_type_the_scan_refuses_but_whose_instance_repeats_the_annotation_starts_and_registers_both_handlers() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", CrossPackageShadowing.class, () -> new CrossPackageRepeatingShadowing(bodies), definition -> definition.setLazyInit(true)).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactlyInAnyOrder("cross-package-package-private-handler", "repeating-handler");
+            anyHandlerFor(subscriptions, "repeating-handler").invoke(null, new CrossPackageEvent());
+            assertThat(bodies).containsExactly("repeating-body");
+        });
+    }
+
+    @Test
+    void a_lazy_bean_whose_declared_type_and_instance_are_both_refused_still_fails_startup_with_the_refusal() {
+        runner.withBean("subscriber", CrossPackageShadowing.class, () -> new RefusedShadowingSubscriber(new CopyOnWriteArrayList<>()), definition -> definition.setLazyInit(true)).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not override " + CrossPackagePackagePrivateHandler.class.getName() + "#on");
+        });
+    }
+
+    @Test
+    void a_scoped_proxy_of_interfaces_registers_its_handler_once_under_the_target_and_runs_the_beans_body() {
+        runner.withUserConfiguration(ScopedInterfacesConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactly("scoped-interfaces-handler");
+            handlerFor(subscriptions, "scoped-interfaces-handler").invoke(null, new TestEvent());
+            assertThat(context.getBean(Invocations.class).bodies()).containsExactly("scoped-interfaces-body");
+        });
+    }
+
+    @Test
+    void a_scoped_proxy_of_the_target_class_registers_its_handler_once_under_the_target_and_runs_the_beans_body() {
+        runner.withUserConfiguration(ScopedTargetClassConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactly("scoped-target-class-handler");
+            handlerFor(subscriptions, "scoped-target-class-handler").invoke(null, new TestEvent());
+            assertThat(context.getBean(Invocations.class).bodies()).containsExactly("scoped-target-class-body");
         });
     }
 
@@ -529,6 +621,84 @@ class InheritedHandlerRegistrationTest {
         }
     }
 
+    interface ScopedMarker {
+    }
+
+    record ScopedMarkerConsumer(ScopedMarker marker) {
+    }
+
+    static class ScopedInterfacesHandler implements ScopedMarker {
+        private final Invocations invocations;
+
+        ScopedInterfacesHandler(Invocations invocations) {
+            this.invocations = invocations;
+        }
+
+        @Subscription(id = "scoped-interfaces-handler")
+        public void on(TestEvent event) {
+            invocations.bodies().add("scoped-interfaces-body");
+        }
+    }
+
+    public static class ScopedTargetClassHandler {
+        private final Invocations invocations;
+
+        ScopedTargetClassHandler(Invocations invocations) {
+            this.invocations = invocations;
+        }
+
+        @Subscription(id = "scoped-target-class-handler")
+        public void on(TestEvent event) {
+            invocations.bodies().add("scoped-target-class-body");
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class ScopedInterfacesConfiguration {
+        @Bean
+        @Scope(value = "prototype", proxyMode = ScopedProxyMode.INTERFACES)
+        ScopedInterfacesHandler scopedInterfacesHandler(Invocations invocations) {
+            return new ScopedInterfacesHandler(invocations);
+        }
+
+        @Bean
+        ScopedMarkerConsumer scopedMarkerConsumer(ScopedMarker marker) {
+            return new ScopedMarkerConsumer(marker);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class ScopedTargetClassConfiguration {
+        @Bean
+        @Scope(value = "prototype", proxyMode = ScopedProxyMode.TARGET_CLASS)
+        ScopedTargetClassHandler scopedTargetClassHandler(Invocations invocations) {
+            return new ScopedTargetClassHandler(invocations);
+        }
+    }
+
+    static class InheritsOverrideFromHandlersPackageSubscriber extends CrossPackageOverridingMid {
+        InheritsOverrideFromHandlersPackageSubscriber(List<String> bodies) {
+            super(bodies);
+        }
+    }
+
+    static class OverridesWidenedHandlerSubscriber extends CrossPackageWideningMid {
+        OverridesWidenedHandlerSubscriber(List<String> bodies) {
+            super(bodies);
+        }
+
+        @Override
+        public void on(CrossPackageEvent event) {
+            bodies.add("sub-body");
+        }
+    }
+
+    static class RefusedShadowingSubscriber extends CrossPackageShadowing {
+        RefusedShadowingSubscriber(List<String> bodies) {
+            super(bodies);
+        }
+    }
+
     static class CrossPackageSameSignatureSubscriber extends CrossPackagePackagePrivateHandler {
         CrossPackageSameSignatureSubscriber(List<String> bodies) {
             super(bodies);
@@ -817,7 +987,7 @@ class InheritedHandlerRegistrationTest {
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("Method " + shadowing + " does not override " + shadowed)
                     .hasMessageContaining("with id \"cross-package-package-private-handler\"")
-                    .hasMessageContaining("Make " + shadowed + " protected or public")
+                    .hasMessageContaining("Make both " + shadowed + " and " + shadowing + " protected or public")
                     .hasMessageContaining("or rename " + shadowing);
             assertThat(bodies).isEmpty();
         });

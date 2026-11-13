@@ -50,9 +50,12 @@ method as the one the bean's class actually runs:
   annotation.
 - An override that repeats the annotation is one handler under its own annotation.
 - Bridge methods are left out, so a generic handler is one handler.
+- Overriding follows the JVM's rules. A package-private method is overridden by a method in its own package, and by a
+  method in any package that overrides such a method.
 - A method that only shares its name and parameters with an annotated method it doesn't override is refused at
   startup. That happens when the annotated method is package-private and a superclass in another package declares it,
-  since Spring's annotation search ignores packages and gives the subclass's method that annotation.
+  since Spring's annotation search ignores packages and gives the subclass's method that annotation. When the bean's
+  class, or a superclass below that method, declares a method of the same signature, that method is checked instead.
 - A static method an interface declares is left out, since a class doesn't inherit it. A static method a superclass
   declares is a handler, and it's refused the way a static method the bean's class declares is.
 
@@ -61,8 +64,9 @@ So `on(E event)` on `Base<E>` subscribes to `Placed` on a class that extends `Ba
 `E` a type, as a raw `extends Base` doesn't, a handler gets the erasure of `E` as before, and a factory whose state type
 is a type variable fails at startup with the error it gave before.
 
-The scan reads the class whose code runs, never a proxy's class, so a bean behind a JDK interface proxy is scanned
-through the proxy's target class. The key that tells whether a handler is already registered is the bean name, the method's
+The scan reads the class behind a proxy, so a bean behind a JDK interface proxy is scanned through the proxy's target
+class. A bean with a scoped proxy has two bean definitions, the proxy's and its target's under the `scopedTarget.`
+name. The scan skips the proxy's, so the handlers register once, under the target's name. The key that tells whether a handler is already registered is the bean name, the method's
 name and its parameter types, as in 0.34.0. When the method is private or package-private and a superclass declares
 it, the key also has that superclass. So a private method on the bean's class and a private method of the same
 signature on a superclass get two keys, and they register as two handlers. A later pass of the scan over the same bean
@@ -74,8 +78,8 @@ generic interface method with a concrete parameter type, the handler runs throug
 whose class overrides the method, since that runs code the scan didn't read. Two proxies can't be unwrapped to their
 target, because their target source isn't a fixed singleton:
 
-- A JDK interface proxy runs the factory through the proxy when the method is declared on an interface the proxy
-  implements, the way 0.34.0 ran it. It refuses any other method, since the proxy doesn't implement it.
+- A JDK interface proxy runs the factory through the proxy when one of the proxy's interfaces declares the method the
+  scan read from the class behind it, the way 0.34.0 ran it. It refuses any other method, since the proxy doesn't implement it.
 - A CGLIB proxy refuses a package-private factory method declared in another package than the class it subclasses.
   The proxy can't override such a method, so invoking it would run the method's body on the proxy instance.
 
@@ -123,8 +127,8 @@ I rejected three smaller changes:
 - A method that shares its name and parameters with a package-private annotated method of a superclass in another
   package ran under that method's annotation in 0.34.0, though it doesn't override it. Now the application fails at
   startup. Running the annotated method instead would swap one handler body for another, and a user who missed the
-  upgrade guide would get no signal of it. Making the superclass method protected or public lets the subclass's
-  method override it, which keeps the 0.34.0 handler. Renaming the subclass's method runs the superclass method.
+  upgrade guide would get no signal of it. Making both methods protected or public lets the subclass's method
+  override the superclass method, which keeps the 0.34.0 handler. Renaming the subclass's method runs the superclass method.
 - There is no OpenRewrite recipe, because nothing in the code says whether an inherited handler was meant to run. The
   code compiles unchanged. [The upgrade guide](../../migration/upgrading-to-0.35.0.md#a-handler-method-the-bean-inherits-is-registered)
   says who is affected and what to do.

@@ -24,6 +24,13 @@ import org.occurrent.annotation.StreamVersion;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.springboot.common.internal.HandlerMethod;
+import org.occurrent.springboot.common.between.PublicMethodThatDoesNotOverride;
+import org.occurrent.springboot.common.declaring.OverridesHandlerBelowAMethodThatDoesNot;
+import org.occurrent.springboot.common.declaring.PackagePrivateHandlerBase;
+import org.occurrent.springboot.common.declaring.PackagePrivateOverridingMid;
+import org.occurrent.springboot.common.declaring.PublicOverridingMid;
+import org.occurrent.springboot.common.declaring.PublicOverridingOfPackagePrivateMid;
+import org.occurrent.springboot.common.declaring.SubclassInDeclaringPackage;
 import org.occurrent.springboot.common.other.CrossPackageMethods;
 import org.occurrent.springboot.common.other.CrossPackageSubscriptionBase;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
@@ -1029,8 +1036,83 @@ class SubscriptionAnnotationsTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Method " + shadowing + " does not override " + shadowed)
                 .hasMessageContaining("@Subscription with id \"h\"")
-                .hasMessageContaining("Make " + shadowed + " protected or public")
+                .hasMessageContaining("Make both " + shadowed + " and " + shadowing + " protected or public")
                 .hasMessageContaining("or rename " + shadowing);
+    }
+
+    @Test
+    void handlerMethods_refusal_advises_making_both_methods_protected_or_public_since_a_public_override_of_a_package_private_method_is_not_enough() {
+        String shadowing = ShadowsPackagePrivateHandler.class.getName() + "#on(String)";
+        String shadowed = CrossPackageSubscriptionBase.class.getName() + "#on(String)";
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(ShadowsPackagePrivateHandler.class, List.of(Subscription.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Make both ")
+                .hasMessageContaining(shadowed + " and " + shadowing + " protected or public");
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // handlerMethods follows the JVM's rules for overriding a package-private method
+    // ------------------------------------------------------------------------------------------------------
+
+    static class SubOfPackagePrivateOverridingMid extends PackagePrivateOverridingMid {
+    }
+
+    static class OverridesWidenedMid extends PublicOverridingMid {
+        @Override
+        public void on(String event) {
+        }
+    }
+
+    static class OverridesWidenedMidOfPackagePrivateMid extends PublicOverridingOfPackagePrivateMid {
+        @Override
+        public void on(String event) {
+        }
+    }
+
+    static class InheritsWidenedMidOfPackagePrivateMid extends PublicOverridingOfPackagePrivateMid {
+    }
+
+    @Test
+    void handlerMethods_returns_the_package_private_override_once_for_a_class_in_another_package_that_declares_nothing() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(SubOfPackagePrivateOverridingMid.class, List.of(Subscription.class)))
+                .containsExactly(PackagePrivateOverridingMid.class.getDeclaredMethod("on", String.class));
+    }
+
+    @Test
+    void handlerMethods_returns_the_public_override_of_a_package_private_handler_once_for_a_class_in_another_package_that_overrides_it_again() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(OverridesWidenedMid.class, List.of(Subscription.class)))
+                .containsExactly(OverridesWidenedMid.class.getDeclaredMethod("on", String.class));
+    }
+
+    @Test
+    void handlerMethods_returns_the_last_override_of_a_chain_that_starts_with_a_package_private_handler_and_widens_to_public() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(OverridesWidenedMidOfPackagePrivateMid.class, List.of(Subscription.class)))
+                .containsExactly(OverridesWidenedMidOfPackagePrivateMid.class.getDeclaredMethod("on", String.class));
+    }
+
+    @Test
+    void handlerMethods_returns_the_widened_override_of_a_chain_for_a_class_in_another_package_that_declares_nothing() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(InheritsWidenedMidOfPackagePrivateMid.class, List.of(Subscription.class)))
+                .containsExactly(PublicOverridingOfPackagePrivateMid.class.getDeclaredMethod("on", String.class));
+    }
+
+    @Test
+    void handlerMethods_returns_only_the_override_in_the_handlers_package_of_a_class_that_extends_a_method_that_does_not_override_the_handler() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(OverridesHandlerBelowAMethodThatDoesNot.class, List.of(Subscription.class)))
+                .containsExactly(OverridesHandlerBelowAMethodThatDoesNot.class.getDeclaredMethod("on", String.class));
+    }
+
+    @Test
+    void handlerMethods_refuses_a_public_method_in_another_package_that_does_not_override_a_package_private_handler_when_the_scanned_class_is_in_the_handlers_package() throws Exception {
+        String shadowing = PublicMethodThatDoesNotOverride.class.getName() + "#on(String)";
+        String shadowed = PackagePrivateHandlerBase.class.getName() + "#on(String)";
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(SubclassInDeclaringPackage.class, List.of(Subscription.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(shadowing)
+                .hasMessageContaining(shadowed)
+                .hasMessageContaining("@Subscription with id \"h\"");
     }
 
     @Test

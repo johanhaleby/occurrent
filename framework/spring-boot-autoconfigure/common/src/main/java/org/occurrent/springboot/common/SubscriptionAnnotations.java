@@ -574,11 +574,14 @@ public final class SubscriptionAnnotations {
      * declared one does.
      * Each method is the one {@code type} actually runs, so an override is found once, under its own annotation if it
      * repeats one and under the overridden method's if it doesn't. Bridge methods are left out, so a generic handler
-     * is found once too. A method that does not override the method its annotation is declared on is refused with an
-     * {@link IllegalStateException}. That is a method of the same signature as a package-private one a superclass in
-     * another package declares, which Spring's annotation search reads the superclass method's annotation for, so
-     * nothing says which of the two bodies the handler is. A static method an interface declares is left out, since a
-     * class does not inherit it. A static method a superclass declares is returned like any other, so a static subscription handler there is
+     * is found once too. Overriding follows the JVM's rules, under which a package-private method is overridden only
+     * from its own package or through a chain of overrides that starts there. Spring's annotation search ignores
+     * packages, so it can give a method the annotation of a package-private method the method doesn't override. Such a
+     * method is refused with an {@link IllegalStateException}, since nothing says which of the two bodies the handler
+     * is, unless {@code type} or a superclass below it declares a method of the same signature, which is then checked
+     * instead. A package-private method that a method of {@code type} or one of its superclasses overrides is left out, since
+     * {@code type} never runs it. A static method an interface declares is left out, since a class does not inherit
+     * it. A static method a superclass declares is returned like any other, so a static subscription handler there is
      * refused the way one the class declares is. Both annotation post-processors call this, so they find the same
      * methods.
      *
@@ -596,16 +599,27 @@ public final class SubscriptionAnnotations {
                 return null;
             }
             MergedAnnotations annotations = MergedAnnotations.from(method, SearchStrategy.TYPE_HIERARCHY);
+            // MethodIntrospector can hand over a bridge method and keeps the method it bridges instead, so that is the
+            // method the checks below compare against
+            Method bridged = BridgeMethodResolver.findBridgedMethod(method);
             boolean annotated = false;
             for (Class<? extends Annotation> annotationType : annotationTypes) {
                 MergedAnnotation<? extends Annotation> annotation = annotations.get(annotationType);
                 if (!annotation.isPresent()) {
                     continue;
                 }
-                // MethodIntrospector can hand over a bridge method and keeps the method it bridges instead, so that is the
-                // method the annotated declaration has to resolve to
-                if (annotation.getSource() instanceof Method declaration && !AopUtils.getMostSpecificMethod(declaration, type).equals(BridgeMethodResolver.findBridgedMethod(method))) {
-                    throw annotationFromAMethodNotOverridden(method, declaration, annotation);
+                // MethodIntrospector keeps a package-private method of another package than type even when a method of
+                // its own package overrides it, since Spring decides overriding by type's package alone
+                if (!methodTheJvmRuns(bridged, type).equals(bridged)) {
+                    return null;
+                }
+                if (annotation.getSource() instanceof Method declaration && !methodTheJvmRuns(declaration, type).equals(bridged)) {
+                    // A method of the same signature declared below it is the one the class shows for that
+                    // signature, and it is checked on its own, as a handler or refused
+                    if (declaredBelow(bridged, type)) {
+                        return null;
+                    }
+                    throw annotationFromAMethodNotOverridden(bridged, declaration, annotation);
                 }
                 annotated = true;
             }
@@ -613,12 +627,81 @@ public final class SubscriptionAnnotations {
         }).keySet();
     }
 
+    // The method the JVM runs when method is invoked on an instance of type, bridges resolved to the method they
+    // bridge. The JVM picks the first method of the same signature up from type that overrides method, and Spring's
+    // ClassUtils.getMostSpecificMethod decides overriding for a package-private method by type's package instead of
+    // the overriding method's, which is wrong when a superclass in method's own package overrides it
+    private static Method methodTheJvmRuns(Method method, Class<?> type) {
+        Class<?> declaringClass = method.getDeclaringClass();
+        int modifiers = method.getModifiers();
+        if (Modifier.isStatic(modifiers) || Modifier.isPrivate(modifiers)) {
+            return method;
+        }
+        if (declaringClass.isInterface() || !declaringClass.isAssignableFrom(type)) {
+            return BridgeMethodResolver.findBridgedMethod(AopUtils.getMostSpecificMethod(method, type));
+        }
+        for (Class<?> candidateClass = type; candidateClass != null && candidateClass != declaringClass; candidateClass = candidateClass.getSuperclass()) {
+            Method candidate = declaredMethod(candidateClass, method);
+            if (candidate != null && overrides(candidate, method)) {
+                return BridgeMethodResolver.findBridgedMethod(candidate);
+            }
+        }
+        return BridgeMethodResolver.findBridgedMethod(method);
+    }
+
+    // Whether overrider, declared in a subclass of overridden's declaring class, overrides it under the JVM's rules
+    // (JVMS 5.4.5). A package-private method is overridden from its own runtime package, or by overriding a method in
+    // between that overrides it
+    private static boolean overrides(Method overrider, Method overridden) {
+        if (Modifier.isPrivate(overrider.getModifiers()) || Modifier.isStatic(overrider.getModifiers())) {
+            return false;
+        }
+        int modifiers = overridden.getModifiers();
+        if (Modifier.isPrivate(modifiers) || Modifier.isStatic(modifiers)) {
+            return false;
+        }
+        if (Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers) || inSameRuntimePackage(overrider.getDeclaringClass(), overridden.getDeclaringClass())) {
+            return true;
+        }
+        for (Class<?> between = overrider.getDeclaringClass().getSuperclass(); between != null && between != overridden.getDeclaringClass(); between = between.getSuperclass()) {
+            Method intermediate = declaredMethod(between, overridden);
+            if (intermediate != null && overrides(intermediate, overridden) && overrides(overrider, intermediate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Whether type or a superclass of type below method's declaring class declares an instance method of method's
+    // signature that isn't private
+    private static boolean declaredBelow(Method method, Class<?> type) {
+        for (Class<?> candidateClass = type; candidateClass != null && candidateClass != method.getDeclaringClass(); candidateClass = candidateClass.getSuperclass()) {
+            Method candidate = declaredMethod(candidateClass, method);
+            if (candidate != null && !Modifier.isPrivate(candidate.getModifiers()) && !Modifier.isStatic(candidate.getModifiers())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean inSameRuntimePackage(Class<?> a, Class<?> b) {
+        return a.getPackageName().equals(b.getPackageName()) && a.getClassLoader() == b.getClassLoader();
+    }
+
+    private static @Nullable Method declaredMethod(Class<?> type, Method signature) {
+        try {
+            return type.getDeclaredMethod(signature.getName(), signature.getParameterTypes());
+        } catch (NoSuchMethodException e) {
+            return null;
+        }
+    }
+
     private static IllegalStateException annotationFromAMethodNotOverridden(Method method, Method declaration, MergedAnnotation<? extends Annotation> annotation) {
         String annotationName = "@" + annotation.getType().getSimpleName();
         String handler = annotation.getValue("id", String.class).map(id -> "%s with id \"%s\"".formatted(annotationName, id)).orElse(annotationName);
         return new IllegalStateException(("Method %s does not override %s, which declares %s, but Spring's annotation search finds the annotation on both, so which body is the handler is ambiguous. "
-                + "Make %s protected or public so %s overrides it and runs as the handler, or rename %s to keep %s as the handler.").formatted(
-                signatureOf(method), signatureOf(declaration), handler, signatureOf(declaration), signatureOf(method), signatureOf(method), signatureOf(declaration)));
+                + "Make both %s and %s protected or public so %s overrides it and runs as the handler, or rename %s to keep %s as the handler.").formatted(
+                signatureOf(method), signatureOf(declaration), handler, signatureOf(declaration), signatureOf(method), signatureOf(method), signatureOf(method), signatureOf(declaration)));
     }
 
     private static String signatureOf(Method method) {

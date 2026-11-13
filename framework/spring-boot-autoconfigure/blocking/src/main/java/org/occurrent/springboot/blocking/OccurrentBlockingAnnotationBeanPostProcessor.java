@@ -28,6 +28,7 @@ import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.springframework.aop.scope.ScopedProxyUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.FactoryBean;
@@ -188,7 +189,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             builtWhileScanning.add(new BuiltWhileScanning(beanName, bean));
         }
         // Read again rather than reused, so a bean finishing as the scan ends is registered by whichever of the two
-        // sees the flag set. Registering it twice is not possible, since both go through the same handler keys.
+        // sees the flag set. Registering it twice is not possible, since both check the same RegisteredHandlers.
         if (startupScanComplete && beanFactory.containsBeanDefinition(beanName)) {
             boolean singleton = beanFactory.isSingleton(beanName);
             // The class of the instance this callback received, never a second lookup by name. Two threads
@@ -248,7 +249,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     //
     // The instance recorded with the name is what makes this safe. Resolving the name would mean waiting for the
     // thread creating it, which may be waiting for the lock this holds, so nothing here resolves anything. Both
-    // sides can reach the same bean, and the handler keys they both go through admit only the first.
+    // sides can reach the same bean, and the RegisteredHandlers they both check admit only the first.
     //
     // This runs on the startup thread inside afterSingletonsInstantiated, so a bean whose creating thread has
     // finished with it registers under the startup policy and keeps the WAIT_UNTIL_STARTED guarantee it would have
@@ -309,6 +310,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // pass so the next one can read their real class.
         Set<String> beansToBuild = new LinkedHashSet<>();
         for (String beanName : beanNames) {
+            // A scoped proxy and its target are two definitions of one bean, so its handlers register once, under the
+            // target's name
+            if (isScopedProxy(beanName)) {
+                continue;
+            }
             ScanType scanType;
             try {
                 scanType = typeResolver.apply(beanName);
@@ -438,8 +444,18 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
 
+    // A refusal read from a predicted type counts as an annotation, so the bean is built and its own class decides,
+    // since a subclass the container builds may override the method the prediction refuses
     private static boolean declaresAnyOccurrentAnnotation(Class<?> type) {
-        return !SubscriptionAnnotations.handlerMethods(type, HANDLER_ANNOTATIONS).isEmpty();
+        try {
+            return !SubscriptionAnnotations.handlerMethods(type, HANDLER_ANNOTATIONS).isEmpty();
+        } catch (IllegalStateException e) {
+            return true;
+        }
+    }
+
+    private boolean isScopedProxy(String beanName) {
+        return ((ConfigurableApplicationContext) applicationContext).getBeanFactory().containsBeanDefinition(ScopedProxyUtils.getTargetBeanName(beanName));
     }
 
 

@@ -2150,9 +2150,9 @@ methods. For each one a bean inherits without overriding it:
 - If it's static, make it an instance method. If the bean is behind a CGLIB proxy and the method is private, final,
   or package-private in another package, make it public or protected and not final. In Kotlin, mark it `open`.
 - If it's package-private and a subclass in another package declares a method with the same name and parameters, the
-  application fails at startup. To keep the subclass's method as the handler, which is what ran before, make the
-  superclass method protected or public, so the subclass's method overrides it. To run the superclass method instead,
-  rename the subclass's method.
+  application fails at startup. To keep the subclass's method as the handler, which is what ran before, make both
+  methods protected or public, so the subclass's method overrides the superclass method. To run the superclass method
+  instead, rename the subclass's method.
 - If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
   A bean of the class that declares it keeps the original id.
 
