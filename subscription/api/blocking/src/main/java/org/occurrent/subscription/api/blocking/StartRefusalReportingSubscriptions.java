@@ -72,6 +72,21 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
     }
 
     /**
+     * Whether this model tells a listener through {@link StartRefusalListener#handleStartRefusal} about a start position
+     * it refuses. A catch-up subscription model refuses none itself. It passes each listener on to the model it wraps
+     * and reports only the subscriptions it holds paused, so it answers what that model answers, and {@code false} when
+     * that model doesn't implement this interface. A listener that waits for a refusal report after a handle threw the
+     * refusal waits only when this answers {@code true}, since nothing would report it otherwise. This default answers
+     * {@code true}.
+     *
+     * @return {@code true} when this model calls {@link StartRefusalListener#handleStartRefusal} for the start positions
+     * it refuses after {@code subscribe} has returned.
+     */
+    default boolean reportsStartRefusals() {
+        return true;
+    }
+
+    /**
      * Finds the {@link StartRefusalReportingSubscriptions} capability behind {@code subscriptionModel}, unwrapping a
      * {@link SubscriptionModelWrapper} chain until one is found.
      *

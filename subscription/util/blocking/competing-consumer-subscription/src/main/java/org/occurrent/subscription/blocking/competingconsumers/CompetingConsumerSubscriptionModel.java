@@ -646,9 +646,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             noStartReturnedSinceBuilt = true;
         }
         this.competingConsumerStrategy.addListener(this);
+        // A catch-up is found here also over a model that reports no refusals, and then answers false, so a handle doesn't
+        // wait for a report nothing sends
         this.wrappedModelReportsStartRefusals = StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(model -> {
             model.addStartRefusalListener(startRefusalListener);
-            return true;
+            return model.reportsStartRefusals();
         }).orElse(false);
     }
 

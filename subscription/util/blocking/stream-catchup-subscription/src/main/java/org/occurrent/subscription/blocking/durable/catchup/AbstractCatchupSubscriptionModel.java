@@ -986,6 +986,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                || StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).map(liveDelegate -> liveDelegate.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
     }
 
+    /**
+     * Answers what the live delegate answers, since only the live delegate refuses a start position after
+     * {@code subscribe} has returned, and {@code false} when it doesn't report its refusals.
+     */
+    @Override
+    public boolean reportsStartRefusals() {
+        return StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).map(StartRefusalReportingSubscriptions::reportsStartRefusals).orElse(false);
+    }
+
     // Without asking the live delegate, for a dispatcher whose children share one
     boolean holdsTheReplayHeldFor(String subscriptionId, CatchupCannotResumeException refusal) {
         ParkedReplay parked = parkedReplays.get(subscriptionId);
