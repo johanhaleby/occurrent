@@ -716,7 +716,8 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
      * A subscribe takes over the delete a first cancel of the id started, a second cancel ends it, and a later subscribe
      * takes over both deletes and cannot read its start position. Both end, so no subscription needs the checkpoint and
      * the second cancel does not complete until a delete has removed it, whichever of the two gives the deletes back
-     * first. That holds on the path that drives the feed and on the one that hands the subscription to a wrapped model.
+     * first. That holds on the path that drives the feed and on the one that hands the subscription to a wrapped model, where
+     * the first subscribe is held reading the store when the second cancel ends it.
      * <ul>
      *     <li>later: the later subscribe gives back first, while the give-back of the one the second cancel ended is
      *     held</li>
@@ -725,16 +726,19 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
      * </ul>
      */
     @ParameterizedTest
-    @CsvSource({"handed-over, later", "handed-over, ended"})
+    @CsvSource({"drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended", "drives-the-feed, later", "drives-the-feed, ended", "reads-the-store, later", "reads-the-store, ended"})
     void a_cancel_completes_with_the_checkpoint_removed_whichever_of_two_subscribes_that_took_its_delete_over_gives_it_back_first(String path, String givesBackFirst) throws Exception {
         // Given
         GatedStorage storage = new GatedStorage(false);
-        Feed feed = path.equals("handed-over") ? new NamedFeed() : new Feed();
+        boolean readsTheStore = path.equals("reads-the-store");
+        Feed feed = readsTheStore ? new NamedFeed() : new Feed();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
         boolean laterFirst = givesBackFirst.equals("later");
         ExecutorService caller = Executors.newSingleThreadExecutor();
+        ExecutorService laterCaller = Executors.newSingleThreadExecutor();
         ExecutorService canceller = Executors.newSingleThreadExecutor();
         CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
         AtomicReference<@Nullable ParkedGiveBack> parkNext = parkGiveBacks(model);
         ParkedGiveBack endedParked = new ParkedGiveBack();
         ParkedGiveBack laterParked = new ParkedGiveBack();
@@ -751,9 +755,16 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         });
         try {
             Mono<Void> firstCancel = cancelWithCheckpointStored(model, storage, feed, release);
-            CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())), caller)
-                    .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-            if (path.equals("handed-over")) { await().atMost(TIMEOUT).until(() -> feed.isRunning(SUBSCRIPTION_ID) && model.isRunning(SUBSCRIPTION_ID)); System.out.println("DIAG forced registered, undecided=" + undecided(model)); }
+            // One that reads the store is held there, so a wrapped model has not registered it when the second cancel ends it
+            if (readsTheStore) {
+                storage.readGate = releaseRead;
+            }
+            CompletableFuture<Subscription> endedSubscribe = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())), caller);
+            if (readsTheStore) {
+                assertThat(storage.readEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("read of the store held").isTrue();
+            } else {
+                endedSubscribe.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            }
             // On a thread of its own, since on the path that drives the feed the cancel gives the deletes back on the thread that calls it
             parkNext.set(endedParked);
             CompletableFuture<Mono<Void>> secondCancel = CompletableFuture.supplyAsync(() -> model.cancelSubscription(SUBSCRIPTION_ID), canceller);
@@ -764,7 +775,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
                 parkNext.set(laterParked);
             }
             storage.readsFail = true;
-            CompletableFuture<Subscription> laterSubscribe = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())), caller);
+            CompletableFuture<Subscription> laterSubscribe = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())), laterCaller);
             AtomicReference<@Nullable Throwable> laterEnded = new AtomicReference<>();
             if (laterFirst) {
                 laterEnded.set(catchThrowable(() -> laterSubscribe.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block()));
@@ -785,7 +796,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             assertThat(untilStored(storage, stored)).as("checkpoint written back while a give-back is held").isEqualTo(String.valueOf(stored));
             // The second cancel does not start its delete until it has given back what it ended, which is the held give-back on the path that drives the feed
             if (!(path.equals("drives-the-feed") && laterFirst)) {
-                System.out.println("DIAG secondDeleteReached=" + secondDeleteReached.await(3, TimeUnit.SECONDS));
+                assertThat(secondDeleteReached.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete of the second cancel held before it is retired").isTrue();
             }
             (laterFirst ? endedParked : laterParked).open().countDown();
             await().atMost(TIMEOUT).until(() -> !model.awaitsADeleteDecision(SUBSCRIPTION_ID));
@@ -796,13 +807,11 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             Mono<Void> cancelledAgain = secondCancel.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
 
             // When
-            System.out.println("DIAG before cancels undecided=" + undecided(model) + " stored=" + storage.stored());
             Throwable secondCancelEnded = catchThrowable(() -> cancelledAgain.block(TIMEOUT));
             String storedOnceTheSecondCancelEnded = storage.stored();
             Throwable firstCancelEnded = catchThrowable(() -> firstCancel.block(TIMEOUT));
             String storedOnceTheFirstCancelEnded = storage.stored();
 
-            System.out.println("DIAG RESULT second=" + secondCancelEnded + " first=" + firstCancelEnded + " stored=" + storedOnceTheFirstCancelEnded + "/" + storedOnceTheSecondCancelEnded);
             // Then
             SoftAssertions.assertSoftly(softly -> {
                 softly.assertThat(laterEnded.get()).as("why the later subscribe did not start").hasStackTraceContaining(READ_FAILED);
@@ -818,7 +827,9 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             endedParked.open().countDown();
             laterParked.open().countDown();
             retireSecondDelete.countDown();
+            releaseRead.countDown();
             canceller.shutdownNow();
+            laterCaller.shutdownNow();
             caller.shutdownNow();
             model.shutdown();
         }
