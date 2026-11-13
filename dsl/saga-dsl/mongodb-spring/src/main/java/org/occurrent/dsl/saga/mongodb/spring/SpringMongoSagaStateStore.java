@@ -93,6 +93,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // Written only when a fire of the timer has failed. A document stored before 0.35.0 has no such key, and 0.34.0 reads
     // only the name and firesAtEpochMilli of a timer, so either version reads what the other wrote.
     private static final String TIMER_NEXT_ATTEMPT_AT = "nextAttemptAtEpochMilli";
+    // Holds SagaEnvelope.earliestDueAtEpochMilli(), which is the earliest firesAtEpochMilli until a fire fails. The key
+    // keeps its 0.34.0 name so stored documents and the index on it need no migration
     private static final String NEXT_TIMER_FIRES_AT = "nextTimerFiresAt";
     private static final String CURRENT_STEP = "currentStep";
     private static final String STREAM_WATERMARKS = "streamWatermarks";
@@ -444,7 +446,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             timers.add(timerDocument);
         }
         document.append(TIMERS, timers);
-        envelope.earliestTimerFiresAtEpochMilli().ifPresent(next -> document.append(NEXT_TIMER_FIRES_AT, next));
+        envelope.earliestDueAtEpochMilli().ifPresent(next -> document.append(NEXT_TIMER_FIRES_AT, next));
         // Denormalized beside nextTimerFiresAt and for the same reason: it lets a query answer SagaInstance.currentStep()
         // without decoding the state, which for a flow saga means not decoding its received log.
         if (envelope.currentStep() != null) {

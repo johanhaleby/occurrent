@@ -134,18 +134,17 @@ import static java.util.Objects.requireNonNull;
  *       instance that happened to be running.
  *       <p>
  *       A poll fires at most {@link SagaRunnerConfig#timerBatchLimit()} instances, a hundred by default, earliest due
- *       first. A failed fire saves the time of that attempt on the timer, so the next poll tries that timer after
- *       every instance that was due before the attempt. When more than {@code timerBatchLimit} instances keep
- *       failing, for example because a downstream that every timer reaction calls is down, later polls work through
- *       them in order and the healthy instances due among them still fire. Each healthy instance waits longer the
- *       more failing instances are due ahead of it. A store whose
+ *       first. A failed fire makes the timer due again one millisecond after the poll that tried it, so later polls
+ *       try that timer after every instance that was due at that poll. When more than {@code timerBatchLimit}
+ *       instances keep failing, for example because a downstream that every timer reaction calls is down, later polls
+ *       work through them in order and the healthy instances due among them still fire. Each healthy instance waits
+ *       longer the more failing instances are due ahead of it. A store whose
  *       {@link org.occurrent.dsl.saga.SagaStateStore#findWithDueTimers} ignores that order can fill every batch with
  *       the same failing instances instead.
  *       <p>
- *       An instance whose timer keeps failing shows the time of its last attempt as
- *       {@link org.occurrent.dsl.saga.SagaInstance#nextTimerAt()}, and its {@code updatedAt} stays at the last input it
- *       handled. Find it with {@link org.occurrent.dsl.saga.SagaInstances#findByStatus} and the warning each failed fire
- *       logs.</li>
+ *       A failed fire changes neither {@link org.occurrent.dsl.saga.SagaInstance#nextTimerAt()} nor
+ *       {@code updatedAt}, so an instance whose timer keeps failing shows a due time well in the past. Find it with
+ *       {@link org.occurrent.dsl.saga.SagaInstances#findByStatus} and the warning each failed fire logs.</li>
  * </ul>
  * Commands are dispatched before the save, and a lost compare-and-set retries the step, so a single input can
  * re-dispatch its whole command list several times (up to {@code maxCasAttempts}). Receivers must be idempotent and

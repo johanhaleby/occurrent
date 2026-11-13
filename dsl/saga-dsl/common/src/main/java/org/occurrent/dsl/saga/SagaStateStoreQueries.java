@@ -32,9 +32,10 @@ import java.util.List;
  * <p>
  * It is a separate capability because enumeration asks a store to sort on a second field. {@link #findByStatus} must
  * return its instances ascending by {@code updatedAt}, while {@link SagaStateStore#findWithDueTimers(Instant, int)}
- * sorts on the earliest timer due time, earliest first. A store that cannot index or sort on {@code updatedAt} can
- * still satisfy the core contract. One that ignores the due-time order can still run sagas, but a few instances whose
- * timers keep failing can then keep every other instance's timers from firing, as that method explains.
+ * sorts on the earliest timer due time, earliest first, and returns instances due at the same instant in no particular
+ * order. A store that cannot index or sort on {@code updatedAt} can still satisfy the core contract. One that ignores
+ * the due-time order can still run sagas, but {@code limit} instances whose timers keep failing can then keep every
+ * other instance's timers from firing, as that method explains.
  * <p>
  * {@link SagaInstances} needs this only to enumerate. A by-id lookup works against any store. Calling
  * {@link SagaInstances#findByStatus(SagaStatus, Instant, int)} on a store that does not implement this fails fast.

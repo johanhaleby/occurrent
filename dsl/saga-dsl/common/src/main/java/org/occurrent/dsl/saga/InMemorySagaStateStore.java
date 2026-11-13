@@ -68,10 +68,10 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                 // Firing one would advance its state across the gap the quarantine exists to hold open.
                 .filter(envelope -> envelope.status() == SagaStatus.ACTIVE)
                 .filter(envelope -> {
-                    OptionalLong earliest = envelope.earliestTimerFiresAtEpochMilli();
+                    OptionalLong earliest = envelope.earliestDueAtEpochMilli();
                     return earliest.isPresent() && earliest.getAsLong() <= nowMillis;
                 })
-                .sorted(Comparator.<SagaEnvelope<S>>comparingLong(envelope -> envelope.earliestTimerFiresAtEpochMilli().getAsLong())
+                .sorted(Comparator.<SagaEnvelope<S>>comparingLong(envelope -> envelope.earliestDueAtEpochMilli().getAsLong())
                         .thenComparing(SagaEnvelope::sagaId))
                 .limit(limit)
                 .toList();

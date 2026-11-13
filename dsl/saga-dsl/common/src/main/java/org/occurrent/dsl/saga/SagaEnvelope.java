@@ -196,9 +196,10 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      *
      * @param name                    the timer's name
      * @param firesAtEpochMilli       when the timer should fire (epoch millis)
-     * @param nextAttemptAtEpochMilli when the poller last tried to fire this timer and the fire threw (epoch millis),
-     *                                which the timer is due again from, or {@code null} when no fire of it has failed.
-     *                                Arming the timer again replaces the entry, which clears this
+     * @param nextAttemptAtEpochMilli when the timer is due again after a fire of it threw (epoch millis), which is one
+     *                                millisecond after the poll that tried it, or {@code null} when no fire of it has
+     *                                failed. Arming the timer again for the instant it already fires at keeps this, and
+     *                                arming it for any other instant clears it
      */
     public record TimerEntry(String name, long firesAtEpochMilli, @Nullable Long nextAttemptAtEpochMilli) {
         public TimerEntry {
@@ -211,9 +212,9 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         }
 
         /**
-         * The earliest instant the poller tries to fire this timer (epoch millis). That is
-         * {@link #firesAtEpochMilli()}, or the failed attempt in {@link #nextAttemptAtEpochMilli()} when that is later,
-         * so the poller tries a timer that keeps failing after the timers that have been due for longer.
+         * When this timer makes its instance due for the poller (epoch millis). That is {@link #firesAtEpochMilli()},
+         * or {@link #nextAttemptAtEpochMilli()} when that is later, so an instance whose timer keeps failing comes after
+         * the instances that were due when its last attempt was made.
          */
         public long dueAtEpochMilli() {
             return nextAttemptAtEpochMilli == null ? firesAtEpochMilli : Math.max(firesAtEpochMilli, nextAttemptAtEpochMilli);
@@ -232,19 +233,26 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     }
 
     /**
-     * The earliest {@link TimerEntry#dueAtEpochMilli()} across all pending timers, or empty when there are none. Drives
-     * the due-timer query and its order. A timer whose last fire failed counts from that attempt rather than from when
-     * it was set to fire.
+     * The earliest firing time across all pending timers, or empty when there are none. A failed fire marked on a timer
+     * does not change it. The due-timer query goes by {@link #earliestDueAtEpochMilli()} instead.
      */
     public OptionalLong earliestTimerFiresAtEpochMilli() {
+        return timers.stream().mapToLong(TimerEntry::firesAtEpochMilli).min();
+    }
+
+    /**
+     * The earliest {@link TimerEntry#dueAtEpochMilli()} across all pending timers, or empty when there are none. Drives
+     * the due-timer query and its order. A timer whose fire threw counts from its next attempt rather than from when it
+     * was set to fire.
+     */
+    public OptionalLong earliestDueAtEpochMilli() {
         return timers.stream().mapToLong(TimerEntry::dueAtEpochMilli).min();
     }
 
     /**
      * {@inheritDoc}
      * <p>
-     * The same instant as {@link #earliestTimerFiresAtEpochMilli()}, which stays in epoch millis because it is what
-     * the poller's indexed query compares against.
+     * The same instant as {@link #earliestTimerFiresAtEpochMilli()}.
      */
     @Override
     public @Nullable Instant nextTimerAt() {

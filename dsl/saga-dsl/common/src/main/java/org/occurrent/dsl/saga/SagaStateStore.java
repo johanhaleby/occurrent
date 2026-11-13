@@ -107,10 +107,11 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * Active, not merely unfinished. A {@link SagaStatus#QUARANTINED} instance must not be returned. Its timers stay
      * armed rather than dropped, and firing one would advance its state across the input it stopped on.
      * <p>
-     * The instances come earliest first, ordered by {@link SagaEnvelope#earliestTimerFiresAtEpochMilli()}, and
-     * {@code limit} keeps the first ones in that order. When a timer's fire throws, the executor saves the instant of
-     * that attempt on the timer, which moves the instance behind every instance that has been due for longer. So
-     * instances whose timers keep failing take turns with the healthy ones rather than filling every batch.
+     * The instances come earliest first, ordered by {@link SagaEnvelope#earliestDueAtEpochMilli()}, and {@code limit}
+     * keeps the first ones in that order. Instances due at the same instant come back in no particular order. When a
+     * timer's fire throws, the executor makes that timer due again one millisecond after the poll that tried it, which
+     * moves the instance behind every instance that was due at that poll. So instances whose timers keep failing take
+     * turns with the healthy ones rather than filling every batch.
      * <p>
      * A store that ignores the order gives up that guarantee. Once {@code limit} instances keep failing, such a store
      * can return the same ones on every poll, and the saga's other instances never get their timers fired.

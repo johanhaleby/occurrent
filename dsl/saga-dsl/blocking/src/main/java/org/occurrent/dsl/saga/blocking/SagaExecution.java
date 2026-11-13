@@ -380,10 +380,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * Only the event path calls this, and it is not because the timer path has nothing to gain from it. A timeout
      * has no redelivery key of its own, so there is nothing to quarantine it on.
      * <p>
-     * The timer path retries a failing timeout on every poll instead, and {@link #markFailedAttempt} saves each failed
-     * attempt on the timer. {@link SagaStateStore#findWithDueTimers} returns the instances that have been due longest
-     * first, so an instance whose timer keeps failing is tried again only after the instances that were due before its
-     * last attempt.
+     * The timer path retries a failing timeout on a later poll instead, and {@link #markFailedAttempt} makes the timer
+     * due again one millisecond after each poll that failed to fire it. {@link SagaStateStore#findWithDueTimers}
+     * returns the instances that have been due longest first, so an instance whose timer keeps failing is tried again
+     * only after the instances that were due at its last attempt.
      */
     private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Duration quarantineAfter) {
         try {
@@ -548,20 +548,22 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     /**
-     * Save {@code attemptedAt} on a timer whose fire threw, so the next poll orders the instance behind every instance
-     * that has been due for longer. Without it a batch of instances whose timers keep failing is returned first on every
-     * poll and the saga's other instances never get their timers fired.
+     * Make a timer whose fire threw due again one millisecond after {@code polledAt}, so later polls order the instance
+     * behind every instance that was due at {@code polledAt}, including one due at exactly that instant. Without it a
+     * batch of instances whose timers keep failing is returned first on every poll and the saga's other instances never
+     * get their timers fired.
      * <p>
      * Read without the state and written without it, so an instance whose state no longer decodes is marked too. A lost
      * compare-and-set is read again and retried up to {@link SagaRunnerConfig#maxCasAttempts()} times. When the write
      * cannot be made, the timer keeps the due time it had and the next poll tries it as early as before. Nothing is
      * thrown, because the exception that matters is the one the fire threw.
      */
-    private void markFailedAttempt(String sagaId, TimerEntry timer, Instant attemptedAt) {
+    private void markFailedAttempt(String sagaId, TimerEntry timer, Instant polledAt) {
+        Instant nextAttemptAt = polledAt.plusMillis(1);
         try {
             for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
                 SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
-                SagaEnvelope<S> marked = SagaExecutionSupport.withFailedTimerAttempt(current, timer, attemptedAt);
+                SagaEnvelope<S> marked = SagaExecutionSupport.withFailedTimerAttempt(current, timer, nextAttemptAt);
                 if (current == null || marked == null || stateStore.compareAndSaveWithoutState(sagaId, marked, current.version())) {
                     return;
                 }

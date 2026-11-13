@@ -653,29 +653,29 @@ public final class SagaExecutionSupport {
     }
 
     /**
-     * The instance with {@code attempted} marked as failed at {@code attemptedAt}, so the due-timer query orders it
-     * behind the instances that have been due for longer. Save it with
+     * The instance with the timer {@code attempted} due again from {@code nextAttemptAt}, so the due-timer query orders
+     * it behind the instances due before that. Save it with
      * {@code compareAndSaveWithoutState(..., current.version())}. It changes the timer and the version and nothing
      * else the executor reads. {@code updatedAt} stays where it was, because a failed fire is no progress.
      * <p>
      * {@code null} when there is nothing to write. That is when the instance is gone, completed or quarantined, when it
      * no longer has a timer of that name set to fire at that instant, or when the timer is already marked at or after
-     * {@code attemptedAt}.
+     * {@code nextAttemptAt}.
      */
     public static <S extends @Nullable Object> @Nullable SagaEnvelope<S> withFailedTimerAttempt(@Nullable SagaEnvelope<S> current,
                                                                                                TimerEntry attempted,
-                                                                                               Instant attemptedAt) {
+                                                                                               Instant nextAttemptAt) {
         if (current == null || current.status() != SagaStatus.ACTIVE) {
             return null;
         }
-        long attemptedAtMillis = attemptedAt.toEpochMilli();
+        long nextAttemptAtMillis = nextAttemptAt.toEpochMilli();
         List<TimerEntry> timers = new ArrayList<>(current.timers().size());
         boolean marked = false;
         for (TimerEntry timer : current.timers()) {
             Long markedAt = timer.nextAttemptAtEpochMilli();
             if (timer.name().equals(attempted.name()) && timer.firesAtEpochMilli() == attempted.firesAtEpochMilli()
-                && (markedAt == null || markedAt < attemptedAtMillis)) {
-                timers.add(new TimerEntry(timer.name(), timer.firesAtEpochMilli(), attemptedAtMillis));
+                && (markedAt == null || markedAt < nextAttemptAtMillis)) {
+                timers.add(new TimerEntry(timer.name(), timer.firesAtEpochMilli(), nextAttemptAtMillis));
                 marked = true;
             } else {
                 timers.add(timer);
@@ -763,12 +763,19 @@ public final class SagaExecutionSupport {
         for (SagaEffect<C> effect : effects) {
             switch (effect) {
                 case SagaEffect.IssueCommand<C> issue -> commands.add(issue.command());
-                case SagaEffect.StartTimeout<C> start ->
-                        timers.put(start.timerName().encode(), new TimerEntry(start.timerName().encode(), now.plus(start.after()).toEpochMilli()));
-                case SagaEffect.StartTimeoutAt<C> startAt ->
-                        timers.put(startAt.timerName().encode(), new TimerEntry(startAt.timerName().encode(), startAt.at().toEpochMilli()));
+                case SagaEffect.StartTimeout<C> start -> arm(timers, start.timerName().encode(), now.plus(start.after()).toEpochMilli());
+                case SagaEffect.StartTimeoutAt<C> startAt -> arm(timers, startAt.timerName().encode(), startAt.at().toEpochMilli());
                 case SagaEffect.CancelTimeout<C> cancel -> timers.remove(cancel.timerName().encode());
             }
         }
+    }
+
+    // A timer armed again for the instant it already fires at keeps its failed attempt, so an input that repeats the same
+    // deadline does not move a timer that keeps failing back ahead of the instances that were due before it. Any other
+    // instant is a new deadline and starts clean
+    private static void arm(Map<String, TimerEntry> timers, String name, long firesAtEpochMilli) {
+        TimerEntry existing = timers.get(name);
+        Long nextAttemptAtEpochMilli = existing != null && existing.firesAtEpochMilli() == firesAtEpochMilli ? existing.nextAttemptAtEpochMilli() : null;
+        timers.put(name, new TimerEntry(name, firesAtEpochMilli, nextAttemptAtEpochMilli));
     }
 }

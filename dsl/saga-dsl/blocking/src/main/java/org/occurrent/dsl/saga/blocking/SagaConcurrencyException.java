@@ -23,7 +23,7 @@ package org.occurrent.dsl.saga.blocking;
  * configured. What the failing event holds up is decided by whatever feeds the subscription, and
  * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what that can be. {@link SagaRunner} describes how an
  * instance that keeps failing can be quarantined. For a timeout the poller catches it and logs it. The timer stays due,
- * and a later poll tries it again after the instances that were due before this attempt.
+ * and a later poll tries it again after the instances that were due at this attempt.
  */
 public class SagaConcurrencyException extends RuntimeException {
     public SagaConcurrencyException(String message) {
