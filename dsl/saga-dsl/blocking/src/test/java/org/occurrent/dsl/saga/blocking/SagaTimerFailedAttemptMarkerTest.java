@@ -109,7 +109,7 @@ class SagaTimerFailedAttemptMarkerTest {
     }
 
     @Test
-    void bumps_the_version_by_one_and_leaves_updatedAt_and_the_state_alone() {
+    void keeps_the_version_and_leaves_updatedAt_and_the_state_alone() {
         seed("s1", List.of(new TimerEntry(TIMER, FIRES_AT)));
         SagaEnvelope<String> before = backing.find("s1").orElseThrow();
 
@@ -117,7 +117,7 @@ class SagaTimerFailedAttemptMarkerTest {
 
         SagaEnvelope<String> after = backing.find("s1").orElseThrow();
         assertAll(
-                () -> assertThat(after.version()).isEqualTo(before.version() + 1),
+                () -> assertThat(after.version()).isEqualTo(before.version()),
                 () -> assertThat(after.updatedAt()).isEqualTo(before.updatedAt()),
                 () -> assertThat(after.state()).isEqualTo(before.state()),
                 () -> assertThat(after.status()).isEqualTo(SagaStatus.ACTIVE)
@@ -147,7 +147,7 @@ class SagaTimerFailedAttemptMarkerTest {
         assertAll(
                 () -> assertThat(store.markerWrites.get()).as("write attempts").isEqualTo(3),
                 () -> assertThat(after.timers()).containsExactly(new TimerEntry(TIMER, FIRES_AT, MARKED_UNTIL)),
-                () -> assertThat(after.version()).as("initial 1, two concurrent bumps, one marker").isEqualTo(4),
+                () -> assertThat(after.version()).as("initial 1, two concurrent bumps, the marker keeps the version it read").isEqualTo(3),
                 () -> assertThat(markerWarnings()).isEmpty()
         );
     }

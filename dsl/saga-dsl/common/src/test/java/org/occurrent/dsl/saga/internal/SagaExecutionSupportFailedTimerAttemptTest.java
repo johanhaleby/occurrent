@@ -60,14 +60,14 @@ class SagaExecutionSupportFailedTimerAttemptTest {
     }
 
     @Test
-    void bumps_the_version_by_one_and_keeps_updatedAt_and_everything_else() {
+    void keeps_the_version_and_updatedAt_and_everything_else() {
         SagaEnvelope<String> current = active(List.of(FAILED));
 
         SagaEnvelope<String> marked = SagaExecutionSupport.withFailedTimerAttempt(current, FAILED, ATTEMPTED_AT);
 
         assertThat(marked).isNotNull();
         assertAll(
-                () -> assertThat(marked.version()).isEqualTo(8),
+                () -> assertThat(marked.version()).isEqualTo(current.version()),
                 () -> assertThat(marked.updatedAt()).isEqualTo(UPDATED),
                 () -> assertThat(marked.createdAt()).isEqualTo(CREATED),
                 () -> assertThat(marked.sagaId()).isEqualTo("s1"),
