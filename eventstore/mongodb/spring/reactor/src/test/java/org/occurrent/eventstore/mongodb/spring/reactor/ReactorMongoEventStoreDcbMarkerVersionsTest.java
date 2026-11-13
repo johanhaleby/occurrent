@@ -22,6 +22,7 @@ import com.mongodb.MongoException;
 import com.mongodb.reactivestreams.client.ClientSession;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
+import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.reactivestreams.client.MongoCollection;
 import com.mongodb.client.result.DeleteResult;
 import io.cloudevents.CloudEvent;
@@ -35,7 +36,9 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
@@ -44,6 +47,7 @@ import org.occurrent.eventstore.api.dcb.DcbMarkerVersions.MarkerVersion;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -88,6 +92,7 @@ import static com.mongodb.client.model.Filters.eq;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
@@ -115,7 +120,8 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
     private static final String ACCOUNT_B = "account:b1";
     private static final String KEY_A = "tag:" + ACCOUNT_A;
     private static final String KEY_B = "tag:" + ACCOUNT_B;
-    private static final String KEY_DEPOSITED = "type:" + DEPOSITED;
+    private static final String KEY_DEPOSITED = DcbMarkerVersionsSupport.stripeKey(DEPOSITED, 0);
+    private static final String KEY_D = DcbMarkerVersionsSupport.stripeKey("D", 0);
     private static final DcbCriteria BOUNDARY_A = DcbCriteria.tags(Tag.parse(ACCOUNT_A));
     private static final DcbCriteria BOUNDARY_B = DcbCriteria.tags(Tag.parse(ACCOUNT_B));
 
@@ -861,6 +867,178 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
 
         assertThat(queried).hasSize(1);
         assertThat(queried.getFirst().getExtensionNames()).doesNotContain(EVENT_MARKER_VERSIONS);
+    }
+
+    @Test
+    void writes_only_the_first_stripe_of_a_type_when_type_marker_writes_are_not_spread() {
+        for (int i = 0; i < 64; i++) {
+            eventStore.append(List.of(taggedEvent("e" + i, DEPOSITED, "account:s" + i))).block();
+        }
+
+        assertThat(existingStripes(DEPOSITED)).containsExactly(0);
+        assertThat(marker(DcbMarkerVersionsSupport.stripeKey(DEPOSITED, 0)).get(CHECKPOINT_VERSION)).isEqualTo(64L);
+        for (int i = 0; i < 64; i++) {
+            assertThat(markerVersionsOf("e" + i)).extracting(Recorded::key).contains(KEY_DEPOSITED).doesNotContain(DcbMarkerVersionsSupport.stripeKey(DEPOSITED, 1));
+        }
+    }
+
+    @Test
+    void writes_more_than_one_stripe_of_a_type_when_type_marker_writes_are_spread() {
+        ReactorMongoEventStore spreading = storeOver(config -> config.spreadTypeMarkerWrites(true));
+        for (int i = 0; i < 64; i++) {
+            spreading.append(List.of(taggedEvent("e" + i, DEPOSITED, "account:s" + i))).block();
+        }
+
+        assertThat(existingStripes(DEPOSITED)).hasSizeGreaterThan(1);
+        long total = existingStripes(DEPOSITED).stream().mapToLong(stripe -> marker(DcbMarkerVersionsSupport.stripeKey(DEPOSITED, stripe)).getLong(CHECKPOINT_VERSION)).sum();
+        assertThat(total).as("every append incremented exactly one stripe of its type").isEqualTo(64L);
+        for (int i = 0; i < 64; i++) {
+            List<String> typeKeys = markerVersionsOf("e" + i).stream().map(Recorded::key).filter(DcbMarkerVersionsSupport::isTypeKey).toList();
+            assertThat(typeKeys).as("the type keys of event e%d", i).hasSize(1);
+        }
+    }
+
+    @Test
+    void increments_every_stripe_of_a_type_for_a_type_only_conditional_append_when_type_marker_writes_are_not_spread() {
+        typeOnlyConditionalAppendIncrementsEveryStripe(eventStore);
+    }
+
+    @Test
+    void increments_every_stripe_of_a_type_for_a_type_only_conditional_append_when_type_marker_writes_are_spread() {
+        typeOnlyConditionalAppendIncrementsEveryStripe(storeOver(config -> config.spreadTypeMarkerWrites(true)));
+    }
+
+    private void typeOnlyConditionalAppendIncrementsEveryStripe(ReactorMongoEventStore store) {
+        DcbCriteria criteria = DcbCriteria.types(DEPOSITED);
+        store.append(List.of(taggedEvent("a", DEPOSITED)), failIfEventsMatch(criteria, store.read(criteria).block().consistencyToken())).block();
+
+        assertThat(existingStripes(DEPOSITED)).containsExactly(0, 1, 2, 3, 4, 5, 6, 7);
+        for (int stripe = 0; stripe < DcbMarkerVersionsSupport.STRIPES; stripe++) {
+            assertThat(marker(DcbMarkerVersionsSupport.stripeKey(DEPOSITED, stripe)).get(CHECKPOINT_VERSION)).as("version of stripe %d", stripe).isEqualTo(1L);
+        }
+    }
+
+    @Test
+    void refuses_a_conditional_append_whose_unconditional_competitor_spread_its_type_marker_write_when_the_reader_does_not_spread() {
+        conflictingAppendIsRefused(false, true);
+    }
+
+    @Test
+    void refuses_a_conditional_append_whose_unconditional_competitor_wrote_the_first_stripe_when_the_reader_spreads() {
+        conflictingAppendIsRefused(true, false);
+    }
+
+    @Test
+    void refuses_a_conditional_append_whose_unconditional_competitor_spread_its_type_marker_write_when_the_reader_spreads() {
+        conflictingAppendIsRefused(true, true);
+    }
+
+    @Test
+    void accepts_a_conditional_append_when_the_unconditional_competitor_appended_another_type_whatever_the_settings() {
+        for (boolean[] settings : new boolean[][]{{false, true}, {true, false}}) {
+            ReactorMongoEventStore reader = storeOver(config -> config.spreadTypeMarkerWrites(settings[0]));
+            ReactorMongoEventStore writer = storeOver(config -> config.spreadTypeMarkerWrites(settings[1]));
+            for (int i = 0; i < 32; i++) {
+                String type = "Control" + UUID.randomUUID();
+                DcbCriteria criteria = DcbCriteria.types(type);
+                DcbConsistencyToken token = reader.read(criteria).block().consistencyToken();
+                writer.append(List.of(taggedEvent(UUID.randomUUID().toString(), "Other" + UUID.randomUUID()))).block();
+
+                assertThatCode(() -> reader.append(List.of(taggedEvent(UUID.randomUUID().toString(), type)), failIfEventsMatch(criteria, token)).block()).doesNotThrowAnyException();
+            }
+        }
+    }
+
+    private void conflictingAppendIsRefused(boolean readerSpreads, boolean writerSpreads) {
+        ReactorMongoEventStore reader = storeOver(config -> config.spreadTypeMarkerWrites(readerSpreads));
+        ReactorMongoEventStore writer = storeOver(config -> config.spreadTypeMarkerWrites(writerSpreads));
+        for (int i = 0; i < 32; i++) {
+            String type = "Mixed" + UUID.randomUUID();
+            DcbCriteria criteria = DcbCriteria.types(type);
+            DcbConsistencyToken token = reader.read(criteria).block().consistencyToken();
+            writer.append(List.of(taggedEvent(UUID.randomUUID().toString(), type))).block();
+
+            assertThat(errorOf(reader.append(List.of(taggedEvent(UUID.randomUUID().toString(), type)), failIfEventsMatch(criteria, token))))
+                    .as("the append %d of the type %s after a competitor that wrote it", i, type)
+                    .isInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        }
+    }
+
+    @Test
+    void a_read_after_versions_saved_by_a_store_that_does_not_spread_returns_the_events_a_store_that_spreads_appended() {
+        resumedAfterACompetitorAppendedUnconditionally(false, true);
+    }
+
+    @Test
+    void a_read_after_versions_saved_by_a_store_that_spreads_returns_the_events_a_store_that_does_not_spread_appended() {
+        resumedAfterACompetitorAppendedUnconditionally(true, false);
+    }
+
+    private void resumedAfterACompetitorAppendedUnconditionally(boolean readerSpreads, boolean writerSpreads) {
+        ReactorMongoEventStore reader = storeOver(config -> config.spreadTypeMarkerWrites(readerSpreads));
+        ReactorMongoEventStore writer = storeOver(config -> config.spreadTypeMarkerWrites(writerSpreads));
+        DcbCriteria criteria = DcbCriteria.types("D");
+        reader.append(List.of(taggedEvent("first", "D"))).block();
+        DcbMarkerVersions saved = reader.read(criteria, DcbReadOptions.fromBeginning().withVersions()).block().markerVersions().orElseThrow();
+        List<String> ids = new java.util.ArrayList<>();
+        for (int i = 0; i < 32; i++) {
+            ids.add("later" + i);
+            writer.append(List.of(taggedEvent("later" + i, "D"))).block();
+        }
+
+        List<String> read = reader.read(criteria, DcbReadOptions.afterVersions(saved)).block().events().stream().map(CloudEvent::getId).toList();
+
+        assertThat(read).containsExactlyInAnyOrderElementsOf(ids);
+    }
+
+    @Test
+    void refuses_a_type_only_conditional_append_after_a_writer_that_wrote_no_marker_versions_incremented_the_type_marker_when_type_marker_writes_are_not_spread() {
+        refusesAfterAnOlderWriterIncrementedTheTypeMarker(eventStore);
+    }
+
+    @Test
+    void refuses_a_type_only_conditional_append_after_a_writer_that_wrote_no_marker_versions_incremented_the_type_marker_when_type_marker_writes_are_spread() {
+        refusesAfterAnOlderWriterIncrementedTheTypeMarker(storeOver(config -> config.spreadTypeMarkerWrites(true)));
+    }
+
+    private void refusesAfterAnOlderWriterIncrementedTheTypeMarker(ReactorMongoEventStore store) {
+        DcbCriteria criteria = DcbCriteria.types("D");
+        DcbConsistencyToken token = store.read(criteria).block().consistencyToken();
+
+        Mono.from(markers().updateOne(eq("_id", DcbMarkerModel.markerId(KEY_D)), new Document("$inc", new Document(CHECKPOINT_VERSION, 1L)), new UpdateOptions().upsert(true))).block();
+
+        assertThat(errorOf(store.append(List.of(taggedEvent("a", "D")), failIfEventsMatch(criteria, token))))
+                .isInstanceOf(DcbAppendConditionNotFulfilledException.class);
+    }
+
+    @Test
+    void refuses_a_read_after_versions_with_an_absent_type_stripe_that_an_older_writer_has_incremented_since() {
+        DcbCriteria criteria = DcbCriteria.types("D");
+        DcbMarkerVersions saved = eventStore.read(criteria, DcbReadOptions.fromBeginning().withVersions()).block().markerVersions().orElseThrow();
+        Mono.from(markers().insertOne(new Document("_id", DcbMarkerModel.markerId(KEY_D)).append(CHECKPOINT_VERSION, 2L).append(CHECKPOINT_STAMPED, 1L).append(CHECKPOINT_EPOCH, new ObjectId()))).block();
+
+        assertThat(errorOf(eventStore.read(criteria, DcbReadOptions.afterVersions(saved))))
+                .isInstanceOf(DcbSnapshotInvalidException.class)
+                .hasMessageContaining(KEY_D)
+                .hasMessageContaining("writer that wrote no marker versions");
+    }
+
+    @Test
+    void refuses_a_read_after_versions_with_an_absent_type_stripe_whose_marker_has_no_epoch_now() {
+        DcbCriteria criteria = DcbCriteria.types("D");
+        DcbMarkerVersions saved = eventStore.read(criteria, DcbReadOptions.fromBeginning().withVersions()).block().markerVersions().orElseThrow();
+        Mono.from(markers().insertOne(new Document("_id", DcbMarkerModel.markerId(KEY_D)).append(CHECKPOINT_VERSION, 1L))).block();
+
+        assertThat(errorOf(eventStore.read(criteria, DcbReadOptions.afterVersions(saved))))
+                .isInstanceOf(DcbSnapshotInvalidException.class)
+                .hasMessageContaining(KEY_D)
+                .hasMessageContaining("has no epoch");
+    }
+
+    private List<Integer> existingStripes(String type) {
+        return java.util.stream.IntStream.range(0, DcbMarkerVersionsSupport.STRIPES)
+                .filter(stripe -> Mono.from(markers().countDocuments(eq("_id", DcbMarkerModel.markerId(DcbMarkerVersionsSupport.stripeKey(type, stripe))))).block() > 0)
+                .boxed().toList();
     }
 
     private <T> Mono<T> inScopeWithoutTransaction(Mono<T> body) {
