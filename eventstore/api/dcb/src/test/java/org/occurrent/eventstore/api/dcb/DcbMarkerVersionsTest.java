@@ -85,17 +85,40 @@ class DcbMarkerVersionsTest {
         }
 
         @Test
-        void rejects_a_version_of_zero() {
+        void rejects_a_version_of_zero_with_an_epoch() {
             assertThatThrownBy(() -> new MarkerVersion("epoch-1", 0, 0))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
-                    .hasMessage("Version must be greater than zero");
+                    .hasMessage("A marker without a version cannot have an epoch");
+        }
+
+        @Test
+        void rejects_a_version_of_zero_with_an_unstamped_count() {
+            assertThatThrownBy(() -> new MarkerVersion(null, 0, 1))
+                    .isExactlyInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("A marker without a version cannot have an unstamped count");
         }
 
         @Test
         void rejects_a_negative_version() {
             assertThatThrownBy(() -> new MarkerVersion("epoch-1", -1, 0))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
-                    .hasMessage("Version must be greater than zero");
+                    .hasMessage("Version cannot be negative");
+        }
+
+        @Test
+        void absent_is_no_epoch_version_zero_and_unstamped_zero() {
+            MarkerVersion absent = MarkerVersion.absent();
+
+            assertThat(absent.epoch()).isNull();
+            assertThat(absent.version()).isZero();
+            assertThat(absent.unstamped()).isZero();
+            assertThat(absent).isEqualTo(new MarkerVersion(null, 0, 0));
+        }
+
+        @Test
+        void is_absent_only_for_the_absent_value() {
+            assertThat(MarkerVersion.absent().isAbsent()).isTrue();
+            assertThat(new MarkerVersion("epoch-1", 1, 0).isAbsent()).isFalse();
         }
 
         @Test
@@ -122,6 +145,16 @@ class DcbMarkerVersionsTest {
             DcbMarkerVersions versions = DcbMarkerVersions.of(CRITERIA, Map.of("tag:a", FIRST, "type:T", SECOND));
 
             assertThat(versions.markers()).containsOnly(Map.entry("tag:a", FIRST), Map.entry("type:T", SECOND));
+        }
+
+        @Test
+        void holds_an_absent_marker_version_next_to_present_ones() {
+            DcbMarkerVersions versions = DcbMarkerVersions.of(CRITERIA, Map.of("type:T", FIRST, "typestripe:3:T", MarkerVersion.absent()));
+
+            assertThat(versions.get("typestripe:3:T")).contains(MarkerVersion.absent());
+            assertThat(versions.get("typestripe:3:T").orElseThrow().isAbsent()).isTrue();
+            assertThat(versions.get("type:T").orElseThrow().isAbsent()).isFalse();
+            assertThat(versions).isEqualTo(DcbMarkerVersions.of(CRITERIA, Map.of("type:T", FIRST, "typestripe:3:T", new MarkerVersion(null, 0, 0))));
         }
 
         @Test
