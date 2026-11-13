@@ -1098,10 +1098,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     /**
-     * {@code false}. A plain {@link #resumeSubscription(String)} resumes at the checkpoint stored for the id. A
-     * subscription started at a {@code StartAt} of its own stores nothing until the checkpoint of one of its events is
-     * saved, so a checkpoint an earlier run of the id stored after that position makes the resume skip the events in
-     * between. <a href="https://github.com/johanhaleby/occurrent/issues/1490">Issue 1490</a> tracks fixing that.
+     * {@code false}. A plain {@link #resumeSubscription(String)}, and a {@link #resumeSubscription(String, StartAt)} at
+     * {@link StartAt#subscriptionModelDefault()}, resume at the checkpoint stored for the id. A subscription started
+     * at a {@code StartAt} of its own stores nothing until the checkpoint of one of its events is saved, so a
+     * checkpoint an earlier run of the id stored after that position makes the resume skip the events in between.
+     * <a href="https://github.com/johanhaleby/occurrent/issues/1490">Issue 1490</a> tracks fixing that.
      * <p>
      * With {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turned on, the answer
      * stays {@code false} after that fix. A subscription that starts with no position recorded opens where the wrapped
