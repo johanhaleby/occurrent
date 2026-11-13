@@ -1316,9 +1316,9 @@ MongoDB that is the oplog, which you can keep for a minimum time with the `oplog
 The catch-up then holds the subscription paused on both stacks and logs the failure once at error level. In 0.34.0 a
 blocking subscription ended when its subscribe started the replay, and the replay ran again after a backoff when a
 resume started it. `waitUntilStarted()` fails with the exception, and the id stays taken, so cancel the subscription
-before you subscribe the id again. Resuming the subscription replays again from the beginning, and so does `start(true)`
-on the blocking stack. Over a `CompetingConsumerSubscriptionModel` the node gives up the lease and stops competing for it
-until you resume the subscription.
+before you subscribe the id again. Resuming the subscription replays again from the beginning, and so does `start(true)`.
+Over a `CompetingConsumerSubscriptionModel` the node gives up the lease and stops competing for it until you resume the
+subscription.
 
 A replay that started later and loses its live start is held paused the same way. A replay again from its start would
 skip events, so `resumeSubscription(id)` throws `CatchupCannotResumeException` until you cancel the subscription, and so
@@ -1492,7 +1492,10 @@ again.
 
 The same applies to a checkpoint 0.34 stored in the middle of a replay that started above position 0. When the
 application is down for the upgrade for so long that the change stream history no longer reaches back to the live start
-in that checkpoint, 0.35 refuses it.
+in that checkpoint, 0.35 refuses it. A blocking catch-up refuses it in `subscribe(..)`, before it replays anything, so
+in Spring Boot with `startupMode` unset the application doesn't start, as when a stored resume token is gone. With
+`startupMode = BACKGROUND`, or on a competing-consumer node that gets the lease later, the catch-up holds the
+subscription paused at that live start instead.
 
 A start at position 0, `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or the beginning of time is not refused. A
 replay from there whose live start is lost still replays again, as
@@ -1506,9 +1509,11 @@ went live at the present, as
 [A stream catch-up over an event store without positions replays from position 0](#a-stream-catch-up-over-an-event-store-without-positions-replays-from-position-0)
 describes.
 
-The blocking catch-up throws `CatchupCannotResumeException` from `subscribe(..)` or from `waitUntilStarted()`, and a
-replay a resume or a takeover started is held, as for a lost live start. The reactor catch-up fails its `Flux` with it.
-The message names the subscription and what to do.
+The blocking catch-up throws `CatchupCannotResumeException` from `subscribe(..)` or from `waitUntilStarted()`. A replay
+that loses its live start is held paused, whether a subscribe, a resume or a takeover started it, as
+[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay)
+describes. The reactor catch-up fails its `Flux` with it, except that a named reactor catch-up whose replay loses its
+live start holds the subscription paused the same way. The message names the subscription and what to do.
 
 ### What to do
 
