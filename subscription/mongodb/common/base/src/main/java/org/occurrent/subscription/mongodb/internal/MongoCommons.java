@@ -830,8 +830,8 @@ public class MongoCommons {
      * that opens at the present.
      */
     public static String noOperationTimeToPinToMessage(Document reply) {
-        return "The reply to " + CURRENT_OPERATION_TIME_COMMAND.toJson() + " carried no " + OPERATION_TIME + ", so the change stream opens at the present without recording where. " +
-                "Until the first event is handled, a pause, resume or restart of the subscription opens at a later present and skips what was written in between. Reply was: " + reply.toJson();
+        return "The reply to " + CURRENT_OPERATION_TIME_COMMAND.toJson() + " carried no " + OPERATION_TIME + ", so the change stream opens at the present and records where only once its first read returns. " +
+                "A pause, resume or restart of the subscription before then opens at a later present and skips what was written in between. Reply was: " + reply.toJson();
     }
 
     public static Checkpoint calculateCheckpointFromMongoStreamPositionDocument(Document checkpointDocument) {

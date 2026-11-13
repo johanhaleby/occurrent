@@ -93,14 +93,21 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     /**
-     * {@code false}. With {@code restartSubscriptionsOnChangeStreamHistoryLost} turned on, a restart after the change
-     * stream's history was lost opens at the present and skips the events written in between. With it off, two gaps in
-     * the change stream loop, tracked in
-     * <a href="https://github.com/johanhaleby/occurrent/issues/1482">issue 1482</a>, still break commit order.
-     * A subscription that opened at the present without an operation time has no recorded position until a read returns
-     * no event or its first event is handled, so a pause and resume or a restart before then opens at a later present
-     * and skips what was written in between. A pause stops waiting for a running action after a second, and a resume
-     * can then deliver later events while that call still runs.
+     * {@code true} while {@code restartSubscriptionsOnChangeStreamHistoryLost} is off. With it on, a restart after the
+     * change stream's history was lost opens at the present and skips the events written in between, so the answer is
+     * {@code false}.
+     * <p>
+     * A resumed subscription calls its action only once the call from before the pause has returned, however long that
+     * takes, so no two calls for one subscription run at once. The pause itself still returns after a second.
+     * <p>
+     * A subscription started at the present records MongoDB's operation time as the position its change stream opened
+     * at, so a pause and resume, or a restart, opens there. A replica set and a sharded cluster send that time with every
+     * reply. On a server that doesn't, the subscription records the commit time of the first event it reads before its
+     * action runs, and a resume after that action threw delivers the event again, together with the events after it,
+     * which include the rest of its transaction. A pause and resume, or a restart, before that first read returns opens
+     * at a later present. A subscription made while this model is stopped opens at the operation time MongoDB answered
+     * at the subscribe, and on a server that sends none, at the start of this model, so earlier events count from that
+     * start rather than from the subscribe.
      */
     @Override
     public boolean deliversEveryEventInCommitOrder() {

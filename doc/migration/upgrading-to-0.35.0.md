@@ -120,6 +120,9 @@ other sections compile fine and behave differently, so read them first.
 - [A dynamic `StartAt.now()` that the wrapped model refuses fails `waitUntilStarted()` instead of `subscribe(..)`](#a-dynamic-startatnow-that-the-wrapped-model-refuses-fails-waituntilstarted-instead-of-subscribe).
   A refusal of the subscribe, for an unsupported filter for example, no longer throws from `subscribe(..)`. Compiles
   unchanged.
+- [A resumed MongoDB subscription waits for the action that ran when it was paused](#a-resumed-mongodb-subscription-waits-for-the-action-that-ran-when-it-was-paused).
+  A resumed `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` subscription calls its action only once the
+  call from before the pause has returned. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
@@ -2272,6 +2275,33 @@ for a checkpoint that a cancel of the id deleted to be written back was handed o
 Handle the refusal where you wait for `waitUntilStarted()`, as 0.34.0 already required for a subscription from the
 subscription-model default. Keep handling `DuplicateSubscriptionIdException` at the call too, since it can come from
 either place.
+
+## A resumed MongoDB subscription waits for the action that ran when it was paused
+
+`pauseSubscription(id)` and `stop()` on `NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel` wait at most a
+second for a running action. In 0.34.0 a `resumeSubscription(id)` or a `start(true)` after that could call the action
+for the next events while the call from before the pause still ran, so two calls for one subscription ran at once and a
+later event could be handled before an earlier one. A resumed subscription now opens its change stream and then waits,
+with no deadline, until that call returns, before it calls the action again.
+
+### Who is affected
+
+Code that pauses or stops one of these models while an action can run for longer than a second, and then resumes it. A
+`CompetingConsumerSubscriptionModel` over one of them pauses and resumes its subscriptions as its lease moves, so it is
+affected too.
+
+### What changes
+
+* While the earlier call runs, the resumed subscription calls the action for no event. An action that never returns
+  holds the resumed subscription back for as long as it runs, where 0.34.0 delivered the events after it.
+* `resumeSubscription(id)` and `start(true)` return, and `waitUntilStarted(..)` answers `true`, once the change stream
+  has opened, without waiting for that call.
+* The pause still returns after at most a second.
+
+### What to do
+
+Give an action that can block for good a timeout of its own, since a resume no longer gets past it. The code compiles
+unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 

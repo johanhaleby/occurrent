@@ -441,6 +441,16 @@ public final class ChangeStreamSubscriptions {
             }
 
             internalSubscription.started();
+            // Only when MongoDB's reply had no operation time, since the stream then opened at the present and
+            // recorded nothing. The first event's commit time is recorded before its action runs, so a pause and
+            // resume, or a restart, after the action threw opens at that event rather than at a later present
+            boolean openedAtThePresent = MongoCommons.opensAtThePresent(openingPosition);
+            // After started(), so a resume called from inside the previous run's action, or a start(true) that waits
+            // for the run to start, doesn't wait for that action
+            if (!internalSubscription.waitForThePreviousRuns()) {
+                log.debug("Subscription {} was interrupted while it waited for the action of a run it replaced, so it stops.", subscriptionId);
+                return;
+            }
 
             while (!internalSubscription.isIntentionallyClosed()) {
                 // Asked before the read, so a listener decides what it may write before it knows what the read returns
@@ -456,6 +466,9 @@ public final class ChangeStreamSubscriptions {
                     if (changeStreamDocument == null) {
                         reachedQuietPosition(internalSubscription, cursor.getResumeToken(), quietPositionConsumers);
                         continue;
+                    }
+                    if (openedAtThePresent) {
+                        internalSubscription.recordedAtIfUnmoved(openedAt.tracked(), changeStreamDocument.getClusterTime());
                     }
                     MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
                             .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())))
@@ -894,13 +907,12 @@ public final class ChangeStreamSubscriptions {
     }
 
     /**
-     * {@code false}. The javadoc of {@code deliversEveryEventInCommitOrder()} in {@code NativeMongoSubscriptionModel}
-     * and {@code SpringMongoSubscriptionModel} says why. Once
-     * <a href="https://github.com/johanhaleby/occurrent/issues/1482">issue 1482</a> is fixed, this answers {@code true}
-     * only while {@code restartSubscriptionsOnChangeStreamHistoryLost} is off.
+     * {@code true} while {@code restartSubscriptionsOnChangeStreamHistoryLost} is off. The javadoc of
+     * {@code deliversEveryEventInCommitOrder()} in {@code NativeMongoSubscriptionModel} and
+     * {@code SpringMongoSubscriptionModel} says why.
      */
     public boolean deliversEveryEventInCommitOrder() {
-        return false;
+        return !restartSubscriptionsOnChangeStreamHistoryLost;
     }
 
     public boolean isRunning() {
@@ -1051,7 +1063,8 @@ public final class ChangeStreamSubscriptions {
      * Pauses a subscription, and returns the wait for its action when that is running. The model runs the wait once it
      * has let go of its monitor, so a call for another subscription doesn't wait for the paused one's action. The wait
      * returns once the action has, or after a second, and at once when called from inside the action. While
-     * {@link #stop()} pauses, the wait returns at once and stop() waits for all the actions together.
+     * {@link #stop()} pauses, the wait returns at once and stop() waits for all the actions together. A resume waits for
+     * the action with no deadline, on the resumed run's own thread, before that run delivers anything.
      */
     public Runnable pauseSubscription(String subscriptionId) {
         if (shutdown) {
@@ -1258,6 +1271,9 @@ public final class ChangeStreamSubscriptions {
         // or handing over a quiet position right now.
         private @Nullable MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
         private @Nullable Thread delivering;
+        // The run a resume replaced to create this run, until this run has waited for it and every run before it to
+        // stop delivering
+        private volatile @Nullable InternalSubscription previous;
 
         private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, FirstStart firstStart) {
             this.log = log;
@@ -1278,7 +1294,38 @@ public final class ChangeStreamSubscriptions {
                     // In one step, since the operation time asked for at subscribe can be recorded meanwhile
                     currentStartAt.updateAndGet(reposition);
                 }
-                return new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStart);
+                InternalSubscription next = new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStart);
+                next.previous = this;
+                return next;
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        // Waits, with no deadline, until no run this run replaced is delivering, so the action is never called while a
+        // call from an earlier run still runs. Every earlier run that may still deliver, since a run that a resume
+        // replaced while it waited has not delivered yet and delivers nothing once its wait ends. Each run lets go of
+        // the run it replaced once its wait is over, so a chain of pauses and resumes keeps no finished run. False when
+        // interrupted, which a shutdown does, and the interrupt is set again
+        boolean waitForThePreviousRuns() {
+            try {
+                for (InternalSubscription run = previous; run != null; run = run.previous) {
+                    run.awaitNotDelivering();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            previous = null;
+            return true;
+        }
+
+        private void awaitNotDelivering() throws InterruptedException {
+            lock.lock();
+            try {
+                while (delivering != null) {
+                    stoppedDelivering.await();
+                }
             } finally {
                 lock.unlock();
             }
@@ -1341,6 +1388,24 @@ public final class ChangeStreamSubscriptions {
             try {
                 if (!replaced) {
                     currentStartAt.set(position);
+                }
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        // Records the commit time of an event as the position, but only while the position is still unrecorded, the one
+        // the stream opened at the present with. A position an earlier event or a read with no event recorded is kept,
+        // so the position never moves back, and so is one a resume set. Opening at that time delivers the event again,
+        // together with the rest of its transaction, which shares its commit time
+        void recordedAtIfUnmoved(StartAt unrecorded, @Nullable BsonTimestamp clusterTime) {
+            if (clusterTime == null) {
+                return;
+            }
+            lock.lock();
+            try {
+                if (!replaced) {
+                    currentStartAt.compareAndSet(unrecorded, StartAt.checkpoint(new MongoOperationTimeCheckpoint(clusterTime)));
                 }
             } finally {
                 lock.unlock();
