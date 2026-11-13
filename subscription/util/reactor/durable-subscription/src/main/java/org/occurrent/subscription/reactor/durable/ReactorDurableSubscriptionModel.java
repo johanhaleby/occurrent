@@ -310,7 +310,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // function the caller supplies, or while disposing a subscription to the wrapped model's feed
     private final ConcurrentMap<String, InternalSubscription> runningSubscriptions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions = new ConcurrentHashMap<>();
-    // Held while reading or changing the five maps below and the fields of a PositionDelete, and never while calling
+    // Held while reading or changing the six maps below and the fields of a PositionDelete, and never while calling
     // the storage, the wrapped model or a function the caller supplies. A cancel retires the writer of the
     // subscription it removes, collects the writes in flight for the id and installs its delete in one step under it.
     // A write checks its writer and is tracked in one step under it too, so each write is one the delete waits for or
@@ -327,6 +327,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // The latest delete of a stored position that cancelSubscription started for each id, until it has ended. A
     // subscription of the id that starts meanwhile takes it over, see takeOverPositionDelete.
     private final Map<String, PositionDelete> positionDeletes = new HashMap<>();
+    // For each id, the takeovers of its deletes that have been neither given back nor kept, until the last of them is,
+    // see DeleteDecision
+    private final Map<String, DeleteDecision> deleteDecisions = new HashMap<>();
     // The cancels, pauses and resumes this model has decided to send the wrapped model for each id and that have not
     // ended yet. The wrapped model takes them by id, so each would reach a subscription of the id that a subscribe hands
     // it meanwhile, and such a subscribe is refused, see refusesSubscribeOf.
@@ -344,6 +347,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // Runs on the thread that ends the tries of a delete a cancel started, once they have ended and before the delete
     // is retired. Exists so a test can take the delete over at that point, which nothing outside this model can reach.
     private volatile Runnable beforeADeleteIsRetired = () -> {
+    };
+    // Runs on the thread that gives back a takeover of a delete of the id, before it takes positionLock. Exists so a test
+    // can choose the order in which two takeovers are given back, which nothing outside this model can reach.
+    private volatile Runnable beforeATakeOverIsGivenBack = () -> {
     };
     // Runs on the thread that hands a subscription to the wrapped model, each time it has found no call this model sent
     // the wrapped model for the id in flight and before it checks for one again. Exists so a test can send a call at
@@ -391,6 +398,20 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // of this model's contract.
     void runBeforeADeleteIsRetired(Runnable hook) {
         this.beforeADeleteIsRetired = requireNonNull(hook, "hook cannot be null");
+    }
+
+    // Package-private for the test that orders give-backs at the point the field describes. Not public, and not part of
+    // this model's contract.
+    void runBeforeATakeOverIsGivenBack(Runnable hook) {
+        this.beforeATakeOverIsGivenBack = requireNonNull(hook, "hook cannot be null");
+    }
+
+    // Package-private for the test that checks a decided id leaves nothing behind. Not public, and not part of this
+    // model's contract.
+    boolean awaitsADeleteDecision(String subscriptionId) {
+        synchronized (positionLock) {
+            return deleteDecisions.containsKey(subscriptionId);
+        }
     }
 
     // Package-private for the test that sends a call at the point the field describes. Not public, and not part of
@@ -650,11 +671,14 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // the deletes it took over, as a cancel does for a subscription it ends before it started.
     private void endUnreserved(String subscriptionId, Sinks.Empty<Void> readsAbandoned, @Nullable PresentRead present, TakeOver takenOver,
                                Throwable reason) {
-        readsAbandoned.tryEmitError(reason);
-        if (present != null) {
-            present.end();
+        try {
+            readsAbandoned.tryEmitError(reason);
+            if (present != null) {
+                present.end();
+            }
+        } finally {
+            giveBackPositionDelete(subscriptionId, takenOver, null);
         }
-        giveBackPositionDelete(subscriptionId, takenOver, null);
     }
 
     // Whether a cancelled call returns null. On a model shut down by then it throws SubscriptionModelShutdownException
@@ -956,12 +980,16 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                     synchronized (positionLock) {
                         keptForTheId = kept.keeping && kept.askedByACall;
                     }
-                    if (failure instanceof DuplicateSubscriptionIdException && keptForTheId) {
-                        applyKeptLifecycle(delegate, subscriptionId, writer, kept, "after refusing a subscribe of the id that it already held");
-                    } else {
-                        endKeptLifecycle(writer, kept, failure);
+                    // Given back whatever the wrapped model throws, so no cancel of the id waits for this subscribe
+                    try {
+                        if (failure instanceof DuplicateSubscriptionIdException && keptForTheId) {
+                            applyKeptLifecycle(delegate, subscriptionId, writer, kept, "after refusing a subscribe of the id that it already held");
+                        } else {
+                            endKeptLifecycle(writer, kept, failure);
+                        }
+                    } finally {
+                        giveBackPositionDelete(subscriptionId, writer.takeOver, writer);
                     }
-                    giveBackPositionDelete(subscriptionId, writer.takeOver, writer);
                 })
                 .doFinally(__ -> positionWriterNoLongerStarting(subscriptionId, writer))
                 .cache();
@@ -3142,14 +3170,18 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // is disposed writes a position, and no step toward starting it begins.
             for (InternalSubscription cancelled : Arrays.asList(runningSubscription, pausedSubscription)) {
                 if (cancelled != null) {
-                    cancelled.disposable.dispose();
-                    endBeforeItStarted(cancelled, cancelledBeforeItStarted(subscriptionId));
-                    // After the dispose, so the generation it cancelled does not hear of the read ending
-                    cancelled.readsAbandoned.tryEmitError(cancelledBeforeItStarted(subscriptionId));
-                    endPresentRead(cancelled);
-                    // Before the delete of this cancel starts, so that delete is the latest of the id and the deletes
-                    // given back here only stop counting the generation, see giveBackPositionDelete
-                    giveBackTakeOvers(subscriptionId, cancelled);
+                    try {
+                        cancelled.disposable.dispose();
+                        endBeforeItStarted(cancelled, cancelledBeforeItStarted(subscriptionId));
+                        // After the dispose, so the generation it cancelled does not hear of the read ending
+                        cancelled.readsAbandoned.tryEmitError(cancelledBeforeItStarted(subscriptionId));
+                        endPresentRead(cancelled);
+                    } finally {
+                        // Whatever the steps above throw, so no cancel of the id waits for this generation for good.
+                        // Before the delete of this cancel starts, so that delete is the latest of the id and goes ahead
+                        // in place of the deletes given back here, see decideDelete.
+                        giveBackTakeOvers(subscriptionId, cancelled);
+                    }
                 }
             }
             startDelete(subscriptionId, delete);
@@ -3262,10 +3294,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             final Mono<Void> next;
             synchronized (positionLock) {
                 @Nullable Mono<Void> inPlaceOfThis = delete.goneAhead;
-                if (delete.undecided > 0) {
-                    Sinks.Empty<Void> decided = Sinks.empty();
-                    delete.awaitingDecision = decided;
-                    next = warnWhileUndecided(subscriptionId, Mono.firstWithSignal(decided.asMono(), shutDown.asMono().then(Mono.<Void>error(SubscriptionModelShutdownException::new))))
+                @Nullable DeleteDecision decision = delete.decision;
+                if (decision != null && decision.undecided > 0) {
+                    next = warnWhileUndecided(subscriptionId, Mono.firstWithSignal(decision.decided.asMono(), shutDown.asMono().then(Mono.<Void>error(SubscriptionModelShutdownException::new))))
                             .then(onceDecided(subscriptionId, delete));
                 } else if (inPlaceOfThis != null) {
                     delete.goneAhead = null;
@@ -3289,17 +3320,17 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         });
     }
 
-    // Called under positionLock, for a takeover that is given back or kept for good. Adds what to emit once the lock is
-    // released to decided.
-    private static void countDecided(TakeOver takeOver, List<Sinks.Empty<Void>> decided) {
-        for (PositionDelete counted : takeOver.counted) {
-            counted.undecided--;
-            Sinks.@Nullable Empty<Void> awaiting = counted.awaitingDecision;
-            if (counted.undecided == 0 && awaiting != null) {
-                counted.awaitingDecision = null;
-                decided.add(awaiting);
-            }
+    // Called under positionLock, for a takeover that is given back or kept for good. Answers the decision of the id
+    // when this was the last takeover counted in it that had not decided, taken out of deleteDecisions, so a takeover
+    // made from here on counts in a new one, and null otherwise.
+    private @Nullable DeleteDecision countDecided(TakeOver takeOver) {
+        DeleteDecision decision = requireNonNull(takeOver.decision, "a takeover that counted a delete counts in a decision");
+        decision.undecided--;
+        if (decision.undecided > 0) {
+            return null;
         }
+        deleteDecisions.remove(decision.subscriptionId, decision);
+        return decision;
     }
 
     // A generation keeps the deletes of the id it took over for good once it subscribed to the feed before it was
@@ -3334,12 +3365,16 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return live;
     }
 
-    // Called under positionLock. Adds what to emit once the lock is released to decided.
-    private static void keepTakeOvers(PositionWriter writer, List<Sinks.Empty<Void>> decided) {
+    // Called under positionLock. Adds what to emit once the lock is released to decided. A keep that decides lets
+    // nothing go ahead, since a subscription of the id then started or wrote a checkpoint.
+    private void keepTakeOvers(PositionWriter writer, List<Sinks.Empty<Void>> decided) {
         Stream.concat(writer.takenOverBefore.stream(), Stream.of(writer.takeOver)).forEach(takeOver -> {
             if (!takeOver.counted.isEmpty() && !takeOver.givenBack && !takeOver.kept) {
                 takeOver.kept = true;
-                countDecided(takeOver, decided);
+                @Nullable DeleteDecision decision = countDecided(takeOver);
+                if (decision != null) {
+                    decided.add(decision.decided);
+                }
             }
         });
     }
@@ -3473,6 +3508,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         boolean restoredFound = false;
         @Nullable Checkpoint restored = null;
         final @Nullable Checkpoint writing;
+        @Nullable DeleteDecision decision = null;
         synchronized (positionLock) {
             @Nullable SequencedMap<Mono<Void>, Optional<Checkpoint>> inFlight = positionWritesInFlight.get(subscriptionId);
             // The newest one that writes a checkpoint
@@ -3484,7 +3520,6 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                     continue;
                 }
                 delete.takers++;
-                delete.undecided++;
                 counted.add(delete);
                 beforeStorage.add(delete.writesInFlight);
                 if (!delete.isTakenOver) {
@@ -3542,6 +3577,18 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                     }
                 }
             }
+            if (!counted.isEmpty()) {
+                decision = deleteDecisions.computeIfAbsent(subscriptionId, DeleteDecision::new);
+                decision.undecided++;
+                // Counted from the latest delete of the id back, so the first is the newest
+                decision.newest = counted.getFirst();
+                for (PositionDelete delete : counted) {
+                    if (!decision.waiting.contains(delete)) {
+                        decision.waiting.add(delete);
+                    }
+                    delete.decision = decision;
+                }
+            }
         }
         // Outside the lock, since each starts what waits on it
         takenOver.forEach(delete -> delete.takenOverSignal.tryEmitEmpty());
@@ -3555,28 +3602,33 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // waits for, so it writes a newer checkpoint than one a try read
         @Nullable Checkpoint storedOnceWrittenBack = writing != null ? writing : writtenBack != null ? writtenBack : restored;
         return new TakeOver(Mono.when(beforeStorage).cache(), writeVersion < 0 ? null : CheckpointWriteCondition.notOlderThan(writeVersion),
-                writtenBack, storedOnceWrittenBack, Mono.when(restoring), counted);
+                writtenBack, storedOnceWrittenBack, Mono.when(restoring), counted, decision);
     }
 
     // A subscribe, a resume or a start that throws once its generation took over a delete of the id has no
     // subscription that needs the checkpoint the delete was to remove, so the delete goes ahead, as it would had that
-    // call never come. A new delete of the id takes its place, which runs after the tries and the write back of the
-    // deletes taken over, and after the position writes in flight. Each of those deletes whose cancel still waits ends
-    // only once the new one has, and where a delete of the id made after the takeover is what goes ahead, only once
-    // that one has, see onceDecided. Where the write back waits for the try under way, it is not made once every call
-    // has given the delete back by the time the try ends. The new delete is not started for a takeover kept for good,
-    // while another call counted against those deletes has not given them back, while a newer delete of the id runs,
-    // while a writer of the id is registered or starting, or once the model is shut down. refused is the writer of the
-    // call that threw, which is retired here when that call took a delete over, so nothing it still has under way
-    // writes a position, or null.
+    // call never come. What goes ahead is decided once for the id by the last takeover counted in its DeleteDecision
+    // to give back or keep, see decideDelete, so the order in which the takeovers end doesn't matter. refused is the
+    // writer of the call that threw, which is retired here when that call took a delete over, so nothing it still has
+    // under way writes a position, or null.
     private void giveBackPositionDelete(String subscriptionId, TakeOver takeOver, @Nullable PositionWriter refused) {
         if (takeOver.counted.isEmpty()) {
             return;
         }
-        // Asked before the lock is taken, which is never held while calling the storage
-        boolean conditional = storage.evaluatesDeleteConditions() && storage.evaluatesWriteConditionsFor(subscriptionId);
+        beforeATakeOverIsGivenBack.run();
+        // Asked before the lock is taken, which is never held while calling the storage. A storage that throws here
+        // still has the takeover counted as given back, and a new delete that the decision needs fails with what it
+        // threw, so no cancel of the id waits for good or completes with the checkpoint stored.
+        boolean conditional;
+        @Nullable Exception conditionUnknown = null;
+        try {
+            conditional = storage.evaluatesDeleteConditions() && storage.evaluatesWriteConditionsFor(subscriptionId);
+        } catch (Exception e) {
+            conditional = false;
+            conditionUnknown = e;
+        }
         @Nullable Mono<Void> goneAhead = null;
-        List<Sinks.Empty<Void>> decided = new ArrayList<>();
+        @Nullable DeleteDecision decided = null;
         synchronized (positionLock) {
             if (refused != null) {
                 refused.retired = true;
@@ -3587,50 +3639,73 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             @Nullable PositionDelete latest = positionDeletes.get(subscriptionId);
             // A takeover kept for good stands for a checkpoint a subscription of the id wrote or starts from, so a give
             // back of it changes nothing unless a delete of the id made after it is the latest, as a cancel of the id
-            // makes one before it gives back, or the model is shut down. Neither lets a delete go ahead here.
+            // makes one before it gives back, or the model is shut down. Its decision was made when it was kept, so it
+            // lets no delete go ahead here either way.
             if (takeOver.kept && !shutdown && (latest == null || takeOver.counted.contains(latest))) {
                 return;
             }
             takeOver.givenBack = true;
             takeOver.counted.forEach(counted -> counted.takers--);
             if (!takeOver.kept) {
-                countDecided(takeOver, decided);
+                decided = countDecided(takeOver);
             }
-            boolean stillNeeded = shutdown
-                    || (latest != null && !takeOver.counted.contains(latest))
-                    || takeOver.counted.stream().anyMatch(counted -> counted.takers > 0)
-                    || positionWriters.containsKey(subscriptionId)
-                    || positionWritersStarting.getOrDefault(subscriptionId, Set.of()).stream().anyMatch(writer -> writer != refused);
-            @Nullable Mono<Void> inPlaceOfCounted = null;
-            if (!stillNeeded) {
-                Mono<Void> writesInFlight = Mono.when(new ArrayList<>(positionWritesInFlight.getOrDefault(subscriptionId, new LinkedHashMap<>()).sequencedKeySet()));
-                // Not the end of the latest delete, which waits for the new delete
-                Mono<Void> writtenBack = Mono.when(takeOver.counted.stream().map(counted -> counted.writtenBack.asMono()).toList());
-                PositionDelete delete = new PositionDelete(writesInFlight, conditional, latest, writtenBack);
-                // Only assembled here, it calls nothing until it is started below
-                goneAhead = runPositionDelete(subscriptionId, delete, false);
-                positionDeletes.put(subscriptionId, delete);
-                inPlaceOfCounted = goneAhead;
-            } else if (!shutdown && !takeOver.kept && latest != null && !takeOver.counted.contains(latest)) {
-                // A delete of the id made after the takeover goes ahead in place of the counted ones
-                inPlaceOfCounted = latest.finished.asMono();
-            }
-            if (inPlaceOfCounted != null) {
-                // The cancel that started a counted delete waits for this call until this step, unless this call kept
-                // the delete for good, and then for what goes ahead, along with what an earlier call named, see
-                // onceDecided
-                for (PositionDelete counted : takeOver.counted) {
-                    if (!counted.isEnding) {
-                        @Nullable Mono<Void> namedEarlier = counted.goneAhead;
-                        counted.goneAhead = namedEarlier == null ? inPlaceOfCounted : Mono.when(namedEarlier, inPlaceOfCounted);
-                    }
-                }
+            if (decided != null) {
+                goneAhead = decideDelete(subscriptionId, decided, latest, conditional, conditionUnknown, refused);
             }
         }
-        decided.forEach(Sinks.Empty::tryEmitEmpty);
+        if (decided != null) {
+            decided.decided.tryEmitEmpty();
+        }
         if (goneAhead != null) {
             startDelete(subscriptionId, goneAhead);
         }
+    }
+
+    // Called under positionLock by the give-back that made the decision, once no takeover counted in it is undecided.
+    // Nothing goes ahead once the model is shut down. A delete of the id made after every takeover counted, which none
+    // took over, goes ahead in place of the deletes in waiting, since it runs anyway. Failing that, nothing goes ahead
+    // while a subscription of the id is registered or starting, or kept a takeover of the newest delete counted, since
+    // it needs the checkpoint, and otherwise a new delete does, which runs after the tries and the write back of the
+    // deletes in waiting, and after the position writes in flight, and which is returned to be started once the lock is
+    // released. Each delete in waiting whose cancel still
+    // waits then waits for what goes ahead too, along with what an earlier decision named, see onceDecided.
+    private @Nullable Mono<Void> decideDelete(String subscriptionId, DeleteDecision decision, @Nullable PositionDelete latest, boolean conditional,
+                                              @Nullable Exception conditionUnknown, @Nullable PositionWriter refused) {
+        if (shutdown) {
+            return null;
+        }
+        PositionDelete newest = requireNonNull(decision.newest, "a decision counts at least one delete");
+        @Nullable Mono<Void> goneAhead = null;
+        final Mono<Void> inPlaceOfWaiting;
+        if (latest != null && !latest.isTakenOver) {
+            // Runs whatever is decided here
+            inPlaceOfWaiting = latest.finished.asMono();
+        } else if (newest.takers > 0
+                   || positionWriters.containsKey(subscriptionId)
+                   || positionWritersStarting.getOrDefault(subscriptionId, Set.of()).stream().anyMatch(writer -> writer != refused)) {
+            return null;
+        } else if (conditionUnknown != null) {
+            // Neither a conditional nor an unconditional delete is safe to run without knowing which the storage takes
+            inPlaceOfWaiting = Mono.error(new IllegalStateException("Could not delete the stored checkpoint of cancelled subscription " + subscriptionId +
+                                                                    ", since asking the checkpoint storage whether it evaluates a condition on a delete failed. Cancel it again.",
+                    conditionUnknown));
+        } else {
+            Mono<Void> writesInFlight = Mono.when(new ArrayList<>(positionWritesInFlight.getOrDefault(subscriptionId, new LinkedHashMap<>()).sequencedKeySet()));
+            // Not the end of the latest delete, which waits for the new delete
+            Mono<Void> writtenBack = Mono.when(decision.waiting.stream().map(waiting -> waiting.writtenBack.asMono()).toList());
+            PositionDelete delete = new PositionDelete(writesInFlight, conditional, latest, writtenBack);
+            // Only assembled here, it calls nothing until it is started
+            goneAhead = runPositionDelete(subscriptionId, delete, false);
+            positionDeletes.put(subscriptionId, delete);
+            inPlaceOfWaiting = goneAhead;
+        }
+        for (PositionDelete waiting : decision.waiting) {
+            if (!waiting.isEnding) {
+                @Nullable Mono<Void> namedEarlier = waiting.goneAhead;
+                waiting.goneAhead = namedEarlier == null ? inPlaceOfWaiting : Mono.when(namedEarlier, inPlaceOfWaiting);
+            }
+        }
+        return goneAhead;
     }
 
     private boolean isTakenOverStill(PositionDelete delete) {
@@ -4217,7 +4292,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // none, and the checkpoint that storage holds once the position writes in flight and the deletes have ended, null
     // for none. See takeOverPositionDelete.
     private static final class TakeOver {
-        private static final TakeOver NONE = new TakeOver(Mono.empty(), null, null, null, Mono.empty(), List.of());
+        private static final TakeOver NONE = new TakeOver(Mono.empty(), null, null, null, Mono.empty(), List.of(), null);
         private final Mono<Void> beforeStorage;
         private final @Nullable CheckpointWriteCondition writeCondition;
         private final @Nullable Checkpoint writtenBack;
@@ -4227,6 +4302,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         private final Mono<Void> restoredInStorage;
         // The deletes this takeover counts itself against, see giveBackPositionDelete
         private final List<PositionDelete> counted;
+        // The decision of the id this takeover counts in until it is given back or kept, null for NONE
+        private final @Nullable DeleteDecision decision;
         // Both read and changed under positionLock only
         private boolean givenBack;
         private boolean kept;
@@ -4234,7 +4311,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         private volatile boolean restoringEnded;
 
         private TakeOver(Mono<Void> beforeStorage, @Nullable CheckpointWriteCondition writeCondition, @Nullable Checkpoint writtenBack,
-                         @Nullable Checkpoint restored, Mono<Void> restoredInStorage, List<PositionDelete> counted) {
+                         @Nullable Checkpoint restored, Mono<Void> restoredInStorage, List<PositionDelete> counted,
+                         @Nullable DeleteDecision decision) {
+            this.decision = decision;
             this.beforeStorage = beforeStorage;
             this.writeCondition = writeCondition;
             this.writtenBack = writtenBack;
@@ -4294,18 +4373,17 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // The version the position writes of a subscription that took the delete over go at, set where the write back
         // goes at once, and -1 otherwise
         private long positionWritesVersion = -1;
-        // How many calls that took the delete over have not given it back, see giveBackPositionDelete
+        // How many calls that took the delete over have not given it back, kept ones included, see
+        // giveBackPositionDelete
         private int takers;
-        // How many of those calls have neither given it back nor kept it for good, see keepTakeOvers
-        private int undecided;
-        // Set while the cancel that started the delete waits for undecided to reach zero, see onceDecided, and emitted
-        // and cleared once it has
-        private Sinks.@Nullable Empty<Void> awaitingDecision;
+        // The decision of the id that the latest takeover of this delete counts in. The cancel that started the
+        // delete waits until it is made, see onceDecided.
+        private @Nullable DeleteDecision decision;
         // Emitted once what runPositionDelete returns for this delete has ended, with its error when it failed
         private final Sinks.Empty<Void> finished = Sinks.empty();
         // The end of each delete that goes ahead in place of this delete, a new delete or a later delete of the id made
-        // by then, as giveBackPositionDelete names it. The cancel that started this delete waits for it once every call
-        // that took the delete over has decided, see onceDecided, which takes and clears it.
+        // by then, as decideDelete names it. The cancel that started this delete waits for it once the decision it
+        // waits for is made, see onceDecided, which takes and clears it.
         private @Nullable Mono<Void> goneAhead;
         // Set once the cancel waits for nothing more, after which goneAhead is no longer set
         private boolean isEnding;
@@ -4319,6 +4397,28 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             this.earlier = earlier;
             this.earlierFailure = earlier == null ? null : earlier.lastFailure;
             this.runsAfter = runsAfter;
+        }
+    }
+
+    // One per id while a takeover of a delete of the id has been neither given back nor kept, and the one owner of
+    // what goes ahead in place of the deletes those takeovers counted. A takeover made while it exists counts in it,
+    // so a cancel whose delete a later takeover counts too waits for that one as well. The give-back or keep that brings
+    // undecided to zero decides for every delete in waiting at once, whichever order the takeovers end in, and takes
+    // the decision out of deleteDecisions, see decideDelete. Read and changed under positionLock only.
+    private static final class DeleteDecision {
+        private final String subscriptionId;
+        // Takeovers counted in this decision that have been neither given back nor kept
+        private int undecided;
+        // The deletes the takeovers counted, whose cancels wait for this decision
+        private final List<PositionDelete> waiting = new ArrayList<>();
+        // The newest delete a takeover counted. A kept takeover holds the checkpoint against the decision only when it
+        // counted this one, since a later cancel of the id ends the subscription that kept it.
+        private @Nullable PositionDelete newest;
+        // Emitted once the decision is made
+        private final Sinks.Empty<Void> decided = Sinks.empty();
+
+        private DeleteDecision(String subscriptionId) {
+            this.subscriptionId = subscriptionId;
         }
     }
 
