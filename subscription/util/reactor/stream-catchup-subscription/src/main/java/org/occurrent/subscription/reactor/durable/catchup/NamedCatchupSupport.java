@@ -297,6 +297,9 @@ final class NamedCatchupSupport {
         Owned record = new Owned();
         Replay replay = new Replay(subscriptionId, delegate, pipeline, cache, action, liveSubscriptionFilter, liveAction, live, new LongestReplay(), record);
         state.launcher = launcher(replay, state, PositionCatchupPipeline.notBefore(start), scope -> pipeline.resolveStart(wrapped, start, subscriptionId, scope.liveStart()), 0, null);
+        // Read before the put, since once the replay is held a resume gives the state a sink of its own, which this
+        // subscribe's handle must not wait for
+        Mono<Void> started = state.started.asMono();
 
         underIdLock(subscriptionId, () -> {
             // The wrapped model already knowing the id means an earlier catch-up handed it over (or someone subscribed it
@@ -335,7 +338,7 @@ final class NamedCatchupSupport {
             release(subscriptionId, record);
             throw e;
         }
-        return new NamedCatchupSubscription(subscriptionId, state.started.asMono());
+        return new NamedCatchupSubscription(subscriptionId, started);
     }
 
     // Runs the first launch of the replay, or parks the replay while this model is stopped. Run by subscribeWithCatchup
@@ -419,7 +422,7 @@ final class NamedCatchupSupport {
             Disposable replaying = replayThenHandOver(replay, state, launched, notBefore, firstStart, replaysAgain)
                     .subscribe(unused -> {
                     }, throwable -> {
-                        if (HistoryLossMessages.isHistoryLost(throwable) && holdForLostLiveStart(replay, state, takenOver, throwable)) {
+                        if (HistoryLossMessages.isHistoryLost(throwable) && holdForLostLiveStart(replay, state, launched, takenOver, throwable)) {
                             return;
                         }
                         // Under the lock of the id, so a resume or a report of the loss finds both the state gone and
@@ -1219,10 +1222,12 @@ final class NamedCatchupSupport {
         if (resumed == null) {
             return named.resumeSubscription(subscriptionId);
         }
+        // Read before the launch, since a replay it holds and a resume after it give the state a sink of its own
+        Mono<Void> started = resumed.state().started.asMono();
         if (resumed.launched() != null) {
             resumed.state().launcher.accept(resumed.launched());
         }
-        return new NamedCatchupSubscription(subscriptionId, resumed.state().started.asMono());
+        return new NamedCatchupSubscription(subscriptionId, started);
     }
 
     // The replay a resume runs, with the launch it runs once the lock of the id is released, or null for none
@@ -1557,10 +1562,10 @@ final class NamedCatchupSupport {
      * record, and a resume refuses with {@link CatchupCannotResumeException} until the subscription is cancelled. A
      * replay that started at the beginning skips nothing when it runs again, so a resume or a {@code start(true)} runs it
      * again. A takeover replay leaves the subscription the wrapped model holds paused as it is, and only records the
-     * loss. Returns false, and leaves the failure to end the replay as any other, when the replay is no longer the one in
-     * flight for the id, was cancelled or handed over, or this model shut down.
+     * loss. Returns false, so the failure ends the replay as any other failure does, when the replay is no longer the one
+     * in flight for the id, a later launch of it runs since, it was cancelled or handed over, or this model shut down.
      */
-    private boolean holdForLostLiveStart(Replay replay, CatchupState state, @Nullable HandedOver takenOver, Throwable failure) {
+    private boolean holdForLostLiveStart(Replay replay, CatchupState state, Object launched, @Nullable HandedOver takenOver, Throwable failure) {
         String subscriptionId = replay.subscriptionId();
         Checkpoint lost = HistoryLossMessages.lostFromWhereAResumeSkipsEvents(failure);
         if (takenOver != null) {
@@ -1569,7 +1574,7 @@ final class NamedCatchupSupport {
                 // a cancelled or replaced takeover doesn't refuse the resume of a subscription a newer run took over
                 underIdLock(subscriptionId, () -> {
                     synchronized (state) {
-                        if (!shutdown && !state.cancelled.get() && catchingUp.get(subscriptionId) == state && handedOver.get(subscriptionId) == takenOver) {
+                        if (!shutdown && !state.cancelled.get() && state.episode.get() == launched && catchingUp.get(subscriptionId) == state && handedOver.get(subscriptionId) == takenOver) {
                             replay.owned().historyLost = lost;
                         }
                     }
@@ -1582,7 +1587,7 @@ final class NamedCatchupSupport {
         AtomicReference<Sinks.@Nullable Empty<Void>> failing = new AtomicReference<>();
         boolean held = underIdLock(subscriptionId, () -> {
             synchronized (state) {
-                if (shutdown || state.cancelled.get() || state.handedOver.get() || catchingUp.get(subscriptionId) != state) {
+                if (shutdown || state.cancelled.get() || state.handedOver.get() || state.episode.get() != launched || catchingUp.get(subscriptionId) != state) {
                     return false;
                 }
                 failing.set(state.started);
