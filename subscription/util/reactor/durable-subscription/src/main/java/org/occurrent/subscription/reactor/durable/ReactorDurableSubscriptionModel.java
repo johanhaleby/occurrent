@@ -51,6 +51,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -3181,9 +3182,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                         cancelled.readsAbandoned.tryEmitError(cancelledBeforeItStarted(subscriptionId));
                         endPresentRead(cancelled);
                     } finally {
-                        // Whatever the steps above throw, so no cancel of the id waits for this generation for good.
+                        // Whatever the steps above throw, so no cancel of the id waits for this generation's takeovers.
                         // Before the delete of this cancel starts, so that delete is the latest of the id and goes ahead
-                        // in place of the deletes given back here, see decideDelete.
+                        // in place of the deletes given back here, see decideDelete. A throw here also skips starting
+                        // that delete, and a cancel waiting for it then waits until the model shuts down.
                         giveBackTakeOvers(subscriptionId, cancelled);
                     }
                 }
@@ -3587,9 +3589,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 // Counted from the latest delete of the id back, so the first is the newest
                 decision.newest = counted.getFirst();
                 for (PositionDelete delete : counted) {
-                    if (!decision.waiting.contains(delete)) {
-                        decision.waiting.add(delete);
-                    }
+                    decision.waiting.add(delete);
                     delete.decision = decision;
                 }
             }
@@ -4414,7 +4414,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // Takeovers counted in this decision that have been neither given back nor kept
         private int undecided;
         // The deletes the takeovers counted, whose cancels wait for this decision
-        private final List<PositionDelete> waiting = new ArrayList<>();
+        private final Set<PositionDelete> waiting = new LinkedHashSet<>();
         // The newest delete a takeover counted. A kept takeover holds the checkpoint against the decision only when it
         // counted that delete, since a later cancel of the id ends the subscription that kept it.
         private @Nullable PositionDelete newest;
