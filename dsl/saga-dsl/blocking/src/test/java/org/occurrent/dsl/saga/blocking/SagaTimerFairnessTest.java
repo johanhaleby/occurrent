@@ -117,8 +117,44 @@ class SagaTimerFairnessTest {
         );
     }
 
+    @Test
+    void lets_a_healthy_instance_due_at_exactly_the_instant_of_a_failed_poll_fire_within_the_polls_the_instance_ahead_of_it_needs() {
+        int singleBatch = 1;
+        seed("failing", 0);
+        seed("healthy", 10);
+        SagaExecution<OrderEvent, String, CancelOrder> execution = execution(singleBatch);
+        int polls = pollsAllowed(1, singleBatch);
+
+        for (int i = 0; i < polls; i++) {
+            now.set(Instant.ofEpochMilli(10 + 10L * i));
+            execution.pollTimers();
+        }
+
+        assertThat(dispatched).as("the healthy timer was due at the first poll's instant and fired within %d polls behind one failing instance at a batch limit of %d", polls, singleBatch)
+                .containsExactly(new CancelOrder("healthy"));
+    }
+
+    @Test
+    void shows_the_firing_time_as_nextTimerAt_for_an_instance_whose_only_timer_keeps_failing() {
+        seed("failing", 1_000);
+        SagaExecution<OrderEvent, String, CancelOrder> execution = execution(BATCH_LIMIT);
+
+        pollRepeatedly(execution, 4);
+
+        SagaEnvelope<String> after = store.find("failing").orElseThrow();
+        assertAll(
+                () -> assertThat(attempts.get("failing")).as("failed fires").isEqualTo(4),
+                () -> assertThat(after.nextTimerAt()).isEqualTo(Instant.ofEpochMilli(1_000)),
+                () -> assertThat(after.earliestDueAtEpochMilli()).as("the marked due time").hasValue(FIRST_POLL + 3 * POLL_STEP + 1)
+        );
+    }
+
     private static int pollsAllowed(int ahead) {
-        return (int) Math.ceil(ahead / (double) BATCH_LIMIT) + 1;
+        return pollsAllowed(ahead, BATCH_LIMIT);
+    }
+
+    private static int pollsAllowed(int ahead, int batchLimit) {
+        return (int) Math.ceil(ahead / (double) batchLimit) + 1;
     }
 
     private void pollRepeatedly(SagaExecution<OrderEvent, String, CancelOrder> execution, int polls) {
@@ -139,13 +175,17 @@ class SagaTimerFairnessTest {
     }
 
     private SagaExecution<OrderEvent, String, CancelOrder> execution() {
+        return execution(BATCH_LIMIT);
+    }
+
+    private SagaExecution<OrderEvent, String, CancelOrder> execution(int batchLimit) {
         Saga<OrderEvent, String, CancelOrder> saga = Saga.<OrderEvent, String, CancelOrder>builder("waiting")
                 .correlate(OrderPlaced.class, OrderPlaced::orderId)
                 .startsOn(OrderPlaced.class)
                 .evolve(OrderPlaced.class, (state, event) -> "waiting")
                 .evolveOnTimeout(TIMER, (state, timeout) -> "cancelled")
                 .reactOnTimeout(TIMER, (state, timeout) -> {
-                    if (timeout.sagaId().startsWith("failing-")) {
+                    if (timeout.sagaId().startsWith("failing")) {
                         attempts.merge(timeout.sagaId(), 1, Integer::sum);
                         throw new IllegalStateException("this instance always fails");
                     }
@@ -153,7 +193,7 @@ class SagaTimerFairnessTest {
                 })
                 .build();
         CommandDispatcher<CancelOrder> dispatcher = dispatched::add;
-        SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofSeconds(15), BATCH_LIMIT, 50);
+        SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofSeconds(15), batchLimit, 50);
         return new SagaExecution<>("saga-timer-fairness", saga, store, dispatcher, converter, config, event -> true, now::get);
     }
 

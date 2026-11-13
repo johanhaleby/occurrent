@@ -127,6 +127,19 @@ class SagaExecutionSupportTest {
                 .build();
     }
 
+    /** Arms the payment timer for a fixed instant on a new order and whenever that timer fires. */
+    private static Saga<OrderEvent, OrderState, OrderCommand> deadlineSaga(Instant deadline) {
+        return Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                .correlateAll(OrderEvent::orderId)
+                .startsOn(OrderPlaced.class)
+                .evolve(OrderPlaced.class, (state, e) -> new AwaitingPayment(e.orderId()))
+                .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.startTimeoutAt(PAYMENT_TIMER, deadline)))
+                .evolveOnTimeout(PAYMENT_TIMER, (state, t) -> state)
+                .reactOnTimeout(PAYMENT_TIMER, (state, t) -> List.of(SagaEffect.startTimeoutAt(PAYMENT_TIMER, deadline)))
+                .isTerminal(state -> state instanceof Paid || state instanceof Cancelled)
+                .build();
+    }
+
     private static SagaEnvelope<OrderState> activeEnvelope(String sagaId, OrderState state, long version, List<TimerEntry> timers,
                                                             Map<String, Long> streamWatermarks, Long positionWatermark) {
         return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, streamWatermarks, positionWatermark, NOW, NOW, null, null);
@@ -400,7 +413,7 @@ class SagaExecutionSupportTest {
         }
 
         @Test
-        void a_startTimeout_effect_for_a_timer_marked_as_failed_re_arms_it_without_the_marker() {
+        void a_startTimeout_effect_for_another_instant_drops_the_marker_of_a_timer_marked_as_failed() {
             SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1,
                     List.of(new TimerEntry(PAYMENT_TIMER, NOW.toEpochMilli() - 1_000, NOW.toEpochMilli() - 500)), Map.of(), null);
 
@@ -409,6 +422,56 @@ class SagaExecutionSupportTest {
 
             assertThat(outcome.envelope().timers())
                     .containsExactly(new TimerEntry(PAYMENT_TIMER, NOW.plus(Duration.ofMinutes(5)).toEpochMilli(), null));
+        }
+
+        @Test
+        void a_startTimeout_effect_for_the_instant_the_timer_already_fires_at_keeps_the_marker() {
+            long firesAt = NOW.plus(Duration.ofMinutes(5)).toEpochMilli();
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1,
+                    List.of(new TimerEntry(PAYMENT_TIMER, firesAt, NOW.toEpochMilli() + 1)), Map.of(), null);
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    orderFulfillment(), "o1", current, SagaInput.event(new OrderPlaced("o1", 100)), EventMeta.NONE, NOW);
+
+            assertThat(outcome.envelope().timers()).containsExactly(new TimerEntry(PAYMENT_TIMER, firesAt, NOW.toEpochMilli() + 1));
+        }
+
+        @Test
+        void a_startTimeoutAt_effect_for_the_instant_the_timer_already_fires_at_keeps_the_marker() {
+            long firesAt = NOW.minusSeconds(60).toEpochMilli();
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1,
+                    List.of(new TimerEntry(PAYMENT_TIMER, firesAt, NOW.toEpochMilli() + 1)), Map.of(), null);
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    deadlineSaga(Instant.ofEpochMilli(firesAt)), "o1", current, SagaInput.event(new OrderPlaced("o1", 100)), EventMeta.NONE, NOW);
+
+            assertThat(outcome.envelope().timers()).containsExactly(new TimerEntry(PAYMENT_TIMER, firesAt, NOW.toEpochMilli() + 1));
+        }
+
+        @Test
+        void a_startTimeoutAt_effect_for_another_instant_drops_the_marker() {
+            long firesAt = NOW.minusSeconds(60).toEpochMilli();
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1,
+                    List.of(new TimerEntry(PAYMENT_TIMER, firesAt, NOW.toEpochMilli() + 1)), Map.of(), null);
+            Instant anotherInstant = Instant.ofEpochMilli(firesAt + 1);
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    deadlineSaga(anotherInstant), "o1", current, SagaInput.event(new OrderPlaced("o1", 100)), EventMeta.NONE, NOW);
+
+            assertThat(outcome.envelope().timers()).containsExactly(new TimerEntry(PAYMENT_TIMER, anotherInstant.toEpochMilli(), null));
+        }
+
+        @Test
+        void re_arming_the_timer_that_just_fired_for_its_own_instant_starts_without_a_marker() {
+            long firesAt = NOW.minusSeconds(60).toEpochMilli();
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1,
+                    List.of(new TimerEntry(PAYMENT_TIMER, firesAt, NOW.toEpochMilli() + 1)), Map.of(), null);
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    deadlineSaga(Instant.ofEpochMilli(firesAt)), "o1", current,
+                    SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(PAYMENT_TIMER))), EventMeta.NONE, NOW);
+
+            assertThat(outcome.envelope().timers()).containsExactly(new TimerEntry(PAYMENT_TIMER, firesAt, null));
         }
 
         @Test

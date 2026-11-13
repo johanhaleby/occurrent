@@ -28,6 +28,7 @@ import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -145,6 +146,25 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
         stateStore.compareAndSave("s1", instanceWith("s1", List.of(new TimerEntry("t", BASE - 9_000, BASE - 100))), 0);
 
         assertThat(rawDocument("s1").get("nextTimerFiresAt")).isEqualTo(BASE - 100);
+    }
+
+    @Test
+    void nextTimerAt_stays_at_the_firing_time_while_nextTimerFiresAt_holds_the_marked_due_time_after_several_failed_fires() {
+        long firesAt = BASE - 9_000;
+        TimerEntry timer = new TimerEntry("t", firesAt);
+        stateStore.compareAndSave("s1", instanceWith("s1", List.of(timer)), 0);
+        for (int failedPoll = 1; failedPoll <= 3; failedPoll++) {
+            SagaEnvelope<String> current = stateStore.findWithoutState("s1").orElseThrow();
+            SagaEnvelope<String> marked = requireNonNull(SagaExecutionSupport.withFailedTimerAttempt(current, timer, Instant.ofEpochMilli(BASE - 1_000 + failedPoll)));
+            assertThat(stateStore.compareAndSaveWithoutState("s1", marked, current.version())).isTrue();
+        }
+
+        assertAll(
+                () -> assertThat(stateStore.findWithoutState("s1").orElseThrow().nextTimerAt()).as("without state").isEqualTo(Instant.ofEpochMilli(firesAt)),
+                () -> assertThat(stateStore.find("s1").orElseThrow().nextTimerAt()).as("with state").isEqualTo(Instant.ofEpochMilli(firesAt)),
+                () -> assertThat(rawDocument("s1").get("nextTimerFiresAt")).as("raw nextTimerFiresAt").isEqualTo(BASE - 1_000 + 3),
+                () -> assertThat(stateStore.find("s1").orElseThrow().timers()).containsExactly(new TimerEntry("t", firesAt, BASE - 1_000 + 3))
+        );
     }
 
     @Test

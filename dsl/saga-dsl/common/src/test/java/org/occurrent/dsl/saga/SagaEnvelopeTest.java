@@ -204,7 +204,7 @@ class SagaEnvelopeTest {
     }
 
     @Nested
-    class EarliestTimerFiresAt {
+    class EarliestDueAt {
 
         @Test
         void is_the_smallest_due_time_across_timers_with_and_without_markers() {
@@ -214,21 +214,48 @@ class SagaEnvelopeTest {
                     new TimerEntry("marked-before-its-firing-time", 6_000, 2_000L)
             ));
 
-            assertThat(envelope.earliestTimerFiresAtEpochMilli()).hasValue(4_000);
+            assertThat(envelope.earliestDueAtEpochMilli()).hasValue(4_000);
         }
 
         @Test
         void follows_the_marker_when_it_is_the_only_timer() {
             SagaEnvelope<String> envelope = envelopeWithTimers(List.of(new TimerEntry("t", 1_000, 9_000L)));
 
-            assertThat(envelope.earliestTimerFiresAtEpochMilli()).hasValue(9_000);
+            assertThat(envelope.earliestDueAtEpochMilli()).hasValue(9_000);
         }
 
         @Test
-        void nextTimerAt_reports_the_effective_due_time_rather_than_the_firing_time() {
+        void is_empty_when_there_are_no_timers() {
+            assertThat(envelopeWithTimers(List.of()).earliestDueAtEpochMilli()).isEmpty();
+        }
+    }
+
+    @Nested
+    class EarliestTimerFiresAt {
+
+        @Test
+        void is_the_smallest_firing_time_whatever_the_markers_say() {
+            SagaEnvelope<String> envelope = envelopeWithTimers(List.of(
+                    new TimerEntry("marked-past-the-others", 1_000, 9_000L),
+                    new TimerEntry("unmarked", 4_000),
+                    new TimerEntry("marked-before-its-firing-time", 6_000, 2_000L)
+            ));
+
+            assertThat(envelope.earliestTimerFiresAtEpochMilli()).hasValue(1_000);
+        }
+
+        @Test
+        void stays_at_the_firing_time_when_a_marker_is_on_the_only_timer() {
             SagaEnvelope<String> envelope = envelopeWithTimers(List.of(new TimerEntry("t", 1_000, 9_000L)));
 
-            assertThat(envelope.nextTimerAt()).isEqualTo(Instant.ofEpochMilli(9_000));
+            assertThat(envelope.earliestTimerFiresAtEpochMilli()).hasValue(1_000);
+        }
+
+        @Test
+        void nextTimerAt_reports_the_firing_time_rather_than_the_marked_due_time() {
+            SagaEnvelope<String> envelope = envelopeWithTimers(List.of(new TimerEntry("t", 1_000, 9_000L)));
+
+            assertThat(envelope.nextTimerAt()).isEqualTo(Instant.ofEpochMilli(1_000));
         }
     }
 }

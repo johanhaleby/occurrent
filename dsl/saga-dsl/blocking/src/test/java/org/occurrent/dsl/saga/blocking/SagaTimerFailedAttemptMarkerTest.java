@@ -64,6 +64,7 @@ class SagaTimerFailedAttemptMarkerTest {
     private static final long FIRES_AT = 1_000;
     private static final long OTHER_FIRES_AT = 10_000_000;
     private static final Instant POLL = Instant.ofEpochMilli(5_000);
+    private static final long MARKED_UNTIL = POLL.plusMillis(1).toEpochMilli();
     private static final Instant CREATED_AND_UPDATED = Instant.ofEpochMilli(1);
     private static final int MAX_CAS_ATTEMPTS = 3;
 
@@ -104,7 +105,7 @@ class SagaTimerFailedAttemptMarkerTest {
         poll(new CountingStore(backing));
 
         assertThat(backing.find("s1").orElseThrow().timers())
-                .containsExactly(new TimerEntry(TIMER, FIRES_AT, POLL.toEpochMilli()), new TimerEntry(OTHER_TIMER, OTHER_FIRES_AT));
+                .containsExactly(new TimerEntry(TIMER, FIRES_AT, MARKED_UNTIL), new TimerEntry(OTHER_TIMER, OTHER_FIRES_AT));
     }
 
     @Test
@@ -124,14 +125,14 @@ class SagaTimerFailedAttemptMarkerTest {
     }
 
     @Test
-    void makes_the_instance_due_again_from_the_poll_instant_and_not_earlier() {
+    void makes_the_instance_due_again_just_after_the_poll_instant() {
         seed("s1", List.of(new TimerEntry(TIMER, FIRES_AT)));
 
         poll(new CountingStore(backing));
 
         assertAll(
-                () -> assertThat(backing.findWithDueTimers(POLL.minusMillis(1), 10)).isEmpty(),
-                () -> assertThat(backing.findWithDueTimers(POLL, 10)).extracting(SagaEnvelope::sagaId).containsExactly("s1")
+                () -> assertThat(backing.findWithDueTimers(POLL, 10)).isEmpty(),
+                () -> assertThat(backing.findWithDueTimers(POLL.plusMillis(1), 10)).extracting(SagaEnvelope::sagaId).containsExactly("s1")
         );
     }
 
@@ -145,7 +146,7 @@ class SagaTimerFailedAttemptMarkerTest {
         SagaEnvelope<String> after = backing.find("s1").orElseThrow();
         assertAll(
                 () -> assertThat(store.markerWrites.get()).as("write attempts").isEqualTo(3),
-                () -> assertThat(after.timers()).containsExactly(new TimerEntry(TIMER, FIRES_AT, POLL.toEpochMilli())),
+                () -> assertThat(after.timers()).containsExactly(new TimerEntry(TIMER, FIRES_AT, MARKED_UNTIL)),
                 () -> assertThat(after.version()).as("initial 1, two concurrent bumps, one marker").isEqualTo(4),
                 () -> assertThat(markerWarnings()).isEmpty()
         );
@@ -238,7 +239,7 @@ class SagaTimerFailedAttemptMarkerTest {
         assertAll(
                 () -> assertThat(dispatched).as("the healthy instance behind it still fired").containsExactly(new CancelOrder("c-healthy")),
                 () -> assertThat(backing.find("b-failing").orElseThrow().timers())
-                        .as("the next failing instance was still marked").containsExactly(new TimerEntry(TIMER, FIRES_AT, POLL.toEpochMilli())),
+                        .as("the next failing instance was still marked").containsExactly(new TimerEntry(TIMER, FIRES_AT, MARKED_UNTIL)),
                 () -> assertThat(backing.find("a-unlucky").orElseThrow().timers()).containsExactly(new TimerEntry(TIMER, FIRES_AT)),
                 () -> assertThat(markerWarnings()).hasSize(1),
                 () -> assertThat(markerWarnings().get(0)).contains("a-unlucky", "state store failed")
@@ -255,10 +256,9 @@ class SagaTimerFailedAttemptMarkerTest {
             }
         };
         CountingStore store = new CountingStore(backing);
-        SagaExecution<OrderEvent, String, CancelOrder> execution = execution(store, () -> POLL);
 
-        execution.pollTimers();
-        execution.pollTimers();
+        execution(store, () -> POLL).pollTimers();
+        execution(store, () -> POLL.plusMillis(1)).pollTimers();
 
         SagaEnvelope<String> after = backing.find("s1").orElseThrow();
         assertAll(
