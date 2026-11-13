@@ -552,6 +552,23 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
     }
 
     @Test
+    void holds_a_running_consumer_paused_and_gives_up_the_lease_when_the_wrapped_model_fails_the_first_question_whether_it_holds_the_subscription_paused() {
+        // Given a consumer that runs and holds the lease, over a wrapped model that fails the first such question
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+        reporting.heldPausedQueriesToFail.set(1);
+
+        // When the wrapped model holds it paused and tells
+        reporting.holdsPausedAndTells(ID, HistoryLossMessages.liveStartLost("The live start is gone", (Checkpoint) () -> "live start", true));
+
+        // Then the report is still there for the retry
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(this::assertHeldPaused);
+        assertThat(reporting.heldPausedQueriesToFail.get()).as("failures left to throw").isZero();
+        assertThat(errorsLogged()).as("errors logged").singleElement().asString().contains("replays the subscription from the beginning again");
+    }
+
+    @Test
     void holds_a_running_consumer_paused_on_the_thread_that_tells_it_before_the_wrapped_model_returns_from_telling_that_it_holds_the_subscription_paused() {
         // Given a consumer that runs and holds the lease, with no call for it under way
         ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
@@ -881,6 +898,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         private final List<StartRefusalListener> listeners = new CopyOnWriteArrayList<>();
         private final Map<String, CatchupCannotResumeException> heldFor = new ConcurrentHashMap<>();
         private final AtomicReference<@Nullable Runnable> afterTheNextAnswerToIsRunning = new AtomicReference<>();
+        private final AtomicInteger heldPausedQueriesToFail = new AtomicInteger();
 
         @Override
         public void addStartRefusalListener(StartRefusalListener listener) {
@@ -900,6 +918,9 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
 
         @Override
         public boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
+            if (heldPausedQueriesToFail.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
+                throw new IllegalStateException("The wrapped model cannot tell whether it holds the subscription paused");
+            }
             return heldFor.get(subscriptionId) == refusal;
         }
 

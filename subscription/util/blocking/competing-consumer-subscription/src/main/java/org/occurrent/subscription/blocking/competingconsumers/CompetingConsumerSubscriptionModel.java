@@ -4801,8 +4801,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         if (cc == null && isBeingMade(key)) {
             return;
         }
+        // Asked before the report is taken, so the next try still finds it when the wrapped model throws
+        boolean hold = cc != null && cc.isRunning() && isHeldPausedInTheWrappedModelFor(key.subscriptionId(), refused);
         startRefusal.heldPaused.compareAndSet(refused, null);
-        if (cc != null && cc.isRunning() && isHeldPausedInTheWrappedModelFor(key.subscriptionId(), refused)) {
+        if (hold && cc != null) {
             holdTheRefusedStartPaused(key, cc.state, refused, Boolean.TRUE.equals(registrations.get(key)));
         }
     }
