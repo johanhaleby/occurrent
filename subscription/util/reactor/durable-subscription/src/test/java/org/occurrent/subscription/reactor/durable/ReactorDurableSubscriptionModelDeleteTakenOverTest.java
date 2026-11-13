@@ -713,6 +713,176 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     }
 
     /**
+     * A subscribe takes over the delete a first cancel of the id started, a second cancel ends it, and a later subscribe
+     * takes over both deletes and cannot read its start position. Both end, so no subscription needs the checkpoint and
+     * the second cancel does not complete until a delete has removed it, whichever of the two gives the deletes back
+     * first. That holds on the path that drives the feed and on the one that hands the subscription to a wrapped model.
+     * <ul>
+     *     <li>later: the later subscribe gives back first, while the give-back of the one the second cancel ended is
+     *     held</li>
+     *     <li>ended: the one the second cancel ended gives back first, while the give-back of the later subscribe is
+     *     held</li>
+     * </ul>
+     */
+    @ParameterizedTest
+    @CsvSource({"handed-over, later", "handed-over, ended"})
+    void a_cancel_completes_with_the_checkpoint_removed_whichever_of_two_subscribes_that_took_its_delete_over_gives_it_back_first(String path, String givesBackFirst) throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        Feed feed = path.equals("handed-over") ? new NamedFeed() : new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        boolean laterFirst = givesBackFirst.equals("later");
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        ExecutorService canceller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicReference<@Nullable ParkedGiveBack> parkNext = parkGiveBacks(model);
+        ParkedGiveBack endedParked = new ParkedGiveBack();
+        ParkedGiveBack laterParked = new ParkedGiveBack();
+        // The delete of the second cancel is the latest of the id until it is retired, which is held until the last give-back
+        // has decided. The first delete to be retired is that of the first cancel.
+        CountDownLatch secondDeleteReached = new CountDownLatch(1);
+        CountDownLatch retireSecondDelete = new CountDownLatch(1);
+        AtomicInteger deletesRetired = new AtomicInteger();
+        model.runBeforeADeleteIsRetired(() -> {
+            if (deletesRetired.incrementAndGet() == 2) {
+                secondDeleteReached.countDown();
+                awaitLatch(retireSecondDelete);
+            }
+        });
+        try {
+            Mono<Void> firstCancel = cancelWithCheckpointStored(model, storage, feed, release);
+            CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())), caller)
+                    .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            if (path.equals("handed-over")) { await().atMost(TIMEOUT).until(() -> feed.isRunning(SUBSCRIPTION_ID) && model.isRunning(SUBSCRIPTION_ID)); System.out.println("DIAG forced registered, undecided=" + undecided(model)); }
+            // On a thread of its own, since on the path that drives the feed the cancel gives the deletes back on the thread that calls it
+            parkNext.set(endedParked);
+            CompletableFuture<Mono<Void>> secondCancel = CompletableFuture.supplyAsync(() -> model.cancelSubscription(SUBSCRIPTION_ID), canceller);
+            assertThat(endedParked.reached().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("give-back of the subscribe the second cancel ended reached").isTrue();
+            // What the subscribe the second cancel ended counted, which a subscribe of the same path counts too
+            int endedCounted = undecided(model);
+            if (!laterFirst) {
+                parkNext.set(laterParked);
+            }
+            storage.readsFail = true;
+            CompletableFuture<Subscription> laterSubscribe = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())), caller);
+            AtomicReference<@Nullable Throwable> laterEnded = new AtomicReference<>();
+            if (laterFirst) {
+                laterEnded.set(catchThrowable(() -> laterSubscribe.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block()));
+                storage.readsFail = false;
+                // The later subscribe counted before it failed, so what is left once it gave back is what the ended one counted
+                await().atMost(TIMEOUT).until(() -> undecided(model) == endedCounted);
+            } else {
+                assertThat(laterParked.reached().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("give-back of the later subscribe reached").isTrue();
+                storage.readsFail = false;
+                endedParked.open().countDown();
+                // The later subscribe is held before its give-back and counted, so what is left once the ended one gave back is what it counted
+                await().atMost(TIMEOUT).until(() -> undecided(model) == endedCounted);
+            }
+            boolean decisionAwaitedWhileOneIsHeld = model.awaitsADeleteDecision(SUBSCRIPTION_ID);
+            // The try under way removes the checkpoint, and the one still held has not given back, so it is written back
+            long stored = feed.present.get();
+            release.countDown();
+            assertThat(untilStored(storage, stored)).as("checkpoint written back while a give-back is held").isEqualTo(String.valueOf(stored));
+            // The second cancel does not start its delete until it has given back what it ended, which is the held give-back on the path that drives the feed
+            if (!(path.equals("drives-the-feed") && laterFirst)) {
+                System.out.println("DIAG secondDeleteReached=" + secondDeleteReached.await(3, TimeUnit.SECONDS));
+            }
+            (laterFirst ? endedParked : laterParked).open().countDown();
+            await().atMost(TIMEOUT).until(() -> !model.awaitsADeleteDecision(SUBSCRIPTION_ID));
+            retireSecondDelete.countDown();
+            if (!laterFirst) {
+                laterEnded.set(catchThrowable(() -> laterSubscribe.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block()));
+            }
+            Mono<Void> cancelledAgain = secondCancel.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+            // When
+            System.out.println("DIAG before cancels undecided=" + undecided(model) + " stored=" + storage.stored());
+            Throwable secondCancelEnded = catchThrowable(() -> cancelledAgain.block(TIMEOUT));
+            String storedOnceTheSecondCancelEnded = storage.stored();
+            Throwable firstCancelEnded = catchThrowable(() -> firstCancel.block(TIMEOUT));
+            String storedOnceTheFirstCancelEnded = storage.stored();
+
+            System.out.println("DIAG RESULT second=" + secondCancelEnded + " first=" + firstCancelEnded + " stored=" + storedOnceTheFirstCancelEnded + "/" + storedOnceTheSecondCancelEnded);
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(laterEnded.get()).as("why the later subscribe did not start").hasStackTraceContaining(READ_FAILED);
+                softly.assertThat(decisionAwaitedWhileOneIsHeld).as("a delete decision awaited while one of the two give-backs was held").isTrue();
+                softly.assertThat(secondCancelEnded).as("how the second cancel ended").isNull();
+                softly.assertThat(storedOnceTheSecondCancelEnded).as("checkpoint stored once the second cancel completed").isEqualTo("-");
+                softly.assertThat(firstCancelEnded).as("how the first cancel ended").isNull();
+                softly.assertThat(storedOnceTheFirstCancelEnded).as("checkpoint stored once the first cancel completed").isEqualTo("-");
+                softly.assertThat(model.awaitsADeleteDecision(SUBSCRIPTION_ID)).as("a delete decision awaited once both cancels completed").isFalse();
+            });
+        } finally {
+            release.countDown();
+            endedParked.open().countDown();
+            laterParked.open().countDown();
+            retireSecondDelete.countDown();
+            canceller.shutdownNow();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe takes over the delete a cancel of the id started and a second cancel ends it while it waits, so no
+     * subscription needs the checkpoint. The first cancel completes once the subscribe has given the delete back, and
+     * a delete has removed the checkpoint, whether the subscribe waits for the delete to write back on the path that
+     * drives the feed or reads the store where a wrapped model is. Until then the id awaits a decision, and it does not
+     * once both cancels completed.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"drives-the-feed", "reads-the-store"})
+    void a_cancel_completes_once_the_subscribe_that_took_its_delete_over_is_ended_by_a_later_cancel_while_it_waits(String path) throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        boolean readsTheStore = path.equals("reads-the-store");
+        Feed feed = readsTheStore ? new NamedFeed() : new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        try {
+            Mono<Void> firstCancel = cancelWithCheckpointStored(model, storage, feed, release);
+            if (readsTheStore) {
+                storage.readGate = releaseRead;
+            }
+            CompletableFuture<Subscription> tookOver = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())), caller);
+            if (readsTheStore) {
+                assertThat(storage.readEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("read of the store held").isTrue();
+            } else {
+                tookOver.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            }
+            boolean decisionAwaitedWhileItWaits = model.awaitsADeleteDecision(SUBSCRIPTION_ID);
+
+            // When
+            Mono<Void> secondCancel = model.cancelSubscription(SUBSCRIPTION_ID);
+            Throwable endedBeforeItStarted = catchThrowable(() -> tookOver.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block());
+            releaseRead.countDown();
+            release.countDown();
+            Throwable firstCancelEnded = catchThrowable(() -> firstCancel.block(TIMEOUT));
+            String storedOnceTheFirstCancelEnded = storage.stored();
+            Throwable secondCancelEnded = catchThrowable(() -> secondCancel.block(TIMEOUT));
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(decisionAwaitedWhileItWaits).as("a delete decision awaited while the subscribe that took the delete over waits").isTrue();
+                softly.assertThat(endedBeforeItStarted).as("how the subscribe that took the delete over ended").isInstanceOf(CancellationException.class);
+                softly.assertThat(firstCancelEnded).as("how the first cancel ended").isNull();
+                softly.assertThat(storedOnceTheFirstCancelEnded).as("checkpoint stored once the first cancel completed").isEqualTo("-");
+                softly.assertThat(secondCancelEnded).as("how the second cancel ended").isNull();
+                softly.assertThat(storage.stored()).as("checkpoint stored once both cancels completed").isEqualTo("-");
+                softly.assertThat(model.awaitsADeleteDecision(SUBSCRIPTION_ID)).as("a delete decision awaited once both cancels completed").isFalse();
+            });
+        } finally {
+            release.countDown();
+            releaseRead.countDown();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
      * A subscribe takes over the delete a cancel of the id started, and the delete removes the checkpoint and writes it
      * back for that subscribe. The subscribe is refused while it still reads its start position, and a delete goes
      * ahead in place of it. The cancel does not complete while the subscribe still reads, and once it has completed
@@ -2142,6 +2312,46 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             return field.get(model);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    // A give-back of a takeover that reached the hook and waits there until open opens
+    private record ParkedGiveBack(CountDownLatch reached, CountDownLatch open) {
+        private ParkedGiveBack() {
+            this(new CountDownLatch(1), new CountDownLatch(1));
+        }
+    }
+
+    // Parks the first give-back that reaches the hook once a ParkedGiveBack is set in what it answers, and none after
+    // that one until another is set. Which give-back that is, is for the test to know by when it sets it.
+    private static AtomicReference<@Nullable ParkedGiveBack> parkGiveBacks(ReactorDurableSubscriptionModel model) {
+        AtomicReference<@Nullable ParkedGiveBack> next = new AtomicReference<>();
+        model.runBeforeATakeOverIsGivenBack(() -> {
+            @Nullable ParkedGiveBack parked = next.getAndSet(null);
+            if (parked != null) {
+                parked.reached().countDown();
+                awaitLatch(parked.open());
+            }
+        });
+        return next;
+    }
+
+    // How many takeovers of the id are neither given back nor kept, or 0 when it awaits no decision. A subscribe that
+    // drives the feed counts two, the one it makes at the call and the one of its generation, and one handed to a
+    // wrapped model counts one. Read under the lock the model decides under.
+    private static int undecided(ReactorDurableSubscriptionModel model) {
+        synchronized (field(model, "positionLock")) {
+            @Nullable Object decision = ((Map<?, ?>) field(model, "deleteDecisions")).get(SUBSCRIPTION_ID);
+            if (decision == null) {
+                return 0;
+            }
+            try {
+                Field undecided = decision.getClass().getDeclaredField("undecided");
+                undecided.setAccessible(true);
+                return undecided.getInt(decision);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
         }
     }
 
