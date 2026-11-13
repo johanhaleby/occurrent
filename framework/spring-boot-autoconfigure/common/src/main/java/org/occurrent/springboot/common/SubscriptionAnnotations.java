@@ -589,10 +589,10 @@ public final class SubscriptionAnnotations {
      * refused the way one the class declares is. Both annotation post-processors call this, so they find the same
      * methods.
      * <p>
-     * One case is missed. When {@code type} is in the package of a package-private annotated method, Spring takes the
-     * first method of the same signature up from {@code type} as the one it runs, even a method in another package
-     * that doesn't override it. When that method is private, or has a handler annotation of its own, the annotated
-     * method isn't returned, though the JVM runs it.
+     * The scan misses this case. When {@code type} is in the package of a package-private annotated method, Spring
+     * takes the first method of the same signature up from {@code type} as the one it runs, even a method in another
+     * package that doesn't override it. When that method is private, or has a handler annotation of its own, the
+     * annotated method isn't returned, though the JVM runs it.
      *
      * @param type            the concrete class the scan reads
      * @param annotationTypes the handler annotations to look for, searched with {@link SearchStrategy#TYPE_HIERARCHY}

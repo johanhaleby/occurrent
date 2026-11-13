@@ -56,10 +56,10 @@ method as the one the bean's class actually runs:
   startup. That happens when the annotated method is package-private and a superclass in another package declares it,
   since Spring's annotation search ignores packages and gives the subclass's method that annotation. When the bean's
   class, or a superclass below that method, declares a method of the same signature, that method is checked instead.
-- One case is missed. When the bean's class is in the package of a package-private annotated method, Spring takes the
-  first method of the same signature up from the bean's class as the one it runs, even a method in another package
-  that doesn't override it. When that method is private, or has a handler annotation of its own, the annotated method
-  isn't found, though the JVM runs it.
+- The scan misses this case. When the bean's class is in the package of a package-private annotated method, Spring
+  takes the first method of the same signature up from the bean's class as the one it runs, even a method in another
+  package that doesn't override it. When that method is private, or has a handler annotation of its own, the annotated
+  method isn't found, though the JVM runs it.
 - A static method an interface declares is left out, since a class doesn't inherit it. A static method a superclass
   declares is a handler, and it's refused the way a static method the bean's class declares is.
 
