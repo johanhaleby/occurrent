@@ -1569,11 +1569,14 @@ final class NamedCatchupSupport {
             }
             return false;
         }
+        // Read under the monitor, since a resume or a start(true) after the hold gives the state a sink of its own
+        AtomicReference<Sinks.@Nullable Empty<Void>> failing = new AtomicReference<>();
         boolean held = underIdLock(subscriptionId, () -> {
             synchronized (state) {
                 if (shutdown || state.cancelled.get() || state.handedOver.get() || catchingUp.get(subscriptionId) != state) {
                     return false;
                 }
+                failing.set(state.started);
                 state.pendingPause.set(false);
                 state.parked.set(true);
                 state.heldForLostLiveStart = true;
@@ -1593,14 +1596,18 @@ final class NamedCatchupSupport {
         } else {
             log.error("The catch-up replay for subscription {} failed, so the subscription is held paused, and resuming it or start(true) on this model replays again from the beginning.", subscriptionId, failure);
         }
-        failStart(state, subscriptionId, failure);
+        failStart(requireNonNull(failing.get()), subscriptionId, failure);
         return true;
     }
 
     // A waiter whose error handler throws would otherwise abort the cancel or shutdown that fails it
     private static void failStart(CatchupState state, String subscriptionId, Throwable failure) {
+        failStart(state.started, subscriptionId, failure);
+    }
+
+    private static void failStart(Sinks.Empty<Void> started, String subscriptionId, Throwable failure) {
         try {
-            state.started.tryEmitError(failure);
+            started.tryEmitError(failure);
         } catch (RuntimeException e) {
             log.error("A waiter for subscription {} to start threw when told it failed with {}.", subscriptionId, failure.toString(), e);
         }

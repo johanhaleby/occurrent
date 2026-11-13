@@ -105,6 +105,12 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
         return this;
     }
 
+    // From now on an open at a live start it has not lost already keeps it, as once the history reaches back far enough
+    LiveStartLosingSubscriptionModel keepingEveryOpen() {
+        losesEveryOpen = false;
+        return this;
+    }
+
     LiveStartLosingSubscriptionModel beforeTheFirstOpen(Runnable beforeTheFirstOpen) {
         this.beforeTheFirstOpen = beforeTheFirstOpen;
         return this;

@@ -16,6 +16,9 @@
 
 package org.occurrent.subscription.reactor.durable.catchup;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -30,6 +33,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -39,10 +43,12 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorStreamCatchupSubscriptionModelTest {
@@ -356,6 +362,56 @@ class ReactorStreamCatchupSubscriptionModelTest {
             assertThat(wrapped.subscribeCalls).as("handed over").containsExactly("sub");
             assertThat(catchup.isPaused("sub")).as("paused").isFalse();
         } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_resume_after_a_named_catch_up_that_started_at_the_beginning_is_held_and_before_the_waiters_of_the_held_replay_are_failed_gets_a_start_that_completes_once_the_replay_run_again_hands_over() {
+        // Given a model that loses the live start in each of the replays, and a resume made where the hold is logged, which
+        // comes after the hold and before the waiters of the held replay are told it failed
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.losesEveryToken = true;
+        Sinks.Empty<Void> wrappedStarted = Sinks.empty();
+        Sinks.Empty<Void> letTheReplayGo = Sinks.empty();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new ThreeEventReader());
+        AtomicBoolean asked = new AtomicBoolean();
+        AtomicReference<Subscription> resumed = new AtomicReference<>();
+        AtomicReference<Throwable> resumeFailure = new AtomicReference<>();
+        Logger supportLogger = (Logger) LoggerFactory.getLogger(NamedCatchupSupport.class);
+        AppenderBase<ILoggingEvent> resumesWhereTheHoldIsLogged = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getFormattedMessage().contains("held paused, and resuming it or start(true) on this model replays again from the beginning") && asked.compareAndSet(false, true)) {
+                    wrapped.losesEveryToken = false;
+                    wrapped.startedSignal = wrappedStarted.asMono();
+                    resumeFailure.set(org.assertj.core.api.Assertions.catchThrowable(() -> resumed.set(catchup.resumeSubscription("sub"))));
+                }
+            }
+        };
+        resumesWhereTheHoldIsLogged.start();
+        supportLogger.addAppender(resumesWhereTheHoldIsLogged);
+        try {
+            // When, with the replays let go only once the subscribe has returned the start of the replay it made
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> letTheReplayGo.asMono());
+            letTheReplayGo.tryEmitEmpty();
+            await().atMost(Duration.ofSeconds(20)).untilTrue(asked);
+            assertThat(resumeFailure.get()).as("thrown by the resume").isNull();
+            // The start of the resume waits for the start signal of the wrapped model, held back until below, so only a
+            // failure can end it before then
+            Mono<String> firstStartToEnd = Mono.firstWithSignal(
+                    subscription.waitUntilStarted().thenReturn("the held replay started").onErrorReturn("the held replay failed"),
+                    resumed.get().waitUntilStarted().thenReturn("the resume started").onErrorReturn("the resume failed"));
+
+            // Then the failure reaches the waiters of the held replay and not the start of the resume
+            StepVerifier.create(firstStartToEnd).expectNext("the held replay failed").expectComplete().verify(Duration.ofSeconds(5));
+            wrappedStarted.tryEmitEmpty();
+            StepVerifier.create(resumed.get().waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(5));
+            assertThat(wrapped.subscribeCalls).as("handed over").containsExactly("sub");
+        } finally {
+            supportLogger.detachAppender(resumesWhereTheHoldIsLogged);
             catchup.shutdown();
         }
     }

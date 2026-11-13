@@ -115,16 +115,16 @@ class WrapperCapabilityLookupTest {
                         with(A_SUBSCRIPTION_MODEL, IntrospectableSubscriptions.class))),
                 Named.of("CatchupSubscriptionModel over a stream", new Wrapper(
                         beneath -> new CatchupSubscriptionModel(beneath, unused(EventStoreQueries.class, CatchupReads.class), CATCHUP_CONFIG),
-                        with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class))),
+                        with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class, StartRefusalReportingSubscriptions.class))),
                 Named.of("CatchupSubscriptionModel over a DCB event store", new Wrapper(
                         beneath -> new CatchupSubscriptionModel(beneath, unused(DcbEventStore.class, DcbCatchupReads.class), QUERY, CATCHUP_CONFIG),
-                        with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class))),
+                        with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class, StartRefusalReportingSubscriptions.class))),
                 Named.of("StreamCatchupSubscriptionModel", new Wrapper(
                         beneath -> new StreamCatchupSubscriptionModel(beneath, unused(EventStoreQueries.class, CatchupReads.class), CATCHUP_CONFIG),
-                        with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class))),
+                        with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class, StartRefusalReportingSubscriptions.class))),
                 Named.of("DcbCatchupSubscriptionModel", new Wrapper(
                         beneath -> DcbCatchupModelFactory.dcbCatchupSubscriptionModel(beneath, unused(DcbEventStore.class, DcbCatchupReads.class), QUERY, CATCHUP_CONFIG),
-                        with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class))));
+                        with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class, StartRefusalReportingSubscriptions.class))));
     }
 
     static Stream<Arguments> wrappersAndCapabilities() {

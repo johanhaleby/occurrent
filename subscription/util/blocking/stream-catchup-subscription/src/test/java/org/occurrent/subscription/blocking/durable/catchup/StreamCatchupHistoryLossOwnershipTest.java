@@ -46,6 +46,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
@@ -56,6 +57,7 @@ import org.slf4j.helpers.MessageFormatter;
 
 import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -980,6 +982,68 @@ class StreamCatchupHistoryLossOwnershipTest {
                 () -> assertThat(received).as("events delivered").isEmpty(),
                 () -> assertThat(signals).as("catch-up signals, so no replay ran").isEmpty(),
                 () -> assertThat(storage.read(ID)).as("stored position").isNull()
+        );
+    }
+
+    @Test
+    void runs_a_subscription_whose_replay_lost_its_live_start_before_it_went_live_and_delivers_a_later_event_when_resumed_at_a_checkpoint_the_live_model_has_the_history_back_to() {
+        // Given
+        heldPausedBeforeItWentLive();
+        DomainEvent later = nameDefined(LocalDateTime.now(), "later");
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN)));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        liveModel.deliver(ID, cloudEventConverter.toCloudEvents(List.of(later)).get(0));
+        assertAll(
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(liveModel.subscribeCalls).as("running subscribes on the live model").containsExactly(ID),
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").isEmpty(),
+                () -> assertThat(received).as("events delivered, the history after position 1 and then the later event").containsExactly(history.get(1), history.get(2), later),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged").containsExactly(terminalFailureLog(ID, TOKEN))
+        );
+    }
+
+    @Test
+    void a_pause_and_resume_does_not_throw_the_terminal_failure_once_a_subscription_whose_replay_lost_its_live_start_before_it_went_live_is_resumed_at_a_kept_checkpoint() {
+        // Given
+        heldPausedBeforeItWentLive();
+        catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN));
+        catchup.pauseSubscription(ID);
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").containsExactly(ID),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged").containsExactly(terminalFailureLog(ID, TOKEN))
+        );
+    }
+
+    // A replay a subscribe started above the beginning, whose action ages out the live start the replay would go live
+    // from, so the live model never gets the subscription and the loss is recorded
+    private void heldPausedBeforeItWentLive() {
+        create();
+        Checkpoint stored = new StringBasedCheckpoint(CatchupCheckpoints.format(1, 1, 3, TOKEN));
+        Subscription subscribed = catchup.subscribe(ID, StartAt.checkpoint(stored), cloudEvent -> {
+            liveModel.withoutHistoryBack(TOKEN);
+            received.add(cloudEventConverter.toDomainEvent(cloudEvent));
+        });
+        assertThat(catchThrowable(() -> subscribed.waitUntilStarted(Duration.ofSeconds(10)))).as("thrown by waiting for the subscription to start")
+                .isInstanceOf(CatchupCannotResumeException.class);
+        assertAll(
+                () -> assertThat(catchup.isPaused(ID)).as("held paused").isTrue(),
+                () -> assertThat(liveModel.subscribeCalls).as("running subscribes on the live model").isEmpty(),
+                () -> assertThat(catchThrowable(() -> catchup.resumeSubscription(ID))).as("thrown by a resume").isInstanceOf(CatchupCannotResumeException.class)
         );
     }
 

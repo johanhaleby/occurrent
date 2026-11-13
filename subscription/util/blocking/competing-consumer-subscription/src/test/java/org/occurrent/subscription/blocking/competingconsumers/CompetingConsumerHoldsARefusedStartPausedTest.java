@@ -546,6 +546,23 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
     }
 
     @Test
+    void holds_a_running_consumer_paused_on_the_thread_that_tells_it_before_the_wrapped_model_returns_from_telling_that_it_holds_the_subscription_paused() {
+        // Given a consumer that runs and holds the lease, with no call for it under way
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+
+        // When the wrapped model holds it paused because the live start its replay would go live from is gone
+        reporting.holdsPausedAndTells(ID, HistoryLossMessages.liveStartLost("The live start is gone", (Checkpoint) () -> "live start", true));
+
+        // Then
+        String tellingThread = Thread.currentThread().getName();
+        assertHeldPaused();
+        assertThat(logged.events.stream().filter(event -> event.getLevel().equals(Level.ERROR)).map(ILoggingEvent::getThreadName).toList())
+                .as("threads that logged an error").containsExactly(tellingThread);
+    }
+
+    @Test
     void competes_again_and_resumes_the_wrapped_model_when_the_user_resumes_a_consumer_the_wrapped_model_told_it_holds_paused() {
         // Given
         ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();

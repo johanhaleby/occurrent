@@ -68,12 +68,14 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
+import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.slf4j.LoggerFactory;
+import org.slf4j.helpers.MessageFormatter;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
@@ -1343,8 +1345,18 @@ class StreamCatchupResumeReplayMongoTest {
         // When B is resumed
         catchupB.resumeSubscription(subscriptionId);
 
-        // Then the replay is held and refused once, instead of replaying again
-        assertTheRefusedReplayIsHeldAndNothingIsStoredOrDelivered(stored, "from the beginning again");
+        // Then the replay is held and the loss recorded and logged once, instead of replaying again
+        await("the replay is held").atMost(10, SECONDS).untilAsserted(() -> assertThat(catchupB.hasParkedReplay(subscriptionId)).isTrue());
+        assertThat(catchupB.isPaused(subscriptionId)).as("paused").isTrue();
+        assertThat(catchupB.isRunning(subscriptionId)).as("running").isFalse();
+        assertThat(catchupB.isCatchingUp(subscriptionId)).as("catching up").isFalse();
+        String heldLog = MessageFormatter.arrayFormat(HistoryLossMessages.TERMINAL_FAILURE_LOG, new Object[]{subscriptionId, LiveStartLosingModel.LOST, LiveStartLosingModel.LOST}).getMessage();
+        await("the loss is logged once").during(2, SECONDS).atMost(6, SECONDS)
+                .untilAsserted(() -> assertThat(errorLog.messagesAbout(subscriptionId)).containsExactly(heldLog));
+        assertThat(errorLog.failures).as("the failure of the held replay").singleElement().asString()
+                .contains(subscriptionId).contains("from the beginning again");
+        assertThat(storage.read(subscriptionId)).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());
+        assertThat(receivedByB).as("delivered").isEmpty();
     }
 
     @Test
