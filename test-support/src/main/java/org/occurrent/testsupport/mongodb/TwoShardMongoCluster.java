@@ -96,7 +96,7 @@ public final class TwoShardMongoCluster implements AutoCloseable {
      */
     public String createDatabase(String primaryShard) {
         String database = "sharded_" + UUID.randomUUID().toString().replace("-", "");
-        mongosh(MONGOS_PORT, "ok(sh.enableSharding('" + database + "', '" + primaryShard + "'));");
+        mongosh(MONGOS_PORT, "ok(sh.enableSharding(" + js(database) + ", " + js(primaryShard) + "));");
         return database;
     }
 
@@ -106,17 +106,18 @@ public final class TwoShardMongoCluster implements AutoCloseable {
      * collection named {@code <event collection>_dcb_checkpoints}.
      */
     public void shardCheckpointCollection(String database, String collection) {
-        String namespace = database + "." + collection;
-        mongosh(MONGOS_PORT, "ok(sh.shardCollection('" + namespace + "', {_id: 1}));"
-                + "ok(sh.splitAt('" + namespace + "', {_id: '" + SPLIT_POINT + "'}));"
-                + "ok(sh.moveChunk('" + namespace + "', {_id: 'marker:tag:zzz'}, '" + SECOND_SHARD + "'));"
-                + "ok(sh.moveChunk('" + namespace + "', {_id: 'marker:tag:aaa'}, '" + FIRST_SHARD + "'));");
+        String namespace = js(database + "." + collection);
+        mongosh(MONGOS_PORT, "ok(sh.shardCollection(" + namespace + ", {_id: 1}));"
+                + "ok(sh.splitAt(" + namespace + ", {_id: '" + SPLIT_POINT + "'}));"
+                + "ok(sh.moveChunk(" + namespace + ", {_id: 'marker:tag:zzz'}, '" + SECOND_SHARD + "'));"
+                + "ok(sh.moveChunk(" + namespace + ", {_id: 'marker:tag:aaa'}, '" + FIRST_SHARD + "'));");
     }
 
     /**
      * Makes every transaction that commits on the second shard wait before it commits there, until
      * {@link #releaseCommitsOnSecondShard()} or until the returned {@link Hold} is closed. Use it in a
-     * try-with-resources, so a test that fails while commits are held doesn't leave the next test hanging.
+     * try-with-resources, so a test that fails while commits are held doesn't leave the next test hanging. The hold
+     * covers every commit on the second shard, so tests that share a cluster and hold commits can't run concurrently.
      */
     public Hold holdCommitsOnSecondShard() {
         setCommitFailPoint("alwaysOn");
@@ -124,7 +125,8 @@ public final class TwoShardMongoCluster implements AutoCloseable {
     }
 
     /**
-     * Commits held on the second shard. Closing it releases them, and closing it after they were released does nothing.
+     * Commits held on the second shard. Closing it releases them, and closing it again releases them again, which
+     * changes nothing on the shard.
      */
     @FunctionalInterface
     public interface Hold extends AutoCloseable {
@@ -166,6 +168,21 @@ public final class TwoShardMongoCluster implements AutoCloseable {
             throw new IllegalStateException("Interrupted while waiting for the second shard", e);
         }
         throw new IllegalStateException("The second shard had no primary after 60 seconds");
+    }
+
+    // A JavaScript string literal for a name the caller passes, so a quote or a backslash in it stays part of the name
+    private static String js(String value) {
+        StringBuilder literal = new StringBuilder("\"");
+        for (char c : value.toCharArray()) {
+            if (c == '"' || c == '\\') {
+                literal.append('\\').append(c);
+            } else if (c < 0x20 || c == '\u2028' || c == '\u2029') {
+                literal.append(String.format("\\u%04x", (int) c));
+            } else {
+                literal.append(c);
+            }
+        }
+        return literal.append('"').toString();
     }
 
     private void mongosh(int port, String script) {

@@ -34,6 +34,7 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -100,24 +101,41 @@ class TwoShardMongoClusterTest {
     }
 
     @Test
+    void places_checkpoint_markers_on_the_shard_their_id_belongs_to_when_the_collection_name_has_a_quote_and_a_backslash() {
+        String database = cluster.createDatabase(SECOND_SHARD);
+        String collection = "events'archive\\x_dcb_checkpoints";
+
+        cluster.shardCheckpointCollection(database, collection);
+
+        assertMarkersAreSplitAcrossTheShards(database, collection);
+    }
+
+    @Test
     void holds_a_commit_on_the_second_shard_until_the_commits_are_released() throws Exception {
         String database = cluster.createDatabase(SECOND_SHARD);
         MongoDatabase db = mongo.getDatabase(database);
         db.createCollection("events");
         MongoCollection<Document> events = db.getCollection("events");
         ExecutorService executor = Executors.newSingleThreadExecutor();
-        try (ClientSession session = mongo.startSession(); Hold ignored = cluster.holdCommitsOnSecondShard()) {
-            session.startTransaction();
-            events.insertOne(session, new Document("_id", "held"));
-            Future<?> commit = executor.submit(session::commitTransaction);
+        try (ClientSession session = mongo.startSession()) {
+            Future<?> commit = null;
+            try (Hold ignored = cluster.holdCommitsOnSecondShard()) {
+                session.startTransaction();
+                events.insertOne(session, new Document("_id", "held"));
+                commit = executor.submit(session::commitTransaction);
+                Future<?> held = commit;
 
-            assertThatThrownBy(() -> commit.get(2, TimeUnit.SECONDS))
-                    .as("the commit on the second shard should still be held after 2 seconds")
-                    .isInstanceOf(TimeoutException.class);
+                assertThatThrownBy(() -> held.get(2, TimeUnit.SECONDS))
+                        .as("the commit on the second shard should still be held after 2 seconds")
+                        .isInstanceOf(TimeoutException.class);
 
-            cluster.releaseCommitsOnSecondShard();
+                cluster.releaseCommitsOnSecondShard();
 
-            commit.get(30, TimeUnit.SECONDS);
+                commit.get(30, TimeUnit.SECONDS);
+            } finally {
+                // The hold is released by now, so the commit can finish before the session closes
+                awaitSettled(commit);
+            }
         } finally {
             executor.shutdownNow();
         }
@@ -134,21 +152,29 @@ class TwoShardMongoClusterTest {
         MongoCollection<Document> checkpoints = db.getCollection(CHECKPOINTS);
         MongoCollection<Document> events = db.getCollection("events");
         ExecutorService executor = Executors.newSingleThreadExecutor();
-        try (ClientSession session = mongo.startSession(); Hold ignored = cluster.holdCommitsOnSecondShard()) {
-            session.startTransaction();
-            checkpoints.insertOne(session, new Document("_id", ID_ON_FIRST_SHARD));
-            events.insertOne(session, new Document("_id", "event-1"));
-            Future<?> commit = executor.submit(session::commitTransaction);
+        try (ClientSession session = mongo.startSession()) {
+            Future<?> commit = null;
+            try (Hold ignored = cluster.holdCommitsOnSecondShard()) {
+                session.startTransaction();
+                checkpoints.insertOne(session, new Document("_id", ID_ON_FIRST_SHARD));
+                events.insertOne(session, new Document("_id", "event-1"));
+                commit = executor.submit(session::commitTransaction);
+                Future<?> held = commit;
 
-            assertThatThrownBy(() -> commit.get(2, TimeUnit.SECONDS))
-                    .as("the cross shard commit should still be held after 2 seconds")
-                    .isInstanceOf(TimeoutException.class);
-            assertThat(events.find(new Document("_id", "event-1")).first())
-                    .as("the event on the second shard while its commit is held").isNull();
+                assertThatThrownBy(() -> held.get(2, TimeUnit.SECONDS))
+                        .as("the cross shard commit should still be held after 2 seconds")
+                        .isInstanceOf(TimeoutException.class);
+                assertThat(events.find(new Document("_id", "event-1")).first())
+                        .as("the event on the second shard while its commit is held").isNull();
+                assertThat(visibleWithinTenSeconds(checkpoints, ID_ON_FIRST_SHARD))
+                        .as("the marker on the first shard, read outside the transaction, while the second shard's commit is held").isTrue();
 
-            cluster.releaseCommitsOnSecondShard();
+                cluster.releaseCommitsOnSecondShard();
 
-            commit.get(30, TimeUnit.SECONDS);
+                commit.get(30, TimeUnit.SECONDS);
+            } finally {
+                awaitSettled(commit);
+            }
         } finally {
             executor.shutdownNow();
         }
@@ -157,14 +183,43 @@ class TwoShardMongoClusterTest {
         assertThat(events.find(new Document("_id", "event-1")).first()).as("event after the commit").isNotNull();
     }
 
+    // On a failing path the hold is already released when this runs, so a commit still in flight finishes
+    private static void awaitSettled(Future<?> commit) {
+        if (commit == null) {
+            return;
+        }
+        try {
+            commit.get(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException | TimeoutException ignored) {
+            // The test reports its own failure, and this only keeps the session open until the commit is over
+        }
+    }
+
+    private static boolean visibleWithinTenSeconds(MongoCollection<Document> collection, String id) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (collection.find(new Document("_id", id)).first() == null) {
+            if (System.nanoTime() >= deadline) {
+                return false;
+            }
+            Thread.sleep(100);
+        }
+        return true;
+    }
+
     private void assertMarkersAreSplitAcrossTheShards(String database) {
-        MongoCollection<Document> checkpoints = mongo.getDatabase(database).getCollection(CHECKPOINTS);
+        assertMarkersAreSplitAcrossTheShards(database, CHECKPOINTS);
+    }
+
+    private void assertMarkersAreSplitAcrossTheShards(String database, String collection) {
+        MongoCollection<Document> checkpoints = mongo.getDatabase(database).getCollection(collection);
         checkpoints.insertOne(new Document("_id", ID_ON_FIRST_SHARD));
         checkpoints.insertOne(new Document("_id", ID_ON_SECOND_SHARD));
 
-        assertThat(shardsOwning(database, CHECKPOINTS, ID_ON_FIRST_SHARD))
+        assertThat(shardsOwning(database, collection, ID_ON_FIRST_SHARD))
                 .as("shards owning %s", ID_ON_FIRST_SHARD).containsExactly(FIRST_SHARD);
-        assertThat(shardsOwning(database, CHECKPOINTS, ID_ON_SECOND_SHARD))
+        assertThat(shardsOwning(database, collection, ID_ON_SECOND_SHARD))
                 .as("shards owning %s", ID_ON_SECOND_SHARD).containsExactly(SECOND_SHARD);
     }
 
