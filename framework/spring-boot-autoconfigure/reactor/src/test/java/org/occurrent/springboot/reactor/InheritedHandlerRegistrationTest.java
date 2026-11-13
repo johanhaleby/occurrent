@@ -1001,6 +1001,152 @@ class InheritedHandlerRegistrationTest {
     }
 
     @Test
+    void an_interface_handler_registers_for_a_jdk_proxy_built_over_a_sub_interface_that_redeclares_it() {
+        assertRegistersForNoTargetClassProxy(NoTargetClassRedeclaringProxyConfiguration.class, "proxy-redeclared", "proxy-redeclared-body");
+    }
+
+    @Test
+    void an_interface_handler_registers_for_a_jdk_proxy_built_over_a_sub_interface_that_overrides_it_with_a_default_method() {
+        assertRegistersForNoTargetClassProxy(NoTargetClassDefaultProxyConfiguration.class, "proxy-default", "proxy-default-body");
+    }
+
+    @Test
+    void a_generic_interface_handler_registers_for_a_jdk_proxy_built_over_a_sub_interface_that_binds_the_type_argument() {
+        assertRegistersForNoTargetClassProxy(NoTargetClassGenericProxyConfiguration.class, "proxy-generic", "proxy-generic-body");
+    }
+
+    private void assertRegistersForNoTargetClassProxy(Class<?> configuration, String id, String body) {
+        runner.withUserConfiguration(configuration).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactly(id);
+            handlerFor(subscriptions, id).invoke(null, new TestEvent()).block();
+            assertThat(context.getBean(Invocations.class).bodies()).containsExactly(body);
+        });
+    }
+
+    interface ProxyRedeclaredBase {
+        @Subscription(id = "proxy-redeclared", startupMode = StartupMode.BACKGROUND)
+        void on(TestEvent event);
+    }
+
+    interface ProxyRedeclaringInterface extends ProxyRedeclaredBase {
+        @Override
+        void on(TestEvent event);
+    }
+
+    interface ProxyDefaultBase {
+        @Subscription(id = "proxy-default", startupMode = StartupMode.BACKGROUND)
+        void on(TestEvent event);
+    }
+
+    interface ProxyDefaultingInterface extends ProxyDefaultBase {
+        @Override
+        default void on(TestEvent event) {
+        }
+    }
+
+    interface ProxyGenericBase<E> {
+        @Subscription(id = "proxy-generic", startupMode = StartupMode.BACKGROUND)
+        void on(E event);
+    }
+
+    interface ProxyGenericBinding extends ProxyGenericBase<TestEvent> {
+        @Override
+        void on(TestEvent event);
+    }
+
+    static class ProxyRedeclaredTarget implements ProxyRedeclaringInterface {
+        private final Invocations invocations;
+
+        ProxyRedeclaredTarget(Invocations invocations) {
+            this.invocations = invocations;
+        }
+
+        @Override
+        public void on(TestEvent event) {
+            invocations.bodies().add("proxy-redeclared-body");
+        }
+    }
+
+    static class ProxyDefaultTarget implements ProxyDefaultingInterface {
+        private final Invocations invocations;
+
+        ProxyDefaultTarget(Invocations invocations) {
+            this.invocations = invocations;
+        }
+
+        @Override
+        public void on(TestEvent event) {
+            invocations.bodies().add("proxy-default-body");
+        }
+    }
+
+    static class ProxyGenericTarget implements ProxyGenericBinding {
+        private final Invocations invocations;
+
+        ProxyGenericTarget(Invocations invocations) {
+            this.invocations = invocations;
+        }
+
+        @Override
+        public void on(TestEvent event) {
+            invocations.bodies().add("proxy-generic-body");
+        }
+    }
+
+    private static Object noTargetClassProxy(Class<?> proxiedInterface, Object target) {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setInterfaces(proxiedInterface);
+        proxyFactory.setTargetSource(new TargetSource() {
+            @Override
+            public Class<?> getTargetClass() {
+                return null;
+            }
+
+            @Override
+            public boolean isStatic() {
+                return false;
+            }
+
+            @Override
+            public Object getTarget() {
+                return target;
+            }
+
+            @Override
+            public void releaseTarget(Object target) {
+            }
+        });
+        return proxyFactory.getProxy();
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class NoTargetClassRedeclaringProxyConfiguration {
+        @Bean
+        ProxyRedeclaringInterface redeclaringProxy(Invocations invocations) {
+            return (ProxyRedeclaringInterface) noTargetClassProxy(ProxyRedeclaringInterface.class, new ProxyRedeclaredTarget(invocations));
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class NoTargetClassDefaultProxyConfiguration {
+        @Bean
+        ProxyDefaultingInterface defaultingProxy(Invocations invocations) {
+            return (ProxyDefaultingInterface) noTargetClassProxy(ProxyDefaultingInterface.class, new ProxyDefaultTarget(invocations));
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class NoTargetClassGenericProxyConfiguration {
+        @Bean
+        ProxyGenericBinding genericProxy(Invocations invocations) {
+            return (ProxyGenericBinding) noTargetClassProxy(ProxyGenericBinding.class, new ProxyGenericTarget(invocations));
+        }
+    }
+
+    @Test
     void a_generic_interface_handler_read_from_the_class_and_later_from_a_jdk_proxys_interface_method_registers_once() {
         AtomicBoolean proxying = new AtomicBoolean();
         runner.withBean(JdkProxyingPostProcessor.class, () -> new JdkProxyingPostProcessor(proxying))

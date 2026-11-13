@@ -646,8 +646,14 @@ public final class SubscriptionAnnotations {
             return method;
         }
         // A JDK proxy class hands every interface method to its invocation handler, so the interface method is the one
-        // that runs, not the proxy class's generated method
+        // that runs, not the proxy class's generated method. A sub-interface the proxy implements may redeclare it, so
+        // it resolves against the first interface the proxy lists that extends the method's interface
         if (declaringClass.isInterface() && java.lang.reflect.Proxy.isProxyClass(type)) {
+            for (Class<?> proxiedInterface : type.getInterfaces()) {
+                if (declaringClass.isAssignableFrom(proxiedInterface)) {
+                    return BridgeMethodResolver.findBridgedMethod(AopUtils.getMostSpecificMethod(method, proxiedInterface));
+                }
+            }
             return BridgeMethodResolver.findBridgedMethod(method);
         }
         if (declaringClass.isInterface() || !declaringClass.isAssignableFrom(type)) {

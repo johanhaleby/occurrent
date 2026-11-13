@@ -1453,4 +1453,30 @@ class SubscriptionAnnotationsTest {
         assertThat(SubscriptionAnnotations.handlerMethods(InheritsStaticHandler.class, MARKERS))
                 .containsExactly(StaticHandlerBase.class.getDeclaredMethod("handle", String.class));
     }
+
+    interface ProxiedBaseHandler {
+        @Subscription(id = "proxied-base")
+        void on(String event);
+    }
+
+    interface ProxiedRedeclaringHandler extends ProxiedBaseHandler {
+        @Override
+        void on(String event);
+    }
+
+    private static Class<?> jdkProxyClassOver(Class<?>... interfaces) {
+        return Proxy.newProxyInstance(SubscriptionAnnotationsTest.class.getClassLoader(), interfaces, (proxy, method, args) -> null).getClass();
+    }
+
+    @Test
+    void handlerMethods_gives_the_sub_interface_method_for_a_jdk_proxy_built_over_a_sub_interface_that_redeclares_the_handler() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(ProxiedRedeclaringHandler.class), List.of(Subscription.class)))
+                .containsExactly(ProxiedRedeclaringHandler.class.getDeclaredMethod("on", String.class));
+    }
+
+    @Test
+    void handlerMethods_gives_one_method_for_a_jdk_proxy_listing_both_an_interface_and_its_redeclaring_sub_interface() {
+        assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(ProxiedBaseHandler.class, ProxiedRedeclaringHandler.class), List.of(Subscription.class)))
+                .hasSize(1);
+    }
 }
