@@ -60,6 +60,10 @@ other sections compile fine and behave differently, so read them first.
   `DcbEventStore` of your own usually does.
 - [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, sharing a type
   with a criteria item that has tags is no longer a reason for a condition to refuse.
+- [Appends of one type can spread over eight marker documents](#appends-of-one-type-can-spread-over-eight-marker-documents).
+  On MongoDB, `spreadTypeMarkerWrites(true)` lets appends of one type with different tags commit at the same time.
+  Whatever the setting, a read or conditional append on a criteria item without tags uses eight marker documents per
+  type. Don't turn it on while a 0.34.0 node uses the store.
 - [An append on MongoDB waits for majority on its position reservation](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation).
   This overrides a w:1 on that one write, which on the Spring and reactor stores now runs outside a transaction of yours
   too. On a set of a primary, a secondary and an arbiter with the secondary down, an append throws after
@@ -914,8 +918,10 @@ describes it.
   read. On a replica set the check reads the events as they are when the append runs, so an event deleted by then, or
   changed so that it no longer matches, may not fail it. A read can also miss such an event and let the append through,
   as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says.
-- Every append still increments a marker for each type and each tag of its events, so two appends of one type still
-  can't commit at the same time on MongoDB, whatever their tags.
+- Every append still increments a marker for each type and each tag of its events, so by default two appends of one
+  type still can't commit at the same time on MongoDB, whatever their tags.
+  [Appends of one type can spread over eight marker documents](#appends-of-one-type-can-spread-over-eight-marker-documents)
+  says how to change that.
 - This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the
   limits in [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). A conditional
   append from a 0.34.0 node still increments the type markers of its criteria, also for an item with tags. A conditional
@@ -946,6 +952,67 @@ describes it.
   says.
 - **Code or an operator that deletes marker documents.** Follow the rule at the end of
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
+
+## Appends of one type can spread over eight marker documents
+
+On MongoDB every DCB append increments a marker document for each type of its events, so two appends of one type
+can't commit at the same time, even when their tags differ and no condition could ever match both. 0.35.0 splits the
+marker of a type into eight documents. By default an append increments the first one, the document 0.34.0 uses, so
+nothing changes for it.
+
+To spread the writes, set `spreadTypeMarkerWrites(true)` on the `EventStoreConfig` of the native, Spring blocking or
+Spring reactor store, or this in either Spring Boot starter:
+
+```properties
+occurrent.event-store.mongodb.spread-type-marker-writes=true
+```
+
+An append then increments one of the eight documents of each of its types, picked from its `AppendId`. Two appends of
+one type with different tags conflict only when they pick the same document. The change is the second part of
+[#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
+[ADR 162](../architecture/decisions/0162-a-dcb-type-marker-is-split-into-stripes.md) describes it.
+
+### What changes whatever the setting
+
+- A read of a criteria item without tags, such as `DcbCriteria.type("TicketSold")`, reads all eight documents of each
+  of its types, in the same query.
+- A conditional append on such an item compares all eight documents of each type and increments them, so it still
+  conflicts with every append of the type.
+- The `DcbMarkerVersions` of such an item hold eight entries per type. An entry for a document that doesn't exist yet
+  has no epoch and version 0, and `MarkerVersion.isAbsent()` is true for it. Such a boundary reports versions before
+  any event of its types was appended.
+- A criteria item with tags reads no type marker, as
+  [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags) says, so none of this
+  touches it.
+
+### Turning the setting on or off
+
+Every 0.35.0 node reads all eight documents, whatever its own setting. So nodes on different settings can share a
+store, and a rolling restart that turns the setting on or off is safe.
+
+Turn it on only when no 0.34.0 node appends to or reads from the store. A 0.34.0 node reads only the first document of
+a type. Say a 0.34.0 node reads `type("TicketSold")`, and a 0.35.0 node with the setting on then appends a
+`TicketSold` that picks the fourth document. The 0.34.0 node's conditional append sees no change in the first document
+and commits, although a matching event was appended after its read. The same holds for any 0.34.0 condition with an
+item without tags, with or without a token.
+
+With the setting off, 0.34.0 and 0.35.0 nodes can share a store in both directions, as before.
+
+To go back to 0.34.0 after turning the setting on, turn it off and restart every process that appends to the store,
+including a separate service, a migration or a tool with its own `EventStoreConfig`. Then downgrade. The marker documents
+beyond the first of each type stay in the store, and 0.34.0 doesn't use them.
+
+### Who is affected
+
+- **An application whose appends are mostly of one type.** It can turn the setting on, once no 0.34.0 node uses the
+  store.
+- **An application that reads or appends with conditions on criteria items without tags.** Each such read and
+  conditional append uses eight marker documents per type instead of one, whatever the setting.
+- **Code that inspects `DcbMarkerVersions`.** `MarkerVersion.epoch()` is `null` for an absent entry. A snapshot store
+  of your own has to keep the entry without an epoch, as `SpringMongoSnapshotStore` and
+  `ReactiveSpringMongoSnapshotStore` do.
+- **A `DcbEventStore` of your own that reports marker versions.** The TCK expects eight entries per type for a criteria
+  item without tags, with an absent entry for each document that doesn't exist.
 
 ## The default transaction executors retry on a MongoDB error label
 
@@ -1023,8 +1090,8 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   late, and folding it last could give another state than a read in position order.
 - When the store reported no versions, or didn't confirm the append, the snapshot isn't saved. The first skip for each
   reason logs a warning, and later ones log at debug.
-- A boundary reports no versions until each tag of an item with tags, and each type of an item without tags, has a
-  marker. A decider reads the whole boundary, an attempt whose read reported no versions saves nothing, and its append creates the missing markers
+- A boundary reports no versions until each tag of an item with tags has a marker and every marker of the boundary
+  that exists has an epoch. A decider reads the whole boundary, an attempt whose read reported no versions saves nothing, and its append creates the missing markers
   and gives the others an epoch, so its next command can save. A `@Snapshot` view never appends, so it reads the whole
   boundary until other appends have done that for every marker. 0.34.0 saved at a position there.
 - A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot and logs a warning at start, since a read of every event
