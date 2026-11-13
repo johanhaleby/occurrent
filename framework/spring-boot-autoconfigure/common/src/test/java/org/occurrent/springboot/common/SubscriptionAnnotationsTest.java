@@ -1580,7 +1580,7 @@ class SubscriptionAnnotationsTest {
         Class<?> proxyClass = jdkProxyClassOver(ProxiedAsynchronousOn.class, ProxiedSynchronousOn.class);
 
         assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(proxyClass, List.of(Subscription.class, SynchronousSubscription.class)))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("same name and parameter types")
                 .hasMessageContaining("@Subscription")
                 .hasMessageContaining("@SynchronousSubscription");
@@ -1591,7 +1591,7 @@ class SubscriptionAnnotationsTest {
         Class<?> proxyClass = jdkProxyClassOver(ProxiedSynchronousOn.class, ProxiedAsynchronousOn.class);
 
         assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(proxyClass, List.of(Subscription.class, SynchronousSubscription.class)))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("same name and parameter types")
                 .hasMessageContaining("@Subscription")
                 .hasMessageContaining("@SynchronousSubscription");

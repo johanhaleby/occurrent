@@ -598,6 +598,8 @@ public final class SubscriptionAnnotations {
      * @param annotationTypes the handler annotations to look for, searched with {@link SearchStrategy#TYPE_HIERARCHY}
      * @return the matching methods, empty if there are none
      * @throws IllegalStateException when a method has an annotation Spring reads from a method it does not override
+     * @throws IllegalArgumentException when {@code type} is a JDK proxy and two of its interfaces declare a method of
+     *                                  the same name and parameter types with different handler annotations
      */
     public static Set<Method> handlerMethods(Class<?> type, List<Class<? extends Annotation>> annotationTypes) {
         if (!AnnotationUtils.isCandidateClass(type, annotationTypes)) {
@@ -648,8 +650,9 @@ public final class SubscriptionAnnotations {
         for (Method method : methods) {
             Method kept = bySignature.putIfAbsent(List.of(method.getName(), List.of(method.getParameterTypes())), method);
             if (kept != null && !handlerAnnotationsOf(kept, annotationTypes).equals(handlerAnnotationsOf(method, annotationTypes))) {
-                throw new IllegalStateException("Methods %s and %s have the same name and parameter types, so a JDK proxy %s runs them as one method, but their handler annotations differ, %s and %s. Give both methods the same handler annotation, or rename one of them."
-                        .formatted(kept, method, type.getName(), handlerAnnotationsOf(kept, annotationTypes), handlerAnnotationsOf(method, annotationTypes)));
+                throw new IllegalArgumentException("Method %s#%s is annotated with %s and %s#%s with %s, and JDK proxy %s runs them as one method since they have the same name and parameter types, use only one annotation."
+                        .formatted(kept.getDeclaringClass().getName(), kept.getName(), String.join(" and ", handlerAnnotationsOf(kept, annotationTypes)),
+                                method.getDeclaringClass().getName(), method.getName(), String.join(" and ", handlerAnnotationsOf(method, annotationTypes)), type.getName()));
             }
         }
         return new LinkedHashSet<>(bySignature.values());
