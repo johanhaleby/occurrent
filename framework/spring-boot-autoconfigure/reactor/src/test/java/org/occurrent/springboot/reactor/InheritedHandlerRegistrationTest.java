@@ -49,6 +49,8 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.springframework.aop.TargetSource;
 import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.beans.factory.ObjectFactory;
+import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -274,6 +276,30 @@ class InheritedHandlerRegistrationTest {
             assertThat(subscribedIds(subscriptions)).containsExactly("scoped-target-class-handler");
             handlerFor(subscriptions, "scoped-target-class-handler").invoke(null, new TestEvent()).block();
             assertThat(context.getBean(Invocations.class).bodies()).containsExactly("scoped-target-class-body");
+        });
+    }
+
+    @Test
+    void a_bean_registers_its_handler_although_another_bean_is_named_scoped_target_plus_its_own_name() {
+        runner.withBean("x", NameCollisionHandler.class, () -> new NameCollisionHandler(new Invocations(new CopyOnWriteArrayList<>())))
+                .withBean("scopedTarget.x", UnrelatedBean.class, UnrelatedBean::new)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+                    assertThat(subscribedIds(subscriptions)).containsExactly("name-collision-handler");
+                    handlerFor(subscriptions, "name-collision-handler").invoke(null, new TestEvent()).block();
+                    assertThat(context.getBean("x", NameCollisionHandler.class).invocations.bodies()).containsExactly("name-collision-body");
+                });
+    }
+
+    @Test
+    void a_scoped_proxy_bean_in_a_scope_that_is_inactive_at_startup_still_fails_startup_because_the_scan_builds_its_target() {
+        runner.withUserConfiguration(RequestLikeScopeConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("No thread-bound request");
         });
     }
 
@@ -651,6 +677,66 @@ class InheritedHandlerRegistrationTest {
         @Subscription(id = "scoped-target-class-handler", startupMode = StartupMode.BACKGROUND)
         public void on(TestEvent event) {
             invocations.bodies().add("scoped-target-class-body");
+        }
+    }
+
+    static class NameCollisionHandler {
+        final Invocations invocations;
+
+        NameCollisionHandler(Invocations invocations) {
+            this.invocations = invocations;
+        }
+
+        @Subscription(id = "name-collision-handler", startupMode = StartupMode.BACKGROUND)
+        public void on(TestEvent event) {
+            invocations.bodies().add("name-collision-body");
+        }
+    }
+
+    static class UnrelatedBean {
+    }
+
+    public static class RequestLikeHandler {
+        @Subscription(id = "request-like-handler", startupMode = StartupMode.BACKGROUND)
+        public void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class RequestLikeScopeConfiguration {
+        @Bean
+        static BeanFactoryPostProcessor requestLikeScope() {
+            return beanFactory -> beanFactory.registerScope("request-like", new org.springframework.beans.factory.config.Scope() {
+                @Override
+                public Object get(String name, ObjectFactory<?> objectFactory) {
+                    throw new IllegalStateException("No thread-bound request");
+                }
+
+                @Override
+                public Object remove(String name) {
+                    return null;
+                }
+
+                @Override
+                public void registerDestructionCallback(String name, Runnable callback) {
+                }
+
+                @Override
+                public Object resolveContextualObject(String key) {
+                    return null;
+                }
+
+                @Override
+                public String getConversationId() {
+                    return null;
+                }
+            });
+        }
+
+        @Bean
+        @Scope(value = "request-like", proxyMode = ScopedProxyMode.TARGET_CLASS)
+        RequestLikeHandler requestLikeHandler() {
+            return new RequestLikeHandler();
         }
     }
 

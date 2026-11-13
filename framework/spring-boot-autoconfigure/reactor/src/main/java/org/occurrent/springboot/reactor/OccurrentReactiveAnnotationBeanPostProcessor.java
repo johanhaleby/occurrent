@@ -27,7 +27,6 @@ import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.api.reactor.Subscribable;
-import org.springframework.aop.scope.ScopedProxyUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.FactoryBean;
@@ -332,7 +331,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         for (String beanName : beanNames) {
             // A scoped proxy and its target are two definitions of one bean, so its handlers register once, under the
             // target's name
-            if (isScopedProxy(beanName)) {
+            if (SubscriptionAnnotations.isScopedProxy(((ConfigurableApplicationContext) applicationContext).getBeanFactory(), beanName)) {
                 continue;
             }
             ScanType scanType;
@@ -448,10 +447,6 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         } catch (IllegalStateException e) {
             return true;
         }
-    }
-
-    private boolean isScopedProxy(String beanName) {
-        return ((ConfigurableApplicationContext) applicationContext).getBeanFactory().containsBeanDefinition(ScopedProxyUtils.getTargetBeanName(beanName));
     }
 
 

@@ -56,6 +56,10 @@ method as the one the bean's class actually runs:
   startup. That happens when the annotated method is package-private and a superclass in another package declares it,
   since Spring's annotation search ignores packages and gives the subclass's method that annotation. When the bean's
   class, or a superclass below that method, declares a method of the same signature, that method is checked instead.
+- One case is missed. When the bean's class is in the package of a package-private annotated method, Spring takes the
+  first method of the same signature up from the bean's class as the one it runs, even a method in another package
+  that doesn't override it. When that method is private, or has a handler annotation of its own, the annotated method
+  isn't found, though the JVM runs it.
 - A static method an interface declares is left out, since a class doesn't inherit it. A static method a superclass
   declares is a handler, and it's refused the way a static method the bean's class declares is.
 
@@ -66,7 +70,9 @@ is a type variable fails at startup with the error it gave before.
 
 The scan reads the class behind a proxy, so a bean behind a JDK interface proxy is scanned through the proxy's target
 class. A bean with a scoped proxy has two bean definitions, the proxy's and its target's under the `scopedTarget.`
-name. The scan skips the proxy's, so the handlers register once, under the target's name. The key that tells whether a handler is already registered is the bean name, the method's
+name. The scan skips the proxy's, so the handlers register once, under the target's name. A bean in request or
+session scope still fails at startup, because the scan builds its target then, outside a request.
+The key that tells whether a handler is already registered is the bean name, the method's
 name and its parameter types, as in 0.34.0. When the method is private or package-private and a superclass declares
 it, the key also has that superclass. So a private method on the bean's class and a private method of the same
 signature on a superclass get two keys, and they register as two handlers. A later pass of the scan over the same bean

@@ -1051,6 +1051,25 @@ class SubscriptionAnnotationsTest {
                 .hasMessageContaining(shadowed + " and " + shadowing + " protected or public");
     }
 
+    static class StaticMethodShadowsPackagePrivateHandler extends CrossPackageSubscriptionBase {
+        @SuppressWarnings("unused")
+        static void on(String event) {
+        }
+    }
+
+    @Test
+    void handlerMethods_refuses_a_static_method_shadowing_a_package_private_handler_in_another_package_by_advising_a_rename_not_a_wider_modifier() {
+        String shadowing = StaticMethodShadowsPackagePrivateHandler.class.getName() + "#on(String)";
+        String shadowed = CrossPackageSubscriptionBase.class.getName() + "#on(String)";
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(StaticMethodShadowsPackagePrivateHandler.class, List.of(Subscription.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Method " + shadowing + " is static, so it does not override " + shadowed)
+                .hasMessageContaining("@Subscription with id \"h\"")
+                .hasMessageContaining("Rename " + shadowing + " to keep " + shadowed + " as the handler")
+                .hasMessageNotContaining("protected or public");
+    }
+
     // ------------------------------------------------------------------------------------------------------
     // handlerMethods follows the JVM's rules for overriding a package-private method
     // ------------------------------------------------------------------------------------------------------

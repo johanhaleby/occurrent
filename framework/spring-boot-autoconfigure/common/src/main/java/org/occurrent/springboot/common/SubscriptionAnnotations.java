@@ -29,8 +29,12 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
 import org.springframework.aop.framework.AopProxyUtils;
+import org.springframework.aop.scope.ScopedProxyUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.config.BeanDefinitionHolder;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.BridgeMethodResolver;
 import org.springframework.core.MethodIntrospector;
@@ -584,6 +588,11 @@ public final class SubscriptionAnnotations {
      * it. A static method a superclass declares is returned like any other, so a static subscription handler there is
      * refused the way one the class declares is. Both annotation post-processors call this, so they find the same
      * methods.
+     * <p>
+     * One case is missed. When {@code type} is in the package of a package-private annotated method, Spring takes the
+     * first method of the same signature up from {@code type} as the one it runs, even a method in another package
+     * that doesn't override it. When that method is private, or has a handler annotation of its own, the annotated
+     * method isn't returned, though the JVM runs it.
      *
      * @param type            the concrete class the scan reads
      * @param annotationTypes the handler annotations to look for, searched with {@link SearchStrategy#TYPE_HIERARCHY}
@@ -696,9 +705,31 @@ public final class SubscriptionAnnotations {
         }
     }
 
+    /**
+     * Answers whether {@code beanName} names the proxy of a scoped bean, a definition that decorates its target's
+     * definition under {@link ScopedProxyUtils#getTargetBeanName}. Both annotation post-processors skip such a name,
+     * so a scoped bean's handlers register once, under its target's name. Internal to the Spring Boot starters.
+     *
+     * @param beanFactory the bean factory that defines {@code beanName}
+     * @param beanName    the bean name the scan is about to read
+     * @return {@code true} when {@code beanName} is a scoped proxy whose target has a definition of its own
+     */
+    public static boolean isScopedProxy(ConfigurableListableBeanFactory beanFactory, String beanName) {
+        if (!beanFactory.containsBeanDefinition(beanName)) {
+            return false;
+        }
+        String targetBeanName = ScopedProxyUtils.getTargetBeanName(beanName);
+        BeanDefinitionHolder decorated = beanFactory.getMergedBeanDefinition(beanName) instanceof RootBeanDefinition root ? root.getDecoratedDefinition() : null;
+        return decorated != null && decorated.getBeanName().equals(targetBeanName) && beanFactory.containsBeanDefinition(targetBeanName);
+    }
+
     private static IllegalStateException annotationFromAMethodNotOverridden(Method method, Method declaration, MergedAnnotation<? extends Annotation> annotation) {
         String annotationName = "@" + annotation.getType().getSimpleName();
         String handler = annotation.getValue("id", String.class).map(id -> "%s with id \"%s\"".formatted(annotationName, id)).orElse(annotationName);
+        if (Modifier.isStatic(method.getModifiers())) {
+            return new IllegalStateException(("Method %s is static, so it does not override %s, which declares %s, but Spring's annotation search finds the annotation on both, so which body is the handler is ambiguous. "
+                    + "Rename %s to keep %s as the handler.").formatted(signatureOf(method), signatureOf(declaration), handler, signatureOf(method), signatureOf(declaration)));
+        }
         return new IllegalStateException(("Method %s does not override %s, which declares %s, but Spring's annotation search finds the annotation on both, so which body is the handler is ambiguous. "
                 + "Make both %s and %s protected or public so %s overrides it and runs as the handler, or rename %s to keep %s as the handler.").formatted(
                 signatureOf(method), signatureOf(declaration), handler, signatureOf(declaration), signatureOf(method), signatureOf(method), signatureOf(method), signatureOf(declaration)));
