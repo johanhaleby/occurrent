@@ -34,6 +34,7 @@ import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions.MarkerVersion;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
+import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 import org.occurrent.tck.ConformanceEvents;
 
 import java.util.ArrayList;
@@ -41,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,8 +57,8 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
 
 /**
  * What a DCB caller sees of marker versions, the values a snapshot saves to resume a read without comparing positions.
- * A marker key is {@code tag:<tag>} for a tag and {@code type:<type>} for an event type, and a read reports the
- * versions of the keys of its criteria.
+ * A marker key stands for a tag or for a part of an event type, and a read reports the versions of the keys of its
+ * criteria. A key for a type is the store's own, so the suite derives the keys it expects the way the stores do.
  * <p>
  * The suite states only what a caller sees, which is the same for every store. These things are left out on purpose,
  * because they describe how a store keeps the contract rather than the contract:
@@ -87,8 +89,10 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
     private static final String REGION = "region:eu";
     private static final String KEY_A = "tag:account:a1";
     private static final String KEY_B = "tag:account:b1";
-    private static final String KEY_DEPOSITED = "type:Deposited";
-    private static final String KEY_WITHDRAWN = "type:Withdrawn";
+
+    private static Set<String> keysOf(DcbCriteria criteria) {
+        return DcbMarkerVersionsSupport.queryMarkerKeys(criteria);
+    }
 
     @Override
     protected final Set<EventStoreCapability> requiredCapabilities() {
@@ -111,8 +115,8 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
                     .as("A conditional append with a consistency token must report the versions its criteria ended at")
                     .isPresent();
             assertThat(result.markerVersions().orElseThrow().keys())
-                    .as("One entry per marker key of the criteria, a tag key per tag for an item with tags and a type key per type for an item without tags")
-                    .containsExactly(KEY_A, KEY_DEPOSITED);
+                    .as("One entry per marker key of the criteria, a tag key per tag for an item with tags and the keys of its types for an item without tags")
+                    .isEqualTo(keysOf(criteria));
         }
 
         @Test
@@ -207,7 +211,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             DcbEventStream read = dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().withVersions());
 
             assertThat(read.markerVersions()).as("A full forward read that asks must report versions").isPresent();
-            assertThat(read.markerVersions().orElseThrow().keys()).containsExactly(KEY_A, KEY_DEPOSITED);
+            assertThat(read.markerVersions().orElseThrow().keys()).isEqualTo(keysOf(criteria));
         }
 
         @Test
@@ -466,7 +470,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             DcbCriteria boundary = DcbCriteria.types(DEPOSITED, WITHDRAWN);
             dcbEventStore().append(List.of(untaggedWithId("before-deposited", DEPOSITED), untaggedWithId("before-withdrawn", WITHDRAWN)));
             DcbMarkerVersions saved = versionsOf(dcbEventStore().read(boundary, DcbReadOptions.fromBeginning().withVersions()));
-            assertThat(saved.keys()).containsExactly(KEY_DEPOSITED, KEY_WITHDRAWN);
+            assertThat(saved.keys()).isEqualTo(keysOf(boundary));
 
             dcbEventStore().append(List.of(untaggedWithId("after-withdrawn", WITHDRAWN)));
             dcbEventStore().append(List.of(untaggedWithId("after-closed", CLOSED)));
@@ -819,6 +823,132 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
                         .doesNotContain("mv");
                 assertThat(extension(event, "mv")).isNull();
             }
+        }
+    }
+
+    @Nested
+    @DisplayName("a criteria item without tags")
+    class ACriteriaItemWithoutTags {
+
+        @Test
+        void conflicts_with_an_unconditional_append_of_its_type_whichever_part_of_the_type_the_append_writes() {
+            for (int i = 0; i < 32; i++) {
+                String type = "FreshType" + i;
+                String suffix = String.valueOf(i);
+                DcbEventStream decidedOn = dcbEventStore().read(DcbCriteria.type(type));
+                dcbEventStore().append(List.of(untaggedWithId("unconditional-" + suffix, type)));
+
+                Throwable thrown = catchThrowable(() -> dcbEventStore().append(List.of(untaggedWithId("decided-" + suffix, type)),
+                        failIfEventsMatch(decidedOn.consistencyToken())));
+
+                assertThat(thrown)
+                        .as("An event of %s committed after the read must reject an append conditional on type(%s), also when the store wrote it to another part of the type than the condition's own append would", type, type)
+                        .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+            }
+        }
+
+        @Test
+        void saves_one_present_version_and_an_absent_version_for_every_other_part_of_its_type_after_one_event_of_the_type() {
+            DcbCriteria criteria = DcbCriteria.type(DEPOSITED);
+            dcbEventStore().append(List.of(untaggedWithId("first", DEPOSITED)));
+
+            DcbMarkerVersions saved = versionsOf(dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().withVersions()));
+
+            assertThat(saved.keys()).as("A version for every marker key of the criteria, absent ones included").isEqualTo(keysOf(criteria));
+            assertThat(saved.markers().values().stream().filter(version -> !version.isAbsent()).toList())
+                    .as("One event of the type was appended, so one part of its type has a marker, at version 1")
+                    .hasSize(1)
+                    .allSatisfy(version -> assertThat(version.version()).isEqualTo(1));
+            assertThat(saved.markers().values().stream().filter(MarkerVersion::isAbsent).count())
+                    .as("Every other part of the type has no marker")
+                    .isEqualTo(DcbMarkerVersionsSupport.STRIPES - 1);
+        }
+
+        @Test
+        void saves_an_absent_version_for_every_part_of_its_type_when_no_event_of_the_type_was_appended() {
+            DcbCriteria criteria = DcbCriteria.type(DEPOSITED);
+
+            DcbMarkerVersions saved = versionsOf(dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().withVersions()));
+
+            assertThat(saved.keys()).isEqualTo(keysOf(criteria));
+            assertThat(saved.markers().values())
+                    .as("No event of the type was appended, so no part of it has a marker")
+                    .hasSize(DcbMarkerVersionsSupport.STRIPES)
+                    .allSatisfy(version -> assertThat(version.isAbsent()).isTrue());
+        }
+
+        @Test
+        void resumes_after_versions_that_are_all_absent_and_returns_no_event_while_nothing_was_appended() {
+            DcbCriteria criteria = DcbCriteria.type(DEPOSITED);
+            DcbMarkerVersions saved = versionsOf(dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().withVersions()));
+
+            assertThatCode(() -> dcbEventStore().read(criteria, DcbReadOptions.afterVersions(saved)))
+                    .as("A type that has no marker yet is a valid state to resume from")
+                    .doesNotThrowAnyException();
+            assertThat(dcbEventStore().read(criteria, DcbReadOptions.afterVersions(saved)).events()).isEmpty();
+        }
+
+        @Test
+        void resumes_after_versions_with_absent_parts_and_returns_every_event_of_the_type_appended_after_them() {
+            DcbCriteria criteria = DcbCriteria.type(DEPOSITED);
+            dcbEventStore().append(List.of(untaggedWithId("before", DEPOSITED)));
+            DcbMarkerVersions saved = versionsOf(dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().withVersions()));
+            List<String> expected = new ArrayList<>();
+            for (int i = 0; i < 32; i++) {
+                String id = "after-" + i;
+                dcbEventStore().append(List.of(taggedEventWithId(id, DEPOSITED, "account:resumed" + i)));
+                expected.add(id);
+            }
+
+            AtomicReference<DcbEventStream> resumed = new AtomicReference<>();
+            assertThatCode(() -> resumed.set(dcbEventStore().read(criteria, DcbReadOptions.afterVersions(saved))))
+                    .as("Versions with absent parts of a type are accepted")
+                    .doesNotThrowAnyException();
+
+            assertThat(idsOf(resumed.get().events()))
+                    .as("An event appended to a part of the type that had no marker when the versions were saved must be returned too")
+                    .containsExactlyElementsOf(expected);
+        }
+
+        @Test
+        void refuses_saved_versions_that_hold_only_the_first_part_of_its_type() {
+            DcbCriteria criteria = DcbCriteria.type(DEPOSITED);
+            dcbEventStore().append(List.of(untaggedWithId("before", DEPOSITED)));
+            DcbMarkerVersions saved = versionsOf(dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().withVersions()));
+            String first = DcbMarkerVersionsSupport.stripeKey(DEPOSITED, 0);
+            DcbMarkerVersions onlyFirst = DcbMarkerVersions.of(criteria, Map.of(first, saved.get(first).orElseThrow()));
+
+            assertThat(catchThrowable(() -> dcbEventStore().read(criteria, DcbReadOptions.afterVersions(onlyFirst))))
+                    .as("A subset of the marker keys of the criteria says nothing about the other parts of the type")
+                    .isInstanceOf(DcbSnapshotInvalidException.class)
+                    .hasMessageContaining(DcbMarkerVersionsSupport.stripeKey(DEPOSITED, 1));
+        }
+    }
+
+    @Nested
+    @DisplayName("an absent marker version")
+    class AnAbsentMarkerVersion {
+
+        @Test
+        void is_refused_for_a_tag_key() {
+            DcbCriteria boundary = DcbCriteria.tags(tag(ACCOUNT_A));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)));
+            DcbMarkerVersions absentTag = DcbMarkerVersions.of(boundary, Map.of(KEY_A, MarkerVersion.absent()));
+
+            assertThat(catchThrowable(() -> dcbEventStore().read(boundary, DcbReadOptions.afterVersions(absentTag))))
+                    .as("A tag always has a marker once an event carries it, so an absent tag key is not versions the store reported")
+                    .isInstanceOf(DcbSnapshotInvalidException.class)
+                    .hasMessageContaining(KEY_A);
+        }
+
+        @Test
+        void is_refused_for_a_tag_key_that_has_no_marker_yet() {
+            DcbCriteria boundary = DcbCriteria.tags(tag(ACCOUNT_A));
+            DcbMarkerVersions absentTag = DcbMarkerVersions.of(boundary, Map.of(KEY_A, MarkerVersion.absent()));
+
+            assertThat(catchThrowable(() -> dcbEventStore().read(boundary, DcbReadOptions.afterVersions(absentTag))))
+                    .isInstanceOf(DcbSnapshotInvalidException.class)
+                    .hasMessageContaining(KEY_A);
         }
     }
 

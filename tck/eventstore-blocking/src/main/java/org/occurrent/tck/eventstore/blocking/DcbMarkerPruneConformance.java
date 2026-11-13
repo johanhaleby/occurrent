@@ -25,11 +25,16 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
+import org.occurrent.eventstore.api.dcb.DcbReadOptions;
+import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
+import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 
 import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
@@ -43,9 +48,11 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
  * <p>
  * An implementation says how to delete a marker and how to delete events, and the suite deletes events and then the
  * marker, the way the pruning rule has an operator do it in one transaction (ADR 149). A marker key is
- * {@code tag:<tag>} for a tag and {@code type:<type>} for an event type, the same keys
- * {@link DcbMarkerVersionsConformance} describes. The suite states only that a token read before the deletion is
- * refused after a later append recreated the marker, which holds whichever way a store recreates it.
+ * {@code tag:<tag>} for a tag. A type has one marker per stripe, and the suite takes their keys from
+ * {@link DcbMarkerVersionsSupport}, the way {@link DcbMarkerVersionsConformance} does. The suite states only that a
+ * token read before the deletion is refused after a later append recreated the marker, which holds whichever way a
+ * store recreates it. For a type the rule deletes all its stripes together, with every event of the type, since an event
+ * of the type can be on any stripe.
  */
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -124,5 +131,59 @@ public abstract class DcbMarkerPruneConformance extends EventStoreConformance {
                         + "allow. An operator who does it anyway must still not get a token through that was read "
                         + "before the marker was recreated by a later event")
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+    }
+
+    @Test
+    void refuses_a_token_read_before_every_stripe_of_a_type_and_its_event_were_deleted_when_an_append_has_recreated_a_stripe() {
+        DcbCriteria criteria = DcbCriteria.type(DEPOSITED);
+        dcbEventStore().append(List.of(taggedEventWithId("first", DEPOSITED)));
+        DcbConsistencyToken token = dcbEventStore().read(criteria).consistencyToken();
+        deleteEvents("first");
+        deleteAllStripesOf(DEPOSITED);
+        dcbEventStore().append(List.of(taggedEventWithId("second", DEPOSITED)));
+
+        assertThatThrownBy(() -> dcbEventStore().append(List.of(taggedEvent(WITHDRAWN, ACCOUNT_B)), failIfEventsMatch(token)))
+                .as("The stripe the second event wrote is a new marker, and the event that created it was committed after "
+                        + "the read. The token must not pass for a marker it never saw, whichever stripes the two events used")
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+    }
+
+    @Test
+    void refuses_a_read_after_versions_saved_before_every_stripe_of_a_type_and_its_event_were_deleted_when_an_append_has_recreated_a_stripe() {
+        DcbCriteria criteria = DcbCriteria.type(DEPOSITED);
+        dcbEventStore().append(List.of(taggedEventWithId("first", DEPOSITED)));
+        DcbMarkerVersions saved = dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().withVersions()).markerVersions().orElseThrow();
+        deleteEvents("first");
+        deleteAllStripesOf(DEPOSITED);
+        dcbEventStore().append(List.of(taggedEventWithId("second", DEPOSITED)));
+
+        assertThatThrownBy(() -> dcbEventStore().read(criteria, DcbReadOptions.afterVersions(saved)))
+                .as("The stripe the first event wrote was deleted and the stripe of the second may be the same one at the "
+                        + "same version, but it is a new marker. A read after the saved versions would skip the second "
+                        + "event if it took them for the old marker's")
+                .isExactlyInstanceOf(DcbSnapshotInvalidException.class);
+    }
+
+    @Test
+    void reads_the_event_appended_after_a_stripe_that_was_absent_at_the_save_was_created_deleted_with_its_event_and_created_again() {
+        DcbCriteria criteria = DcbCriteria.type(DEPOSITED);
+        DcbMarkerVersions saved = dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().withVersions()).markerVersions().orElseThrow();
+        dcbEventStore().append(List.of(taggedEventWithId("first", DEPOSITED)));
+        deleteEvents("first");
+        deleteAllStripesOf(DEPOSITED);
+        dcbEventStore().append(List.of(taggedEventWithId("second", DEPOSITED)));
+
+        assertThatCode(() -> dcbEventStore().read(criteria, DcbReadOptions.afterVersions(saved)))
+                .as("Every stripe was absent at the save, and the one that exists now was created after it")
+                .doesNotThrowAnyException();
+        assertThat(idsOf(dcbEventStore().read(criteria, DcbReadOptions.afterVersions(saved)).events()))
+                .as("The first event and the stripe it created are gone, so the second is the only event after the save")
+                .containsExactly("second");
+    }
+
+    private void deleteAllStripesOf(String type) {
+        for (int stripe = 0; stripe < DcbMarkerVersionsSupport.STRIPES; stripe++) {
+            deleteMarker(DcbMarkerVersionsSupport.stripeKey(type, stripe));
+        }
     }
 }

@@ -457,7 +457,8 @@ class DcbMarkerVersionsSupportTest {
 
             Optional<DcbMarkerVersions> versions = DcbMarkerVersionsSupport.versionsOf(DcbCriteria.type("D"), Set.of(stripe3), Map.of(stripe3, new MarkerObservation(null, 0, 0)));
 
-            assertThat(versions.orElseThrow().get(stripe3)).contains(MarkerVersion.absent());
+            assertThat(versions).isPresent();
+            assertThat(versions.get().get(stripe3)).contains(MarkerVersion.absent());
         }
 
         @Test

@@ -24,12 +24,14 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions.MarkerVersion;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -122,7 +124,7 @@ class SnapshotMarkerVersionsFieldsTest {
 
         assertThatThrownBy(() -> SnapshotMarkerVersionsFields.fromFields(stored(noEpoch)))
                 .isInstanceOf(NullPointerException.class)
-                .hasMessage("Epoch is missing for marker key tag:a");
+                .hasMessage("Epoch cannot be null");
     }
 
     @Test
@@ -151,7 +153,27 @@ class SnapshotMarkerVersionsFieldsTest {
     void values_a_marker_version_does_not_accept_are_refused() {
         assertThatThrownBy(() -> SnapshotMarkerVersionsFields.fromFields(stored(field("tag:a", "epoch-1", 0L, 0L))))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Version must be greater than zero");
+                .hasMessage("A marker without a version cannot have an epoch");
+    }
+
+    @Test
+    void round_trips_a_type_marker_with_absent_stripes_and_stores_no_epoch_for_the_absent_ones() {
+        Map<String, MarkerVersion> markers = new java.util.TreeMap<>();
+        markers.put(DcbMarkerVersionsSupport.stripeKey("D", 0), new MarkerVersion("epoch-1", 1, 0));
+        for (int stripe = 1; stripe < DcbMarkerVersionsSupport.STRIPES; stripe++) {
+            markers.put(DcbMarkerVersionsSupport.stripeKey("D", stripe), MarkerVersion.absent());
+        }
+        DcbCriteria criteria = DcbCriteria.types("D");
+        DcbMarkerVersions versions = DcbMarkerVersions.of(criteria, markers);
+
+        Map<String, Object> fields = SnapshotMarkerVersionsFields.toFields(versions);
+        assertThatCode(() -> SnapshotMarkerVersionsFields.fromFields(fields)).doesNotThrowAnyException();
+        DcbMarkerVersions read = SnapshotMarkerVersionsFields.fromFields(fields);
+
+        assertThat(read).isEqualTo(versions);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> stored = (List<Map<String, Object>>) fields.get("m");
+        assertThat(stored).filteredOn(m -> !"epoch-1".equals(m.get("e"))).hasSize(DcbMarkerVersionsSupport.STRIPES - 1).allSatisfy(m -> assertThat(m).doesNotContainKey("e"));
     }
 
     @Test
