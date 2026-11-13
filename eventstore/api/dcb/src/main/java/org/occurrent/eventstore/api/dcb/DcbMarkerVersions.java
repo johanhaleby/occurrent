@@ -36,8 +36,8 @@ import static java.util.Objects.requireNonNull;
  * from other criteria. Two criteria are the same when they hold the same alternatives in any order, as for a
  * {@link DcbConsistencyToken}, so {@code types("A", "B")} isn't the same as {@code anyOf(type("A"), type("B"))}.
  *
- * @param criteria the criteria these versions were read with, in a canonical form that only this class creates. Persist it
- *                 as it is and pass it back to {@link #of(String, Map)}.
+ * @param criteria the criteria these versions were read with, in the canonical form {@link #of(DcbCriteria, Map)} creates.
+ *                 Persist it as it is and pass it back to {@link #of(String, Map)}.
  * @param markers  the marker versions by marker key, never empty
  */
 @NullMarked

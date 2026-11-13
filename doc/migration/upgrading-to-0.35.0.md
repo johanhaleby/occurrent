@@ -1070,8 +1070,9 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - `Snapshot` gains two components, `Optional<DcbMarkerVersions> markerVersions` and `long highestFoldedPosition`. The
   three-argument constructor stays and sets them to empty and 0, and `Snapshot.atMarkerVersions(..)` creates a DCB
   snapshot, whose `version` is 0.
-- `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot with a `markerVersions` array, a
-  `highestFoldedPosition` field and no `version` field. A stream snapshot is stored as before.
+- `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot with a `markerVersions` document,
+  which holds the criteria the versions were read with and their entries, a `highestFoldedPosition` field and no
+  `version` field. A stream snapshot is stored as before.
 - A DCB snapshot that 0.34.0 saved at a position is never used. After the upgrade an execute or delivery reads the whole
   boundary until one can save over it, so nothing needs migrating. On a boundary whose markers 0.34.0 wrote, a decider's
   append gives them an epoch, and its next command can save.

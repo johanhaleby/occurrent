@@ -73,7 +73,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * read with. The snapshot store can't tell which criteria that list was read with, so a decider over the store must read
  * in full and overwrite the snapshot in the new shape, instead of resuming from the list.
  */
-@DisplayName("A decider over SpringMongoSnapshotStore and a snapshot saved with a list of marker versions")
+@DisplayName("A decider over ReactiveSpringMongoSnapshotStore and a snapshot saved with a list of marker versions")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @SpringBootTest(
         classes = ReactiveEarlierSnapshotShapeDcbDeciderMongoTest.Application.class,

@@ -55,7 +55,7 @@ final class DcbCriteriaIdentity {
     }
 
     // all for MatchAll, otherwise a JSON array of the distinct alternatives in sorted order, each with its types, tags and
-    // excluded types sorted. Changing it makes every saved DcbMarkerVersions unresumable
+    // excluded types sorted. Saved DcbMarkerVersions of criteria whose string changes no longer resume
     static String canonical(DcbCriteria criteria) {
         return alternatives(criteria)
                 .map(items -> items.stream().map(DcbCriteriaIdentity::canonical).collect(Collectors.toCollection(TreeSet::new)))
