@@ -50,6 +50,7 @@ import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModelConfig;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModelConfig;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
@@ -385,13 +386,11 @@ class ActionThatOutlivesItsRunTest {
         // And once the read is answered, the slow event is handled by the run the pause closed and then by the resumed run
         answer.countDown();
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(first.eventId(), slow.eventId(), slow.eventId()));
-        Checkpoint afterTheSlowEvent = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(handled.getLast());
         eventStore.write("declined", serialize(declined));
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).last().isEqualTo(declined.eventId()));
-        Thread.sleep(500);
-        Checkpoint beforeTheDeclinedEvent = requireNonNull(storage.read("declining"));
-        await().during(Duration.ofSeconds(1)).atMost(2, SECONDS).untilAsserted(() -> assertThat(storage.read("declining"))
-                .as("stored checkpoint stays before the declined event while it is the last one the resumed run delivered").isIn(beforeTheDeclinedEvent, afterTheSlowEvent));
+        String declinedAt = resumeTokenOf(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(handled.getLast()));
+        await().during(Duration.ofSeconds(1)).atMost(2, SECONDS).untilAsserted(() -> assertThat(resumeTokenOf(storage.read("declining")))
+                .as("stored checkpoint stays before the declined event while it is the last one the resumed run delivered").isLessThan(declinedAt));
     }
 
     @ParameterizedTest
@@ -561,13 +560,17 @@ class ActionThatOutlivesItsRunTest {
         releaseTheSlowAction.countDown();
         await().atMost(5, SECONDS).untilTrue(firstDeliveryOfTheSlowEventReturned);
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(first.eventId(), slow.eventId(), slow.eventId()));
-        Checkpoint afterTheSlowEvent = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(handled.getLast());
         eventStore.write("declined", serialize(declined));
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).last().isEqualTo(declined.eventId()));
-        Thread.sleep(500);
-        Checkpoint beforeTheDeclinedEvent = requireNonNull(storage.read("declining"));
-        await().during(Duration.ofSeconds(1)).atMost(2, SECONDS).untilAsserted(() -> assertThat(storage.read("declining"))
-                .as("stored checkpoint stays before the declined event while it is the last one delivered").isIn(beforeTheDeclinedEvent, afterTheSlowEvent));
+        String declinedAt = resumeTokenOf(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(handled.getLast()));
+        await().during(Duration.ofSeconds(1)).atMost(2, SECONDS).untilAsserted(() -> assertThat(resumeTokenOf(storage.read("declining")))
+                .as("stored checkpoint stays before the declined event while it is the last one delivered").isLessThan(declinedAt));
+    }
+
+    // Resume tokens of one change stream order by their hex data, so a position is before an event when its token is lower
+    private static String resumeTokenOf(@Nullable Checkpoint checkpoint) {
+        assertThat(checkpoint).as("stored checkpoint").isInstanceOf(MongoResumeTokenCheckpoint.class);
+        return ((MongoResumeTokenCheckpoint) checkpoint).resumeToken.getString("_data").getValue();
     }
 
     private record CallResult(@Nullable Throwable thrown, boolean interruptedAfterwards) {

@@ -84,7 +84,8 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
  * A {@link NativeMongoSubscriptionModel} subscribed at the present opens its change stream at the present when
  * MongoDB's reply to the operation time question has no {@code operationTime}, and has recorded no position then.
  * These tests stub that reply and check that the commit time of the first event is recorded before its action runs,
- * and that recording it never moves a position back that an earlier event has recorded.
+ * and that recording it never moves a position back that an earlier event has recorded. The change stream waits up to
+ * 5 s for a document, so the first read spans the write of the first event and no empty read records a position first.
  */
 @Testcontainers
 @Timeout(30)
@@ -102,6 +103,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
     OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AtomicInteger repliesWithoutOperationTime = new AtomicInteger();
     private MongoClient mongoClient;
     private MongoDatabase database;
     private MongoCollection<Document> eventCollection;
@@ -157,6 +159,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
 
         // Then
         assertThat(handled).containsExactly(e1.eventId(), e2.eventId());
+        assertThat(repliesWithoutOperationTime).as("replies without an operation time").hasValueGreaterThan(0);
     }
 
     @Test
@@ -200,11 +203,12 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
 
         // Then
         assertThat(handled).containsExactly(e1.eventId(), e2.eventId());
+        assertThat(repliesWithoutOperationTime).as("replies without an operation time").hasValueGreaterThan(0);
     }
 
     private NativeMongoSubscriptionModel modelOver(MongoDatabase databaseToAsk) {
         return new NativeMongoSubscriptionModel(databaseToAsk, eventCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
-                NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(2000)));
+                NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(2000)).maxAwaitTime(Duration.ofSeconds(5)));
     }
 
     /**
@@ -215,6 +219,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         MongoDatabase wrapped = spy(database);
         doAnswer(invocation -> {
             if (MongoCommons.CURRENT_OPERATION_TIME_COMMAND.equals(invocation.getArgument(0))) {
+                repliesWithoutOperationTime.incrementAndGet();
                 return new Document("ok", 1.0);
             }
             return invocation.callRealMethod();

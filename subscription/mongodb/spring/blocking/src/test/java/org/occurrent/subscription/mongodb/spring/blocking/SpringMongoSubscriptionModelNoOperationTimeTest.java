@@ -77,6 +77,8 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
  * A {@link SpringMongoSubscriptionModel} subscribed at the present opens its change stream at the present when
  * MongoDB's reply to the operation time question has no {@code operationTime}, and has recorded no position then.
  * This test stubs that reply and checks that the commit time of the first event is recorded before its action runs.
+ * The change stream waits up to 5 s for a document, so the first read spans the write of the first event and no empty
+ * read records a position first.
  */
 @Testcontainers
 @Timeout(30)
@@ -92,6 +94,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
     OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AtomicInteger repliesWithoutOperationTime = new AtomicInteger();
     private final TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
     private final NameDefined e1 = nameDefined("name1");
     private final NameDefined e2 = nameDefined("name2");
@@ -125,7 +128,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
     void a_pause_and_resume_after_the_action_of_the_first_event_threw_delivers_that_event_again_when_mongodb_sent_no_operation_time() {
         // Given: a backoff of 2 s between attempts, so the pause comes during the first backoff
         subscriptionModel = new SpringMongoSubscriptionModel(templateThatSendsNoOperationTime(),
-                withConfig(eventCollectionName, timeRepresentation).retryStrategy(RetryStrategy.fixed(2000)));
+                withConfig(eventCollectionName, timeRepresentation).retryStrategy(RetryStrategy.fixed(2000)).maxAwaitTime(Duration.ofSeconds(5)));
         AtomicBoolean failing = new AtomicBoolean(true);
         AtomicInteger failures = new AtomicInteger();
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
@@ -149,6 +152,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
 
         // Then
         assertThat(handled).containsExactly(e1.eventId(), e2.eventId());
+        assertThat(repliesWithoutOperationTime).as("replies without an operation time").hasValueGreaterThan(0);
     }
 
     /**
@@ -160,6 +164,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
             @Override
             public Document executeCommand(Document command) {
                 if (MongoCommons.CURRENT_OPERATION_TIME_COMMAND.equals(command)) {
+                    repliesWithoutOperationTime.incrementAndGet();
                     return new Document("ok", 1.0);
                 }
                 return super.executeCommand(command);
