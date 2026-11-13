@@ -37,6 +37,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
@@ -56,6 +57,13 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     private final Set<Checkpoint> agedOut = ConcurrentHashMap.newKeySet();
     private final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
     private final AtomicInteger liveStartsRead = new AtomicInteger();
+    private record Committed(long sequence, CloudEvent cloudEvent) {
+    }
+
+    // What the live stream holds, in commit order, and the point in it each position answered by globalCheckpoint stands for
+    private final List<Committed> committed = new CopyOnWriteArrayList<>();
+    private final Map<String, Long> positionsRead = new ConcurrentHashMap<>();
+    private final AtomicLong commits = new AtomicLong();
     private volatile boolean running_ = true;
     private volatile @Nullable Checkpoint lossReportedInsideSubscribe;
     private volatile @Nullable Throwable nextSubscribeThrows;
@@ -189,6 +197,21 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         return handle(subscriptionId);
     }
 
+    // Commits an event to the live stream. A subscription opened from now never gets it, and one opened from a position
+    // read by globalCheckpoint before the commit gets it when it opens, as a stream resumed from a position does
+    void commits(CloudEvent cloudEvent) {
+        committed.add(new Committed(commits.incrementAndGet(), cloudEvent));
+    }
+
+    // The start a running subscription was opened at
+    StartAt startOf(String subscriptionId) {
+        Open open = running.get(subscriptionId);
+        if (open == null) {
+            throw new IllegalStateException("Subscription " + subscriptionId + " does not run");
+        }
+        return open.startAt();
+    }
+
     // Hands an event to the action of a running subscription, as the live model does for an event it reads
     void deliver(String subscriptionId, CloudEvent cloudEvent) {
         Open open = running.get(subscriptionId);
@@ -245,6 +268,10 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
             return;
         }
         running.put(subscriptionId, open);
+        if (resolved instanceof StartAtCheckpoint position && positionsRead.containsKey(position.checkpoint.asString())) {
+            long after = positionsRead.get(position.checkpoint.asString());
+            committed.stream().filter(event -> event.sequence() > after).forEach(event -> open.action().accept(event.cloudEvent()));
+        }
     }
 
     private void reportLoss(String subscriptionId, Open open, Checkpoint lostFrom) {
@@ -299,7 +326,9 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
 
     @Override
     public @Nullable Checkpoint globalCheckpoint() {
-        return new StringBasedCheckpoint("live-start-" + liveStartsRead.incrementAndGet());
+        String position = "live-start-" + liveStartsRead.incrementAndGet();
+        positionsRead.put(position, commits.get());
+        return new StringBasedCheckpoint(position);
     }
 
     @Override

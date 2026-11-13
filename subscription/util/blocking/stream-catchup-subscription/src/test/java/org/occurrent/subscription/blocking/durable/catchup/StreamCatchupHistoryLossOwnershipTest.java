@@ -1173,6 +1173,68 @@ class StreamCatchupHistoryLossOwnershipTest {
         );
     }
 
+    @Test
+    void delivers_an_event_committed_between_the_store_of_the_present_position_and_the_subscribe_of_the_live_model_when_a_replay_held_before_it_went_live_is_resumed_at_now() {
+        // Given
+        heldPausedBeforeItWentLive();
+        received.clear();
+        NameDefined committedInTheWindow = nameDefined(LocalDateTime.now(), "committed-in-the-window");
+        liveModel.beforeTheNextSubscribe(() -> liveModel.commits(cloudEventConverter.toCloudEvents(List.of(committedInTheWindow)).get(0)));
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(storage.read(ID)).as("stored position").isNotNull().extracting(Checkpoint::asString).asString().startsWith("live-start-"),
+                () -> assertThat(received).as("events delivered").containsExactly(committedInTheWindow)
+        );
+    }
+
+    @Test
+    void subscribes_the_live_model_from_the_present_position_it_stored_for_a_dynamic_start_that_answers_now_for_the_catch_up_model_and_null_for_a_wrapper() {
+        // Given
+        heldPausedBeforeItWentLive();
+        StartAt dynamic = StartAt.dynamic(context -> context.subscriptionModelType() == StreamCatchupSubscriptionModel.class ? StartAt.now()
+                : SubscriptionModelWrapper.class.isAssignableFrom(context.subscriptionModelType()) ? null : StartAt.now());
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, dynamic));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        Checkpoint stored = storage.read(ID);
+        assertThat(stored).as("stored position").isNotNull();
+        StartAt subscribedAt = liveModel.startOf(ID);
+        assertAll(
+                () -> assertThat(subscribedAt.get(new SubscriptionModelContext(WrapperLikeDurableModel.class))).as("start for a wrapper").isNull(),
+                () -> assertThat(subscribedAt.get(new SubscriptionModelContext(HistoryLosingLiveModel.class))).as("start for the live model").isInstanceOfSatisfying(StartAtCheckpoint.class,
+                        at -> assertThat(at.checkpoint).isEqualTo(stored))
+        );
+    }
+
+    @Test
+    void subscribes_the_live_model_from_now_when_a_replay_held_before_it_went_live_is_resumed_at_now_and_no_checkpoint_storage_is_used() {
+        // Given
+        catchup = new StreamCatchupSubscriptionModel(liveModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        Checkpoint start = new StringBasedCheckpoint(CatchupCheckpoints.format(1, 1, 3, TOKEN));
+        Subscription subscribed = catchup.subscribe(ID, StartAt.checkpoint(start), cloudEvent -> liveModel.withoutHistoryBack(TOKEN));
+        assertThat(catchThrowable(() -> subscribed.waitUntilStarted(Duration.ofSeconds(10)))).as("thrown by waiting for the subscription to start")
+                .isInstanceOf(CatchupCannotResumeException.class);
+        assertThat(catchup.isPaused(ID)).as("held paused").isTrue();
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(liveModel.startOf(ID).isNow()).as("live model subscribed from now").isTrue(),
+                () -> assertThat(saved).as("positions stored").isEmpty()
+        );
+    }
+
     private abstract static class WrapperLikeDurableModel implements SubscriptionModelWrapper {
     }
 
