@@ -100,7 +100,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      */
     @Override
     public boolean deliversEveryEventInCommitOrder() {
-        return deliversEveryEventInCommitOrder;
+        return subscriptions.deliversEveryEventInCommitOrder();
     }
 
     private static final Logger log = LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
@@ -110,7 +110,6 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     private final ExecutorService cloudEventDispatcher;
     private final MongoDatabase database;
     private final ChangeStreamSubscriptions subscriptions;
-    private final boolean deliversEveryEventInCommitOrder;
 
     /**
      * Create a subscription using the native MongoDB sync driver. It will by default use a {@link RetryStrategy} for retries,
@@ -233,7 +232,6 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         this.cloudEventDispatcher = subscriptionExecutor;
         this.timeRepresentation = timeRepresentation;
         this.eventCollection = eventCollection;
-        this.deliversEveryEventInCommitOrder = !config.restartSubscriptionsOnChangeStreamHistoryLost;
         this.subscriptions = new ChangeStreamSubscriptions(this, new ChangeStreams(), NativeMongoSubscriptionModel.class, log, timeRepresentation, config.retryStrategy,
                 config.restartSubscriptionsOnChangeStreamHistoryLost, config.batchSize, config.maxAwaitTime, true);
     }

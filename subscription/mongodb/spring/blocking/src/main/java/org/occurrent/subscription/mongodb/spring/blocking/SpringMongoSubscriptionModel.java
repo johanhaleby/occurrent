@@ -104,7 +104,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      */
     @Override
     public boolean deliversEveryEventInCommitOrder() {
-        return deliversEveryEventInCommitOrder;
+        return subscriptions.deliversEveryEventInCommitOrder();
     }
 
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
@@ -117,7 +117,6 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private final boolean ownsExecutor;
     private final boolean autoStartup;
     private final ChangeStreamSubscriptions subscriptions;
-    private final boolean deliversEveryEventInCommitOrder;
 
     /**
      * Create a blocking subscription using Spring. It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively
@@ -160,7 +159,6 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         this.executor = config.executor == null ? newTaskExecutor(config.virtualThreads) : config.executor;
         // Left stopped when autoStartup is false, so subscribe(..) holds every subscription paused and no change
         // stream is opened until the caller starts one
-        this.deliversEveryEventInCommitOrder = !config.restartSubscriptionsOnChangeStreamHistoryLost;
         this.subscriptions = new ChangeStreamSubscriptions(this, new ChangeStreams(), SpringMongoSubscriptionModel.class, log, config.timeRepresentation, config.retryStrategy,
                 config.restartSubscriptionsOnChangeStreamHistoryLost, null, config.maxAwaitTime, config.autoStartup);
     }

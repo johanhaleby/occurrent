@@ -893,6 +893,16 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
+    /**
+     * {@code true} unless {@code restartSubscriptionsOnChangeStreamHistoryLost} is turned on. The change stream returns
+     * events in the order they committed, and an action that throws is retried before the subscription reads further,
+     * or the run restarts at the position it had not moved past. A restart after the change stream's history was lost
+     * opens at the present, which skips the events written in between.
+     */
+    public boolean deliversEveryEventInCommitOrder() {
+        return !restartSubscriptionsOnChangeStreamHistoryLost;
+    }
+
     public boolean isRunning() {
         return running;
     }

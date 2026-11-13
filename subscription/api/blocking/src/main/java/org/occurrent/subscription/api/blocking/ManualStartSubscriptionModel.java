@@ -487,7 +487,8 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * What the delegate answers, and {@code false} when it doesn't declare it. This model hands each action to the
-     * delegate unchanged.
+     * delegate unchanged. Without a position source, a first run starts where the delegate's default points when it is
+     * started, so earlier events count from that start and not from the registration.
      */
     @Override
     public boolean deliversEveryEventInCommitOrder() {
