@@ -499,10 +499,10 @@ public final class ChangeStreamSubscriptions {
                 throw e;
             } else if (e instanceof NoPositionAtThePresent noPosition && !internalSubscription.hasStarted()) {
                 refuseStart(subscriptionId, internalSubscription, noPosition.refusalOf(subscriptionId, currentStartAt.get()));
-            } else if (e instanceof NoPositionAtThePresent) {
-                // A restart from the present after the history was lost, which stops like a restart the strategy gave up on
-                log.error("Cannot restart subscription {} from the present: {} Pausing and resuming the subscription starts it again.", subscriptionId, e.getMessage(), e);
-                throw e;
+            } else if (e instanceof NoPositionAtThePresent noPosition) {
+                // A restart from the present after the history was lost. Held paused, since a retry asks the same server
+                // and a run left neither running nor paused can't be resumed
+                heldPausedAfterARefusedRestart(subscriptionId, internalSubscription, noPosition);
             } else if (cursor == null && e instanceof UnsupportedStartAtException unsupportedStartAt && MongoCommons.isCatchupPosition(unsupportedStartAt.startAt())) {
                 // Only a catch-up's position before the cursor exists, since an action can throw this type too, as can
                 // the function with another position, and those restart like any other failure
@@ -560,6 +560,16 @@ public final class ChangeStreamSubscriptions {
         internalSubscription.releaseWaitersOfAFailedStart();
         if (refused.get()) {
             startRefused(subscriptionId, refusal);
+        }
+    }
+
+    // No listener is told. A start refusal listener is told the id is free, and this run keeps it. The history loss
+    // listeners were asked about this loss before the restart, and there is no position to tell them it restarts from
+    private void heldPausedAfterARefusedRestart(String subscriptionId, InternalSubscription internalSubscription, NoPositionAtThePresent refusal) {
+        if (pausedAfterHistoryLoss(subscriptionId, internalSubscription)) {
+            log.error("Cannot restart subscription {} from the present after its history was lost: {} It is paused, and resuming it asks MongoDB again.", subscriptionId, refusal.getMessage(), refusal);
+        } else {
+            log.debug("Cannot restart subscription {} from the present after its history was lost, but it was paused, resumed or cancelled meanwhile, so it isn't held.", subscriptionId, refusal);
         }
     }
 

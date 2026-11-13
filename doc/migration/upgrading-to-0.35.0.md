@@ -2316,7 +2316,10 @@ When that read returns neither an event nor a resume token, the subscription can
   position. The subscription is removed from the model, and the listeners added through
   `StartRefusalReportingSubscriptions` are told, as for a catch-up's checkpoint.
 * A `resumeSubscription(id, StartAt.now())` does the read when the resumed change stream opens, and is refused the same
-  way.
+  way. A subscription that had already run is then removed from the model too, and has to be subscribed again.
+* With `restartSubscriptionsOnChangeStreamHistoryLost` on, a restart from the present after the history was lost that
+  gets neither holds the subscription paused. `isPaused(id)` answers `true`, an error in the log names it, and
+  `resumeSubscription(id)` reads the change stream again.
 
 In 0.34.0 such a subscription opened at the present.
 
