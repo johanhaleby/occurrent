@@ -20,6 +20,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +36,8 @@ import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import io.cloudevents.CloudEvent;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
@@ -45,10 +48,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -75,6 +80,10 @@ class SagaTimerFailedAttemptMarkerTest {
     private final List<CancelOrder> dispatched = new ArrayList<>();
     private Consumer<String> onReaction = sagaId -> {
         throw new IllegalStateException("this instance always fails");
+    };
+
+    private final AtomicLong clockMillis = new AtomicLong(POLL.toEpochMilli());
+    private Runnable onDispatch = () -> {
     };
 
     private ListAppender<ILoggingEvent> appender;
@@ -298,6 +307,53 @@ class SagaTimerFailedAttemptMarkerTest {
         );
     }
 
+    @Test
+    void does_not_make_a_slow_event_delivery_lose_its_save_however_many_times_a_poll_marks_the_instance_while_it_runs() {
+        seed("s1", List.of(new TimerEntry(TIMER, FIRES_AT)));
+        SagaExecution<OrderEvent, String, CancelOrder> execution = execution(new CountingStore(backing), () -> Instant.ofEpochMilli(clockMillis.get()));
+        // The dispatch sits between the event's read and its save, and each poll in it writes a fresh marker
+        onDispatch = () -> {
+            clockMillis.addAndGet(10);
+            execution.pollTimers();
+        };
+
+        assertThatCode(() -> execution.onCloudEvent(streamKeyed(1, new OrderNoted("s1")))).doesNotThrowAnyException();
+
+        SagaEnvelope<String> after = backing.find("s1").orElseThrow();
+        assertAll(
+                () -> assertThat(dispatched).as("the event's command, once").containsExactly(new CancelOrder("noted-s1")),
+                () -> assertThat(after.state()).isEqualTo("noted"),
+                () -> assertThat(after.version()).as("the event's save, on top of the version it read").isEqualTo(2),
+                () -> assertThat(after.timers()).as("saved with the timers it read, which drops the marker").containsExactly(new TimerEntry(TIMER, FIRES_AT))
+        );
+    }
+
+    @Test
+    void leaves_the_poll_working_and_the_failing_timer_unmarked_when_the_store_refuses_a_save_at_the_same_version() {
+        seed("a-failing", List.of(new TimerEntry(TIMER, FIRES_AT)));
+        seed("b-healthy", List.of(new TimerEntry(TIMER, FIRES_AT)));
+        AtomicInteger failures = new AtomicInteger();
+        onReaction = sagaId -> {
+            if (sagaId.equals("a-failing")) {
+                failures.incrementAndGet();
+                throw new IllegalStateException("always fails");
+            }
+        };
+        CountingStore store = new CountingStore(backing).refusingASaveAtTheSameVersion();
+
+        assertThatCode(() -> {
+            execution(store, () -> POLL).pollTimers();
+            execution(store, () -> POLL.plusMillis(1)).pollTimers();
+        }).doesNotThrowAnyException();
+
+        assertAll(
+                () -> assertThat(dispatched).as("the healthy instance fired").containsExactly(new CancelOrder("b-healthy")),
+                () -> assertThat(backing.find("a-failing").orElseThrow().timers()).as("never marked").containsExactly(new TimerEntry(TIMER, FIRES_AT)),
+                () -> assertThat(failures.get()).as("tried again by the later poll").isEqualTo(2),
+                () -> assertThat(markerWarnings()).as("one per poll, none fatal").hasSize(2)
+        );
+    }
+
     private void poll(CountingStore store) {
         execution(store, () -> POLL).pollTimers();
     }
@@ -313,6 +369,10 @@ class SagaTimerFailedAttemptMarkerTest {
                 Map.of(), null, current.createdAt(), current.updatedAt(), null, null), current.version());
     }
 
+    private CloudEvent streamKeyed(long streamVersion, OrderEvent event) {
+        return CloudEventBuilder.v1(converter.toCloudEvent(event)).withExtension(OccurrentCloudEventExtension.occurrent("stream-" + event.orderId(), streamVersion)).build();
+    }
+
     private List<String> warnings() {
         return appender.list.stream().filter(event -> event.getLevel() == Level.WARN).map(ILoggingEvent::getFormattedMessage).toList();
     }
@@ -326,6 +386,9 @@ class SagaTimerFailedAttemptMarkerTest {
                 .correlate(OrderPlaced.class, OrderPlaced::orderId)
                 .startsOn(OrderPlaced.class)
                 .evolve(OrderPlaced.class, (state, event) -> "waiting")
+                .correlate(OrderNoted.class, OrderNoted::orderId)
+                .evolve(OrderNoted.class, (state, event) -> "noted")
+                .react(OrderNoted.class, (state, event) -> List.of(SagaEffect.issue(new CancelOrder("noted-" + event.orderId()))))
                 .evolveOnTimeout(TIMER, (state, timeout) -> "cancelled")
                 .reactOnTimeout(TIMER, (state, timeout) -> {
                     onReaction.accept(timeout.sagaId());
@@ -335,7 +398,10 @@ class SagaTimerFailedAttemptMarkerTest {
                 .reactOnTimeout(OTHER_TIMER, (state, timeout) -> List.of(SagaEffect.issue(new CancelOrder(timeout.sagaId() + "/reminder"))))
                 .build();
         SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofSeconds(15), 10, MAX_CAS_ATTEMPTS);
-        return new SagaExecution<>("saga-timer-marker", saga, store, dispatched::add, converter, config, event -> true, clock);
+        return new SagaExecution<>("saga-timer-marker", saga, store, command -> {
+            onDispatch.run();
+            dispatched.add(command);
+        }, converter, config, event -> true, clock);
     }
 
     /** Delegates to a real store and counts the without-state writes, which only the marker write uses. Can lose or fail them on demand. */
@@ -345,6 +411,7 @@ class SagaTimerFailedAttemptMarkerTest {
         private int toLose;
         private @Nullable String failingFor;
         private @Nullable Runnable afterDueTimerRead;
+        private boolean refusingSameVersion;
 
         CountingStore(SagaStateStore<String> delegate) {
             this.delegate = delegate;
@@ -357,6 +424,11 @@ class SagaTimerFailedAttemptMarkerTest {
 
         CountingStore throwingOnWriteFor(String sagaId) {
             this.failingFor = sagaId;
+            return this;
+        }
+
+        CountingStore refusingASaveAtTheSameVersion() {
+            this.refusingSameVersion = true;
             return this;
         }
 
@@ -380,6 +452,9 @@ class SagaTimerFailedAttemptMarkerTest {
             markerWrites.incrementAndGet();
             if (sagaId.equals(failingFor)) {
                 throw new IllegalStateException("the store is down");
+            }
+            if (refusingSameVersion && envelope.version() == expectedVersion) {
+                return false;
             }
             if (toLose > 0) {
                 toLose--;
@@ -407,10 +482,14 @@ class SagaTimerFailedAttemptMarkerTest {
         }
     }
 
-    sealed interface OrderEvent permits OrderPlaced {
+    sealed interface OrderEvent {
+        String orderId();
     }
 
     record OrderPlaced(String orderId) implements OrderEvent {
+    }
+
+    record OrderNoted(String orderId) implements OrderEvent {
     }
 
     record CancelOrder(String orderId) {
