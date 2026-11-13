@@ -17,6 +17,7 @@
 
 package org.occurrent.springboot.mongo.reactor;
 
+import org.bson.BsonTimestamp;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
@@ -41,6 +42,7 @@ import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.eventstore.mongodb.internal.OperationTimeLiveStart;
 import org.occurrent.eventstore.mongodb.spring.reactor.CommitRetryingReactiveMongoTransactionManager;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
@@ -49,6 +51,7 @@ import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.retry.Backoff;
 import org.occurrent.springboot.common.*;
+import org.occurrent.springboot.common.internal.LiveStartCheckpoints;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
 import org.occurrent.springboot.reactor.ComposedCatchupModel;
 import org.occurrent.springboot.reactor.DefaultReactiveSnapshotStoreProvider;
@@ -56,6 +59,7 @@ import org.occurrent.springboot.reactor.OccurrentReactiveAnnotationConfiguration
 import org.occurrent.springboot.reactor.OccurrentReactorBeanNames;
 import org.occurrent.springboot.reactor.PositionOrderedEventStores;
 import org.occurrent.subscription.api.reactor.*;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModelConfig;
@@ -108,6 +112,19 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Bean
     StartupWorkaround occurrentReactiveMongoOperationsStartupWorkaround(ApplicationContext applicationContext) {
         return () -> applicationContext.getBean(ReactiveMongoOperations.class);
+    }
+
+    /**
+     * Turns the live start a MongoDB event store reports into the operation-time checkpoint an annotated subscription's
+     * first start is pinned to. The MongoDB checkpoint storages order an operation-time checkpoint, so two nodes that
+     * pin the same subscription at the same moment keep the earlier position.
+     */
+    @Bean
+    LiveStartCheckpoints occurrentReactiveMongoLiveStartCheckpoints() {
+        return liveStart -> {
+            BsonTimestamp operationTime = OperationTimeLiveStart.parse(liveStart);
+            return operationTime == null ? null : new MongoOperationTimeCheckpoint(operationTime);
+        };
     }
 
     /**

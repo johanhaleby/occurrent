@@ -18,6 +18,7 @@
 package org.occurrent.springboot.blocking;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.Subscription;
@@ -108,6 +109,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // is still unknown is not attempted for ever.
     private final Set<String> alreadyBuiltToBeScanned = ConcurrentHashMap.newKeySet();
     private volatile boolean startupScanComplete;
+    // The start boundary each bean built after startup read when it was created, by bean name, until it registers
+    private final Map<String, String> lateLiveStarts = new ConcurrentHashMap<>();
+    private StartPositionSupport startPositionSupport;
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
     private ProjectionAnnotationRegistrar projectionRegistrar;
     private SnapshotAnnotationRegistrar snapshotRegistrar;
@@ -118,7 +122,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // A BeanPostProcessor is fully Aware-initialized before it post-processes any other bean, so building the
         // registrars here (rather than lazily) is safe and keeps the lifecycle methods thin.
         this.applicationContext = applicationContext;
-        StartPositionSupport startPositionSupport = new StartPositionSupport(applicationContext);
+        this.startPositionSupport = new StartPositionSupport(applicationContext);
         this.subscriptionRegistrar = new SubscriptionAnnotationRegistrar(applicationContext, startPositionSupport);
         this.projectionRegistrar = new ProjectionAnnotationRegistrar(applicationContext, startPositionSupport);
         this.snapshotRegistrar = new SnapshotAnnotationRegistrar(applicationContext, startPositionSupport);
@@ -133,15 +137,34 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // A FactoryBean is skipped, because the container passes the factory itself under the product's own bean name
     // and the factory's class says nothing about the product's. The product arrives at
     // postProcessAfterInitialization instead, under the same name, and is recorded there.
+    //
+    // A handler bean built after startup reads its own start boundary here, as it is created, and a live-only first
+    // start of its handlers begins there rather than at the boundary of the application context.
     @Override
     public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
         if (!(bean instanceof FactoryBean<?>)) {
             // put rather than putIfAbsent, because a creation that failed is retried and the retry can produce a
             // different class than the attempt that failed. The recording has to describe the instance the
             // container is building now, not the first one it tried.
-            userClassByBeanName.put(beanName, userClassOf(bean));
+            Class<?> userClass = userClassOf(bean);
+            userClassByBeanName.put(beanName, userClass);
+            if (startupScanComplete) {
+                recordLateLiveStart(beanName, userClass);
+            }
         }
         return bean;
+    }
+
+    private void recordLateLiveStart(String beanName, Class<?> userClass) {
+        if (!declaresAnyOccurrentAnnotation(userClass)) {
+            return;
+        }
+        @Nullable String liveStart = startPositionSupport.readLateLiveStart();
+        if (liveStart == null) {
+            lateLiveStarts.remove(beanName);
+        } else {
+            lateLiveStarts.put(beanName, liveStart);
+        }
     }
 
     // Where a bean created after the startup scan registers. A @Lazy bean, or a FactoryBean product nothing has
@@ -169,6 +192,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (bean instanceof FactoryBean<?>) {
             return bean;
         }
+        // Every event store bean passes through here as it is created, before anything can write through it
+        startPositionSupport.recordStartBoundaryOf(bean);
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         // Only a FactoryBean's product is recorded here. Every other bean was recorded by the callback above, from
         // the instance before any proxy wrapped it, and overwriting that with what arrives here would record a
@@ -193,8 +218,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             // building the same prototype share the recorded entry, so a lookup here can answer with the other
             // one's class and this bean would be scanned for methods its own class does not declare.
             ScanType userClass = new ScanType(userClassOf(bean), true);
+            // A FactoryBean's product never reached the callback above, so it reads its boundary now
+            @Nullable String lateLiveStart = lateLiveStarts.remove(beanName);
+            if (lateLiveStart == null && beanFactory.isFactoryBean(beanName) && declaresAnyOccurrentAnnotation(userClass.type())) {
+                lateLiveStart = startPositionSupport.readLateLiveStart();
+            }
             scan(new String[]{beanName}, name -> userClass, name -> bean,
-                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved, false);
+                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved, false,
+                    lateLiveStart);
         }
         return bean;
     }
@@ -222,7 +253,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         synchronized (registrationLock) {
             scanningThread = Thread.currentThread();
             String[] beanNames = applicationContext.getBeanDefinitionNames();
-            while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true)) {
+            while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true, null)) {
                 beanNames = applicationContext.getBeanDefinitionNames();
             }
             startupScanComplete = true;
@@ -271,7 +302,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             // resolve the published bean.
             scan(new String[]{beanName}, name -> userClass, name -> bean,
                     (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved,
-                    publishedBeanIsResolvable(beanFactory, beanName, singleton));
+                    publishedBeanIsResolvable(beanFactory, beanName, singleton), null);
         }
     }
 
@@ -287,7 +318,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // fencing check below runs, so one can already write a checkpoint before the check inspects idsToCheck.
     // Pre-existing, not introduced by this reorder. CheckpointStorageCannotFenceSubscriptionException's javadoc
     // covers it.
-    private boolean scan(String[] beanNames, Function<String, ScanType> typeResolver, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets, boolean mayBlockForReplay) {
+    //
+    // lateLiveStart is the start boundary of a bean built after startup, and null for a scan under the startup policy,
+    // which starts at the boundary of the application context. Each id this scan claims is held to it.
+    private boolean scan(String[] beanNames, Function<String, ScanType> typeResolver, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets, boolean mayBlockForReplay,
+                         @Nullable String lateLiveStart) {
         // Reflects over method signatures only, no store access or checkpoint write, so running it before any
         // registration is safe. Spring creates this bean before CheckpointFencingConfigurationCheck's own bean, so
         // a check that instead waited for its own SmartInitializingSingleton callback would run after a catch-up
@@ -385,9 +420,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             // this register a method whose id went through no duplicate check and no refusal.
             subscriptionRegistrar.registerSubscriptions(bean, staged.getValue(), handlerTargets.apply(beanName, bean), mayBlockForReplay,
                     method -> markRegistered(beanName, method),
-                    this::claimSubscriptionId,
+                    id -> claimSubscriptionId(id, lateLiveStart),
                     method -> forgetRegistered(beanName, method),
-                    registeredIds::remove);
+                    this::releaseId);
         }
         if (mayBlockForReplay) {
             CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
@@ -397,7 +432,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             Method method = (Method) pm[1];
             org.occurrent.annotation.Projection projection = (org.occurrent.annotation.Projection) pm[2];
             if (markRegistered(beanName, method)) {
-                registerDescriptor(beanName, method, projection.id(),
+                registerDescriptor(beanName, method, lateLiveStart, projection.id(),
                         "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(projection.id(), method.getDeclaringClass().getName(), method.getName()),
                         () -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply(beanName), method, projection));
             }
@@ -409,7 +444,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             Method method = (Method) sm[1];
             org.occurrent.annotation.Snapshot snapshot = (org.occurrent.annotation.Snapshot) sm[2];
             if (markRegistered(beanName, method)) {
-                registerDescriptor(beanName, method, snapshot.id(),
+                registerDescriptor(beanName, method, lateLiveStart, snapshot.id(),
                         "Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(snapshot.id(), method.getDeclaringClass().getName(), method.getName()),
                         () -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply(beanName), method, snapshot));
             }
@@ -419,7 +454,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             Method method = (Method) gm[1];
             org.occurrent.annotation.Saga saga = (org.occurrent.annotation.Saga) gm[2];
             if (markRegistered(beanName, method)) {
-                registerDescriptor(beanName, method, saga.id(),
+                registerDescriptor(beanName, method, lateLiveStart, saga.id(),
                         "Duplicate subscription/projection/snapshot/saga id '%s' (used by @Saga on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(saga.id(), method.getDeclaringClass().getName(), method.getName()),
                         () -> sagaRegistrar.processSagaAnnotation(beanResolver.apply(beanName), method, saga));
             }
@@ -444,15 +479,16 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // A DuplicateSubscriptionIdException from inside the registration comes from the subscription model instead,
     // for a programmatic subscription already on that id, and the id this call added is still this call's to take
     // back.
-    private void registerDescriptor(String beanName, Method method, String id, String duplicateIdMessage, Runnable registration) {
+    private void registerDescriptor(String beanName, Method method, @Nullable String lateLiveStart, String id, String duplicateIdMessage, Runnable registration) {
         if (!registeredIds.add(id)) {
             forgetRegistered(beanName, method);
             throw new DuplicateSubscriptionIdException(id, duplicateIdMessage);
         }
+        startPositionSupport.startAtLateBoundary(id, lateLiveStart);
         try {
             registration.run();
         } catch (RuntimeException | Error e) {
-            registeredIds.remove(id);
+            releaseId(id);
             forgetRegistered(beanName, method);
             throw e;
         }
@@ -621,10 +657,16 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // Claiming writes to registeredIds itself rather than to anything held aside for the length of a scan, so a
     // nested scan, which happens when registering a handler builds another annotated bean, meets a claim that is
     // already there. The claim is released when the work it stands for throws.
-    private void claimSubscriptionId(String id) {
+    private void claimSubscriptionId(String id, @Nullable String lateLiveStart) {
         if (!registeredIds.add(id)) {
             throw new DuplicateSubscriptionIdException(id, "Duplicate subscription/projection id '%s', each id must be unique because it is the durable checkpoint key.".formatted(id));
         }
+        startPositionSupport.startAtLateBoundary(id, lateLiveStart);
+    }
+
+    private void releaseId(String id) {
+        startPositionSupport.forgetLateBoundary(id);
+        registeredIds.remove(id);
     }
 
     // True unless source = PUSH and catchup = NONE, the one combination @Projection and @Saga share where the bare
