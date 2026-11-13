@@ -64,7 +64,7 @@ final class MongoDcbStore implements AutoCloseable {
     private static final DcbReadOptions TOKEN_ONLY = DcbReadOptions.fromBeginning().backwards().limit(1);
 
     // The sync driver fires command events on the thread that runs the operation, so a conflict is counted against the
-    // benchmark thread whose append hit it. CONFLICTS_SEEN and CONFLICTS_TAKEN check that at the end of a trial.
+    // benchmark thread whose append hit it. close() prints CONFLICTS_SEEN and CONFLICTS_TAKEN, so a run shows whether they agree.
     private static final ThreadLocal<long[]> CONFLICTS = ThreadLocal.withInitial(() -> new long[1]);
     private static final AtomicLong CONFLICTS_SEEN = new AtomicLong();
     private static final AtomicLong CONFLICTS_TAKEN = new AtomicLong();

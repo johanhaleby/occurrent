@@ -40,8 +40,8 @@ import static org.occurrent.benchmark.dcbstripes.MongoDcbStore.TYPE;
  * <ul>
  *     <li>{@code oneType}: tagged conditional appends of one type, each with a tag of its own and a condition on that
  *     tag, the ADR's simulated K = 8 case when the setting is on.</li>
- *     <li>{@code typePerThread}: the same with a type per thread, the ADR's distinct-types reference. The setting
- *     changes nothing here, so its two results show the noise.</li>
+ *     <li>{@code typePerThread}: the same with a type per thread, the ADR's distinct-types reference. Each thread has a
+ *     type marker of its own, so spreading can't take contention away here, and its two results show the noise.</li>
  *     <li>{@code mixed}: 15 threads of {@code oneType} plus one thread making type-only conditional appends
  *     ({@code types(X)}) of the same type.</li>
  * </ul>

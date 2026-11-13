@@ -83,8 +83,8 @@ public record DcbMarkerVersions(String criteria, Map<String, MarkerVersion> mark
 
         /**
          * A marker the store found none of when it read the versions. Only the marker key of an event type may hold
-         * it, since an event type's marker may not exist yet. A read after versions that holds it selects the events
-         * of that marker once it exists.
+         * it, and a missing tag marker gives no versions. A read after versions that holds it selects the events of that
+         * marker once it exists.
          */
         public static MarkerVersion absent() {
             return ABSENT;

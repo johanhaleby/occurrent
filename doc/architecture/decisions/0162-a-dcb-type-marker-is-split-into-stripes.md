@@ -107,28 +107,30 @@ behind, unused by 0.34.
 | Operation | 0.34, one marker | 0.35, setting off | 0.35, setting on |
 |---|---|---|---|
 | An append | one type document written per type | the same, stripe 0 | the same, on its stripe |
-| Two appends of one type with different tags | always conflict | always conflict | conflict when they pick the same stripe, about 1 in 8 |
+| Two appends of one type with different tags | always share the type marker | always share it | share it when they pick the same stripe, about 1 in 8 |
 | A read of an item without tags | one marker document per type | eight, in the same single query | eight |
 | A conditional append on an item without tags | compares and increments one document per type | eight, so it writes eight documents, and still conflicts with every append of the type | the same as off |
 | A read after versions on an item without tags | one `mv` branch per type | eight | eight |
 | A token or saved `DcbMarkerVersions` of an item without tags | one entry per type | eight | eight |
 
-An application that never turns the setting on pays for stripes and gets nothing back. Every read of an item without
+An application that never turns the setting on pays for stripes in marker documents and gets nothing back. Every read of an item without
 tags reads eight marker documents per type instead of one, and every conditional append on one writes eight. The
 writes can't be skipped when the local setting is off. Another node may have it on and append on stripe s during that
 conditional's transaction, and only a document both transactions write makes MongoDB abort one of them.
 
 `DcbTypeMarkerCostBenchmark` in the `benchmark` module measures both costs with the setting off, on the native store,
-against the same class built before the stripes. It ran on a single-node replica set on a machine with 18 cores and a
-load average of 12 to 48, and found no cost above the noise:
+against the same class built before the stripes. It ran on a single-node replica set in a Docker VM with 6 cores, on a
+machine with 18 cores and a load average of 12 to 49, and found no cost above the noise:
 
 - A read of `type(X)` on one thread, two rounds that took turns with the build before the stripes: 332 and 601 reads
   per second with one marker and 611 and 571 with eight, over one event. Over 1000 events, 105 and 83 with one marker
-  and 93 and 82 with eight.
+  and 93 and 82 with eight. A first run of each build on its own, at a different load, gave 462 reads per second
+  with one marker and 175 with eight over one event, and 98 and 55 over 1000. The rounds that took turns didn't repeat
+  that gap.
 - Type-only conditional appends of one type on 16 threads: 41 appended per second with one marker and 43 with eight.
   Their condition refused the rest.
-- The same with a type per thread, so without contention: 653 appended per second with one marker, and 642 and 473 in
-  two runs with eight.
+- The same with a type per thread, so without contention on a type marker: 653 appended per second with one marker,
+  and 642 and 476 in two runs with eight.
 - Tagged conditional appends of one type on 16 threads: 56 per second with one marker and 81 with eight.
 
 `DcbTypeStripeSettingBenchmark` measures what the setting buys, on the same machine. Tagged conditional appends of one
@@ -136,7 +138,7 @@ type on 16 threads reached 75 per second with the setting off and 454 with it on
 thread. The five iterations with the setting on gave 597, 564, 408, 289 and 411 appends per second, so the error is
 wide, and every iteration was still above 280.
 
-A simulation of the benchmark above used tagged conditional appends, as with the setting on. With K = 8 it reached 202
+A simulation of the benchmark in the Context section used tagged conditional appends, as with the setting on. With K = 8 it reached 202
 to 446 appends of one type per second, and with K = 32 it reached 313 to 586, under the same machine load. K = 8 wins
 back about half of what one marker loses against distinct types. In the three paired runs, K = 32 gave 1.49, 0.81 and
 1.55 times K = 8, which is at most about half as much again, for four times the cost on every read and conditional
@@ -147,7 +149,8 @@ append of the type. On 16 threads of one type it hit 394 write conflicts per sec
 within each other's error. In a mixed run, one thread made type-only conditional appends of a type while 15 threads made
 tagged conditional appends of it. The type-only thread appended almost nothing, with the setting off or on. Its
 condition refused nearly every attempt, because a tagged append of the type committed between its read and its append.
-A condition on every event of a busy type rarely holds, whatever the markers. More stripes would add document writes to
+In that run a condition on every event of a type that other threads kept appending almost never held, with one marker
+or eight. More stripes would add document writes to
 each such append and buy nothing for it.
 
 ### Saved versions with an absent stripe
@@ -249,7 +252,7 @@ conditional append of an item without tags.
 
 - With the setting off, appends behave as in 0.34. A read of an item without tags reads eight marker documents per
   type, and a conditional append on one writes eight, for no gain.
-- With the setting on, appends of one type with different tags conflict about one time in eight, and the tag markers
+- With the setting on, two appends of one type with different tags share a type marker about one time in eight, and the tag markers
   decide the rest as before.
 - An upgrade from 0.34 is rolling by default. Turning the setting on needs every 0.34 node gone, and nothing warns a
   deployment that turns it on too early. Going back needs the setting off in every process that appends to the store first.

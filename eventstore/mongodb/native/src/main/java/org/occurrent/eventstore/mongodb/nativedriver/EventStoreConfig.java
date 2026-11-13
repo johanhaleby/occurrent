@@ -372,8 +372,9 @@ public class EventStoreConfig {
 
         /**
          * Whether an append increments the stripe of each type marker that its append id picks, instead of stripe 0. That
-         * lets appends of one type with different tags commit at the same time, and they conflict only when they pick the
-         * same stripe, about one time in eight. Off by default.
+         * lets appends of one type with different tags commit at the same time, since two of them share a type marker only
+         * when they pick the same stripe, about one time in eight. A conditional append on a criteria item without tags
+         * still increments every stripe of its types. Off by default.
          * <p>
          * Turn it on only when no 0.34 node appends to or reads from this store. A 0.34 node knows stripe 0 only, so a
          * condition it checks on an event type can miss a matching event appended on another stripe, and nothing warns

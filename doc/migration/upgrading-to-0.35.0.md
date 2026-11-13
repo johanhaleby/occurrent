@@ -957,8 +957,8 @@ describes it.
 
 On MongoDB every DCB append increments a marker document for each type of its events, so two appends of one type
 can't commit at the same time, even when their tags differ and no condition could ever match both. 0.35.0 splits the
-marker of a type into eight documents. By default an append increments the first one, the document 0.34.0 uses, so
-nothing changes for it.
+marker of a type into eight documents. By default an append increments the first one for its events, the document
+0.34.0 uses.
 
 To spread the writes, set `spreadTypeMarkerWrites(true)` on the `EventStoreConfig` of the native, Spring blocking or
 Spring reactor store, or this in either Spring Boot starter:
@@ -967,8 +967,8 @@ Spring reactor store, or this in either Spring Boot starter:
 occurrent.event-store.mongodb.spread-type-marker-writes=true
 ```
 
-An append then increments one of the eight documents of each of its types, picked from its `AppendId`. Two appends of
-one type with different tags conflict only when they pick the same document. The change is the second part of
+An append then increments one of the eight documents for each type of its events, picked from its `AppendId`. Two
+appends of one type with different tags share a document only when they pick the same one. The change is the second part of
 [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
 [ADR 162](../architecture/decisions/0162-a-dcb-type-marker-is-split-into-stripes.md) describes it.
 
@@ -993,8 +993,9 @@ store, and a rolling restart that turns the setting on or off is safe.
 Turn it on only when no 0.34.0 node appends to or reads from the store. A 0.34.0 node reads only the first document of
 a type. Say a 0.34.0 node reads `type("TicketSold")`, and a 0.35.0 node with the setting on then appends a
 `TicketSold` that picks the fourth document. The 0.34.0 node's conditional append sees no change in the first document
-and commits, although a matching event was appended after its read. The same holds for any 0.34.0 condition with an
-item without tags, with or without a token.
+and commits, although a matching event was appended after its read. The same holds for any 0.34.0 condition with a
+token and an item without tags. A 0.34.0 condition without a token checks the events in its own transaction, so it
+misses only a matching append on another document that commits at the same time.
 
 With the setting off, 0.34.0 and 0.35.0 nodes can share a store in both directions, as before.
 
@@ -1093,7 +1094,7 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - A boundary reports no versions until each tag of an item with tags has a marker and every marker of the boundary
   that exists has an epoch. A decider reads the whole boundary, an attempt whose read reported no versions saves nothing, and its append creates the missing markers
   and gives the others an epoch, so its next command can save. A `@Snapshot` view never appends, so it reads the whole
-  boundary until other appends have done that for every marker. 0.34.0 saved at a position there.
+  boundary until other appends have created its tag markers and given every marker that exists an epoch. 0.34.0 saved at a position there.
 - A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot and logs a warning at start, since a read of every event
   has no marker versions. A snapshot 0.34.0 saved for it stays in the store and stops changing, so delete it or give the
   view a boundary. `dcbSnapshotView { }` in Kotlin uses `DcbCriteria.all()` unless you set tags or criteria. A decider over
