@@ -511,7 +511,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
     @Test
     @Timeout(30)
-    void a_history_loss_that_ends_a_replay_a_stop_and_a_start_replaced_holds_nothing_for_the_replay_that_runs_since() {
+    void a_history_loss_that_ends_a_replay_a_stop_and_a_start_replaced_holds_nothing_and_leaves_the_state_the_id_and_the_start_to_the_replay_that_runs_since() {
         // Given a first replay that reads one event, whose action stops the model and starts it again so a second replay
         // runs, and that then fails with a lost live start, which is before the subscribe has registered the first replay
         // to be disposed. The second replay reads nothing more, so it is the one in flight.
@@ -533,7 +533,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         AtomicBoolean replaced = new AtomicBoolean();
         try (ErrorsLoggedByTheCatchup errors = new ErrorsLoggedByTheCatchup()) {
             // When
-            catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
                 if (replaced.compareAndSet(false, true)) {
                     model.get().stop();
                     model.get().start(true);
@@ -547,6 +547,14 @@ class ReactorStreamCatchupSubscriptionModelTest {
             assertThat(errors.errors()).as("errors logged").noneMatch(message -> message.contains("held paused"));
             assertThat(catchup.isPaused("sub")).as("paused").isFalse();
             assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
+
+            // And the id is still taken, since the second replay owns it
+            Throwable subscribeAgain = org.assertj.core.api.Assertions.catchThrowable(() -> catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty()));
+            assertThat(subscribeAgain).as("what a subscribe of the same id throws").isInstanceOf(DuplicateSubscriptionIdException.class);
+
+            // And the start the subscribe returned is not failed while the second replay is in flight
+            StepVerifier.create(subscription.waitUntilStarted()).expectSubscription().expectNoEvent(Duration.ofMillis(100)).thenCancel().verify(Duration.ofSeconds(5));
         } finally {
             catchup.shutdown();
         }

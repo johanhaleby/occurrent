@@ -430,14 +430,25 @@ final class NamedCatchupSupport {
                         // take no lock.
                         // Identity-checked, since a cancel and a subscribe of the id can have put a new state by the time
                         // this failure reaches here.
-                        underIdLock(subscriptionId, () -> {
-                            catchingUp.remove(subscriptionId, state);
-                            if (takenOver != null) {
-                                // So a resume replays again, counting its replays again from 0
-                                handedOver.computeIfPresent(subscriptionId, (id, made) -> made == takenOver ? made.withTheReplaysAgainOf(0) : made);
+                        // Under the state monitor too, where a stop and a start or a resume name a newer launch, which
+                        // runs on the same state and owns it, so the failure of this launch changes nothing of it
+                        boolean replaced = underIdLock(subscriptionId, () -> {
+                            synchronized (state) {
+                                if (state.episode.get() != launched) {
+                                    return true;
+                                }
+                                catchingUp.remove(subscriptionId, state);
+                                if (takenOver != null) {
+                                    // So a resume replays again, counting its replays again from 0
+                                    handedOver.computeIfPresent(subscriptionId, (id, made) -> made == takenOver ? made.withTheReplaysAgainOf(0) : made);
+                                }
+                                return false;
                             }
-                            return null;
                         });
+                        if (replaced) {
+                            log.warn("The catch-up replay for subscription {} failed after a stop and a start or a resume ran a newer replay, which keeps running.", subscriptionId, throwable);
+                            return;
+                        }
                         if (takenOver != null) {
                             replay.live().open(state);
                         }
@@ -1562,8 +1573,8 @@ final class NamedCatchupSupport {
      * record, and a resume refuses with {@link CatchupCannotResumeException} until the subscription is cancelled. A
      * replay that started at the beginning skips nothing when it runs again, so a resume or a {@code start(true)} runs it
      * again. A takeover replay leaves the subscription the wrapped model holds paused as it is, and only records the
-     * loss. Returns false, so the failure ends the replay as any other failure does, when the replay is no longer the one
-     * in flight for the id, a later launch of it runs since, it was cancelled or handed over, or this model shut down.
+     * loss. Returns false, so the failure takes the path of any other failure, when the replay is no longer the one in
+     * flight for the id, a later launch of it runs since, it was cancelled or handed over, or this model shut down.
      */
     private boolean holdForLostLiveStart(Replay replay, CatchupState state, Object launched, @Nullable HandedOver takenOver, Throwable failure) {
         String subscriptionId = replay.subscriptionId();
