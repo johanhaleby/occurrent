@@ -18,29 +18,59 @@ package org.occurrent.springboot.reactor;
 
 import io.cloudevents.CloudEvent;
 import kotlin.jvm.functions.Function2;
+import org.aopalliance.intercept.MethodInterceptor;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.StartupMode;
+import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
+import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.filter.Filter;
+import org.occurrent.springboot.reactor.other.CrossPackageEvent;
+import org.occurrent.springboot.reactor.other.CrossPackagePackagePrivateHandler;
+import org.occurrent.springboot.reactor.other.CrossPackagePublicHandler;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.mockito.Answers;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
+import org.occurrent.subscription.StreamSubscriptionFilter;
+import org.springframework.aop.TargetSource;
+import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.context.annotation.Primary;
+import org.springframework.context.annotation.Scope;
+import org.springframework.core.PriorityOrdered;
 import org.springframework.core.NestedExceptionUtils;
 import reactor.core.publisher.Mono;
 
+import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockingDetails;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * A handler method counts whether the bean's class declares it, inherits it from a superclass or gets it as an
@@ -150,6 +180,516 @@ class InheritedHandlerRegistrationTest {
         });
     }
 
+    // ------------------------------------------------------------------------------------------------------
+    // A generic handler is read against the bean's class
+    // ------------------------------------------------------------------------------------------------------
+
+    @Test
+    void an_unbounded_generic_subscription_handler_subscribes_to_the_type_the_subclass_binds() {
+        assertSubscribesTo(UnboundedSubscriptionForShipped.class, "subscriptions", "subscribe", "unbounded-subscription", AgnosticSubscriptionFilter.filter(Filter.type("Shipped")));
+    }
+
+    @Test
+    void a_generic_subscription_handler_bounded_by_a_sealed_type_subscribes_to_the_type_the_subclass_binds_only() {
+        assertSubscribesTo(BoundedSubscriptionForPlaced.class, "subscriptions", "subscribe", "bounded-subscription", AgnosticSubscriptionFilter.filter(Filter.type("Placed")));
+    }
+
+    @Test
+    void an_unbounded_generic_stream_subscription_handler_subscribes_to_the_type_the_subclass_binds() {
+        assertSubscribesTo(UnboundedStreamForShipped.class, "streamSubscriptions", "subscribe", "unbounded-stream", StreamSubscriptionFilter.filter(Filter.type("Shipped")));
+    }
+
+    @Test
+    void a_generic_stream_subscription_handler_bounded_by_a_sealed_type_subscribes_to_the_type_the_subclass_binds_only() {
+        assertSubscribesTo(BoundedStreamForPlaced.class, "streamSubscriptions", "subscribe", "bounded-stream", StreamSubscriptionFilter.filter(Filter.type("Placed")));
+    }
+
+    @Test
+    void an_unbounded_generic_synchronous_subscription_handler_subscribes_to_the_type_the_subclass_binds() {
+        assertSubscribesTo(UnboundedSynchronousForShipped.class, OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, "subscribe", "unbounded-synchronous", AgnosticSubscriptionFilter.filter(Filter.type("Shipped")));
+    }
+
+    @Test
+    void a_generic_synchronous_subscription_handler_bounded_by_a_sealed_type_subscribes_to_the_type_the_subclass_binds_only() {
+        assertSubscribesTo(BoundedSynchronousForPlaced.class, OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, "subscribe", "bounded-synchronous", AgnosticSubscriptionFilter.filter(Filter.type("Placed")));
+    }
+
+    @Test
+    void an_unbounded_generic_dcb_subscription_handler_builds_its_criteria_from_the_type_the_subclass_binds() {
+        assertSubscribesTo(UnboundedDcbForShipped.class, "dcbSubscriptions", "subscribeWithMetadata", "unbounded-dcb", DcbCriteria.types("Shipped"));
+    }
+
+    @Test
+    void a_generic_dcb_subscription_handler_bounded_by_a_sealed_type_builds_its_criteria_from_the_type_the_subclass_binds_only() {
+        assertSubscribesTo(BoundedDcbForPlaced.class, "dcbSubscriptions", "subscribeWithMetadata", "bounded-dcb", DcbCriteria.types("Placed"));
+    }
+
+    @Test
+    void a_raw_subclass_of_a_generic_handler_bounded_by_a_sealed_type_keeps_subscribing_to_the_erased_bound_and_its_permitted_subtypes() {
+        runner.withBean(RawBoundedSubscription.class, RawBoundedSubscription::new).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(argumentOf(context.getBean("subscriptions"), "subscribe", "bounded-subscription"))
+                    .isEqualTo(AgnosticSubscriptionFilter.filter(new Filter.CompositionFilter(Filter.CompositionOperator.OR, List.of(Filter.type("OrderEvent"), Filter.type("Placed"), Filter.type("Paid")))));
+        });
+    }
+
+    @Test
+    void a_raw_dcb_subclass_of_a_generic_handler_bounded_by_a_sealed_type_builds_its_criteria_from_the_bound() {
+        assertSubscribesTo(RawBoundedDcb.class, "dcbSubscriptions", "subscribeWithMetadata", "bounded-dcb", DcbCriteria.types("OrderEvent", "Placed", "Paid"));
+    }
+
+    @Test
+    void a_raw_subclass_of_an_unbounded_generic_handler_keeps_failing_startup() {
+        runner.withBean(RawUnboundedSubscription.class, RawUnboundedSubscription::new).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure())).isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("the concrete event types dispatch would accept for java.lang.Object cannot all be enumerated")
+                    .hasMessageContaining("unbounded-subscription");
+        });
+    }
+
+    private void assertSubscribesTo(Class<?> bean, String subscriptionsBean, String method, String id, Object expectedFilterOrCriteria) {
+        runner.withBean(bean).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(argumentOf(context.getBean(subscriptionsBean), method, id)).isEqualTo(expectedFilterOrCriteria);
+        });
+    }
+
+    // The filter, or for a DCB subscription the criteria, a handler was subscribed with. It is the second argument of
+    // every subscribe call the registrar makes.
+    private static Object argumentOf(Object subscriptions, String method, String id) {
+        return mockingDetails(subscriptions).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals(method) && id.equals(invocation.getRawArguments()[0]))
+                .map(invocation -> invocation.getRawArguments()[1])
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No subscription was made under id " + id));
+    }
+
+    sealed interface OrderEvent permits Placed, Paid {
+    }
+
+    record Placed() implements OrderEvent {
+    }
+
+    record Paid() implements OrderEvent {
+    }
+
+    record Shipped() {
+    }
+
+    abstract static class UnboundedSubscription<E> {
+        @Subscription(id = "unbounded-subscription", startupMode = StartupMode.BACKGROUND)
+        public void on(E event) {
+        }
+    }
+
+    static class UnboundedSubscriptionForShipped extends UnboundedSubscription<Shipped> {
+    }
+
+    @SuppressWarnings("rawtypes")
+    static class RawUnboundedSubscription extends UnboundedSubscription {
+    }
+
+    abstract static class BoundedSubscription<E extends OrderEvent> {
+        @Subscription(id = "bounded-subscription", startupMode = StartupMode.BACKGROUND)
+        public void on(E event) {
+        }
+    }
+
+    static class BoundedSubscriptionForPlaced extends BoundedSubscription<Placed> {
+    }
+
+    @SuppressWarnings("rawtypes")
+    static class RawBoundedSubscription extends BoundedSubscription {
+    }
+
+    abstract static class UnboundedStream<E> {
+        @StreamSubscription(id = "unbounded-stream", startupMode = StartupMode.BACKGROUND)
+        public void on(E event) {
+        }
+    }
+
+    static class UnboundedStreamForShipped extends UnboundedStream<Shipped> {
+    }
+
+    abstract static class BoundedStream<E extends OrderEvent> {
+        @StreamSubscription(id = "bounded-stream", startupMode = StartupMode.BACKGROUND)
+        public void on(E event) {
+        }
+    }
+
+    static class BoundedStreamForPlaced extends BoundedStream<Placed> {
+    }
+
+    abstract static class UnboundedSynchronous<E> {
+        @SynchronousSubscription(id = "unbounded-synchronous")
+        public void on(E event) {
+        }
+    }
+
+    static class UnboundedSynchronousForShipped extends UnboundedSynchronous<Shipped> {
+    }
+
+    abstract static class BoundedSynchronous<E extends OrderEvent> {
+        @SynchronousSubscription(id = "bounded-synchronous")
+        public void on(E event) {
+        }
+    }
+
+    static class BoundedSynchronousForPlaced extends BoundedSynchronous<Placed> {
+    }
+
+    abstract static class UnboundedDcb<E> {
+        @DcbSubscription(id = "unbounded-dcb", startupMode = StartupMode.BACKGROUND)
+        public void on(E event) {
+        }
+    }
+
+    static class UnboundedDcbForShipped extends UnboundedDcb<Shipped> {
+    }
+
+    abstract static class BoundedDcb<E extends OrderEvent> {
+        @DcbSubscription(id = "bounded-dcb", startupMode = StartupMode.BACKGROUND)
+        public void on(E event) {
+        }
+    }
+
+    static class BoundedDcbForPlaced extends BoundedDcb<Placed> {
+    }
+
+    @SuppressWarnings("rawtypes")
+    static class RawBoundedDcb extends BoundedDcb {
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // A handler a CGLIB proxy cannot override
+    // ------------------------------------------------------------------------------------------------------
+
+    @Test
+    void a_package_private_handler_inherited_from_another_package_is_refused_on_a_cglib_proxied_bean() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        cglibProxying(CrossPackagePackagePrivateSubscriber.class, new AtomicInteger())
+                .withBean("subscriber", CrossPackagePackagePrivateSubscriber.class, () -> new CrossPackagePackagePrivateSubscriber(bodies))
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
+                            .hasMessageContaining(CrossPackagePackagePrivateHandler.class.getName() + ".on")
+                            .hasMessageContaining("The method is package-private and declared in package org.occurrent.springboot.reactor.other")
+                            .hasMessageContaining("which subclasses " + CrossPackagePackagePrivateSubscriber.class.getName() + " in package org.occurrent.springboot.reactor");
+                });
+    }
+
+    @Test
+    void a_package_private_handler_inherited_from_another_package_registers_and_runs_on_a_bean_nothing_proxies() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", CrossPackagePackagePrivateSubscriber.class, () -> new CrossPackagePackagePrivateSubscriber(bodies)).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            anyHandlerFor(context.getBean(Subscriptions.class), "cross-package-package-private-handler").invoke(null, new CrossPackageEvent());
+
+            assertThat(bodies).containsExactly("package-private-body");
+        });
+    }
+
+    @Test
+    void a_package_private_handler_inherited_from_the_same_package_runs_through_the_advice_of_a_cglib_proxy() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        AtomicInteger adviceCalls = new AtomicInteger();
+        cglibProxying(SamePackageSubscriber.class, adviceCalls)
+                .withBean("subscriber", SamePackageSubscriber.class, () -> new SamePackageSubscriber(bodies))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+
+                    anyHandlerFor(context.getBean(Subscriptions.class), "same-package-handler").invoke(null, new TestEvent());
+
+                    assertThat(bodies).containsExactly("same-package-body");
+                    assertThat(adviceCalls).hasValue(1);
+                });
+    }
+
+    @Test
+    void a_public_handler_inherited_from_another_package_runs_through_the_advice_of_a_cglib_proxy() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        AtomicInteger adviceCalls = new AtomicInteger();
+        cglibProxying(CrossPackagePublicSubscriber.class, adviceCalls)
+                .withBean("subscriber", CrossPackagePublicSubscriber.class, () -> new CrossPackagePublicSubscriber(bodies))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+
+                    anyHandlerFor(context.getBean(Subscriptions.class), "cross-package-public-handler").invoke(null, new CrossPackageEvent());
+
+                    assertThat(bodies).containsExactly("public-body");
+                    assertThat(adviceCalls).hasValue(1);
+                });
+    }
+
+    // The proxy does not exist when the handler registers, so registration succeeds, and the guard that runs again on
+    // the object a delivery reaches is the only place left to refuse it.
+    @Test
+    void a_package_private_handler_from_another_package_wrapped_in_a_cglib_proxy_after_registration_is_refused_on_delivery() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        cglibProxying(LateCrossPackageSubscriber.class, new AtomicInteger())
+                .withBean(LateCrossPackageConfiguration.class, () -> new LateCrossPackageConfiguration(bodies))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    context.getBean("lateSubscriber");
+                    Function2<EventMetadata, Object, Mono<Void>> handler = anyHandlerFor(context.getBean(Subscriptions.class), "cross-package-package-private-handler");
+
+                    assertThatThrownBy(() -> handler.invoke(null, new CrossPackageEvent()))
+                            .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
+                            .hasMessageContaining("The method is package-private and declared in package org.occurrent.springboot.reactor.other");
+                    assertThat(bodies).isEmpty();
+                });
+    }
+
+    @Test
+    void a_final_handler_inherited_from_a_superclass_is_refused_on_a_cglib_proxied_bean() {
+        cglibProxying(FinalInheritingSubscriber.class, new AtomicInteger())
+                .withBean("subscriber", FinalInheritingSubscriber.class, FinalInheritingSubscriber::new)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
+                            .hasMessageContaining(FinalHandlerBase.class.getName() + ".on")
+                            .hasMessageContaining("The method is final");
+                });
+    }
+
+    private ApplicationContextRunner cglibProxying(Class<?> proxied, AtomicInteger adviceCalls) {
+        return runner.withBean(CglibProxyingPostProcessor.class, () -> new CglibProxyingPostProcessor(proxied, adviceCalls));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Function2<EventMetadata, Object, Mono<Void>> anyHandlerFor(Subscriptions<?> subscriptions, String id) {
+        return mockingDetails(subscriptions).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals("subscribe") && id.equals(invocation.getRawArguments()[0]))
+                .map(invocation -> (Function2<EventMetadata, Object, Mono<Void>>) invocation.getRawArguments()[invocation.getRawArguments().length - 1])
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No handler was subscribed under id " + id));
+    }
+
+    static class CglibProxyingPostProcessor implements BeanPostProcessor {
+        private final Class<?> proxied;
+        private final AtomicInteger adviceCalls;
+
+        CglibProxyingPostProcessor(Class<?> proxied, AtomicInteger adviceCalls) {
+            this.proxied = proxied;
+            this.adviceCalls = adviceCalls;
+        }
+
+        @Override
+        public Object postProcessAfterInitialization(Object bean, String beanName) {
+            if (!proxied.isInstance(bean)) {
+                return bean;
+            }
+            ProxyFactory proxyFactory = new ProxyFactory();
+            proxyFactory.setTarget(bean);
+            proxyFactory.setProxyTargetClass(true);
+            proxyFactory.addAdvice((MethodInterceptor) invocation -> {
+                adviceCalls.incrementAndGet();
+                return invocation.proceed();
+            });
+            return proxyFactory.getProxy();
+        }
+    }
+
+    static class CrossPackagePackagePrivateSubscriber extends CrossPackagePackagePrivateHandler {
+        CrossPackagePackagePrivateSubscriber(List<String> bodies) {
+            super(bodies);
+        }
+    }
+
+    static class CrossPackagePublicSubscriber extends CrossPackagePublicHandler {
+        CrossPackagePublicSubscriber(List<String> bodies) {
+            super(bodies);
+        }
+    }
+
+    abstract static class SamePackageHandlerBase {
+        final List<String> bodies;
+
+        SamePackageHandlerBase(List<String> bodies) {
+            this.bodies = bodies;
+        }
+
+        @Subscription(id = "same-package-handler", startupMode = StartupMode.BACKGROUND)
+        void on(TestEvent event) {
+            bodies.add("same-package-body");
+        }
+    }
+
+    static class SamePackageSubscriber extends SamePackageHandlerBase {
+        SamePackageSubscriber(List<String> bodies) {
+            super(bodies);
+        }
+    }
+
+    interface LateMarker {
+    }
+
+    static class LateCrossPackageSubscriber extends CrossPackagePackagePrivateHandler implements LateMarker {
+        LateCrossPackageSubscriber(List<String> bodies) {
+            super(bodies);
+        }
+    }
+
+    // Declared as the interface, so the scan cannot see the handler until the bean is built, and the bean is built
+    // after startup, once the lazy bean is asked for.
+    @Configuration(proxyBeanMethods = false)
+    static class LateCrossPackageConfiguration {
+        private final List<String> bodies;
+
+        LateCrossPackageConfiguration(List<String> bodies) {
+            this.bodies = bodies;
+        }
+
+        @Bean
+        @Lazy
+        LateMarker lateSubscriber() {
+            return new LateCrossPackageSubscriber(bodies);
+        }
+    }
+
+    abstract static class FinalHandlerBase {
+        @Subscription(id = "final-inherited-handler", startupMode = StartupMode.BACKGROUND)
+        public final void on(TestEvent event) {
+        }
+    }
+
+    static class FinalInheritingSubscriber extends FinalHandlerBase {
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // Static handlers
+    // ------------------------------------------------------------------------------------------------------
+
+    @Test
+    void a_static_handler_declared_on_a_superclass_fails_startup() {
+        runner.withBean(StaticInheritingSubscriber.class, StaticInheritingSubscriber::new).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
+                    .hasMessageContaining(StaticHandlerBase.class.getName() + ".on")
+                    .hasMessageContaining("The method is static");
+        });
+    }
+
+    @Test
+    void a_static_method_an_interface_declares_is_not_a_handler_of_the_class_implementing_it() {
+        runner.withBean(StaticInterfaceImplementingSubscriber.class, StaticInterfaceImplementingSubscriber::new).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(subscribedIds(context.getBean(Subscriptions.class))).isEmpty();
+        });
+    }
+
+    abstract static class StaticHandlerBase {
+        @Subscription(id = "static-inherited-handler", startupMode = StartupMode.BACKGROUND)
+        static void on(TestEvent event) {
+        }
+    }
+
+    static class StaticInheritingSubscriber extends StaticHandlerBase {
+    }
+
+    interface DeclaresStaticHandler {
+        @Subscription(id = "static-interface-handler", startupMode = StartupMode.BACKGROUND)
+        static void on(TestEvent event) {
+        }
+    }
+
+    static class StaticInterfaceImplementingSubscriber implements DeclaresStaticHandler {
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // One handler reached through two Method objects
+    // ------------------------------------------------------------------------------------------------------
+
+    // The startup scan reads the handler off the bean's class. A prototype built after startup is wrapped by a JDK
+    // proxy that cannot be unwrapped to a target, and the scan of that proxy finds the interface's method instead. It
+    // is the same handler, so the second scan must not register it again.
+    @Test
+    void a_handler_read_from_the_class_and_later_from_a_jdk_proxys_interface_method_registers_once() {
+        AtomicBoolean proxying = new AtomicBoolean();
+        runner.withBean(JdkProxyingPostProcessor.class, () -> new JdkProxyingPostProcessor(proxying))
+                .withUserConfiguration(PrototypeInterfaceHandlerConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    proxying.set(true);
+
+                    Object[] second = new Object[1];
+                    assertThatCode(() -> second[0] = context.getBean("prototypeHandler")).doesNotThrowAnyException();
+
+                    assertThat(Proxy.isProxyClass(second[0].getClass())).describedAs("the second instance reached the scan as a JDK proxy").isTrue();
+                    verify(context.getBean(Subscriptions.class), times(1))
+                            .subscribe(eq("proxied-interface-handler"), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
+                });
+    }
+
+    interface InterfaceHandler {
+        @Subscription(id = "proxied-interface-handler", startupMode = StartupMode.BACKGROUND)
+        void on(TestEvent event);
+    }
+
+    static class InterfaceHandlerBean implements InterfaceHandler {
+        @Override
+        public void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class PrototypeInterfaceHandlerConfiguration {
+        @Bean
+        @Scope("prototype")
+        InterfaceHandlerBean prototypeHandler() {
+            return new InterfaceHandlerBean();
+        }
+    }
+
+    // Runs before the Occurrent post processor, so the instance it hands that one is already the proxy.
+    static class JdkProxyingPostProcessor implements BeanPostProcessor, PriorityOrdered {
+        private final AtomicBoolean proxying;
+
+        JdkProxyingPostProcessor(AtomicBoolean proxying) {
+            this.proxying = proxying;
+        }
+
+        @Override
+        public Object postProcessAfterInitialization(Object bean, String beanName) {
+            if (!proxying.get() || !(bean instanceof InterfaceHandlerBean)) {
+                return bean;
+            }
+            ProxyFactory proxyFactory = new ProxyFactory();
+            proxyFactory.setInterfaces(InterfaceHandler.class);
+            proxyFactory.setTargetSource(new TargetSource() {
+                @Override
+                public Class<?> getTargetClass() {
+                    return InterfaceHandlerBean.class;
+                }
+
+                @Override
+                public boolean isStatic() {
+                    return false;
+                }
+
+                @Override
+                public Object getTarget() {
+                    return bean;
+                }
+
+                @Override
+                public void releaseTarget(Object target) {
+                }
+            });
+            return proxyFactory.getProxy();
+        }
+
+        @Override
+        public int getOrder() {
+            return HIGHEST_PRECEDENCE;
+        }
+    }
+
     private static List<String> subscribedIds(Subscriptions<?> subscriptions) {
         return mockingDetails(subscriptions).getInvocations().stream()
                 .filter(invocation -> invocation.getMethod().getName().equals("subscribe"))
@@ -175,9 +715,28 @@ class InheritedHandlerRegistrationTest {
         }
 
         @Bean
+        @Primary
         @SuppressWarnings("unchecked")
         Subscriptions<TestEvent> subscriptions() {
             return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        StreamSubscriptions<TestEvent> streamSubscriptions() {
+            return mock(StreamSubscriptions.class);
+        }
+
+        @Bean(OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> synchronousSubscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        DcbSubscriptions<TestEvent> dcbSubscriptions() {
+            return mock(DcbSubscriptions.class, Answers.RETURNS_MOCKS);
         }
 
         @Bean

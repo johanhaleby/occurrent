@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.StreamId;
 import org.occurrent.annotation.StreamVersion;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.springboot.common.other.CrossPackageMethods;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameterKind;
 import org.springframework.aop.TargetSource;
@@ -710,5 +711,384 @@ class SubscriptionAnnotationsTest {
         context.refresh();
         Class<?> type = SubscriptionAnnotations.resolveFeedBeanType(context, Void.class, "", CandidateA.class, CandidateB.class);
         assertThat(type).isNull();
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // invokeDescriptorFactory on a proxy left proxied (a TargetSource that is not a fixed singleton)
+    // ------------------------------------------------------------------------------------------------------
+
+    interface DeclaresFactory {
+        String factory();
+    }
+
+    static class ImplementsFactory implements DeclaresFactory {
+        @Override
+        public String factory() {
+            return "interface-factory-built";
+        }
+    }
+
+    static class OverridesInterfaceFactory extends ImplementsFactory {
+        @Override
+        public String factory() {
+            return "overridden-factory-built";
+        }
+    }
+
+    static class ClassOnlyFactory implements NonSingletonMarker {
+        public String factory() {
+            return "class-factory-built";
+        }
+    }
+
+    private static Object jdkProxyOverAFreshTarget(Class<?> targetClass, Class<?> proxiedInterface, AtomicInteger adviceInvocations) {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setTargetSource(new AlwaysFreshTargetSource(targetClass));
+        proxyFactory.setInterfaces(proxiedInterface);
+        proxyFactory.setProxyTargetClass(false);
+        proxyFactory.addAdvice((MethodInterceptor) invocation -> {
+            adviceInvocations.incrementAndGet();
+            return invocation.proceed();
+        });
+        return proxyFactory.getProxy();
+    }
+
+    @Test
+    void invokeDescriptorFactory_runs_an_interface_declared_factory_through_a_jdk_proxy_whose_target_source_is_not_fixed() throws Exception {
+        AtomicInteger adviceInvocations = new AtomicInteger();
+        Object proxy = jdkProxyOverAFreshTarget(ImplementsFactory.class, DeclaresFactory.class, adviceInvocations);
+
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, DeclaresFactory.class.getDeclaredMethod("factory"));
+
+        assertThat(result).isEqualTo("interface-factory-built");
+        assertThat(adviceInvocations).describedAs("the factory ran through the proxy").hasValue(1);
+    }
+
+    @Test
+    void invokeDescriptorFactory_refuses_a_factory_the_interfaces_of_a_jdk_proxy_do_not_declare() throws Exception {
+        Object proxy = jdkProxyOverAFreshTarget(ClassOnlyFactory.class, NonSingletonMarker.class, new AtomicInteger());
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Snapshot", proxy, ClassOnlyFactory.class.getDeclaredMethod("factory")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("@Snapshot factory")
+                .hasMessageContaining("the proxy does not implement " + ClassOnlyFactory.class.getName())
+                .hasMessageContaining("spring.aop.proxy-target-class=true");
+    }
+
+    @Test
+    void invokeDescriptorFactory_refuses_an_implementation_that_overrides_the_factory_the_scan_read() throws Exception {
+        Method scanned = ImplementsFactory.class.getDeclaredMethod("factory");
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Saga", new OverridesInterfaceFactory(), scanned))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("@Saga factory")
+                .hasMessageContaining(OverridesInterfaceFactory.class.getName() + " does not run the factory the scan read from " + ImplementsFactory.class.getName())
+                .hasMessageContaining("it either overrides it or does not inherit it");
+    }
+
+    static class InheritsCrossPackageMethods extends CrossPackageMethods {
+    }
+
+    private static Method crossPackagePackagePrivate() throws Exception {
+        return CrossPackageMethods.class.getDeclaredMethod("packagePrivate");
+    }
+
+    private static InheritsCrossPackageMethods cglibProxyOfInheritingBean(boolean fixedTarget) {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        if (fixedTarget) {
+            proxyFactory.setTarget(new InheritsCrossPackageMethods());
+        } else {
+            proxyFactory.setTargetSource(new AlwaysFreshTargetSource(InheritsCrossPackageMethods.class));
+        }
+        proxyFactory.setProxyTargetClass(true);
+        proxyFactory.addAdvice((MethodInterceptor) invocation -> invocation.proceed());
+        return (InheritsCrossPackageMethods) proxyFactory.getProxy();
+    }
+
+    @Test
+    void invokeDescriptorFactory_refuses_a_package_private_factory_from_another_package_on_a_cglib_proxy_left_proxied() throws Exception {
+        InheritsCrossPackageMethods proxy = cglibProxyOfInheritingBean(false);
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, crossPackagePackagePrivate()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("@Projection factory")
+                .hasMessageContaining("it is package-private and declared in " + CrossPackageMethods.class.getName())
+                .hasMessageContaining("outside the package of " + InheritsCrossPackageMethods.class.getName());
+    }
+
+    @Test
+    void invokeDescriptorFactory_runs_a_package_private_factory_from_another_package_on_a_cglib_proxy_that_is_unwrapped() throws Exception {
+        InheritsCrossPackageMethods proxy = cglibProxyOfInheritingBean(true);
+
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, crossPackagePackagePrivate());
+
+        assertThat(result).isEqualTo("package-private-ran");
+    }
+
+    @Test
+    void invokeDescriptorFactory_runs_a_package_private_factory_from_another_package_on_a_bean_nothing_proxies() throws Exception {
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", new InheritsCrossPackageMethods(), crossPackagePackagePrivate());
+
+        assertThat(result).isEqualTo("package-private-ran");
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // isPackagePrivateOutsidePackageOf
+    // ------------------------------------------------------------------------------------------------------
+
+    static class SamePackageMethods {
+        void packagePrivate() {
+        }
+    }
+
+    @Test
+    void isPackagePrivateOutsidePackageOf_is_true_for_a_package_private_method_declared_in_another_package() throws Exception {
+        assertThat(SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(crossPackagePackagePrivate(), InheritsCrossPackageMethods.class)).isTrue();
+    }
+
+    @Test
+    void isPackagePrivateOutsidePackageOf_is_false_for_a_package_private_method_declared_in_the_same_package() throws Exception {
+        assertThat(SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(SamePackageMethods.class.getDeclaredMethod("packagePrivate"), SamePackageMethods.class)).isFalse();
+    }
+
+    @Test
+    void isPackagePrivateOutsidePackageOf_is_false_for_a_public_protected_or_private_method_declared_in_another_package() throws Exception {
+        for (String name : List.of("publicMethod", "protectedMethod", "privateMethod")) {
+            assertThat(SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(CrossPackageMethods.class.getDeclaredMethod(name), InheritsCrossPackageMethods.class))
+                    .describedAs(name).isFalse();
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // returnTypeArgument (a factory's state type, read against the class that inherits the factory)
+    // ------------------------------------------------------------------------------------------------------
+
+    record Pair<A, B>(A first, B second) {
+    }
+
+    static class MyView {
+    }
+
+    static class OtherView {
+    }
+
+    static class FactoryBaseOfS<S> {
+        Pair<S, String> stateFirst() {
+            return null;
+        }
+
+        Pair<String, S> stateSecond() {
+            return null;
+        }
+    }
+
+    static class BindsMyView extends FactoryBaseOfS<MyView> {
+    }
+
+    @SuppressWarnings("rawtypes")
+    static class RawSubclass extends FactoryBaseOfS {
+    }
+
+    static class StillGeneric<T> extends FactoryBaseOfS<T> {
+    }
+
+    static class MidLevel<T> extends FactoryBaseOfS<T> {
+    }
+
+    static class LeafOfMidLevel extends MidLevel<OtherView> {
+    }
+
+    interface FactoryInterface<S> {
+        Pair<S, String> stateFirst();
+    }
+
+    static class ImplementsFactoryInterface implements FactoryInterface<MyView> {
+        @Override
+        public Pair<MyView, String> stateFirst() {
+            return null;
+        }
+    }
+
+    static class InheritsInterfaceFactory extends ImplementsFactoryInterface {
+    }
+
+    static class ShapesOfReturnTypes {
+        Pair<MyView, String> concrete() {
+            return null;
+        }
+
+        Pair<List<String>, String> parameterized() {
+            return null;
+        }
+
+        Pair<?, String> wildcard() {
+            return null;
+        }
+
+        <S extends Number> Pair<S, String> methodLevelVariable() {
+            return null;
+        }
+
+        @SuppressWarnings("rawtypes")
+        Pair raw() {
+            return null;
+        }
+
+        String notParameterized() {
+            return null;
+        }
+    }
+
+    private static Method method(Class<?> type, String name) throws Exception {
+        return type.getDeclaredMethod(name);
+    }
+
+    @Test
+    void returnTypeArgument_resolves_a_type_variable_the_implementation_binds() throws Exception {
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), BindsMyView.class, 0)).isEqualTo(MyView.class);
+    }
+
+    @Test
+    void returnTypeArgument_reads_the_requested_index() throws Exception {
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateSecond"), BindsMyView.class, 1)).isEqualTo(MyView.class);
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateSecond"), BindsMyView.class, 0)).isEqualTo(String.class);
+    }
+
+    @Test
+    void returnTypeArgument_follows_a_binding_through_an_intermediate_generic_class() throws Exception {
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), LeafOfMidLevel.class, 0)).isEqualTo(OtherView.class);
+    }
+
+    @Test
+    void returnTypeArgument_resolves_a_type_variable_of_a_generic_interface_the_implementation_binds() throws Exception {
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryInterface.class, "stateFirst"), InheritsInterfaceFactory.class, 0)).isEqualTo(MyView.class);
+    }
+
+    @Test
+    void returnTypeArgument_is_null_when_the_implementation_extends_the_generic_class_raw() throws Exception {
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), RawSubclass.class, 0)).isNull();
+    }
+
+    @Test
+    void returnTypeArgument_is_null_when_the_implementation_leaves_the_type_variable_unbound() throws Exception {
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), StillGeneric.class, 0)).isNull();
+    }
+
+    @Test
+    void returnTypeArgument_is_null_when_the_implementation_is_the_generic_class_itself() throws Exception {
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), FactoryBaseOfS.class, 0)).isNull();
+    }
+
+    @Test
+    void returnTypeArgument_is_null_for_a_type_variable_the_method_itself_declares() throws Exception {
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "methodLevelVariable"), ShapesOfReturnTypes.class, 0)).isNull();
+    }
+
+    @Test
+    void returnTypeArgument_is_null_for_a_wildcard_a_raw_return_type_a_non_generic_return_type_and_an_index_past_the_arguments() throws Exception {
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "wildcard"), ShapesOfReturnTypes.class, 0)).isNull();
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "raw"), ShapesOfReturnTypes.class, 0)).isNull();
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "notParameterized"), ShapesOfReturnTypes.class, 0)).isNull();
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "concrete"), ShapesOfReturnTypes.class, 2)).isNull();
+    }
+
+    @Test
+    void returnTypeArgument_returns_a_concrete_class_and_the_raw_class_of_a_parameterized_argument() throws Exception {
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "concrete"), ShapesOfReturnTypes.class, 0)).isEqualTo(MyView.class);
+        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "parameterized"), ShapesOfReturnTypes.class, 0)).isEqualTo(List.class);
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // analyzeParameters reading a handler's generic parameter against the implementation
+    // ------------------------------------------------------------------------------------------------------
+
+    sealed interface Event permits Placed, Paid {
+    }
+
+    record Placed() implements Event {
+    }
+
+    record Paid() implements Event {
+    }
+
+    static class UnboundedHandlerBase<E> {
+        void on(E event, EventMetadata metadata) {
+        }
+    }
+
+    static class BoundedHandlerBase<E extends Event> {
+        void on(E event, EventMetadata metadata) {
+        }
+    }
+
+    static class UnboundedForPlaced extends UnboundedHandlerBase<Placed> {
+    }
+
+    static class BoundedForPlaced extends BoundedHandlerBase<Placed> {
+    }
+
+    @SuppressWarnings("rawtypes")
+    static class RawUnbounded extends UnboundedHandlerBase {
+    }
+
+    @SuppressWarnings("rawtypes")
+    static class RawBounded extends BoundedHandlerBase {
+    }
+
+    private static Class<?> eventTypeRead(Class<?> declaring, Class<?> implementation) {
+        Method on = java.util.Arrays.stream(declaring.getDeclaredMethods()).filter(candidate -> candidate.getName().equals("on")).findFirst().orElseThrow();
+        return SubscriptionAnnotations.eventTypeOf(SubscriptionAnnotations.analyzeParameters(on, implementation, EventMetadata.class::equals, true));
+    }
+
+    @Test
+    void analyzeParameters_reads_an_inherited_generic_event_parameter_as_the_type_the_implementation_binds() {
+        assertThat(eventTypeRead(UnboundedHandlerBase.class, UnboundedForPlaced.class)).isEqualTo(Placed.class);
+        assertThat(eventTypeRead(BoundedHandlerBase.class, BoundedForPlaced.class)).isEqualTo(Placed.class);
+    }
+
+    @Test
+    void analyzeParameters_keeps_the_declared_type_for_a_generic_event_parameter_the_implementation_does_not_bind() {
+        assertThat(eventTypeRead(UnboundedHandlerBase.class, RawUnbounded.class)).isEqualTo(Object.class);
+        assertThat(eventTypeRead(BoundedHandlerBase.class, RawBounded.class)).isEqualTo(Event.class);
+    }
+
+    @Test
+    void analyzeParameters_without_an_implementation_reads_the_type_the_method_declares() {
+        Method on = java.util.Arrays.stream(BoundedHandlerBase.class.getDeclaredMethods()).filter(candidate -> candidate.getName().equals("on")).findFirst().orElseThrow();
+
+        assertThat(SubscriptionAnnotations.eventTypeOf(SubscriptionAnnotations.analyzeParameters(on, EventMetadata.class::equals, true))).isEqualTo(Event.class);
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // handlerMethods and static methods
+    // ------------------------------------------------------------------------------------------------------
+
+    interface DeclaresStaticHandler {
+        @Marked
+        static void handle(String event) {
+        }
+    }
+
+    static class ImplementsStaticHandlerInterface implements DeclaresStaticHandler {
+    }
+
+    abstract static class StaticHandlerBase {
+        @Marked
+        public static void handle(String event) {
+        }
+    }
+
+    static class InheritsStaticHandler extends StaticHandlerBase {
+    }
+
+    @Test
+    void handlerMethods_leaves_out_a_static_method_an_interface_declares() {
+        assertThat(SubscriptionAnnotations.handlerMethods(ImplementsStaticHandlerInterface.class, MARKERS)).isEmpty();
+    }
+
+    @Test
+    void handlerMethods_returns_a_static_method_a_superclass_declares_so_the_registrar_can_refuse_it() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(InheritsStaticHandler.class, MARKERS))
+                .containsExactly(StaticHandlerBase.class.getDeclaredMethod("handle", String.class));
     }
 }
