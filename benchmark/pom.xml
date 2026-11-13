@@ -30,8 +30,8 @@
     <name>${mavenProjectName}</name>
     <description>
         JMH benchmarks that reproduce the measurement setups cited in ADR 108 and PR #615, a payload-filter read
-        benchmark for the go/no-go decision on #623, and a coalescing-flush benchmark for the batch-size default in
-        #692. Dev-only: never installed as a reactor module unless the "benchmarks" profile is active, and never
+        benchmark for the go/no-go decision on #623, a coalescing-flush benchmark for the batch-size default in
+        #692, and the DCB type marker stripes of ADR 162. Dev-only: never installed as a reactor module unless the "benchmarks" profile is active, and never
         published even if it is (see maven.deploy.skip below).
     </description>
 
@@ -61,6 +61,17 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-projection-dsl-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-mongodb-native</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- ReplicaSetReadyMongoDBContainer for the DCB stripe benchmarks -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>test-support</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
