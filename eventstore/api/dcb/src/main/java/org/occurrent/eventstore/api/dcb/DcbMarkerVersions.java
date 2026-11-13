@@ -17,6 +17,7 @@
 package org.occurrent.eventstore.api.dcb;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 
 import java.util.*;
 
@@ -27,10 +28,10 @@ import static java.util.Objects.requireNonNull;
  * or an append. A snapshot of a DCB boundary saves this as its version and passes it back to
  * {@link DcbReadOptions#afterVersions(DcbMarkerVersions)} to read only the events appended after it.
  * <p>
- * A marker key is {@code tag:<tag>} for a tag and {@code type:<type>} for an event type. Each entry holds the marker's
- * epoch, its version, and the number of its increments that wrote no marker versions on their events. All three are
- * plain values, so a snapshot store can persist them as they are. Compare these versions only within the store that
- * reported them.
+ * A marker key is {@code tag:<tag>} for a tag. A key for an event type is the store's own, as {@link #criteria()} and
+ * the versions are. Each entry holds the marker's epoch, its version, and the number of its increments that wrote no
+ * marker versions on their events. All three are plain values, so a snapshot store can persist them as they are.
+ * Compare these versions only within the store that reported them.
  * <p>
  * The versions also hold the criteria they were read with, as a string, so that a read after them can refuse versions
  * from other criteria. Two criteria are the same when they hold the same alternatives in any order, as for a
@@ -44,28 +45,56 @@ import static java.util.Objects.requireNonNull;
 public record DcbMarkerVersions(String criteria, Map<String, MarkerVersion> markers) {
 
     /**
-     * The version of one marker.
+     * The version of one marker, or {@link #absent()} for a marker the store found none of.
      *
      * @param epoch     an opaque identifier of this incarnation of the marker. A marker that is removed and created again
-     *                  gets a new epoch, so versions with different epochs can't be compared.
-     * @param version   how many times appends have incremented the marker, at least 1
+     *                  gets a new epoch, so versions with different epochs can't be compared. It's {@code null} only
+     *                  for {@link #absent()}.
+     * @param version   how many times appends have incremented the marker, at least 1, or 0 for {@link #absent()}
      * @param unstamped how many of those increments wrote no marker versions on their events, from 0 up to {@code version}
      */
-    public record MarkerVersion(String epoch, long version, long unstamped) {
+    public record MarkerVersion(@Nullable String epoch, long version, long unstamped) {
+        private static final MarkerVersion ABSENT = new MarkerVersion(null, 0, 0);
+
         public MarkerVersion {
-            requireNonNull(epoch, "Epoch cannot be null");
-            if (epoch.isBlank()) {
-                throw new IllegalArgumentException("Epoch cannot be blank");
+            if (version < 0) {
+                throw new IllegalArgumentException("Version cannot be negative");
             }
-            if (version < 1) {
-                throw new IllegalArgumentException("Version must be greater than zero");
+            if (version == 0) {
+                if (epoch != null) {
+                    throw new IllegalArgumentException("A marker without a version cannot have an epoch");
+                }
+                if (unstamped != 0) {
+                    throw new IllegalArgumentException("A marker without a version cannot have an unstamped count");
+                }
+            } else {
+                requireNonNull(epoch, "Epoch cannot be null");
+                if (epoch.isBlank()) {
+                    throw new IllegalArgumentException("Epoch cannot be blank");
+                }
+                if (unstamped < 0) {
+                    throw new IllegalArgumentException("Unstamped count cannot be negative");
+                }
+                if (unstamped > version) {
+                    throw new IllegalArgumentException("Unstamped count cannot be greater than the version");
+                }
             }
-            if (unstamped < 0) {
-                throw new IllegalArgumentException("Unstamped count cannot be negative");
-            }
-            if (unstamped > version) {
-                throw new IllegalArgumentException("Unstamped count cannot be greater than the version");
-            }
+        }
+
+        /**
+         * A marker the store found none of when it read the versions. Only the marker key of an event type may hold
+         * it, since an event type's marker may not exist yet. A read after versions that holds it selects the events
+         * of that marker once it exists.
+         */
+        public static MarkerVersion absent() {
+            return ABSENT;
+        }
+
+        /**
+         * Whether this is {@link #absent()}.
+         */
+        public boolean isAbsent() {
+            return version == 0;
         }
     }
 

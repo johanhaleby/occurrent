@@ -301,6 +301,13 @@ public class OccurrentProperties {
              */
             private @Nullable TimeRepresentation timeRepresentation;
 
+            /**
+             * Whether an append increments the type marker stripe its append id picks instead of stripe 0, so appends of
+             * one type with different tags conflict about one time in eight instead of every time. Defaults to
+             * {@code false}. Turn it on only when no 0.34 node appends to or reads from the store.
+             */
+            private boolean spreadTypeMarkerWrites = false;
+
             public @Nullable String getCollection() {
                 return collection;
             }
@@ -315,6 +322,14 @@ public class OccurrentProperties {
 
             public void setTimeRepresentation(@Nullable TimeRepresentation timeRepresentation) {
                 this.timeRepresentation = timeRepresentation;
+            }
+
+            public boolean isSpreadTypeMarkerWrites() {
+                return spreadTypeMarkerWrites;
+            }
+
+            public void setSpreadTypeMarkerWrites(boolean spreadTypeMarkerWrites) {
+                this.spreadTypeMarkerWrites = spreadTypeMarkerWrites;
             }
         }
     }

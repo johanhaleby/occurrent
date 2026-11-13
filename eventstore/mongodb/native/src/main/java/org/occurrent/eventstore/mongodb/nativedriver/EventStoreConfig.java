@@ -58,6 +58,7 @@ public class EventStoreConfig {
     // opt into failing while any are left.
     private static final boolean DEFAULT_REQUIRE_REPAIRED_EVENTS = false;
     private static final boolean DEFAULT_RESUME_FROM_MARKER_VERSIONS = true;
+    private static final boolean DEFAULT_SPREAD_TYPE_MARKER_WRITES = false;
 
     public final TransactionOptions transactionOptions;
     public final TimeRepresentation timeRepresentation;
@@ -79,6 +80,9 @@ public class EventStoreConfig {
     // When false, a DCB read reports no marker versions and a read after marker versions is refused. See
     // Builder.resumeFromMarkerVersions(boolean).
     public final boolean resumeFromMarkerVersions;
+    // When true, an append increments the type marker stripe its append id picks instead of stripe 0. See
+    // Builder.spreadTypeMarkerWrites(boolean).
+    public final boolean spreadTypeMarkerWrites;
     // The bound on the read-only transaction that reports marker versions. See Builder.markerVersionsCommitTimeout(Duration).
     public final Duration markerVersionsCommitTimeout;
 
@@ -105,10 +109,10 @@ public class EventStoreConfig {
      * @see TimeRepresentation
      */
     public EventStoreConfig(TimeRepresentation timeRepresentation, @Nullable TransactionOptions transactionOptions) {
-        this(timeRepresentation, transactionOptions, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_EVENT_STORE_CAPABILITIES, new PartitionedDcbStreamIdGenerator(), DEFAULT_STREAM_POSITION_ENABLED, false, false, DEFAULT_REQUIRE_BACKFILLED_POSITION, DEFAULT_REQUIRE_REPAIRED_EVENTS, DEFAULT_RESUME_FROM_MARKER_VERSIONS, DcbMarkerVersionsDocuments.DEFAULT_MARKER_VERSIONS_COMMIT_TIMEOUT);
+        this(timeRepresentation, transactionOptions, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_EVENT_STORE_CAPABILITIES, new PartitionedDcbStreamIdGenerator(), DEFAULT_STREAM_POSITION_ENABLED, false, false, DEFAULT_REQUIRE_BACKFILLED_POSITION, DEFAULT_REQUIRE_REPAIRED_EVENTS, DEFAULT_RESUME_FROM_MARKER_VERSIONS, DEFAULT_SPREAD_TYPE_MARKER_WRITES, DcbMarkerVersionsDocuments.DEFAULT_MARKER_VERSIONS_COMMIT_TIMEOUT);
     }
 
-    private EventStoreConfig(TimeRepresentation timeRepresentation, @Nullable TransactionOptions transactionOptions, Function<FindIterable<Document>, FindIterable<Document>> queryOptions, Set<EventStoreCapability> eventStoreCapabilities, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled, boolean streamPositionExplicitlyEnabled, boolean streamPositionOptedOut, boolean requireBackfilledPosition, boolean requireRepairedEvents, boolean resumeFromMarkerVersions, Duration markerVersionsCommitTimeout) {
+    private EventStoreConfig(TimeRepresentation timeRepresentation, @Nullable TransactionOptions transactionOptions, Function<FindIterable<Document>, FindIterable<Document>> queryOptions, Set<EventStoreCapability> eventStoreCapabilities, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled, boolean streamPositionExplicitlyEnabled, boolean streamPositionOptedOut, boolean requireBackfilledPosition, boolean requireRepairedEvents, boolean resumeFromMarkerVersions, boolean spreadTypeMarkerWrites, Duration markerVersionsCommitTimeout) {
         Objects.requireNonNull(timeRepresentation, "Time representation cannot be null");
         requireNonNull(eventStoreCapabilities, "Event store capabilities cannot be null");
         if (eventStoreCapabilities.isEmpty()) {
@@ -128,6 +132,7 @@ public class EventStoreConfig {
         this.requireBackfilledPosition = requireBackfilledPosition;
         this.requireRepairedEvents = requireRepairedEvents;
         this.resumeFromMarkerVersions = resumeFromMarkerVersions;
+        this.spreadTypeMarkerWrites = spreadTypeMarkerWrites;
         this.markerVersionsCommitTimeout = DcbMarkerVersionsDocuments.requireValidCommitTimeout(markerVersionsCommitTimeout);
     }
 
@@ -142,12 +147,12 @@ public class EventStoreConfig {
     public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof EventStoreConfig that)) return false;
-        return Objects.equals(transactionOptions, that.transactionOptions) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities) && Objects.equals(dcbStreamIdGenerator, that.dcbStreamIdGenerator) && streamPositionEnabled == that.streamPositionEnabled && streamPositionExplicitlyEnabled == that.streamPositionExplicitlyEnabled && requireBackfilledPosition == that.requireBackfilledPosition && requireRepairedEvents == that.requireRepairedEvents && resumeFromMarkerVersions == that.resumeFromMarkerVersions && Objects.equals(markerVersionsCommitTimeout, that.markerVersionsCommitTimeout);
+        return Objects.equals(transactionOptions, that.transactionOptions) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities) && Objects.equals(dcbStreamIdGenerator, that.dcbStreamIdGenerator) && streamPositionEnabled == that.streamPositionEnabled && streamPositionExplicitlyEnabled == that.streamPositionExplicitlyEnabled && requireBackfilledPosition == that.requireBackfilledPosition && requireRepairedEvents == that.requireRepairedEvents && resumeFromMarkerVersions == that.resumeFromMarkerVersions && spreadTypeMarkerWrites == that.spreadTypeMarkerWrites && Objects.equals(markerVersionsCommitTimeout, that.markerVersionsCommitTimeout);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(transactionOptions, timeRepresentation, queryOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionExplicitlyEnabled, requireBackfilledPosition, requireRepairedEvents, resumeFromMarkerVersions, markerVersionsCommitTimeout);
+        return Objects.hash(transactionOptions, timeRepresentation, queryOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionExplicitlyEnabled, requireBackfilledPosition, requireRepairedEvents, resumeFromMarkerVersions, spreadTypeMarkerWrites, markerVersionsCommitTimeout);
     }
 
     @Override
@@ -163,6 +168,7 @@ public class EventStoreConfig {
                 .add("requireBackfilledPosition=" + requireBackfilledPosition)
                 .add("requireRepairedEvents=" + requireRepairedEvents)
                 .add("resumeFromMarkerVersions=" + resumeFromMarkerVersions)
+                .add("spreadTypeMarkerWrites=" + spreadTypeMarkerWrites)
                 .add("markerVersionsCommitTimeout=" + markerVersionsCommitTimeout)
                 .toString();
     }
@@ -180,6 +186,7 @@ public class EventStoreConfig {
         private boolean requireBackfilledPosition = DEFAULT_REQUIRE_BACKFILLED_POSITION;
         private boolean requireRepairedEvents = DEFAULT_REQUIRE_REPAIRED_EVENTS;
         private boolean resumeFromMarkerVersions = DEFAULT_RESUME_FROM_MARKER_VERSIONS;
+        private boolean spreadTypeMarkerWrites = DEFAULT_SPREAD_TYPE_MARKER_WRITES;
         private Duration markerVersionsCommitTimeout = DcbMarkerVersionsDocuments.DEFAULT_MARKER_VERSIONS_COMMIT_TIMEOUT;
 
         /**
@@ -364,6 +371,25 @@ public class EventStoreConfig {
         }
 
         /**
+         * Whether an append increments the stripe of each type marker that its append id picks, instead of stripe 0. That
+         * lets appends of one type with different tags commit at the same time, and they conflict only when they pick the
+         * same stripe, about one time in eight. Off by default.
+         * <p>
+         * Turn it on only when no 0.34 node appends to or reads from this store. A 0.34 node knows stripe 0 only, so a
+         * condition it checks on an event type can miss a matching event appended on another stripe, and nothing warns
+         * about it. Between 0.35 nodes the setting may differ, since every 0.35 node reads all stripes whatever its own
+         * setting, so a rolling restart that turns it on or off is safe. To go back to 0.34 after turning it on, turn it
+         * off and restart every process that appends to the store first.
+         *
+         * @return The same {@code Builder} instance.
+         */
+        @NullMarked
+        public Builder spreadTypeMarkerWrites(boolean spreadTypeMarkerWrites) {
+            this.spreadTypeMarkerWrites = spreadTypeMarkerWrites;
+            return this;
+        }
+
+        /**
          * How long the read-only transaction that reports marker versions may run and take to commit. Defaults to
          * 5 seconds. A read that doesn't commit within it reports no marker versions. The transaction never uses the
          * {@link #transactionOptions(TransactionOptions) transaction options} configured for writes.
@@ -386,7 +412,7 @@ public class EventStoreConfig {
 
         @NullMarked
         public EventStoreConfig build() {
-            return new EventStoreConfig(timeRepresentation, transactionOptions, queryOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionExplicitlyEnabled, streamPositionOptedOut, requireBackfilledPosition, requireRepairedEvents, resumeFromMarkerVersions, markerVersionsCommitTimeout);
+            return new EventStoreConfig(timeRepresentation, transactionOptions, queryOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionExplicitlyEnabled, streamPositionOptedOut, requireBackfilledPosition, requireRepairedEvents, resumeFromMarkerVersions, spreadTypeMarkerWrites, markerVersionsCommitTimeout);
         }
     }
 }

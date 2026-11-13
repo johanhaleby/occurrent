@@ -29,7 +29,8 @@ import static java.util.Objects.requireNonNull;
 /**
  * Converts {@link DcbMarkerVersions} to and from the plain values a snapshot store persists. That's a map with the field
  * {@code c}, the criteria the versions were read with, and {@code m}, a list with one map per marker key holding the
- * fields {@code k} (key), {@code e} (epoch), {@code v} (version) and {@code u} (unstamped). A list of maps is used
+ * fields {@code k} (key), {@code e} (epoch), {@code v} (version) and {@code u} (unstamped). An absent marker has no
+ * {@code e}. A list of maps is used
  * instead of one map keyed by marker key, since a marker key can contain a dot, which a MongoDB field name can't.
  */
 public final class SnapshotMarkerVersionsFields {
@@ -52,7 +53,9 @@ public final class SnapshotMarkerVersionsFields {
         markerVersions.markers().forEach((key, markerVersion) -> {
             Map<String, Object> marker = new LinkedHashMap<>();
             marker.put(KEY, key);
-            marker.put(EPOCH, markerVersion.epoch());
+            if (markerVersion.epoch() != null) {
+                marker.put(EPOCH, markerVersion.epoch());
+            }
             marker.put(VERSION, markerVersion.version());
             marker.put(UNSTAMPED, markerVersion.unstamped());
             markers.add(marker);
@@ -83,7 +86,7 @@ public final class SnapshotMarkerVersionsFields {
                 throw new IllegalArgumentException("A marker version must be a map, was " + element);
             }
             String key = (String) requireNonNull(field.get(KEY), "Marker key is missing");
-            String epoch = (String) requireNonNull(field.get(EPOCH), "Epoch is missing for marker key " + key);
+            String epoch = (String) field.get(EPOCH);
             long version = ((Number) requireNonNull(field.get(VERSION), "Version is missing for marker key " + key)).longValue();
             long unstamped = ((Number) requireNonNull(field.get(UNSTAMPED), "Unstamped count is missing for marker key " + key)).longValue();
             if (markers.put(key, new MarkerVersion(epoch, version, unstamped)) != null) {

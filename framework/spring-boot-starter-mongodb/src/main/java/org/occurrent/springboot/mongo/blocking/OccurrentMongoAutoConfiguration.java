@@ -156,7 +156,8 @@ public class OccurrentMongoAutoConfiguration<E> {
                 .eventStoreCollectionName(eventStoreProperties.resolveCollection())
                 .transactionConfig(transactionManager)
                 .timeRepresentation(eventStoreProperties.resolveTimeRepresentation())
-                .eventStoreCapabilities(eventStoreProperties.getCapabilities());
+                .eventStoreCapabilities(eventStoreProperties.getCapabilities())
+                .spreadTypeMarkerWrites(eventStoreProperties.getMongodb().isSpreadTypeMarkerWrites());
         // The property is only applied when set. true enables position explicitly (kept on even for an unpositioned
         // store), false opts a STREAM-only store out. withoutStreamPosition() is rejected with DCB, so skip it then.
         Boolean streamPosition = eventStoreProperties.getStream().getPosition();
