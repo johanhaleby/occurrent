@@ -32,11 +32,13 @@ import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
+import org.springframework.core.BridgeMethodResolver;
 import org.springframework.core.MethodIntrospector;
 import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.core.annotation.MergedAnnotation;
 import org.springframework.core.annotation.MergedAnnotations;
+import org.springframework.core.annotation.MergedAnnotations.SearchStrategy;
 import org.springframework.util.ClassUtils;
 
 import java.lang.annotation.Annotation;
@@ -327,9 +329,9 @@ public final class SubscriptionAnnotations {
      * {@code method}, which would run code the scan never read.
      * <p>
      * Two proxies are left proxied by {@link #ultimateTarget}, because their target source is not a fixed singleton.
-     * A JDK interface proxy runs the factory through the proxy when {@code method} is declared on one of the proxy's
-     * interfaces, which is the method the scan reads from such a proxy's class, and refuses any other method, since the
-     * proxy does not implement it. A CGLIB proxy passes the check above, since {@code getUserClass} of the proxy's own
+     * A JDK interface proxy runs the factory through the proxy, by the method {@link #invocableMethodOn} selects, when
+     * one of the proxy's interfaces declares the factory the scan read from the class behind it, and refuses any other
+     * method, since the proxy does not implement it. A CGLIB proxy passes the check above, since {@code getUserClass} of the proxy's own
      * class is the class it subclasses, so a factory invoked through it still runs its advice. It refuses an inherited
      * instance {@code method} the proxy cannot override, one that is private, final, or package-private and declared in
      * another package than that class, since invoking it would run the method's body on the proxy instance instead of
@@ -344,8 +346,11 @@ public final class SubscriptionAnnotations {
     public static Object invokeDescriptorFactory(String annotationName, Object bean, Method method) {
         Object target = ultimateTarget(bean);
         Class<?> declaringClass = method.getDeclaringClass();
+        Method invoked = method;
         if (java.lang.reflect.Proxy.isProxyClass(target.getClass())) {
-            if (!declaringClass.isInterface() || !declaringClass.isAssignableFrom(target.getClass())) {
+            try {
+                invoked = invocableMethodOn(target, method);
+            } catch (IllegalStateException e) {
                 throw new IllegalStateException("%s factory %s#%s cannot run because the bean is a JDK interface proxy whose target is not a fixed singleton, so it cannot be unwrapped safely, and the proxy does not implement %s, which declares the factory. Set spring.aop.proxy-target-class=true so this bean is proxied by subclassing instead of by interface, or move the factory method off the advised bean.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName()));
             }
         } else {
@@ -364,8 +369,8 @@ public final class SubscriptionAnnotations {
             }
         }
         try {
-            method.setAccessible(true);
-            Object result = method.invoke(target);
+            invoked.setAccessible(true);
+            Object result = invoked.invoke(target);
             if (result == null) {
                 throw new IllegalStateException("%s factory %s#%s returned null.".formatted(annotationName, target.getClass().getName(), method.getName()));
             }
@@ -450,51 +455,61 @@ public final class SubscriptionAnnotations {
 
     /**
      * The class whose code runs when a handler or factory is invoked on {@code bean}: the user class,
-     * {@link ClassUtils#getUserClass}, of {@link #ultimateTarget}. A proxy whose target source is not a fixed singleton
-     * is not unwrapped, so a JDK interface proxy like that answers with its own class.
+     * {@link ClassUtils#getUserClass}, of the target class {@link AopProxyUtils#ultimateTargetClass} reads from
+     * {@link #ultimateTarget}. A proxy whose target source is not a fixed singleton is not unwrapped, but its target
+     * source names the class it hands out, so a JDK interface proxy like that answers with its target's class rather
+     * than its own. Both annotation post-processors scan this class, and handler and factory generics are read
+     * against it, so the two agree on one {@link Method} per handler.
      *
      * @param bean the (possibly proxied) bean
-     * @return the class a handler's or factory's generic types are read against
+     * @return the class a bean is scanned for handlers in, and a handler's or factory's generic types are read against
      */
     public static Class<?> implementationClassOf(Object bean) {
-        return ClassUtils.getUserClass(ultimateTarget(bean).getClass());
+        // ultimateTargetClass answers with the proxy's own class when the target source names no target class, so
+        // such a bean still scans the proxy class and its handlers are keyed by the interface method
+        return ClassUtils.getUserClass(AopProxyUtils.ultimateTargetClass(ultimateTarget(bean)));
     }
 
     /**
-     * The keys a post-processor records a registered handler under, so a later scan of the same bean skips it. Two
-     * scans can read one handler as different {@link Method}s, the method of the bean's class and the method of a JDK
-     * proxy's interface. When the handler overrides a generic interface method, such as {@code on(Placed)} for
-     * {@code on(E)}, the two have different parameter types, so a key from the signature alone misses the second.
-     * <p>
-     * The first key is the signature, bean name, method name and parameter types, with the declaring class added for
-     * a private or package-private method. Neither overrides a method of the same signature in a superclass when the
-     * method is private or the two classes are in different packages, so those are two handlers. The second key is
-     * the signature of the method the annotation is declared on, with its declaring class, which both scans of a
-     * handler annotated on a generic interface method resolve to. A handler is already registered when either key is.
+     * The method to invoke on {@code bean} to run {@code method}, the one {@link AopUtils#selectInvocableMethod} selects
+     * for {@code bean}'s class. A JDK interface proxy implements only its interfaces, and the scan reads the class
+     * behind it, so when the scanned method overrides a generic interface method, such as {@code on(Placed)} for
+     * {@code on(E)}, no interface declares the scanned signature and the selection fails. The interface method that
+     * the class behind the proxy implements with {@code method} is returned instead, so the call still goes through
+     * the proxy and its advice.
      *
-     * @param beanName    the name of the bean the handler belongs to
-     * @param method      the handler method a scan found
-     * @param annotations the handler annotations the scan looks for
-     * @return the signature key, then the key of the annotated declaration
+     * @param bean   the (possibly proxied) object the method is about to be invoked on
+     * @param method the method the scan read
+     * @return the method to invoke on {@code bean}
+     * @throws IllegalStateException when {@code bean} has no method that runs {@code method}
      */
-    public static List<String> handlerKeys(String beanName, Method method, List<Class<? extends Annotation>> annotations) {
-        int modifiers = method.getModifiers();
-        String owner = Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers) ? "" : method.getDeclaringClass().getName() + '#';
-        String signature = beanName + '#' + owner + method.getName() + Arrays.toString(method.getParameterTypes());
-        Method declaration = annotatedDeclaration(method, annotations);
-        String annotated = beanName + "#@" + declaration.getDeclaringClass().getName() + '#' + declaration.getName() + Arrays.toString(declaration.getParameterTypes());
-        return List.of(signature, annotated);
+    public static Method invocableMethodOn(Object bean, Method method) {
+        try {
+            return AopUtils.selectInvocableMethod(method, bean.getClass());
+        } catch (IllegalStateException e) {
+            Method interfaceMethod = proxyInterfaceMethodRunning(bean, method);
+            if (interfaceMethod == null) {
+                throw e;
+            }
+            return interfaceMethod;
+        }
     }
 
-    private static Method annotatedDeclaration(Method method, List<Class<? extends Annotation>> annotations) {
-        MergedAnnotations merged = MergedAnnotations.from(method, MergedAnnotations.SearchStrategy.TYPE_HIERARCHY);
-        for (Class<? extends Annotation> annotation : annotations) {
-            MergedAnnotation<? extends Annotation> found = merged.get(annotation);
-            if (found.isPresent() && found.getSource() instanceof Method declaration) {
-                return declaration;
+    private static @Nullable Method proxyInterfaceMethodRunning(Object bean, Method method) {
+        if (!java.lang.reflect.Proxy.isProxyClass(bean.getClass())) {
+            return null;
+        }
+        Class<?> implementation = implementationClassOf(bean);
+        for (Class<?> proxiedInterface : bean.getClass().getInterfaces()) {
+            for (Method interfaceMethod : proxiedInterface.getMethods()) {
+                if (!Modifier.isStatic(interfaceMethod.getModifiers()) && interfaceMethod.getName().equals(method.getName())
+                        && interfaceMethod.getParameterCount() == method.getParameterCount()
+                        && AopUtils.getMostSpecificMethod(interfaceMethod, implementation).equals(method)) {
+                    return interfaceMethod;
+                }
             }
         }
-        return method;
+        return null;
     }
 
     /**
@@ -559,14 +574,18 @@ public final class SubscriptionAnnotations {
      * declared one does.
      * Each method is the one {@code type} actually runs, so an override is found once, under its own annotation if it
      * repeats one and under the overridden method's if it doesn't. Bridge methods are left out, so a generic handler
-     * is found once too. A static method an interface declares is left out, since a class does not inherit it. A
-     * static method a superclass declares is returned like any other, so a static subscription handler there is
+     * is found once too. A method that does not override the method its annotation is declared on is refused with an
+     * {@link IllegalStateException}. That is a method of the same signature as a package-private one a superclass in
+     * another package declares, which Spring's annotation search reads the superclass method's annotation for, so
+     * nothing says which of the two bodies the handler is. A static method an interface declares is left out, since a
+     * class does not inherit it. A static method a superclass declares is returned like any other, so a static subscription handler there is
      * refused the way one the class declares is. Both annotation post-processors call this, so they find the same
      * methods.
      *
      * @param type            the concrete class the scan reads
-     * @param annotationTypes the handler annotations to look for, searched with {@link AnnotationUtils#findAnnotation(Method, Class)}
+     * @param annotationTypes the handler annotations to look for, searched with {@link SearchStrategy#TYPE_HIERARCHY}
      * @return the matching methods, empty if there are none
+     * @throws IllegalStateException when a method has an annotation Spring reads from a method it does not override
      */
     public static Set<Method> handlerMethods(Class<?> type, List<Class<? extends Annotation>> annotationTypes) {
         if (!AnnotationUtils.isCandidateClass(type, annotationTypes)) {
@@ -576,8 +595,35 @@ public final class SubscriptionAnnotations {
             if (Modifier.isStatic(method.getModifiers()) && method.getDeclaringClass().isInterface()) {
                 return null;
             }
-            return annotationTypes.stream().anyMatch(annotationType -> AnnotationUtils.findAnnotation(method, annotationType) != null) ? Boolean.TRUE : null;
+            MergedAnnotations annotations = MergedAnnotations.from(method, SearchStrategy.TYPE_HIERARCHY);
+            boolean annotated = false;
+            for (Class<? extends Annotation> annotationType : annotationTypes) {
+                MergedAnnotation<? extends Annotation> annotation = annotations.get(annotationType);
+                if (!annotation.isPresent()) {
+                    continue;
+                }
+                // MethodIntrospector can hand over a bridge method and keeps the method it bridges instead, so that is the
+                // method the annotated declaration has to resolve to
+                if (annotation.getSource() instanceof Method declaration && !AopUtils.getMostSpecificMethod(declaration, type).equals(BridgeMethodResolver.findBridgedMethod(method))) {
+                    throw annotationFromAMethodNotOverridden(method, declaration, annotation);
+                }
+                annotated = true;
+            }
+            return annotated ? Boolean.TRUE : null;
         }).keySet();
+    }
+
+    private static IllegalStateException annotationFromAMethodNotOverridden(Method method, Method declaration, MergedAnnotation<? extends Annotation> annotation) {
+        String annotationName = "@" + annotation.getType().getSimpleName();
+        String handler = annotation.getValue("id", String.class).map(id -> "%s with id \"%s\"".formatted(annotationName, id)).orElse(annotationName);
+        return new IllegalStateException(("Method %s does not override %s, which declares %s, but Spring's annotation search finds the annotation on both, so which body is the handler is ambiguous. "
+                + "Make %s protected or public so %s overrides it and runs as the handler, or rename %s to keep %s as the handler.").formatted(
+                signatureOf(method), signatureOf(declaration), handler, signatureOf(declaration), signatureOf(method), signatureOf(method), signatureOf(declaration)));
+    }
+
+    private static String signatureOf(Method method) {
+        return method.getDeclaringClass().getName() + '#' + method.getName()
+                + Arrays.stream(method.getParameterTypes()).map(Class::getSimpleName).collect(Collectors.joining(", ", "(", ")"));
     }
 
     /**

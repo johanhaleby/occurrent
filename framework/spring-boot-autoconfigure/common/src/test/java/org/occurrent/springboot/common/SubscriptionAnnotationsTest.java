@@ -22,7 +22,10 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.StreamId;
 import org.occurrent.annotation.StreamVersion;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.annotation.Subscription;
+import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.other.CrossPackageMethods;
+import org.occurrent.springboot.common.other.CrossPackageSubscriptionBase;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameterKind;
 import org.springframework.aop.TargetSource;
@@ -37,6 +40,7 @@ import java.lang.annotation.Target;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.*;
@@ -919,7 +923,7 @@ class SubscriptionAnnotationsTest {
     }
 
     // ------------------------------------------------------------------------------------------------------
-    // handlerKeys
+    // HandlerMethod
     // ------------------------------------------------------------------------------------------------------
 
     interface GenericHandler<E> {
@@ -955,30 +959,86 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void handlerKeys_gives_the_class_and_interface_methods_of_a_generic_handler_the_same_second_key() throws Exception {
-        List<String> fromClass = SubscriptionAnnotations.handlerKeys("bean", GenericHandlerBean.class.getDeclaredMethod("on", String.class), MARKERS);
-        List<String> fromInterface = SubscriptionAnnotations.handlerKeys("bean", GenericHandler.class.getDeclaredMethod("on", Object.class), MARKERS);
+    void handlerMethod_gives_the_class_method_of_a_generic_handler_and_the_interface_method_of_a_jdk_proxy_in_front_of_it_the_same_signature() throws Exception {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setTargetSource(new AlwaysFreshTargetSource(GenericHandlerBean.class));
+        proxyFactory.setInterfaces(GenericHandler.class);
+        proxyFactory.setProxyTargetClass(false);
+        Object proxy = proxyFactory.getProxy();
+        Class<?> scanned = SubscriptionAnnotations.implementationClassOf(proxy);
+        assertThat(scanned).describedAs("the class behind the proxy, never the proxy's own").isEqualTo(GenericHandlerBean.class);
 
-        assertThat(fromClass.get(1)).isEqualTo(fromInterface.get(1));
-        assertThat(fromClass.get(0)).describedAs("the signature keys differ, which is the bug the second key covers").isNotEqualTo(fromInterface.get(0));
+        Method fromTheProxy = SubscriptionAnnotations.handlerMethods(scanned, MARKERS).iterator().next();
+        Method interfaceMethod = GenericHandler.class.getDeclaredMethod("on", Object.class);
+
+        assertThat(HandlerMethod.in(scanned, fromTheProxy).signature())
+                .isEqualTo(HandlerMethod.in(GenericHandlerBean.class, GenericHandlerBean.class.getDeclaredMethod("on", String.class)).signature());
+        assertThat(HandlerMethod.in(scanned, interfaceMethod).signature())
+                .describedAs("the interface method alone would be a second handler, which is why the proxy's class is never scanned")
+                .isNotEqualTo(HandlerMethod.in(scanned, fromTheProxy).signature());
     }
 
     @Test
-    void handlerKeys_gives_a_private_method_and_the_private_method_of_its_subclass_distinct_keys() throws Exception {
-        List<String> base = SubscriptionAnnotations.handlerKeys("bean", PrivateHandlerBase.class.getDeclaredMethod("handle", String.class), MARKERS);
-        List<String> subclass = SubscriptionAnnotations.handlerKeys("bean", PrivateHandlerSubclass.class.getDeclaredMethod("handle", String.class), MARKERS);
+    void handlerMethod_gives_a_private_method_and_the_private_method_of_its_subclass_distinct_signatures() {
+        Set<Method> scanned = SubscriptionAnnotations.handlerMethods(PrivateHandlerSubclass.class, MARKERS);
 
-        assertThat(base.get(0)).isNotEqualTo(subclass.get(0));
-        assertThat(base.get(1)).isNotEqualTo(subclass.get(1));
+        assertThat(scanned).hasSize(2);
+        assertThat(scanned.stream().map(method -> HandlerMethod.in(PrivateHandlerSubclass.class, method).signature()).distinct()).hasSize(2);
     }
 
     @Test
-    void handlerKeys_gives_a_cross_package_package_private_method_and_its_subclass_method_distinct_keys() throws Exception {
-        List<String> base = SubscriptionAnnotations.handlerKeys("bean", CrossPackageMethods.class.getDeclaredMethod("packagePrivate"), MARKERS);
-        List<String> subclass = SubscriptionAnnotations.handlerKeys("bean", PackagePrivateSubclassOfOtherPackage.class.getDeclaredMethod("packagePrivate"), MARKERS);
+    void handlerMethod_gives_a_cross_package_package_private_method_and_its_subclasss_method_distinct_signatures() throws Exception {
+        HandlerMethod base = HandlerMethod.in(PackagePrivateSubclassOfOtherPackage.class, crossPackagePackagePrivate());
+        HandlerMethod subclass = HandlerMethod.in(PackagePrivateSubclassOfOtherPackage.class, PackagePrivateSubclassOfOtherPackage.class.getDeclaredMethod("packagePrivate"));
 
-        assertThat(base.get(0)).isNotEqualTo(subclass.get(0));
-        assertThat(base.get(1)).isNotEqualTo(subclass.get(1));
+        assertThat(base.signature()).isNotEqualTo(subclass.signature());
+    }
+
+    @Test
+    void handlerMethod_leaves_the_declaring_class_out_of_the_signature_of_an_inherited_public_or_protected_method() throws Exception {
+        HandlerMethod publicMethod = HandlerMethod.in(InheritsCrossPackageMethods.class, CrossPackageMethods.class.getDeclaredMethod("publicMethod"));
+        HandlerMethod protectedMethod = HandlerMethod.in(InheritsCrossPackageMethods.class, CrossPackageMethods.class.getDeclaredMethod("protectedMethod"));
+
+        assertThat(publicMethod.signature()).isEqualTo("publicMethod[]").doesNotContain(CrossPackageMethods.class.getName());
+        assertThat(protectedMethod.signature()).isEqualTo("protectedMethod[]").doesNotContain(CrossPackageMethods.class.getName());
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // handlerMethods refuses a method whose annotation Spring reads from a method it does not override
+    // ------------------------------------------------------------------------------------------------------
+
+    static class ShadowsPackagePrivateHandler extends CrossPackageSubscriptionBase {
+        @SuppressWarnings("unused")
+        void on(String event) {
+        }
+    }
+
+    static class RepeatsAnnotationOnShadowingMethod extends CrossPackageSubscriptionBase {
+        @Subscription(id = "own")
+        @SuppressWarnings("unused")
+        void on(String event) {
+        }
+    }
+
+    @Test
+    void handlerMethods_refuses_an_unannotated_method_shadowing_a_package_private_handler_in_another_package_naming_both_methods_the_id_and_both_fixes() {
+        String shadowing = ShadowsPackagePrivateHandler.class.getName() + "#on(String)";
+        String shadowed = CrossPackageSubscriptionBase.class.getName() + "#on(String)";
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(ShadowsPackagePrivateHandler.class, List.of(Subscription.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Method " + shadowing + " does not override " + shadowed)
+                .hasMessageContaining("@Subscription with id \"h\"")
+                .hasMessageContaining("Make " + shadowed + " protected or public")
+                .hasMessageContaining("or rename " + shadowing);
+    }
+
+    @Test
+    void handlerMethods_accepts_a_method_that_repeats_the_annotation_of_a_package_private_handler_in_another_package() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(RepeatsAnnotationOnShadowingMethod.class, List.of(Subscription.class)))
+                .containsExactlyInAnyOrder(
+                        RepeatsAnnotationOnShadowingMethod.class.getDeclaredMethod("on", String.class),
+                        CrossPackageSubscriptionBase.class.getDeclaredMethod("on", String.class));
     }
 
     // ------------------------------------------------------------------------------------------------------

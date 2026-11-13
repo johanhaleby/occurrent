@@ -50,6 +50,9 @@ method as the one the bean's class actually runs:
   annotation.
 - An override that repeats the annotation is one handler under its own annotation.
 - Bridge methods are left out, so a generic handler is one handler.
+- A method that only shares its name and parameters with an annotated method it doesn't override is refused at
+  startup. That happens when the annotated method is package-private and a superclass in another package declares it,
+  since Spring's annotation search ignores packages and gives the subclass's method that annotation.
 - A static method an interface declares is left out, since a class doesn't inherit it. A static method a superclass
   declares is a handler, and it's refused the way a static method the bean's class declares is.
 
@@ -58,11 +61,14 @@ So `on(E event)` on `Base<E>` subscribes to `Placed` on a class that extends `Ba
 `E` a type, as a raw `extends Base` doesn't, a handler gets the erasure of `E` as before, and a factory whose state type
 is a type variable fails at startup with the error it gave before.
 
-The key that tells whether a handler is already registered is the bean name, the method name and the parameter types.
-For a private method it also has the declaring class, since a private method on the bean's class and a private method
-of the same signature on a superclass are two handlers, and neither overrides the other. A later pass of the scan finds
-the same key and skips the handler, also when one pass reads a JDK proxy's class and finds the interface's method and
-another reads the bean's class and finds the class's own.
+The scan reads the class whose code runs, never a proxy's class, so a bean behind a JDK interface proxy is scanned
+through the proxy's target class. The key that tells whether a handler is already registered is the bean name, the method's
+name and its parameter types, as in 0.34.0. When the method is private or package-private and a superclass declares
+it, the key also has that superclass. So a private method on the bean's class and a private method of the same
+signature on a superclass get two keys, and they register as two handlers. A later pass of the scan over the same bean
+finds the same keys and skips those handlers. A handler found on the target class runs through the proxy, so
+advice such as `@Transactional` still applies. When the proxy doesn't have that method, because the class overrides a
+generic interface method with a concrete parameter type, the handler runs through the interface method it overrides.
 
 `invokeDescriptorFactory` runs a factory method that the bean's class declares or inherits unchanged. It refuses a bean
 whose class overrides the method, since that runs code the scan didn't read. Two proxies can't be unwrapped to their
@@ -114,6 +120,11 @@ I rejected three smaller changes:
 - A handler declared with a type variable on a superclass subscribes to the type the bean's class gives the variable.
 - An application with a class that overrides a generic handler with a concrete parameter type starts, and the handler
   registers once.
+- A method that shares its name and parameters with a package-private annotated method of a superclass in another
+  package ran under that method's annotation in 0.34.0, though it doesn't override it. Now the application fails at
+  startup. Running the annotated method instead would swap one handler body for another, and a user who missed the
+  upgrade guide would get no signal of it. Making the superclass method protected or public lets the subclass's
+  method override it, which keeps the 0.34.0 handler. Renaming the subclass's method runs the superclass method.
 - There is no OpenRewrite recipe, because nothing in the code says whether an inherited handler was meant to run. The
   code compiles unchanged. [The upgrade guide](../../migration/upgrading-to-0.35.0.md#a-handler-method-the-bean-inherits-is-registered)
   says who is affected and what to do.

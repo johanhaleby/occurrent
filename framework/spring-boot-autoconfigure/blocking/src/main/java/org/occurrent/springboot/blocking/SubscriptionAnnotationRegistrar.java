@@ -30,11 +30,11 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
-import org.springframework.aop.support.AopUtils;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
@@ -105,7 +105,7 @@ class SubscriptionAnnotationRegistrar {
         requireImplementationOf(method, bean);
         Method invocableMethod;
         try {
-            invocableMethod = AopUtils.selectInvocableMethod(method, bean.getClass());
+            invocableMethod = SubscriptionAnnotations.invocableMethodOn(bean, method);
         } catch (IllegalStateException e) {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The proxy does not implement it. Either the method is private, so a CGLIB proxy cannot override it, or the bean is a JDK interface proxy implementing none of the interfaces the method is declared on. Make the method non-private, expose it on an interface, or set spring.aop.proxy-target-class=true so a CGLIB proxy is used instead.");
@@ -171,7 +171,7 @@ class SubscriptionAnnotationRegistrar {
             requireImplementationOf(declaredMethod, target);
             Method method;
             try {
-                method = AopUtils.selectInvocableMethod(declaredMethod, targetClass);
+                method = SubscriptionAnnotations.invocableMethodOn(target, declaredMethod);
             } catch (IllegalStateException e) {
                 throw new SubscriptionHandlerNotInvocableException(declaredMethod,
                         "The proxy does not implement it. Either the method is private, so a CGLIB proxy cannot override it, or the bean is a JDK interface proxy implementing none of the interfaces the method is declared on. Make the method non-private, expose it on an interface, or set spring.aop.proxy-target-class=true so a CGLIB proxy is used instead.");
@@ -203,9 +203,9 @@ class SubscriptionAnnotationRegistrar {
     // A replay on its own thread can still deliver before creation finishes, which is the race the coordinator and
     // ADR 127 both describe. It also matches what WAIT_UNTIL_STARTED means, which is finishing before the
     // application is up, and the application is already up by the time a lazily built bean is asked for.
-    void registerSubscriptions(Object bean, List<Method> methods, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
-                               Predicate<Method> reserveHandler, Consumer<String> claimId,
-                               Consumer<Method> releaseHandler, Consumer<String> releaseId) {
+    void registerSubscriptions(Object bean, List<HandlerMethod> handlers, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
+                               Predicate<HandlerMethod> reserveHandler, Consumer<String> claimId,
+                               Consumer<HandlerMethod> releaseHandler, Consumer<String> releaseId) {
         // Tracked apart, because a call can hold a handler reservation without holding the id. claimId throws when
         // the id belongs to another registration, and at that moment this call has reserved the handler and
         // acquired nothing else, so releasing the id here would hand away what that other registration owns and
@@ -214,10 +214,10 @@ class SubscriptionAnnotationRegistrar {
         List<PendingRegistration> claimedIds = new ArrayList<>();
         List<ResolvedRegistration> resolved = new ArrayList<>();
         try {
-            claimAndResolve(bean, methods, handlerTarget, mayBlockForReplay, reserveHandler, claimId, resolved, reservedHandlers, claimedIds);
+            claimAndResolve(bean, handlers, handlerTarget, mayBlockForReplay, reserveHandler, claimId, resolved, reservedHandlers, claimedIds);
         } catch (RuntimeException | Error e) {
             claimedIds.forEach(h -> releaseId.accept(h.id()));
-            reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
+            reservedHandlers.forEach(h -> releaseHandler.accept(h.handler()));
             throw e;
         }
         for (ResolvedRegistration registration : resolved) {
@@ -225,7 +225,7 @@ class SubscriptionAnnotationRegistrar {
                 registration.subscribe().run();
             } catch (RuntimeException | Error e) {
                 claimedIds.forEach(h -> releaseId.accept(h.id()));
-                reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
+                reservedHandlers.forEach(h -> releaseHandler.accept(h.handler()));
                 throw e;
             }
             claimedIds.remove(registration.claim());
@@ -240,10 +240,11 @@ class SubscriptionAnnotationRegistrar {
     // stays outside this is a failure from subscribe itself, a store refusing for example. Undoing that would mean
     // cancelling the subscriptions already started, and cancelling one deletes its stored checkpoint, so a
     // subscription that had resumed from an existing checkpoint would lose it.
-    private void claimAndResolve(Object bean, List<Method> methods, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
-                                 Predicate<Method> reserveHandler, Consumer<String> claimId, List<ResolvedRegistration> resolved,
+    private void claimAndResolve(Object bean, List<HandlerMethod> handlers, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
+                                 Predicate<HandlerMethod> reserveHandler, Consumer<String> claimId, List<ResolvedRegistration> resolved,
                                  List<PendingRegistration> reservedHandlers, List<PendingRegistration> claimedIds) {
-        for (Method method : methods) {
+        for (HandlerMethod handler : handlers) {
+            Method method = handler.method();
             StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
             DcbSubscription dcbSubscription = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
@@ -255,7 +256,7 @@ class SubscriptionAnnotationRegistrar {
             // Reserving is a single atomic add rather than a check followed by an add, so two threads building
             // the same prototype cannot both find the handler free. The one that loses the reservation skips it
             // instead of going on to the id claim and failing its bean's creation as a duplicate.
-            if (annotationCount == 0 || !reserveHandler.test(method)) {
+            if (annotationCount == 0 || !reserveHandler.test(handler)) {
                 continue;
             }
             // The id comes from the annotation this loop actually read, never from one a caller resolved earlier
@@ -265,7 +266,7 @@ class SubscriptionAnnotationRegistrar {
                     : subscription != null ? subscription.id()
                     : dcbSubscription != null ? dcbSubscription.id()
                     : synchronousSubscription.id();
-            PendingRegistration reserved = new PendingRegistration(method, id);
+            PendingRegistration reserved = new PendingRegistration(handler, id);
             reservedHandlers.add(reserved);
             claimId.accept(id);
             claimedIds.add(reserved);
@@ -283,7 +284,7 @@ class SubscriptionAnnotationRegistrar {
         }
     }
 
-    private record PendingRegistration(Method method, String id) {
+    private record PendingRegistration(HandlerMethod handler, String id) {
     }
 
     private record ResolvedRegistration(PendingRegistration claim, Runnable subscribe) {

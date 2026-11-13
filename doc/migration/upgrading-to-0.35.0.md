@@ -164,8 +164,9 @@ other sections compile fine and behave differently, so read them first.
   method that a bean's class inherits from a superclass, or gets as an interface default method, starts running, and
   replays the history on its first start when its `startAt` or `source = PUSH` asks for that. The application fails
   at startup when two beans run one annotated method, for example a bean of the class that declares it and a bean of
-  a subclass, or when a bean behind a CGLIB proxy inherits a final one.
-  Compiles unchanged.
+  a subclass, or when a bean behind a CGLIB proxy inherits a final one. A method that shares its name and parameters
+  with a package-private annotated method in another package fails at startup instead of running in that method's
+  place. Compiles unchanged.
 
 ### Brokers
 
@@ -2094,6 +2095,8 @@ Applications on either starter with one of these:
 - a bean whose class implements an interface with an annotated default method and doesn't override it
 - two or more beans that run one annotated method without overriding it, either two subclasses of the class that
   declares it, or that class and a subclass, each a bean
+- a bean whose class declares a method with the same name and parameters as a package-private annotated method that a
+  superclass in another package declares
 
 ### What changes
 
@@ -2125,6 +2128,12 @@ Applications on either starter with one of these:
   extends `Base<String>` and overrides `on(E event)`, failed at startup with `DuplicateSubscriptionIdException`. The
   scan also found the bridge method `on(Object)` that the compiler adds, under the same id. The handler now registers
   once.
+- A package-private method doesn't override a method of a superclass in another package, even with the same name and
+  parameters, but both starters treated it as if it did. Say `Base` in package `a` declares a package-private
+  `@Subscription(id = "h") void on(Placed event)`, and `Sub` in package `b` extends it and declares
+  `void on(Placed event)` with no annotation. A `Sub` bean ran `Sub.on` under id `h`. The application now fails at
+  startup, and the error names both methods. A `@Projection`, `@Snapshot` or `@Saga` factory method changes the same
+  way.
 
 ### What to do
 
@@ -2140,6 +2149,10 @@ methods. For each one a bean inherits without overriding it:
   it running everywhere.
 - If it's static, make it an instance method. If the bean is behind a CGLIB proxy and the method is private, final,
   or package-private in another package, make it public or protected and not final. In Kotlin, mark it `open`.
+- If it's package-private and a subclass in another package declares a method with the same name and parameters, the
+  application fails at startup. To keep the subclass's method as the handler, which is what ran before, make the
+  superclass method protected or public, so the subclass's method overrides it. To run the superclass method instead,
+  rename the subclass's method.
 - If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
   A bean of the class that declares it keeps the original id.
 

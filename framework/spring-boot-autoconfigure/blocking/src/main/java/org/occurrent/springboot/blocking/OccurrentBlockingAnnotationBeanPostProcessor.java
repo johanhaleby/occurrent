@@ -24,6 +24,8 @@ import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.HandlerMethod;
+import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.beans.BeansException;
@@ -91,7 +93,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // serialises other singleton creation at the Spring level, so the two threads the hazard needs never overlap.
     // LateRegistrationConcurrencyContractTest asserts the types instead, which catches the way this realistically
     // regresses rather than the hazard itself.
-    private final Set<String> registeredHandlers = ConcurrentHashMap.newKeySet();
+    private final RegisteredHandlers registeredHandlers = new RegisteredHandlers();
     private final Object registrationLock = new Object();
     // A bean another thread finishes while the startup scan is still running is recorded here, because the scan
     // may already have passed its name and the callback that finished it may see startupScanComplete as false and
@@ -172,7 +174,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         // Only a FactoryBean's product is recorded here. Every other bean was recorded by the callback above, from
         // the instance before any proxy wrapped it, and overwriting that with what arrives here would record a
-        // proxy class for a proxy ultimateTarget cannot unwrap. A product is what reaches this
+        // proxy class for a proxy whose target source names no target class. A product is what reaches this
         // callback without reaching that one, since the container passes the factory itself under this name there.
         //
         // containsBeanDefinition first, because not everything that reaches this callback is a bean. Spring's test
@@ -200,7 +202,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     private static Class<?> userClassOf(Object bean) {
-        return ClassUtils.getUserClass(SubscriptionAnnotations.ultimateTarget(bean).getClass());
+        return SubscriptionAnnotations.implementationClassOf(bean);
     }
 
     // @Projection factory methods, and @Subscription, @StreamSubscription, @DcbSubscription and
@@ -302,7 +304,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // The subscription handler methods this pass read and validated, per bean, and the only methods the
         // registration below registers. Iteration order of getBeanDefinitionNames() is deterministic, so a
         // LinkedHashMap keeps registration order reproducible across runs.
-        Map<String, List<Method>> subscriptionMethods = new LinkedHashMap<>();
+        Map<String, List<HandlerMethod>> subscriptionMethods = new LinkedHashMap<>();
         // Beans whose class is only predicted and whose prediction shows an annotation. Built at the end of this
         // pass so the next one can read their real class.
         Set<String> beansToBuild = new LinkedHashSet<>();
@@ -328,14 +330,15 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 continue;
             }
             for (Method method : SubscriptionAnnotations.handlerMethods(type, HANDLER_ANNOTATIONS)) {
-                if (isAlreadyRegistered(beanName, method)) {
+                HandlerMethod handler = HandlerMethod.in(type, method);
+                if (registeredHandlers.isRegistered(beanName, handler)) {
                     continue;
                 }
-                collectSubscriptionMethod(beanName, method, idsToCheck, subscriptionMethods);
+                collectSubscriptionMethod(beanName, handler, idsToCheck, subscriptionMethods);
                 refuseMoreThanOneHandlerAnnotation(type, method);
                 org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
                 if (projection != null) {
-                    projectionMethods.add(new Object[]{beanName, method, projection});
+                    projectionMethods.add(new Object[]{beanName, handler, projection});
                     if (projection.mode() != org.occurrent.annotation.Mode.SYNCHRONOUS && checkpointsWhenPush(projection.source(), projection.catchup())
                             && !isDomainEventFeedFed(projection)) {
                         idsToCheck.add(projection.id());
@@ -343,14 +346,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
                 org.occurrent.annotation.Snapshot snapshot = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Snapshot.class);
                 if (snapshot != null) {
-                    snapshotMethods.add(new Object[]{beanName, method, snapshot});
+                    snapshotMethods.add(new Object[]{beanName, handler, snapshot});
                     if (snapshot.mode() != org.occurrent.annotation.Mode.SYNCHRONOUS) {
                         idsToCheck.add(snapshot.id());
                     }
                 }
                 org.occurrent.annotation.Saga saga = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Saga.class);
                 if (saga != null) {
-                    sagaMethods.add(new Object[]{beanName, method, saga});
+                    sagaMethods.add(new Object[]{beanName, handler, saga});
                     if (checkpointsWhenPush(saga.source(), saga.catchup())) {
                         idsToCheck.add(saga.id());
                     }
@@ -377,16 +380,16 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (!mayBlockForReplay) {
             CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
         }
-        for (Map.Entry<String, List<Method>> staged : subscriptionMethods.entrySet()) {
+        for (Map.Entry<String, List<HandlerMethod>> staged : subscriptionMethods.entrySet()) {
             String beanName = staged.getKey();
             Object bean = beanResolver.apply(beanName);
             // The methods the loop above read, never a fresh scan of the resolved instance. A non-singleton bean
             // is a new instance here, and a factory free to return a different implementation would otherwise have
             // this register a method whose id went through no duplicate check and no refusal.
             subscriptionRegistrar.registerSubscriptions(bean, staged.getValue(), handlerTargets.apply(beanName, bean), mayBlockForReplay,
-                    method -> markRegistered(beanName, method),
+                    handler -> registeredHandlers.markRegistered(beanName, handler),
                     this::claimSubscriptionId,
-                    method -> forgetRegistered(beanName, method),
+                    handler -> registeredHandlers.forgetRegistered(beanName, handler),
                     registeredIds::remove);
         }
         if (mayBlockForReplay) {
@@ -394,10 +397,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         for (Object[] pm : projectionMethods) {
             String beanName = (String) pm[0];
-            Method method = (Method) pm[1];
+            HandlerMethod handler = (HandlerMethod) pm[1];
+            Method method = handler.method();
             org.occurrent.annotation.Projection projection = (org.occurrent.annotation.Projection) pm[2];
-            if (markRegistered(beanName, method)) {
-                registerDescriptor(beanName, method, projection.id(),
+            if (registeredHandlers.markRegistered(beanName, handler)) {
+                registerDescriptor(beanName, handler, projection.id(),
                         "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(projection.id(), method.getDeclaringClass().getName(), method.getName()),
                         () -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply(beanName), method, projection));
             }
@@ -406,20 +410,22 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         projectionRegistrar.catchUpCollectedFeeds();
         for (Object[] sm : snapshotMethods) {
             String beanName = (String) sm[0];
-            Method method = (Method) sm[1];
+            HandlerMethod handler = (HandlerMethod) sm[1];
+            Method method = handler.method();
             org.occurrent.annotation.Snapshot snapshot = (org.occurrent.annotation.Snapshot) sm[2];
-            if (markRegistered(beanName, method)) {
-                registerDescriptor(beanName, method, snapshot.id(),
+            if (registeredHandlers.markRegistered(beanName, handler)) {
+                registerDescriptor(beanName, handler, snapshot.id(),
                         "Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(snapshot.id(), method.getDeclaringClass().getName(), method.getName()),
                         () -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply(beanName), method, snapshot));
             }
         }
         for (Object[] gm : sagaMethods) {
             String beanName = (String) gm[0];
-            Method method = (Method) gm[1];
+            HandlerMethod handler = (HandlerMethod) gm[1];
+            Method method = handler.method();
             org.occurrent.annotation.Saga saga = (org.occurrent.annotation.Saga) gm[2];
-            if (markRegistered(beanName, method)) {
-                registerDescriptor(beanName, method, saga.id(),
+            if (registeredHandlers.markRegistered(beanName, handler)) {
+                registerDescriptor(beanName, handler, saga.id(),
                         "Duplicate subscription/projection/snapshot/saga id '%s' (used by @Saga on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(saga.id(), method.getDeclaringClass().getName(), method.getName()),
                         () -> sagaRegistrar.processSagaAnnotation(beanResolver.apply(beanName), method, saga));
             }
@@ -444,16 +450,16 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // A DuplicateSubscriptionIdException from inside the registration comes from the subscription model instead,
     // for a programmatic subscription already on that id, and the id this call added is still this call's to take
     // back.
-    private void registerDescriptor(String beanName, Method method, String id, String duplicateIdMessage, Runnable registration) {
+    private void registerDescriptor(String beanName, HandlerMethod handler, String id, String duplicateIdMessage, Runnable registration) {
         if (!registeredIds.add(id)) {
-            forgetRegistered(beanName, method);
+            registeredHandlers.forgetRegistered(beanName, handler);
             throw new DuplicateSubscriptionIdException(id, duplicateIdMessage);
         }
         try {
             registration.run();
         } catch (RuntimeException | Error e) {
             registeredIds.remove(id);
-            forgetRegistered(beanName, method);
+            registeredHandlers.forgetRegistered(beanName, handler);
             throw e;
         }
     }
@@ -500,31 +506,6 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             throw new IllegalArgumentException("Method %s#%s is annotated with %s and %s, which register as different things and cannot share a method, use only one.".formatted(
                     userClass.getName(), method.getName(), String.join(" and ", subscriptions), String.join(" and ", declared)));
         }
-    }
-
-    // A handler is recorded under the keys SubscriptionAnnotations.handlerKeys gives, so a rescan skips it, and so do
-    // two passes that read one handler as different Methods, the bean's class method and a JDK proxy's interface method.
-    private boolean isAlreadyRegistered(String beanName, Method method) {
-        return handlerKeys(beanName, method).stream().anyMatch(registeredHandlers::contains);
-    }
-
-    // True the first time a handler is registered, false every time after, so a caller registers it exactly once. The
-    // add of the signature key is what decides between two concurrent registrations of the same Method.
-    private boolean markRegistered(String beanName, Method method) {
-        List<String> keys = handlerKeys(beanName, method);
-        if (registeredHandlers.contains(keys.get(1)) || !registeredHandlers.add(keys.get(0))) {
-            return false;
-        }
-        registeredHandlers.add(keys.get(1));
-        return true;
-    }
-
-    private void forgetRegistered(String beanName, Method method) {
-        handlerKeys(beanName, method).forEach(registeredHandlers::remove);
-    }
-
-    private static List<String> handlerKeys(String beanName, Method method) {
-        return SubscriptionAnnotations.handlerKeys(beanName, method, HANDLER_ANNOTATIONS);
     }
 
     // getType(beanName) predicts the type from the bean definition without forcing creation, which is what lets a
@@ -574,7 +555,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         if (beanFactory.containsSingleton(beanName) && !beanFactory.isFactoryBean(beanName)) {
-            return new ScanType(ClassUtils.getUserClass(SubscriptionAnnotations.ultimateTarget(applicationContext.getBean(beanName)).getClass()), true);
+            return new ScanType(userClassOf(applicationContext.getBean(beanName)), true);
         }
         Class<?> type = applicationContext.getType(beanName);
         return type == null ? null : new ScanType(ClassUtils.getUserClass(type), false);
@@ -598,7 +579,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // subscription id was collected before the first projection, snapshot or saga checked one out. A subscription
     // registering after startup arrives long after all of those, so without this check it would take an id one of
     // them already holds and write to the same durable checkpoint key.
-    private void collectSubscriptionMethod(String beanName, Method method, Set<String> idsToCheck, Map<String, List<Method>> subscriptionMethods) {
+    private void collectSubscriptionMethod(String beanName, HandlerMethod handler, Set<String> idsToCheck, Map<String, List<HandlerMethod>> subscriptionMethods) {
+        Method method = handler.method();
         StreamSubscription s = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
         Subscription a = AnnotationUtils.findAnnotation(method, Subscription.class);
         DcbSubscription d = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
@@ -615,7 +597,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (s == null && a == null && d == null && sy == null) {
             return;
         }
-        subscriptionMethods.computeIfAbsent(beanName, name -> new ArrayList<>()).add(method);
+        subscriptionMethods.computeIfAbsent(beanName, name -> new ArrayList<>()).add(handler);
     }
 
     // Claiming writes to registeredIds itself rather than to anything held aside for the length of a scan, so a

@@ -19,6 +19,7 @@ package org.occurrent.springboot.blocking;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 
 import java.lang.reflect.Constructor;
@@ -112,10 +113,10 @@ class DescriptorIdClaimTest {
     private static void registerDescriptor(OccurrentBlockingAnnotationBeanPostProcessor coordinator, String beanName, String id, Runnable registration) {
         try {
             Method method = OccurrentBlockingAnnotationBeanPostProcessor.class.getDeclaredMethod(
-                    "registerDescriptor", String.class, Method.class, String.class, String.class, Runnable.class);
+                    "registerDescriptor", String.class, HandlerMethod.class, String.class, String.class, Runnable.class);
             method.setAccessible(true);
-            Method anyHandlerMethod = DescriptorIdClaimTest.class.getDeclaredMethod("canHold", Class.class, Class.class);
-            method.invoke(coordinator, beanName, anyHandlerMethod, id,
+            HandlerMethod anyHandler = HandlerMethod.in(DescriptorIdClaimTest.class, DescriptorIdClaimTest.class.getDeclaredMethod("canHold", Class.class, Class.class));
+            method.invoke(coordinator, beanName, anyHandler, id,
                     "Duplicate subscription/projection id '%s', each id must be unique because it is the durable checkpoint key.".formatted(id),
                     registration);
         } catch (InvocationTargetException e) {

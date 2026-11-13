@@ -61,6 +61,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -798,6 +799,304 @@ class InheritedHandlerRegistrationTest {
         @Override
         public int getOrder() {
             return HIGHEST_PRECEDENCE;
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // A package-private handler that an unannotated method of a subclass in another package shadows
+    // ------------------------------------------------------------------------------------------------------
+
+    @Test
+    void an_unannotated_method_shadowing_a_package_private_handler_in_another_package_fails_startup_naming_both_methods_the_id_and_both_fixes() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", CrossPackageShadowingSubscriber.class, () -> new CrossPackageShadowingSubscriber(bodies)).run(context -> {
+            String shadowing = CrossPackageShadowingSubscriber.class.getName() + "#on(CrossPackageEvent)";
+            String shadowed = CrossPackagePackagePrivateHandler.class.getName() + "#on(CrossPackageEvent)";
+
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Method " + shadowing + " does not override " + shadowed)
+                    .hasMessageContaining("with id \"cross-package-package-private-handler\"")
+                    .hasMessageContaining("Make " + shadowed + " protected or public")
+                    .hasMessageContaining("or rename " + shadowing);
+            assertThat(bodies).isEmpty();
+        });
+    }
+
+    static class CrossPackageShadowingSubscriber extends CrossPackagePackagePrivateHandler {
+        CrossPackageShadowingSubscriber(List<String> bodies) {
+            super(bodies);
+        }
+
+        void on(CrossPackageEvent event) {
+            bodies.add("shadowing-body");
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // A generic interface handler a bean overrides, behind a JDK proxy that is not a fixed singleton
+    // ------------------------------------------------------------------------------------------------------
+
+    // The scan reads the class behind the proxy, so it finds the override and its id, and not the interface method
+    // under the interface's id. Reading the proxy's class would register the interface method as a second handler.
+    @Test
+    void a_generic_interface_handler_overridden_with_its_own_annotation_registers_once_behind_a_jdk_proxy_and_receives_the_event() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        jdkProxyingNonSingleton(GenericInterfaceOverrider.class, new AtomicInteger())
+                .withBean("subscriber", GenericInterfaceOverrider.class, () -> new GenericInterfaceOverrider(bodies))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(Proxy.isProxyClass(context.getBean("subscriber").getClass())).describedAs("the bean is a JDK proxy").isTrue();
+                    Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+                    assertThat(subscribedIds(subscriptions)).containsExactly("overriding-generic-handler");
+                    anyHandlerFor(subscriptions, "overriding-generic-handler").invoke(null, new Placed()).block();
+                    assertThat(bodies).containsExactly("overrider-body");
+                });
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // A handler runs through the advice of the proxy around its bean
+    // ------------------------------------------------------------------------------------------------------
+
+    @Test
+    void a_handler_declared_on_an_interface_runs_through_the_advice_of_a_jdk_proxy() {
+        AtomicInteger adviceCalls = new AtomicInteger();
+        jdkProxyingNonSingleton(InterfaceHandlerBean.class, adviceCalls)
+                .withBean("subscriber", InterfaceHandlerBean.class, InterfaceHandlerBean::new)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(Proxy.isProxyClass(context.getBean("subscriber").getClass())).describedAs("the bean is a JDK proxy").isTrue();
+                    adviceCalls.set(0);
+
+                    anyHandlerFor(context.getBean(Subscriptions.class), "proxied-interface-handler").invoke(null, new TestEvent()).block();
+
+                    assertThat(adviceCalls).hasValue(1);
+                });
+    }
+
+    @Test
+    void a_generic_interface_handler_overridden_by_the_bean_runs_through_the_advice_of_a_jdk_proxy_by_the_interface_method() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        AtomicInteger adviceCalls = new AtomicInteger();
+        jdkProxyingNonSingleton(GenericInterfaceOverrider.class, adviceCalls)
+                .withBean("subscriber", GenericInterfaceOverrider.class, () -> new GenericInterfaceOverrider(bodies))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    adviceCalls.set(0);
+
+                    anyHandlerFor(context.getBean(Subscriptions.class), "overriding-generic-handler").invoke(null, new Placed()).block();
+
+                    assertThat(bodies).containsExactly("overrider-body");
+                    assertThat(adviceCalls).hasValue(1);
+                });
+    }
+
+    @Test
+    void a_generic_interface_handler_overridden_by_the_bean_runs_through_the_advice_of_a_cglib_proxy() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        AtomicInteger adviceCalls = new AtomicInteger();
+        cglibProxying(GenericInterfaceOverrider.class, adviceCalls)
+                .withBean("subscriber", GenericInterfaceOverrider.class, () -> new GenericInterfaceOverrider(bodies))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(Proxy.isProxyClass(context.getBean("subscriber").getClass())).describedAs("the bean is a CGLIB proxy").isFalse();
+                    adviceCalls.set(0);
+
+                    anyHandlerFor(context.getBean(Subscriptions.class), "overriding-generic-handler").invoke(null, new Placed()).block();
+
+                    assertThat(bodies).containsExactly("overrider-body");
+                    assertThat(adviceCalls).hasValue(1);
+                });
+    }
+
+    private ApplicationContextRunner jdkProxyingNonSingleton(Class<?> proxied, AtomicInteger adviceCalls) {
+        return runner.withBean(NonSingletonJdkProxyingPostProcessor.class, () -> new NonSingletonJdkProxyingPostProcessor(proxied, adviceCalls));
+    }
+
+    interface GenericPlacedHandler<E> {
+        @Subscription(id = "interface-generic-handler", startupMode = StartupMode.BACKGROUND)
+        void on(E event);
+    }
+
+    static class GenericInterfaceOverrider implements GenericPlacedHandler<Placed> {
+        private final List<String> bodies;
+
+        GenericInterfaceOverrider(List<String> bodies) {
+            this.bodies = bodies;
+        }
+
+        @Override
+        @Subscription(id = "overriding-generic-handler", startupMode = StartupMode.BACKGROUND)
+        public void on(Placed event) {
+            bodies.add("overrider-body");
+        }
+    }
+
+    // Wraps the bean in a JDK proxy of its interfaces whose target source is not static, so nothing can unwrap it to a
+    // target. Runs before the Occurrent post processor, so that is the instance it is handed.
+    static class NonSingletonJdkProxyingPostProcessor implements BeanPostProcessor, PriorityOrdered {
+        private final Class<?> proxied;
+        private final AtomicInteger adviceCalls;
+
+        NonSingletonJdkProxyingPostProcessor(Class<?> proxied, AtomicInteger adviceCalls) {
+            this.proxied = proxied;
+            this.adviceCalls = adviceCalls;
+        }
+
+        @Override
+        public Object postProcessAfterInitialization(Object bean, String beanName) {
+            if (!proxied.isInstance(bean)) {
+                return bean;
+            }
+            ProxyFactory proxyFactory = new ProxyFactory();
+            proxyFactory.setInterfaces(bean.getClass().getInterfaces());
+            proxyFactory.setTargetSource(new TargetSource() {
+                @Override
+                public Class<?> getTargetClass() {
+                    return bean.getClass();
+                }
+
+                @Override
+                public boolean isStatic() {
+                    return false;
+                }
+
+                @Override
+                public Object getTarget() {
+                    return bean;
+                }
+
+                @Override
+                public void releaseTarget(Object target) {
+                }
+            });
+            proxyFactory.addAdvice((MethodInterceptor) invocation -> {
+                adviceCalls.incrementAndGet();
+                return invocation.proceed();
+            });
+            return proxyFactory.getProxy();
+        }
+
+        @Override
+        public int getOrder() {
+            return HIGHEST_PRECEDENCE;
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // A prototype whose factory returns an instance of another class than before
+    // ------------------------------------------------------------------------------------------------------
+
+    @Test
+    void a_prototype_returning_another_class_that_declares_the_same_public_handler_is_skipped() {
+        assertSecondInstanceIsSkipped(PublicVaryingA::new, PublicVaryingB::new);
+    }
+
+    @Test
+    void a_prototype_returning_another_class_that_declares_the_same_private_handler_is_skipped() {
+        assertSecondInstanceIsSkipped(PrivateVaryingA::new, PrivateVaryingB::new);
+    }
+
+    @Test
+    void a_prototype_returning_another_class_that_inherits_the_same_public_handler_from_a_superclass_is_skipped() {
+        assertSecondInstanceIsSkipped(PublicVaryingA::new, InheritingVaryingB::new);
+    }
+
+    // The first instance registers the handler, the second is built by the same factory after startup, and its class
+    // has the handler under another declaring class. It is the same handler, so it must not take the id again, which
+    // would fail the creation of the bean that asked for it.
+    private void assertSecondInstanceIsSkipped(Function<List<String>, VaryingMarker> first, Function<List<String>, VaryingMarker> second) {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        runner.withBean("varying", VaryingMarker.class, () -> created.getAndIncrement() == 0 ? first.apply(bodies) : second.apply(bodies),
+                beanDefinition -> beanDefinition.setScope("prototype")).run(context -> {
+            assertThat(context).hasNotFailed();
+            context.getBean("varying");
+
+            assertThatCode(() -> context.getBean("varying")).doesNotThrowAnyException();
+
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            assertThat(created).describedAs("both instances were built").hasValue(2);
+            assertThat(subscribedIds(subscriptions)).containsExactly("varying-handler");
+            anyHandlerFor(subscriptions, "varying-handler").invoke(null, new TestEvent()).block();
+            assertThat(bodies).describedAs("the handler stays on the instance that registered it").containsExactly("first-body");
+        });
+    }
+
+    // Declared as the return type, so the startup scan cannot see the handler of the class behind it.
+    interface VaryingMarker {
+    }
+
+    static class PublicVaryingA implements VaryingMarker {
+        private final List<String> bodies;
+
+        PublicVaryingA(List<String> bodies) {
+            this.bodies = bodies;
+        }
+
+        @Subscription(id = "varying-handler", startupMode = StartupMode.BACKGROUND)
+        public void on(TestEvent event) {
+            bodies.add("first-body");
+        }
+    }
+
+    static class PublicVaryingB implements VaryingMarker {
+        private final List<String> bodies;
+
+        PublicVaryingB(List<String> bodies) {
+            this.bodies = bodies;
+        }
+
+        @Subscription(id = "varying-handler", startupMode = StartupMode.BACKGROUND)
+        public void on(TestEvent event) {
+            bodies.add("second-body");
+        }
+    }
+
+    static class PrivateVaryingA implements VaryingMarker {
+        private final List<String> bodies;
+
+        PrivateVaryingA(List<String> bodies) {
+            this.bodies = bodies;
+        }
+
+        @Subscription(id = "varying-handler", startupMode = StartupMode.BACKGROUND)
+        private void on(TestEvent event) {
+            bodies.add("first-body");
+        }
+    }
+
+    static class PrivateVaryingB implements VaryingMarker {
+        private final List<String> bodies;
+
+        PrivateVaryingB(List<String> bodies) {
+            this.bodies = bodies;
+        }
+
+        @Subscription(id = "varying-handler", startupMode = StartupMode.BACKGROUND)
+        private void on(TestEvent event) {
+            bodies.add("second-body");
+        }
+    }
+
+    abstract static class PublicVaryingBase {
+        final List<String> bodies;
+
+        PublicVaryingBase(List<String> bodies) {
+            this.bodies = bodies;
+        }
+
+        @Subscription(id = "varying-handler", startupMode = StartupMode.BACKGROUND)
+        public void on(TestEvent event) {
+            bodies.add("second-body");
+        }
+    }
+
+    static class InheritingVaryingB extends PublicVaryingBase implements VaryingMarker {
+        InheritingVaryingB(List<String> bodies) {
+            super(bodies);
         }
     }
 
