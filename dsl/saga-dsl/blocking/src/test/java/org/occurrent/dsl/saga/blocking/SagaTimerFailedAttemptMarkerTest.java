@@ -267,6 +267,37 @@ class SagaTimerFailedAttemptMarkerTest {
         );
     }
 
+    @Test
+    void a_failed_timer_still_waiting_out_its_marker_does_not_fire_when_another_timer_on_the_instance_brings_it_into_the_batch() {
+        TimerEntry waitingOutItsMarker = new TimerEntry(TIMER, FIRES_AT, MARKED_UNTIL);
+        seed("s1", List.of(waitingOutItsMarker, new TimerEntry(OTHER_TIMER, POLL.toEpochMilli())));
+        onReaction = sagaId -> {
+        };
+
+        poll(new CountingStore(backing));
+
+        assertAll(
+                () -> assertThat(dispatched).as("only the timer that is due fired").containsExactly(new CancelOrder("s1/reminder")),
+                () -> assertThat(backing.find("s1").orElseThrow().timers()).containsExactly(waitingOutItsMarker)
+        );
+    }
+
+    @Test
+    void a_timer_that_was_marked_by_a_concurrent_poll_after_this_poll_read_the_batch_is_not_fired() {
+        seed("s1", List.of(new TimerEntry(TIMER, FIRES_AT)));
+        TimerEntry markedMeanwhile = new TimerEntry(TIMER, FIRES_AT, MARKED_UNTIL);
+        onReaction = sagaId -> {
+        };
+        CountingStore store = new CountingStore(backing).afterEachDueTimerRead(() -> replaceTimers("s1", List.of(markedMeanwhile)));
+
+        poll(store);
+
+        assertAll(
+                () -> assertThat(dispatched).isEmpty(),
+                () -> assertThat(backing.find("s1").orElseThrow().timers()).containsExactly(markedMeanwhile)
+        );
+    }
+
     private void poll(CountingStore store) {
         execution(store, () -> POLL).pollTimers();
     }
@@ -300,6 +331,8 @@ class SagaTimerFailedAttemptMarkerTest {
                     onReaction.accept(timeout.sagaId());
                     return List.of(SagaEffect.issue(new CancelOrder(timeout.sagaId())));
                 })
+                .evolveOnTimeout(OTHER_TIMER, (state, timeout) -> "reminded")
+                .reactOnTimeout(OTHER_TIMER, (state, timeout) -> List.of(SagaEffect.issue(new CancelOrder(timeout.sagaId() + "/reminder"))))
                 .build();
         SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofSeconds(15), 10, MAX_CAS_ATTEMPTS);
         return new SagaExecution<>("saga-timer-marker", saga, store, dispatched::add, converter, config, event -> true, clock);
@@ -311,6 +344,7 @@ class SagaTimerFailedAttemptMarkerTest {
         final AtomicInteger markerWrites = new AtomicInteger();
         private int toLose;
         private @Nullable String failingFor;
+        private @Nullable Runnable afterDueTimerRead;
 
         CountingStore(SagaStateStore<String> delegate) {
             this.delegate = delegate;
@@ -323,6 +357,11 @@ class SagaTimerFailedAttemptMarkerTest {
 
         CountingStore throwingOnWriteFor(String sagaId) {
             this.failingFor = sagaId;
+            return this;
+        }
+
+        CountingStore afterEachDueTimerRead(Runnable action) {
+            this.afterDueTimerRead = action;
             return this;
         }
 
@@ -355,7 +394,11 @@ class SagaTimerFailedAttemptMarkerTest {
 
         @Override
         public List<SagaEnvelope<String>> findWithDueTimers(Instant now, int limit) {
-            return delegate.findWithDueTimers(now, limit);
+            List<SagaEnvelope<String>> due = delegate.findWithDueTimers(now, limit);
+            if (afterDueTimerRead != null) {
+                afterDueTimerRead.run();
+            }
+            return due;
         }
 
         @Override
