@@ -90,6 +90,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     private static final String READ_FAILED = "The storage cannot read right now";
     private static final String DELETE_FAILED = "The storage lost the answer to the delete";
     private static final String START_FAILED = "The wrapped model could not start the subscription";
+    private static final String EVALUATION_FAILED = "The storage cannot tell whether it evaluates a condition on a delete";
     private static final String START_POSITION_FAILED = "The start position could not be chosen right now";
 
     /**
@@ -515,6 +516,48 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
                 softly.assertThat(storedOnceTheCancelEnded).as("checkpoint stored once the cancel completed").isEqualTo("-");
                 softly.assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
                         .containsExactly(later.writtenAfter());
+            });
+        } finally {
+            release.countDown();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe takes over a delete whose try is held and cannot read its start position, so its give-back is the last
+     * and a new delete must go ahead. The storage answers the cancel when it asks whether it evaluates a condition on a
+     * delete, and fails when the give-back asks. Neither a conditional nor an unconditional delete is safe to run then,
+     * so the cancel fails with what the storage threw instead of waiting for good, and no decision is awaited.
+     */
+    @Test
+    void a_cancel_fails_with_what_the_storage_threw_when_the_last_give_back_cannot_tell_whether_a_delete_is_conditional() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        Feed feed = new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        IllegalStateException evaluationFailed = new IllegalStateException(EVALUATION_FAILED);
+        try {
+            Mono<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release);
+            model.runBeforeATakeOverIsGivenBack(() -> storage.evaluationFails = evaluationFailed);
+            storage.readsFail = true;
+            Subscription failed = subscribeOn(caller, model, new CopyOnWriteArrayList<>());
+            Throwable notStarted = catchThrowable(() -> failed.waitUntilStarted(TIMEOUT).block());
+            storage.readsFail = false;
+
+            // When
+            release.countDown();
+            Throwable cancelEnded = catchThrowable(() -> cancelled.block(TIMEOUT));
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(notStarted).as("why the subscribe that took the delete over did not start").hasStackTraceContaining(READ_FAILED);
+                softly.assertThat(cancelEnded).as("how the cancel ended").isInstanceOf(IllegalStateException.class)
+                        .hasMessageStartingWith("Could not delete the stored checkpoint of cancelled subscription " + SUBSCRIPTION_ID)
+                        .hasCause(evaluationFailed);
+                softly.assertThat(model.awaitsADeleteDecision(SUBSCRIPTION_ID)).as("a delete decision awaited once the cancel ended").isFalse();
             });
         } finally {
             release.countDown();
@@ -2769,6 +2812,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         private volatile boolean heldSaveFails = true;
         private volatile @Nullable CountDownLatch readGate;
         private volatile boolean readsFail;
+        private volatile @Nullable RuntimeException evaluationFails;
         private volatile @Nullable CountDownLatch notOlderThanGate;
         private volatile @Nullable Checkpoint storedElsewhereBeforeIfAbsent;
         private volatile boolean resolvesRaceByPosition;
@@ -2883,6 +2927,10 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
 
         @Override
         public boolean evaluatesDeleteConditions() {
+            @Nullable RuntimeException failure = evaluationFails;
+            if (failure != null) {
+                throw failure;
+            }
             return conditionalDeletes;
         }
 
