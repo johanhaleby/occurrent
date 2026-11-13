@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.aopalliance.intercept.MethodInterceptor;
 import org.aopalliance.intercept.MethodInvocation;
 import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -30,6 +31,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
@@ -57,6 +59,13 @@ class ReactorCatchupOverAProxyOfMongoModelTest {
     private static final Function<CloudEvent, Mono<Void>> NO_ACTION = __ -> Mono.empty();
     private static final String NAMED_SUBSCRIBE = "subscribe(String, SubscriptionFilter, StartAt, Function)";
 
+    private final List<SubscriptionModelLifeCycle> started = new CopyOnWriteArrayList<>();
+
+    @AfterEach
+    void shut_down_the_models_the_test_started() {
+        started.forEach(SubscriptionModelLifeCycle::shutdown);
+    }
+
     @Test
     void calls_the_named_subscribe_through_a_cglib_proxy_of_the_model() {
         // Given
@@ -64,7 +73,9 @@ class ReactorCatchupOverAProxyOfMongoModelTest {
         ReactorMongoSubscriptionModel proxy = proxyOf(true, advice);
 
         // When
-        Subscription subscription = new ReactorStreamCatchupSubscriptionModel(proxy, new NoReplay())
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(proxy, new NoReplay());
+        started.add(catchup);
+        Subscription subscription = catchup
                 .subscribe("x", StreamSubscriptionFilter.filter(Filter.all()), StartAt.now(), NO_ACTION);
 
         // Then
@@ -80,7 +91,9 @@ class ReactorCatchupOverAProxyOfMongoModelTest {
         CheckpointAwareSubscriptionModel proxy = proxyOf(false, advice);
 
         // When
-        Subscription subscription = new ReactorStreamCatchupSubscriptionModel(proxy, new NoReplay())
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(proxy, new NoReplay());
+        started.add(catchup);
+        Subscription subscription = catchup
                 .subscribe("x", StreamSubscriptionFilter.filter(Filter.all()), StartAt.now(), NO_ACTION);
 
         // Then
@@ -91,11 +104,13 @@ class ReactorCatchupOverAProxyOfMongoModelTest {
 
     // A Spring AOP proxy of the shipped model, as a Spring container builds one
     @SuppressWarnings("unchecked")
-    private static <T> T proxyOf(boolean proxyTargetClass, MethodInterceptor advice) {
+    private <T> T proxyOf(boolean proxyTargetClass, MethodInterceptor advice) {
         ProxyFactory factory = new ProxyFactory(new ReactorMongoSubscriptionModel(neverAnswering(), "events", TimeRepresentation.RFC_3339_STRING));
         factory.setProxyTargetClass(proxyTargetClass);
         factory.addAdvice(advice);
-        return (T) factory.getProxy();
+        Object proxy = factory.getProxy();
+        started.add((SubscriptionModelLifeCycle) proxy);
+        return (T) proxy;
     }
 
     // Answers the two calls a subscribe at now makes with a Publisher that never emits, and refuses every other call

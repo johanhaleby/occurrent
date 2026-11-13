@@ -66,17 +66,20 @@ class ReactorMongoSubscriptionModelCancelledSubscribeTest {
         ReactiveMongoOperations operations = mock(ReactiveMongoOperations.class);
         when(operations.executeCommand(any(Document.class))).thenReturn(Mono.never());
         ReactorMongoSubscriptionModel model = new ReactorMongoSubscriptionModel(operations, "events", TimeRepresentation.RFC_3339_STRING);
-        model.subscribe("someSubscription", null, StartAt.now(), __ -> Mono.empty(), () -> false);
+        try {
+            model.subscribe("someSubscription", null, StartAt.now(), __ -> Mono.empty(), () -> false);
 
-        // When
-        AtomicReference<Subscription> returned = new AtomicReference<>();
-        Throwable thrown = catchThrowable(() -> returned.set(model.subscribe("someSubscription", null, StartAt.now(), __ -> Mono.empty(), () -> true)));
+            // When
+            AtomicReference<Subscription> returned = new AtomicReference<>();
+            Throwable thrown = catchThrowable(() -> returned.set(model.subscribe("someSubscription", null, StartAt.now(), __ -> Mono.empty(), () -> true)));
 
-        // Then
-        assertAll(
-                () -> assertThat(thrown).as("what the call threw").isNull(),
-                () -> assertThat(returned.get()).as("the subscription returned").isNull());
-        model.shutdown();
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).as("what the call threw").isNull(),
+                    () -> assertThat(returned.get()).as("the subscription returned").isNull());
+        } finally {
+            model.shutdown();
+        }
     }
 
     @Test
