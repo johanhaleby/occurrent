@@ -448,7 +448,7 @@ public final class ChangeStreamSubscriptions {
             // After started(), so a resume called from inside the previous run's action, or a start(true) that waits
             // for the run to start, doesn't wait for that action
             if (!internalSubscription.waitForThePreviousRuns()) {
-                log.debug("Subscription {} was interrupted while it waited for the action of a run it replaced, so it stops.", subscriptionId);
+                log.debug("Subscription {} was paused, cancelled or interrupted while it waited for the action of a run it replaced, so this run stops.", subscriptionId);
                 return;
             }
 
@@ -1306,11 +1306,14 @@ public final class ChangeStreamSubscriptions {
         // call from an earlier run still runs. Every earlier run that may still deliver, since a run that a resume
         // replaced while it waited has not delivered yet and delivers nothing once its wait ends. Each run lets go of
         // the run it replaced once its wait is over, so a chain of pauses and resumes keeps no finished run. False when
-        // interrupted, which a shutdown does, and the interrupt is set again
+        // this run is closed while it waits, so a pause or a cancel frees its thread, or when interrupted, which a
+        // shutdown does, and the interrupt is set again
         boolean waitForThePreviousRuns() {
             try {
                 for (InternalSubscription run = previous; run != null; run = run.previous) {
-                    run.awaitNotDelivering();
+                    if (!run.awaitNotDeliveringUnlessClosed(this)) {
+                        return false;
+                    }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -1320,12 +1323,27 @@ public final class ChangeStreamSubscriptions {
             return true;
         }
 
-        private void awaitNotDelivering() throws InterruptedException {
+        // The waiter's flag is read under this run's lock, and close() of the waiter signals under it after setting
+        // the flag, so the waiter either sees the flag or is already waiting when the signal comes
+        private boolean awaitNotDeliveringUnlessClosed(InternalSubscription waiter) throws InterruptedException {
             lock.lock();
             try {
                 while (delivering != null) {
+                    if (waiter.intentionallyClosed) {
+                        return false;
+                    }
                     stoppedDelivering.await();
                 }
+                return true;
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        private void wakeWaiters() {
+            lock.lock();
+            try {
+                stoppedDelivering.signalAll();
             } finally {
                 lock.unlock();
             }
@@ -1529,6 +1547,10 @@ public final class ChangeStreamSubscriptions {
                 openCursor = cursor;
             } finally {
                 lock.unlock();
+            }
+            // Ends this run's wait for the runs it replaced, which no longer matters once it delivers nothing
+            for (InternalSubscription run = previous; run != null; run = run.previous) {
+                run.wakeWaiters();
             }
             if (openCursor == null) {
                 return;
