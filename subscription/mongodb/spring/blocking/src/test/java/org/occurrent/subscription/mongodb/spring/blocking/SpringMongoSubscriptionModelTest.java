@@ -682,9 +682,9 @@ public class SpringMongoSubscriptionModelTest {
 
         @Test
         void a_pause_while_a_failing_listener_backs_off_does_not_skip_the_event_on_resume() {
-            // Given: a model that backs off 500 ms between attempts, so the pause comes during a backoff
+            // Given: a model that backs off 5 s between attempts, so the pause comes during the first backoff
             SpringMongoSubscriptionModel backingOff = new SpringMongoSubscriptionModel(mongoTemplate,
-                    withConfig(eventCollectionName, timeRepresentation).retryStrategy(RetryStrategy.fixed(500)));
+                    withConfig(eventCollectionName, timeRepresentation).retryStrategy(RetryStrategy.fixed(5000)));
             try {
                 String subscriptionId = UUID.randomUUID().toString();
                 AtomicBoolean failing = new AtomicBoolean();
@@ -708,13 +708,14 @@ public class SpringMongoSubscriptionModelTest {
 
                 // When: paused while the retry backs off, then resumed once the listener works again
                 backingOff.pauseSubscription(subscriptionId);
+                assertThat(failures).as("no second attempt before the pause returned").hasValue(1);
                 failing.set(false);
                 backingOff.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
                 mongoEventStore.write("3", 0, serialize(e3));
 
                 // Then
                 await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).containsSubsequence(e1.eventId(), e2.eventId(), e3.eventId()));
-                assertThat(handled).containsExactly(e1.eventId(), e2.eventId(), e3.eventId());
+                await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(handled).containsExactly(e1.eventId(), e2.eventId(), e3.eventId()));
             } finally {
                 backingOff.shutdown();
             }
