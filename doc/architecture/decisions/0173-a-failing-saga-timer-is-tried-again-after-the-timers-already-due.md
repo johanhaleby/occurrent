@@ -24,8 +24,9 @@ instance's last attempt, because that needs a second index and makes the poll wa
 ## Decision
 
 **Each timer records when it last failed, and a timer is due at the later of `firesAt` and that instant.**
-`SagaEnvelope.TimerEntry` gains `nextAttemptAtEpochMilli`, which is null until the timer has failed. When a timer's
-reaction throws anything except an `OutOfMemoryError`, the poller writes the instant one millisecond after its poll
+`SagaEnvelope.TimerEntry` gains `nextAttemptAtEpochMilli`, which is null until the timer has failed. When firing a
+timer throws anything except an `OutOfMemoryError`, whether the reaction threw or the fire lost its compare and set on
+every attempt, the poller writes the instant one millisecond after its poll
 to that timer. The write
 reads the instance again and compares and sets, up to `SagaRunnerConfig.maxCasAttempts()` attempts. Nothing is
 written when the timer was cancelled, consumed or re-armed to another instant in the meantime, or when the instance
@@ -49,7 +50,8 @@ once more.
 
 The record belongs to the timer, so the objections to the instance hold-off in ADR 134 do not apply. Cancelling,
 consuming or re-arming a timer to another instant replaces its entry, and the record goes with it. A re-arm to the
-same instant keeps the record, since it is the same timer. The instance's other timers keep
+same instant keeps the record, since it is the same timer. An input that cancels the timer and then starts it again
+for the same instant drops the record, because the cancel removes the entry before the start reads it. The instance's other timers keep
 their own due times, and a failure of one timer writes nothing to another.
 
 **There is no backoff and no new setting.** A failing timer is still tried on every poll where its turn comes, as in
