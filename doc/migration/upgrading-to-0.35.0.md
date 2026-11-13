@@ -1592,7 +1592,8 @@ and a subscription with an id when the model can't read through the driver's cur
 change stream reads instead.
 
 Once a change stream has opened, the model opens it again at the same position and doesn't call the function again,
-unless, on the blocking models, it opened at the present and MongoDB's reply had no operation time to record.
+unless, on the blocking models, it opened at the present with no operation time in MongoDB's reply and its first read
+hasn't returned.
 That covers a pause and a resume, an action that throws, and a failure reading the change stream before the first
 event. A reactor subscription that counts the first document takes the position the function answered when its `Flux`
 was subscribed to. It gives that position back to the function only when the change stream fails before it reads a
@@ -1620,8 +1621,8 @@ Four cases still lose events, as they did in 0.34.0:
   reactor subscription that counts the first document. The model calls the function again, and an answer that comes
   after that event skips it.
 - On the blocking models, a change stream that opened at the present with no operation time in MongoDB's reply, which a
-  replica set's reply normally has. Nothing records where it opened, so an opening before the subscription has delivered
-  an event can call the function again, and a catch-up's checkpoint it answers then opens at the present and skips the
+  replica set's reply normally has. Nothing records where it opened until its first read returns, so an opening before
+  then can call the function again, and a catch-up's checkpoint it answers then opens at the present and skips the
   events written in between.
 
 ### Who is affected

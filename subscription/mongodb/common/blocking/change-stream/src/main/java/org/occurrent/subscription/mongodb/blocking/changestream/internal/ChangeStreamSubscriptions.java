@@ -448,7 +448,11 @@ public final class ChangeStreamSubscriptions {
             // After started(), so a resume called from inside the previous run's action, or a start(true) that waits
             // for the run to start, doesn't wait for that action
             if (!internalSubscription.waitForThePreviousRuns()) {
-                log.debug("Subscription {} was paused, cancelled or interrupted while it waited for the action of a run it replaced, so this run stops.", subscriptionId);
+                if (internalSubscription.isIntentionallyClosed()) {
+                    log.debug("Subscription {} was paused or cancelled while it waited for the action of a run it replaced, so this run stops.", subscriptionId);
+                } else {
+                    log.warn("Subscription {} was interrupted while it waited for the action of a run it replaced, so this run stops and delivers nothing until it's paused and resumed.", subscriptionId);
+                }
                 return;
             }
 
@@ -1303,11 +1307,11 @@ public final class ChangeStreamSubscriptions {
         }
 
         // Waits, with no deadline, until no run this run replaced is delivering, so the action is never called while a
-        // call from an earlier run still runs. Every earlier run that may still deliver, since a run that a resume
-        // replaced while it waited has not delivered yet and delivers nothing once its wait ends. Each run lets go of
-        // the run it replaced once its wait is over, so a chain of pauses and resumes keeps no finished run. False when
-        // this run is closed while it waits, so a pause or a cancel frees its thread, or when interrupted, which a
-        // shutdown does, and the interrupt is set again
+        // call from an earlier run still runs. It checks every earlier run, since a run replaced while it waited never
+        // delivered, and the call that still runs can belong to any run before it. A run lets go of the runs it
+        // replaced once its wait succeeds. A run closed while it waits keeps them, so each pause and resume while one
+        // call stays stuck adds a run to the chain until a wait succeeds. False when this run is closed while it
+        // waits, so a pause or a cancel frees its thread, or when interrupted, and the interrupt is set again
         boolean waitForThePreviousRuns() {
             try {
                 for (InternalSubscription run = previous; run != null; run = run.previous) {

@@ -498,7 +498,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * it handled any event, even before MongoDB answered, resumes from that time, and the events written since are
      * delivered too, as long as the oplog still holds that time. When it no longer does, the resume gets the handling
      * that {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation
-     * time, nothing is recorded and the resume opens at the present.
+     * time, nothing is recorded until the first read returns, and a resume before then opens at the present.
      * <p>
      * A subscription whose {@code RetryStrategy} gave up opening its change stream still counts as running, and pausing
      * it and then resuming it starts it again. When the strategy gives up asking MongoDB for its operation time, the

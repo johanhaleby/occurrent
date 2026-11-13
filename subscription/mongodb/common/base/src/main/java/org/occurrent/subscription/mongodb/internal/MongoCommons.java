@@ -758,8 +758,9 @@ public class MongoCommons {
      * server's operation time, records it in {@code currentStartAt} with {@link #pinnedTo(StartAt, BsonTimestamp)},
      * and opens the stream at that time. Because it is recorded before the stream opens, a pause and resume, or a
      * restart, before the first event is handled opens at that operation time too. Without it the position resolves
-     * to the present again at that point, and the event being handled and everything written in between are never
-     * delivered.
+     * to the present again at that point until the first read returns, and everything written in between is never
+     * delivered. The blocking change stream loop records the commit time of the first event it reads before its
+     * action runs, so an opening after that read starts at that event.
      * <p>
      * The operation time is recorded only if {@code currentStartAt} still holds the position read at the start,
      * since the checkpoint of a handled event is written from another thread and must not be overwritten. When it
