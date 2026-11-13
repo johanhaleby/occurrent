@@ -1313,9 +1313,15 @@ replays too, it fails with `CatchupCannotResumeException`, an `IllegalStateExcep
 replay, from reading its live start to checking it. Size the change stream history to reach back at least that far. On
 MongoDB that is the oplog, which you can keep for a minimum time with the `oplogMinRetentionHours` setting.
 
-A blocking catch-up whose replay a resume or a takeover started then holds the replay and logs the failure once, and
-runs it again when the subscription is resumed or `start(true)` is called. A replay that `subscribe(..)` started ends
-with the exception, which `waitUntilStarted()` throws.
+The catch-up then holds the subscription paused on both stacks and logs the failure once at error level. In 0.34.0 the
+subscription ended. `waitUntilStarted()` fails with the exception, and the id stays taken, so cancel the subscription
+before you subscribe the id again. Resuming the subscription replays again from the beginning, and so does `start(true)`
+on the blocking stack. Over a `CompetingConsumerSubscriptionModel` the node gives up the lease and stops competing for it
+until you resume the subscription.
+
+A replay that started later and loses its live start is held paused the same way. A replay again from its start would
+skip events, so `resumeSubscription` throws `CatchupCannotResumeException` until you cancel the subscription, and so does
+`start(true)` on the blocking stack.
 
 A DCB catch-up and the reactor catch-ups replay only by position, and throw the same exception when you start them from
 a time replay's checkpoint in the new form.

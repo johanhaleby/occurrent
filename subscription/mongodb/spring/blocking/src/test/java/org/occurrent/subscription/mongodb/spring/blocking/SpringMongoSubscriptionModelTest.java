@@ -50,6 +50,7 @@ import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -90,6 +91,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
@@ -297,6 +299,20 @@ public class SpringMongoSubscriptionModelTest {
                 () -> assertThat(subscriptionModel.isRunning(subscriptionId)).describedAs("is running").isFalse(),
                 () -> assertThat(subscriptionModel.isPaused(subscriptionId)).describedAs("is paused").isTrue()
         );
+    }
+
+    private static StartRefusalReportingSubscriptions.StartRefusalListener onStartRefusal(BiConsumer<String, UnsupportedStartAtException> onRefusal) {
+        return new StartRefusalReportingSubscriptions.StartRefusalListener() {
+            @Override
+            public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+                onRefusal.accept(subscriptionId, refusal);
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+                throw new AssertionError("A MongoDB model never holds a subscription paused, but was asked to for " + subscriptionId, refusal);
+            }
+        };
     }
 
     @Nested
@@ -1200,7 +1216,7 @@ public class SpringMongoSubscriptionModelTest {
         void a_start_refusal_listener_is_told_with_the_id_and_the_refusal_when_a_dynamic_position_answers_a_global_checkpoint() {
             // Given
             List<Map.Entry<String, UnsupportedStartAtException>> told = new CopyOnWriteArrayList<>();
-            subscriptionModel.addStartRefusalListener((id, refusal) -> told.add(Map.entry(id, refusal)));
+            subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> told.add(Map.entry(id, refusal))));
             String subscriptionId = UUID.randomUUID().toString();
             StartAt answered = StartAt.checkpoint(GlobalCheckpoint.of(0));
 

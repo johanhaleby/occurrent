@@ -2,6 +2,7 @@ package org.occurrent.subscription.blocking.competingconsumers;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.Subscription;
 
@@ -87,6 +88,9 @@ public class CompetingConsumerSubscription implements Subscription {
     static final class StartRefusal {
         // Reported by the wrapped model, until the competing consumer model has acted on it
         final AtomicReference<@Nullable UnsupportedStartAtException> reported = new AtomicReference<>();
+        // Reported by the wrapped model once it holds the consumer paused because the history its subscription would go
+        // live from is gone, until the competing consumer model has acted on it
+        final AtomicReference<@Nullable CatchupCannotResumeException> heldPaused = new AtomicReference<>();
         private volatile @Nullable UnsupportedStartAtException refused;
         // Only waited for when the wrapped model reports its refusals, since nothing would act on one otherwise
         private final boolean reportedByTheWrappedModel;

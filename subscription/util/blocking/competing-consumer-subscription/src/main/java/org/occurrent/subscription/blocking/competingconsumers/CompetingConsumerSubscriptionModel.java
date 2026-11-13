@@ -468,7 +468,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // Per competing consumer, from its subscribe until it is forgotten, what its handles throw once the wrapped model
     // refused its start
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, StartRefusal> startRefusals = new ConcurrentHashMap<>();
-    private final StartRefusalListener startRefusalListener = this::startRefused;
+    private final StartRefusalListener startRefusalListener = new StartRefusalListener() {
+        @Override
+        public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+            startRefused(subscriptionId, refusal);
+        }
+
+        @Override
+        public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+            heldPausedInTheWrappedModel(subscriptionId, refusal);
+        }
+    };
     // A handle waits for a refusal to be acted on only when the wrapped model reports it
     private final boolean wrappedModelReportsStartRefusals;
     // Waited for after a call failed, and doubled after each failure that follows, up to the most. A lease callback
@@ -4464,6 +4474,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             boolean stillRunsAfterItsPause = false;
             for (int calls = 0; calls < CALLS_PER_RECONCILE_TRY; calls++) {
                 forgetIfItsStartWasRefused(key);
+                holdIfTheWrappedModelHeldItPaused(key);
                 boolean known = competingConsumers.containsKey(key);
                 boolean runs = known && isRunningInTheWrappedModel(key.subscriptionId());
                 boolean holdsLease = known && Boolean.TRUE.equals(registrations.get(key)) && hasLock(key.subscriptionId(), key.subscriberId());
@@ -4702,7 +4713,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // then. Acted on at once when the subscription's lock is free, and otherwise by a try once the call holding it has
     // returned, or once the subscribe making the consumer has returned
     private void startRefused(String subscriptionId, UnsupportedStartAtException refused) {
-        @Nullable SubscriptionIdAndSubscriberId key = reportStartRefusal(subscriptionId, refused);
+        actOnReport(subscriptionId, startRefusal -> startRefusal.reported.set(refused));
+    }
+
+    // Told as a refusal is, see startRefused, once the wrapped model holds a consumer paused because the history its
+    // subscription would go live from is gone
+    private void heldPausedInTheWrappedModel(String subscriptionId, CatchupCannotResumeException refused) {
+        actOnReport(subscriptionId, startRefusal -> startRefusal.heldPaused.set(refused));
+    }
+
+    private void actOnReport(String subscriptionId, Consumer<StartRefusal> report) {
+        @Nullable SubscriptionIdAndSubscriberId key = reportStartRefusal(subscriptionId, report);
         if (key == null) {
             return;
         }
@@ -4712,6 +4733,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             try {
                 applyWhatWasHandedOverFirst(subscriptionId, lock);
                 forgetIfItsStartWasRefused(key);
+                holdIfTheWrappedModelHeldItPaused(key);
             } catch (Throwable e) {
                 triedAgainAfter(key, e);
                 if (e instanceof Error error) {
@@ -4722,14 +4744,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             }
         }
         @Nullable StartRefusal startRefusal = startRefusals.get(key);
-        if (startRefusal != null && startRefusal.reported.get() != null) {
+        if (startRefusal != null && (startRefusal.reported.get() != null || startRefusal.heldPaused.get() != null)) {
             reconcileLater(key, true);
         }
     }
 
     // The competing consumer that has the id here or that a subscribe is making, or null for an id this model doesn't
     // know, one that doesn't compete, and once this model is shut down
-    private synchronized @Nullable SubscriptionIdAndSubscriberId reportStartRefusal(String subscriptionId, UnsupportedStartAtException refused) {
+    private synchronized @Nullable SubscriptionIdAndSubscriberId reportStartRefusal(String subscriptionId, Consumer<StartRefusal> report) {
         if (shutDown) {
             return null;
         }
@@ -4740,13 +4762,33 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         if (startRefusal == null) {
             return null;
         }
-        startRefusal.reported.set(refused);
+        report.accept(startRefusal);
         return key;
     }
 
     private synchronized boolean isBeingMade(SubscriptionIdAndSubscriberId key) {
         @Nullable BeingMade beingMade = subscriptionsBeingMade.get(key.subscriptionId());
         return beingMade != null && beingMade.key.equals(key);
+    }
+
+    // Called under the subscription's lock. A consumer the wrapped model holds paused because the history its subscription
+    // would go live from is gone delivers nothing, so it is held as one the user paused, which gives up its lease. One the
+    // wrapped model runs again since, or that doesn't run here, is left as it is. One a subscribe hasn't recorded yet is
+    // left to the try that starts once it returns.
+    private void holdIfTheWrappedModelHeldItPaused(SubscriptionIdAndSubscriberId key) {
+        @Nullable StartRefusal startRefusal = startRefusals.get(key);
+        @Nullable CatchupCannotResumeException refused = startRefusal == null ? null : startRefusal.heldPaused.get();
+        if (startRefusal == null || refused == null) {
+            return;
+        }
+        @Nullable CompetingConsumer cc = competingConsumers.get(key);
+        if (cc == null && isBeingMade(key)) {
+            return;
+        }
+        startRefusal.heldPaused.compareAndSet(refused, null);
+        if (cc != null && cc.isRunning() && isPausedInTheWrappedModel(key.subscriptionId()) && !isRunningInTheWrappedModel(key.subscriptionId())) {
+            holdTheRefusedStartPaused(key, cc.state, refused, Boolean.TRUE.equals(registrations.get(key)));
+        }
     }
 
     // Called under the subscription's lock. A consumer the wrapped model runs or holds paused was made there again after

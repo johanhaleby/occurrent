@@ -18,6 +18,7 @@ package org.occurrent.subscription.blocking.durable.catchup;
 
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.ThrowableProxy;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.AppenderBase;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -692,8 +693,8 @@ class StreamCatchupTakeoverLifecycleTest {
     // The replays held because the catch-up cannot resume, each logged once
     private long heldReplays() {
         return logged.events.stream()
-                .filter(event -> event.getFormattedMessage().contains("failed, so it was held, and runs again once the subscription is resumed or start(true) is called on this model"))
-                .filter(event -> event.getThrowableProxy() != null && event.getThrowableProxy().getClassName().equals(CatchupCannotResumeException.class.getName()))
+                .filter(event -> event.getFormattedMessage().contains("failed, so the subscription is held paused, and resuming it or start(true) on this model replays again from the beginning"))
+                .filter(event -> event.getThrowableProxy() instanceof ThrowableProxy proxy && proxy.getThrowable() instanceof CatchupCannotResumeException)
                 .count();
     }
 

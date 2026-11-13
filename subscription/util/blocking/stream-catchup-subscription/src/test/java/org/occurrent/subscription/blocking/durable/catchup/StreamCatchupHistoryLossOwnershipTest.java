@@ -27,8 +27,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
@@ -44,6 +48,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.internal.LostStartHold;
 import org.slf4j.LoggerFactory;
@@ -920,6 +925,62 @@ class StreamCatchupHistoryLossOwnershipTest {
         // Then
         assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID);
         assertThat(catchup.isPaused(ID)).as("paused").isFalse();
+    }
+
+    static Stream<Arguments> storedCheckpointsOfAReplayThatStartedAboveTheBeginning() {
+        return Stream.of(
+                Arguments.of(Named.of("a position replay from position 1", new StringBasedCheckpoint(CatchupCheckpoints.format(2, 1, 3, TOKEN)))),
+                Arguments.of(Named.of("a time replay from 2026-01-01T00:00:00Z", new StringBasedCheckpoint(CatchupCheckpoints.format("2026-01-01T00:00:05Z", "2026-01-01T00:00:00Z", TOKEN)))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("storedCheckpointsOfAReplayThatStartedAboveTheBeginning")
+    void throws_CatchupCannotResumeException_before_anything_replays_when_the_stored_live_start_of_a_replay_that_started_above_the_beginning_is_gone(Checkpoint stored) {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        create();
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.subscribe(ID, StartAt.checkpoint(stored), action()));
+
+        // Then
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
+        assertAll(
+                () -> assertThat(received).as("events delivered").isEmpty(),
+                () -> assertThat(signals).as("catch-up signals, so no replay ran").isEmpty(),
+                () -> assertThat(saved).as("positions stored").isEmpty(),
+                () -> assertThat(liveModel.subscribeCalls).as("running subscribes on the live model").isEmpty(),
+                () -> assertThat(liveModel.subscribePausedCalls).as("paused subscribes on the live model").isEmpty(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isFalse()
+        );
+    }
+
+    @ParameterizedTest
+    @MethodSource("storedCheckpointsOfAReplayThatStartedAboveTheBeginning")
+    void holds_the_subscription_paused_at_the_stored_live_start_with_one_error_and_refuses_a_resume_when_the_hold_is_asked_and_the_live_start_of_a_replay_that_started_above_the_beginning_is_gone(Checkpoint stored) {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        create();
+
+        // When
+        Throwable thrown = catchThrowable(() -> LostStartHold.askedDuring(() -> catchup.subscribe(ID, StartAt.checkpoint(stored), action())));
+        Throwable resume = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).as("thrown by the subscribe").isNull();
+        assertThat(resume).as("thrown by the resume").isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
+        assertAll(
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(liveModel.isPaused(ID)).as("paused on the live model").isTrue(),
+                () -> assertThat(liveModel.subscribePausedCalls).as("paused subscribes on the live model").containsExactly(ID),
+                () -> assertThat(liveModel.subscribeCalls).as("running subscribes on the live model").isEmpty(),
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").isEmpty(),
+                () -> assertThat(errorsLogged()).as("errors logged").containsExactly(terminalFailureLog(ID, TOKEN)),
+                () -> assertThat(received).as("events delivered").isEmpty(),
+                () -> assertThat(signals).as("catch-up signals, so no replay ran").isEmpty(),
+                () -> assertThat(storage.read(ID)).as("stored position").isNull()
+        );
     }
 
     private void assertHeldPausedAfterALostLiveStart() {

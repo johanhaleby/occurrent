@@ -209,6 +209,11 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             firstStartAt = requestedStartAt;
         }
         refuseGlobalPositionWithoutPositions(subscriptionId, firstStartAt);
+        Subscription heldPaused = refuseOrHoldIfItsStoredLiveStartIsLost(subscriptionId, firstStartAt,
+                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), liveStart, action, true));
+        if (heldPaused != null) {
+            return heldPaused;
+        }
 
         CatchupReplay replay = replayFrom(subscriptionId, filter, startAt, action, firstStartAt);
         if (replay == null) {

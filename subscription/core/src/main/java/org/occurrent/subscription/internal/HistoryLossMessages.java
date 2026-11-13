@@ -56,7 +56,7 @@ public final class HistoryLossMessages {
      * before anything is read. {@code subscriptionId} only names the subscription, and may be null.
      */
     public static CatchupCannotResumeException cannotStartFrom(@Nullable String subscriptionId, Checkpoint checkpoint) {
-        return new HistoryLost("Cannot start catch-up subscription " + name(subscriptionId) + " from checkpoint \"" + checkpoint.asString()
+        return new HistoryLost(checkpoint, true, "Cannot start catch-up subscription " + name(subscriptionId) + " from checkpoint \"" + checkpoint.asString()
                 + "\", because the subscription model no longer has the history back to it, and starting from anywhere later would skip the events in between."
                 + " Start the subscription from the beginning, or from an earlier checkpoint the application kept.");
     }
@@ -66,22 +66,45 @@ public final class HistoryLossMessages {
      * {@code lostFrom}. {@code subscriptionId} only names the subscription, and may be null.
      */
     public static CatchupCannotResumeException historyLost(@Nullable String subscriptionId, Checkpoint lostFrom) {
-        return new HistoryLost("Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + lostFrom.asString()
+        return new HistoryLost(lostFrom, true, "Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + lostFrom.asString()
                 + "\", where it stopped, and resuming from anywhere later would skip the events in between. Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept.");
     }
 
     /**
-     * Whether {@code failure} is a refusal from {@link #cannotStartFrom} or {@link #historyLost}, so the position the
-     * subscription would go on from is one the subscription model no longer has the history back to. Any other
-     * {@link CatchupCannotResumeException} answers {@code false}.
+     * Refuses to hand a catch-up over to live delivery with {@code message}, because the subscription model no longer
+     * has the history from {@code lostLiveStart}, the live start the replay read. {@code replaysFromTheBeginning} says
+     * whether the replay started at position 0 or the beginning of time, so running it again skips nothing.
+     */
+    public static CatchupCannotResumeException liveStartLost(String message, Checkpoint lostLiveStart, boolean replaysFromTheBeginning) {
+        return new HistoryLost(lostLiveStart, !replaysFromTheBeginning, message);
+    }
+
+    /**
+     * Whether {@code failure} is a refusal from {@link #cannotStartFrom}, {@link #historyLost} or {@link #liveStartLost},
+     * so the position the subscription would go on from is one the subscription model no longer has the history back
+     * to. Any other {@link CatchupCannotResumeException} answers {@code false}.
      */
     public static boolean isHistoryLost(Throwable failure) {
         return failure instanceof HistoryLost;
     }
 
+    /**
+     * The position {@code failure} says the subscription model lost the history from, when {@link #isHistoryLost} is
+     * true for a refusal whose resume would skip events, and {@code null} otherwise. A loss by a replay from the
+     * beginning answers {@code null}, since running that replay again skips nothing.
+     */
+    public static @Nullable Checkpoint lostFromWhereAResumeSkipsEvents(Throwable failure) {
+        return failure instanceof HistoryLost lost && lost.resumeSkipsEvents ? lost.lostFrom : null;
+    }
+
     private static final class HistoryLost extends CatchupCannotResumeException {
-        private HistoryLost(String message) {
+        private final Checkpoint lostFrom;
+        private final boolean resumeSkipsEvents;
+
+        private HistoryLost(Checkpoint lostFrom, boolean resumeSkipsEvents, String message) {
             super(message);
+            this.lostFrom = lostFrom;
+            this.resumeSkipsEvents = resumeSkipsEvents;
         }
     }
 

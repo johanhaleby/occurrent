@@ -26,6 +26,7 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
@@ -121,7 +122,7 @@ import java.util.stream.Stream;
  * </p>
  */
 @NullMarked
-public class CatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions {
+public class CatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions, StartRefusalReportingSubscriptions {
 
     private static final int DEFAULT_CACHE_SIZE = CatchupSubscriptionModelConfig.DEFAULT_HANDOVER_CACHE_SIZE;
 
@@ -512,6 +513,26 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
         return anyCatchupModel().resumeSubscription(subscriptionId, startAt, presentCatchupModels().toList(), () -> isRunning(subscriptionId) && !isPaused(subscriptionId));
+    }
+
+    /**
+     * Tells {@code listener} about each subscription a catch-up of this model holds paused because the wrapped model lost
+     * the live start its replay would go live from, and passes it on to the wrapped model, so a start position the
+     * wrapped model refuses still reaches it. This model is found before the wrapped model when a caller looks the
+     * capability up, so without passing it on, those refusals would never reach the listener.
+     */
+    @Override
+    public void addStartRefusalListener(StartRefusalListener listener) {
+        Objects.requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
+        presentCatchupModels().forEach(model -> model.addHeldPausedListener(listener));
+        StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(wrapped -> wrapped.addStartRefusalListener(listener));
+    }
+
+    @Override
+    public void removeStartRefusalListener(StartRefusalListener listener) {
+        Objects.requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
+        presentCatchupModels().forEach(model -> model.removeHeldPausedListener(listener));
+        StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(wrapped -> wrapped.removeStartRefusalListener(listener));
     }
 
     /**

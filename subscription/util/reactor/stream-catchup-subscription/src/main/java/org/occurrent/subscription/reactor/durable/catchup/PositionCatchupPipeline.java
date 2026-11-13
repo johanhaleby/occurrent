@@ -308,17 +308,17 @@ final class PositionCatchupPipeline {
     // A replay again from a position above 0, with a token read now, skips an event below that position that was
     // written after the lost token was read
     private static CatchupCannotResumeException liveStartLostAbovePositionZero(@Nullable String subscriptionId, long origin, Checkpoint lostLiveStart) {
-        return new CatchupCannotResumeException("Cannot replay catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId) + " again from position " + origin
+        return HistoryLossMessages.liveStartLost("Cannot replay catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId) + " again from position " + origin
                 + ", because the subscription model no longer has the history from its live start, and a replay from there with a live start read now would never deliver an event before position "
                 + origin + " that was written after the lost live start was read. " + cancelFirst(subscriptionId) + "Start the subscription from the beginning again, and size the change stream history, such as the MongoDB oplog, to reach back across the replay. Lost live start: "
-                + lostLiveStart.asString());
+                + lostLiveStart.asString(), lostLiveStart, false);
     }
 
     private static CatchupCannotResumeException liveStartLostEachTime(@Nullable String subscriptionId, int replays, Checkpoint lastLiveStart, LongestReplay longestReplay) {
-        return new CatchupCannotResumeException("Cannot hand catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId)
+        return HistoryLossMessages.liveStartLost("Cannot hand catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId)
                 + " over to live delivery, because the subscription model lost the live start during or right after each of its " + replays
                 + " replays. The longest replay took " + longestReplay.longest().toMillis() + " ms from reading its live start to checking it, so size the change stream history, such as the MongoDB oplog, to reach back at least that far. Last live start: "
-                + lastLiveStart.asString());
+                + lastLiveStart.asString(), lastLiveStart, true);
     }
 
     /**

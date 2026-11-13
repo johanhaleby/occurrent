@@ -132,6 +132,12 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                     paused -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, firstStartAt), action, paused));
         }
 
+        Subscription heldPaused = refuseOrHoldIfItsStoredLiveStartIsLost(subscriptionId, firstStartAt,
+                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, filter, liveStart, action, true));
+        if (heldPaused != null) {
+            return heldPaused;
+        }
+
         // A replay that stop() cut short runs again from the last position it stored, as a restart would, so the
         // stored position does not move back
         Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId,

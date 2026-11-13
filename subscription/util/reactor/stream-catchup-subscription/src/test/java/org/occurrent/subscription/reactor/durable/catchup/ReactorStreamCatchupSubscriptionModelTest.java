@@ -322,6 +322,93 @@ class ReactorStreamCatchupSubscriptionModelTest {
     }
 
     @Test
+    @Timeout(30)
+    void a_named_catch_up_that_started_at_the_beginning_and_lost_its_live_start_each_time_is_held_paused_with_its_id_taken_and_a_resume_replays_it_again_and_hands_over() {
+        // Given a model that loses the live start in each of the replays
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.losesEveryToken = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new ThreeEventReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        try {
+            // When
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining("4 replays"))
+                    .verify(Duration.ofSeconds(20));
+
+            // Then it is held paused with its id taken
+            Throwable subscribeAgain = org.assertj.core.api.Assertions.catchThrowable(() -> catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty()));
+            assertThat(catchup.isPaused("sub")).as("paused").isTrue();
+            assertThat(catchup.isRunning("sub")).as("running").isFalse();
+            assertThat(subscribeAgain).as("what a subscribe of the same id throws").isInstanceOf(DuplicateSubscriptionIdException.class);
+            assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
+
+            // When the model has the live start again and the subscription is resumed
+            wrapped.losesEveryToken = false;
+            received.clear();
+            Subscription resumed = catchup.resumeSubscription("sub");
+
+            // Then it replays again from the beginning and hands over, since that skips nothing
+            StepVerifier.create(resumed.waitUntilStarted()).verifyComplete();
+            assertThat(received).as("the whole history, replayed again").containsExactly("e1", "e2", "e3");
+            assertThat(wrapped.subscribeCalls).as("handed over").containsExactly("sub");
+            assertThat(catchup.isPaused("sub")).as("paused").isFalse();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_named_catch_up_that_started_above_the_beginning_and_lost_its_live_start_is_held_paused_and_recorded_so_a_resume_refuses_and_a_start_replays_nothing_until_it_is_cancelled() {
+        // Given a stored position above 0 whose live start the model still has when the replay starts, and loses during it
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.answersTrueToTheFirstProbes = 1;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new ThreeEventReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        Checkpoint stored = GlobalCheckpoint.of(1, new StringBasedCheckpoint("stored live start"), 1, 3);
+        try {
+            // When
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(stored), cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining("again from position 1"))
+                    .verify(Duration.ofSeconds(20));
+
+            // Then it is held paused
+            assertThat(received).as("the events after the stored position").containsExactly("e2", "e3");
+            assertThat(catchup.isPaused("sub")).as("paused").isTrue();
+            assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
+
+            // When it is resumed or started, although the model has the live start again
+            wrapped.answersTrueToTheFirstProbes = Integer.MAX_VALUE;
+            received.clear();
+            Throwable resume = org.assertj.core.api.Assertions.catchThrowable(() -> catchup.resumeSubscription("sub"));
+            Throwable start = org.assertj.core.api.Assertions.catchThrowable(() -> catchup.start(true));
+
+            // Then the resume refuses, and nothing replays
+            assertThat(resume).as("what the resume throws").isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining("sub");
+            assertThat(start).as("what start(true) throws").isNull();
+            assertThat(received).as("events delivered by a replay again").isEmpty();
+            assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
+            assertThat(catchup.isPaused("sub")).as("paused").isTrue();
+
+            // When it is cancelled
+            catchup.cancelSubscription("sub").block(Duration.ofSeconds(10));
+            Subscription again = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+
+            // Then the id subscribes again and hands over
+            StepVerifier.create(again.waitUntilStarted()).verifyComplete();
+            assertThat(wrapped.subscribeCalls).as("handed over").containsExactly("sub");
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_named_start_after_a_bare_position_above_0_is_refused_with_the_advice_to_cancel_first_and_hands_nothing_over() {
         // Given
         NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
@@ -517,6 +604,8 @@ class ReactorStreamCatchupSubscriptionModelTest {
         };
         volatile Mono<Void> startedSignal = Mono.empty();
         volatile boolean losesEveryToken = false;
+        // canResumeFrom answers true to this many probes and false to every one after them
+        volatile int answersTrueToTheFirstProbes = Integer.MAX_VALUE;
 
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
@@ -527,7 +616,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         public Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
             return Mono.fromSupplier(() -> {
                 resumeProbes.add(checkpoint);
-                return !losesEveryToken;
+                return !losesEveryToken && resumeProbes.size() <= answersTrueToTheFirstProbes;
             });
         }
 

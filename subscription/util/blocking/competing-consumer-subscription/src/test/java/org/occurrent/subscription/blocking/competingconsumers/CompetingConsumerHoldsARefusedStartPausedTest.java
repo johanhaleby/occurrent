@@ -36,6 +36,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.HistoryLossMessages;
@@ -522,6 +523,58 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         );
     }
 
+    @Test
+    void holds_a_running_consumer_paused_with_one_error_and_gives_up_the_lease_when_the_wrapped_model_tells_that_it_holds_the_subscription_paused() {
+        // Given a consumer that runs and holds the lease
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+        assertThat(model.isRunning(ID)).as("running before the report").isTrue();
+        assertThat(strategy.holders).as("holding the lease before the report").containsExactly(ID);
+        int callsBefore = wrapped.calls.get();
+
+        // When the wrapped model holds it paused because the live start its replay would go live from is gone
+        reporting.holdsPausedAndTells(ID, HistoryLossMessages.liveStartLost("The live start is gone", (Checkpoint) () -> "live start", true));
+
+        // Then
+        await().untilAsserted(this::assertHeldPaused);
+        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+        grantTheLease();
+        model.onConsumeProhibited(ID, NODE);
+        await().during(NO_FURTHER_CALLS_FOR).atMost(NO_FURTHER_CALLS_FOR.plusSeconds(5)).untilAsserted(() ->
+                assertThat(wrapped.calls.get()).as("calls into the wrapped model after the report").isEqualTo(callsBefore));
+    }
+
+    @Test
+    void competes_again_and_resumes_the_wrapped_model_when_the_user_resumes_a_consumer_the_wrapped_model_told_it_holds_paused() {
+        // Given
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+        reporting.holdsPausedAndTells(ID, HistoryLossMessages.liveStartLost("The live start is gone", (Checkpoint) () -> "live start", true));
+        await().untilAsserted(this::assertHeldPaused);
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.resumeSubscription(ID));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        assertAll(
+                () -> assertThat(model.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(wrapped.isRunning(ID)).as("running in the wrapped model").isTrue(),
+                () -> assertThat(strategy.holders).as("holding the lease").containsExactly(ID)
+        );
+    }
+
+    private ReportingWrappedModel useAModelOverAWrappedModelThatReportsHeldPaused() {
+        model.shutdown();
+        ReportingWrappedModel reporting = new ReportingWrappedModel();
+        wrapped = reporting;
+        strategy = new Strategy();
+        model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
+        return reporting;
+    }
+
     private void useAModelBuiltOverAWrappedModelThatIsNotRunning() {
         model.shutdown();
         wrapped = new WrappedModel(false);
@@ -635,7 +688,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
 
     // A model that throws CatchupCannotResumeException from every call that starts or resumes a subscription while the
     // test says so, as a catch-up does for a position it has no history back to
-    private static final class WrappedModel implements SubscriptionModel {
+    private static class WrappedModel implements SubscriptionModel {
         private final Set<String> runningIds = new HashSet<>();
         private final Set<String> pausedIds = new HashSet<>();
         private final AtomicInteger calls = new AtomicInteger();
@@ -721,6 +774,11 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
             return pausedIds.contains(subscriptionId);
         }
 
+        synchronized void holdPaused(String subscriptionId) {
+            runningIds.remove(subscriptionId);
+            pausedIds.add(subscriptionId);
+        }
+
         private void enter(String call, String subscriptionId) {
             calls.incrementAndGet();
             callNames.add(call);
@@ -745,6 +803,27 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
             if (LostStartHold.isAsked()) {
                 askedDuringACall.add(call);
             }
+        }
+    }
+
+    // A wrapped model that holds a subscription paused and tells its listeners, as a catch-up does when the live start of
+    // its replay is gone
+    private static final class ReportingWrappedModel extends WrappedModel implements StartRefusalReportingSubscriptions {
+        private final List<StartRefusalListener> listeners = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void addStartRefusalListener(StartRefusalListener listener) {
+            listeners.add(listener);
+        }
+
+        @Override
+        public void removeStartRefusalListener(StartRefusalListener listener) {
+            listeners.remove(listener);
+        }
+
+        void holdsPausedAndTells(String subscriptionId, CatchupCannotResumeException refusal) {
+            holdPaused(subscriptionId);
+            listeners.forEach(listener -> listener.handleHeldPaused(subscriptionId, refusal));
         }
     }
 
