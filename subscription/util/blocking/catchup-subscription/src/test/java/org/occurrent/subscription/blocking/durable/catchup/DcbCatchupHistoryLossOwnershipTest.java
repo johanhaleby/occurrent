@@ -37,7 +37,10 @@ import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.StartAtCheckpoint;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
@@ -270,11 +273,38 @@ class DcbCatchupHistoryLossOwnershipTest {
                 () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
                 () -> assertThat(liveModel.isPaused(ID)).as("paused on the live model").isTrue(),
                 () -> assertThat(liveModel.subscribePausedCalls).as("paused subscribes on the live model").containsExactly(ID),
+                () -> assertThat(liveModel.subscribePausedStartAts).as("starts the live model was subscribed paused at").hasSize(1).allSatisfy(startAt -> assertThat(startAt.get(new SubscriptionModelContext(HistoryLosingLiveModel.class)))
+                        .isInstanceOfSatisfying(StartAtCheckpoint.class, at -> assertThat(at.checkpoint).isEqualTo(TOKEN))),
                 () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").isEmpty(),
                 () -> assertThat(errorsLogged()).as("errors logged").containsExactly(terminalFailureLog(ID, TOKEN)),
                 () -> assertThat(received).as("events delivered").isEmpty(),
                 () -> assertThat(storage.read(ID)).as("stored position").isNull()
         );
+    }
+
+    @Test
+    void hands_the_live_model_the_stored_live_start_when_a_lost_one_is_held_paused_for_a_dynamic_start_and_a_start_that_answers_null_for_a_wrapper_still_does() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        Checkpoint stored = new StringBasedCheckpoint(CatchupCheckpoints.format(2, 1, 3, TOKEN));
+        StartAt dynamic = StartAt.dynamic(context -> context.subscriptionModelType() == DcbCatchupSubscriptionModel.class ? StartAt.checkpoint(stored)
+                : SubscriptionModelWrapper.class.isAssignableFrom(context.subscriptionModelType()) ? null : StartAt.now());
+
+        // When
+        Throwable thrown = catchThrowable(() -> LostStartHold.askedDuring(() -> catchup.subscribe(ID, dynamic, action())));
+
+        // Then
+        assertThat(thrown).as("thrown by the subscribe").isNull();
+        assertThat(liveModel.subscribePausedStartAts).as("starts the live model was subscribed paused at").hasSize(1);
+        StartAt heldAt = liveModel.subscribePausedStartAts.get(0);
+        assertAll(
+                () -> assertThat(heldAt.get(new SubscriptionModelContext(WrapperLikeDurableModel.class))).as("start for a wrapper").isNull(),
+                () -> assertThat(heldAt.get(new SubscriptionModelContext(HistoryLosingLiveModel.class))).as("start for the live model").isInstanceOfSatisfying(StartAtCheckpoint.class,
+                        at -> assertThat(at.checkpoint).isEqualTo(TOKEN))
+        );
+    }
+
+    private abstract static class WrapperLikeDurableModel implements SubscriptionModelWrapper {
     }
 
     private void assertHeldPausedAfterALostLiveStart() {

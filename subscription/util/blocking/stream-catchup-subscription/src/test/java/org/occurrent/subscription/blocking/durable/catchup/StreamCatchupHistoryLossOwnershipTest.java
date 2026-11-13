@@ -45,8 +45,11 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.StartAtCheckpoint;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
@@ -60,9 +63,11 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -976,6 +981,8 @@ class StreamCatchupHistoryLossOwnershipTest {
                 () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
                 () -> assertThat(liveModel.isPaused(ID)).as("paused on the live model").isTrue(),
                 () -> assertThat(liveModel.subscribePausedCalls).as("paused subscribes on the live model").containsExactly(ID),
+                () -> assertThat(liveModel.subscribePausedStartAts).as("starts the live model was subscribed paused at").hasSize(1).allSatisfy(startAt -> assertThat(startAt.get(new SubscriptionModelContext(HistoryLosingLiveModel.class)))
+                        .isInstanceOfSatisfying(StartAtCheckpoint.class, at -> assertThat(at.checkpoint).isEqualTo(TOKEN))),
                 () -> assertThat(liveModel.subscribeCalls).as("running subscribes on the live model").isEmpty(),
                 () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").isEmpty(),
                 () -> assertThat(errorsLogged()).as("errors logged").containsExactly(terminalFailureLog(ID, TOKEN)),
@@ -1050,10 +1057,138 @@ class StreamCatchupHistoryLossOwnershipTest {
         );
     }
 
+    @Test
+    void throws_CatchupCannotResumeException_when_resuming_a_replay_held_before_it_went_live_after_a_resume_at_a_checkpoint_whose_live_start_is_gone_held_it_paused_again() {
+        // Given
+        heldPausedBeforeItWentLive();
+        Checkpoint lostLiveStart = new StringBasedCheckpoint(CatchupCheckpoints.format(2, 1, 3, TOKEN));
+
+        // When
+        LostStartHold.Answer<Subscription> resumedAt = LostStartHold.askedDuringCall(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(lostLiveStart)));
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(resumedAt.heldPaused()).as("held paused by the resume").isTrue();
+        assertThat(thrown).as("thrown by the resume").isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
+        assertAll(
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").isEmpty(),
+                () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty()
+        );
+    }
+
+    @Test
+    void throws_CatchupCannotResumeException_when_resuming_a_replay_held_before_it_went_live_after_a_resume_at_a_position_threw_from_the_live_model() {
+        // Given
+        heldPausedBeforeItWentLive();
+        liveModel.failingTheNextSubscribeWith(new IllegalStateException("live model down"));
+
+        // When
+        Throwable resumedAt = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN)));
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+        // Then
+        assertThat(resumedAt).as("thrown by the resume at a position").isInstanceOf(IllegalStateException.class).hasMessage("live model down");
+        assertThat(thrown).as("thrown by the resume").isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
+        assertAll(
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").isEmpty()
+        );
+    }
+
+    @Test
+    void stores_the_present_position_of_the_live_model_when_a_replay_held_before_it_went_live_is_resumed_at_now() {
+        // Given
+        heldPausedBeforeItWentLive();
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        Checkpoint stored = storage.read(ID);
+        assertThat(stored).as("stored position").isNotNull();
+        assertAll(
+                () -> assertThat(stored.asString()).as("stored position, the one the live model answered").startsWith("live-start-"),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue()
+        );
+    }
+
+    @Test
+    void keeps_the_position_a_resume_at_a_position_stored_when_nothing_was_stored_before_and_the_live_model_throws_from_the_subscribe_in_place() {
+        // Given
+        heldPausedBeforeItWentLive();
+        storage.delete(ID);
+        liveModel.failingTheNextSubscribeWith(new IllegalStateException("live model down"));
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN)));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isInstanceOf(IllegalStateException.class).hasMessage("live model down");
+        assertThat(storage.read(ID)).as("stored position").isEqualTo(LATER_TOKEN);
+    }
+
+    @Test
+    void puts_the_position_stored_before_back_with_the_write_condition_of_the_replacing_write_when_the_live_model_throws_from_the_subscribe_in_place() {
+        // Given
+        AtomicLong writeVersion = new AtomicLong(5);
+        heldPausedBeforeItWentLive(writeVersion);
+        Checkpoint storedBefore = storage.read(ID);
+        assertThat(storage.writeVersion(ID)).as("version stored by the held replay").hasValue(5);
+        liveModel.beforeTheNextSubscribe(() -> writeVersion.set(7)).failingTheNextSubscribeWith(new IllegalStateException("live model down"));
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN)));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isInstanceOf(IllegalStateException.class).hasMessage("live model down");
+        assertAll(
+                () -> assertThat(storedBefore).as("position stored before the resume").isNotNull(),
+                () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(storedBefore),
+                () -> assertThat(storage.writeVersion(ID)).as("version stored, the one the replacing write had").hasValue(5)
+        );
+    }
+
+    @Test
+    void hands_the_live_model_the_stored_live_start_when_a_lost_one_is_held_paused_for_a_dynamic_start_and_a_start_that_answers_null_for_a_wrapper_still_does() {
+        // Given
+        liveModel.withoutHistoryBack(TOKEN);
+        create();
+        Checkpoint stored = new StringBasedCheckpoint(CatchupCheckpoints.format(2, 1, 3, TOKEN));
+        StartAt dynamic = StartAt.dynamic(context -> context.subscriptionModelType() == StreamCatchupSubscriptionModel.class ? StartAt.checkpoint(stored)
+                : SubscriptionModelWrapper.class.isAssignableFrom(context.subscriptionModelType()) ? null : StartAt.now());
+
+        // When
+        Throwable thrown = catchThrowable(() -> LostStartHold.askedDuring(() -> catchup.subscribe(ID, dynamic, action())));
+
+        // Then
+        assertThat(thrown).as("thrown by the subscribe").isNull();
+        assertThat(liveModel.subscribePausedStartAts).as("starts the live model was subscribed paused at").hasSize(1);
+        StartAt heldAt = liveModel.subscribePausedStartAts.get(0);
+        assertAll(
+                () -> assertThat(heldAt.get(new SubscriptionModelContext(WrapperLikeDurableModel.class))).as("start for a wrapper").isNull(),
+                () -> assertThat(heldAt.get(new SubscriptionModelContext(HistoryLosingLiveModel.class))).as("start for the live model").isInstanceOfSatisfying(StartAtCheckpoint.class,
+                        at -> assertThat(at.checkpoint).isEqualTo(TOKEN))
+        );
+    }
+
+    private abstract static class WrapperLikeDurableModel implements SubscriptionModelWrapper {
+    }
+
     // A replay a subscribe started above the beginning, whose action ages out the live start the replay would go live
     // from, so the live model never gets the subscription and the loss is recorded
     private void heldPausedBeforeItWentLive() {
-        create();
+        heldPausedBeforeItWentLive(useCheckpointStorage(storage));
+    }
+
+    // As above, with every checkpoint write stamped with the version writeVersion holds when it is written
+    private void heldPausedBeforeItWentLive(AtomicLong writeVersion) {
+        heldPausedBeforeItWentLive(useCheckpointStorage(storage, id -> OptionalLong.of(writeVersion.get())));
+    }
+
+    private void heldPausedBeforeItWentLive(CheckpointStorageConfig.UseCheckpointInStorage checkpointStorage) {
+        create(checkpointStorage);
         Checkpoint stored = new StringBasedCheckpoint(CatchupCheckpoints.format(1, 1, 3, TOKEN));
         Subscription subscribed = catchup.subscribe(ID, StartAt.checkpoint(stored), cloudEvent -> {
             liveModel.withoutHistoryBack(TOKEN);
@@ -1106,7 +1241,11 @@ class StreamCatchupHistoryLossOwnershipTest {
     }
 
     private void create() {
-        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        create(useCheckpointStorage(storage));
+    }
+
+    private void create(CheckpointStorageConfig.UseCheckpointInStorage checkpointStorage) {
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, checkpointStorage.andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
         catchup = new StreamCatchupSubscriptionModel(liveModel, eventStore, config);
         catchup.listenForCatchup(ID, new CatchupListener() {
             @Override

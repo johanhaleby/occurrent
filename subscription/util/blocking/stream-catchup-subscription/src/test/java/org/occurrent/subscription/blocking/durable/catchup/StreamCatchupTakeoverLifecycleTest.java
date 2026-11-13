@@ -281,7 +281,7 @@ class StreamCatchupTakeoverLifecycleTest {
         try {
             // When
             catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
-            assertThat(waitUpTo(Duration.ofSeconds(10), asked::get)).as("resumed where the hold is logged").isTrue();
+            assertThat(waitUpTo(Duration.ofSeconds(10), () -> resumed.get() != null || resumeFailure.get() != null)).as("resumed where the hold is logged").isTrue();
             AtomicBoolean started = new AtomicBoolean();
             Throwable thrown = catchThrowable(() -> started.set(resumed.get().waitUntilStarted(Duration.ofSeconds(10))));
 

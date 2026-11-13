@@ -133,7 +133,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         }
 
         Subscription heldPaused = refuseOrHoldIfItsStoredLiveStartIsLost(subscriptionId, firstStartAt,
-                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, filter, liveStart, action, true));
+                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, liveStart), action, true));
         if (heldPaused != null) {
             return heldPaused;
         }

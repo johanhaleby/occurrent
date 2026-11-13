@@ -389,9 +389,31 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
         // Keeps a loss of resumedAt itself. Returns the loss it cleared, or null.
         @Nullable Checkpoint clear(@Nullable Checkpoint resumedAt) {
+            return clearUntilPutBack(resumedAt).lost();
+        }
+
+        // As clear, and what putBack needs to undo it
+        Cleared clearUntilPutBack(@Nullable Checkpoint resumedAt) {
             String at = resumedAt == null ? null : resumedAt.asString();
-            State before = state.getAndUpdate(seen -> new State(seen.clears() + 1, isAt(seen.lostFrom(), at) ? seen.lostFrom() : null, at));
-            return isAt(before.lostFrom(), at) ? null : before.lostFrom();
+            while (true) {
+                State seen = state.get();
+                State after = new State(seen.clears() + 1, isAt(seen.lostFrom(), at) ? seen.lostFrom() : null, at);
+                if (state.compareAndSet(seen, after)) {
+                    return new Cleared(seen, after);
+                }
+            }
+        }
+
+        // Undoes cleared, unless a loss was recorded or cleared since, which then stays
+        void putBack(Cleared cleared) {
+            state.compareAndSet(cleared.after(), cleared.before());
+        }
+
+        record Cleared(State before, State after) {
+            // The loss the clear removed, or null when there was none or it was kept
+            @Nullable Checkpoint lost() {
+                return after.lostFrom() == null ? before.lostFrom() : null;
+            }
         }
 
         private static boolean isAt(@Nullable Checkpoint lostFrom, @Nullable String position) {
@@ -817,9 +839,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * lost the live start it would go live from. This then subscribes it from {@code startAt}, with the filter and
      * action it was made with, as a subscribe at {@code startAt} would, in place of resuming it in the live delegate.
      * The replay it was held for doesn't run again. The position stored for the subscription is replaced by the checkpoint
-     * {@code startAt} gives, or removed when it starts now, so a resume after a pause doesn't replay from where the held
-     * replay got to. When that subscribe throws, the stored position is put back and the loss stays recorded, so a later
-     * {@link #resumeSubscription(String)} still refuses.
+     * {@code startAt} gives, or by the live delegate's present position when it starts now, so a resume after a pause or
+     * a restart doesn't replay from where the held replay got to. When that subscribe throws, the loss stays recorded, so
+     * a later {@link #resumeSubscription(String)} still refuses, and the position stored before is put back with the
+     * write condition the replacing write had, so a position another lease holder stored since refuses it. When nothing
+     * was stored before, the new position stays. When it starts now with checkpoint storage and the live delegate
+     * answers no present position, this throws {@link IllegalStateException} and changes nothing.
+     * <p>
+     * A loss the subscribe in place records, or the replay it starts records, is kept, so a later
+     * {@link #resumeSubscription(String)} refuses.
      * <p>
      * {@link RepositionableSubscriptions#findIn} finds this model only when the live delegate is repositionable.
      *
@@ -881,12 +909,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // this clear, and what it recorded before is cleared here, though its error may already be logged, so
                 // the log says that error no longer applies. A loss of the position given here is kept, since the
                 // run this resume started can report it, unless a late report of the old run replaced it first.
+                // The subscribe in place of a held replay cleared it before it started a replay of its own.
                 Subscribed made = subscribed.get(subscriptionId);
-                Checkpoint resumedAt = startAt instanceof StartAt.StartAtCheckpoint given ? given.checkpoint : null;
-                Checkpoint cleared = made == null ? null : made.historyLost().clear(resumedAt);
-                if (cleared != null) {
-                    String lost = cleared.asString();
-                    log.info(HistoryLossMessages.RESUMED_AFTER_LOSS_LOG, subscriptionId, startAt, lost);
+                if (neverWentLive == null && made != null) {
+                    logResumedAfterLoss(subscriptionId, startAt, made.historyLost().clear(resumedAt(startAt)));
                 }
                 inTheWay.forEach(ReplayInTheWay::end);
                 models.forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
@@ -896,6 +922,26 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     repositioning.remove(subscriptionId);
                 }
             }
+        }
+    }
+
+    private Checkpoint presentPositionToResumeAt(String subscriptionId) {
+        Checkpoint present = subscriptionModel.globalCheckpoint();
+        if (present == null) {
+            throw new IllegalStateException("The live subscription model " + subscriptionModel.getClass().getName() + " answered nothing when asked for the current position, so subscription "
+                                            + subscriptionId + " can't be resumed at StartAt.now() with the position stored. " + NOTHING_CHANGED);
+        }
+        return present;
+    }
+
+    private static @Nullable Checkpoint resumedAt(StartAt startAt) {
+        return startAt instanceof StartAt.StartAtCheckpoint given ? given.checkpoint : null;
+    }
+
+    private static void logResumedAfterLoss(String subscriptionId, StartAt startAt, @Nullable Checkpoint cleared) {
+        if (cleared != null) {
+            String lost = cleared.asString();
+            log.info(HistoryLossMessages.RESUMED_AFTER_LOSS_LOG, subscriptionId, startAt, lost);
         }
     }
 
@@ -2881,35 +2927,71 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     throw new IllegalStateException("Cannot resume subscription " + subscriptionId + " from the given position, because the catch-up replay it was held for is gone. " + NOTHING_CHANGED);
                 }
                 StartAt answered = answeredForThisModel(startAt);
-                // The held replay stored the position it replayed to, and a resume after a pause would replay from
-                // there again. The position given here replaces it, and a start from now removes it. Nothing else
-                // stores for the id meanwhile, since the live delegate has no subscription for it and the held
-                // replay's thread stores nothing more. A dynamic start is decided by what it answers this model, which
-                // answered holds, so its function doesn't run again here.
-                Checkpoint before = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
+                // The held replay stored the position it replayed to, and a resume after a pause or a restart would
+                // replay from there again. The position given here replaces it, and a start from now stores the present
+                // position, as a durable model's resume at now does. A dynamic start is decided by what it answers this
+                // model, which answered holds, so its function doesn't run again here.
                 @Nullable StartAt forThisModel = answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered;
-                boolean replacesTheStoredPosition = forThisModel instanceof StartAt.StartAtCheckpoint || (forThisModel != null && forThisModel.isNow());
-                if (forThisModel instanceof StartAt.StartAtCheckpoint given) {
-                    doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().save(subscriptionId, given.checkpoint, writeConditionFor(cfg, subscriptionId)));
-                } else if (replacesTheStoredPosition) {
-                    deletePositionFromStorage(subscriptionId);
-                }
+                StoredPositionReplaced replaced = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> replaceTheStoredPosition(cfg, forThisModel)).orElse(null);
+                // Cleared before the subscribe, so a loss the replay it starts records is kept, whether the subscribe
+                // records it on this thread or the replay records it once this lets go of the handover lock
+                HistoryLost.Cleared cleared = made.historyLost().clearUntilPutBack(resumedAt(startAt));
+                Subscription subscription;
                 try {
-                    return subscribe(subscriptionId, made.filter(), answered, made.action(), false);
+                    subscription = subscribe(subscriptionId, made.filter(), answered, made.action(), false);
                 } catch (Throwable e) {
                     // Throwable, since a live model written in Kotlin can throw a checked exception
-                    if (replacesTheStoredPosition) {
-                        try {
-                            if (before == null) {
-                                deletePositionFromStorage(subscriptionId);
-                            } else {
-                                doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().save(subscriptionId, before, writeConditionFor(cfg, subscriptionId)));
-                            }
-                        } catch (RuntimeException restoreFailure) {
-                            e.addSuppressed(restoreFailure);
-                        }
+                    made.historyLost().putBack(cleared);
+                    if (replaced != null) {
+                        replaced.putBack(e);
                     }
                     throw e;
+                }
+                logResumedAfterLoss(subscriptionId, startAt, cleared.lost());
+                return subscription;
+            }
+        }
+
+        // Stores the checkpoint forThisModel gives, or the present position when it starts now. Null when it stores
+        // nothing. Nothing else stores for the id here unless another node took the lease, since the live delegate has
+        // no subscription for it and the held replay's thread stores nothing more.
+        private @Nullable StoredPositionReplaced replaceTheStoredPosition(UseCheckpointInStorage cfg, @Nullable StartAt forThisModel) {
+            Checkpoint position = forThisModel instanceof StartAt.StartAtCheckpoint given ? given.checkpoint
+                    : forThisModel != null && forThisModel.isNow() ? presentPositionToResumeAt(subscriptionId) : null;
+            if (position == null) {
+                return null;
+            }
+            Checkpoint previous = cfg.storage().read(subscriptionId);
+            CheckpointWriteCondition writeCondition = writeConditionFor(cfg, subscriptionId);
+            cfg.storage().save(subscriptionId, position, writeCondition);
+            return new StoredPositionReplaced(cfg, previous, writeCondition);
+        }
+
+        // Puts back what was stored before, with the condition the replacing write had, so a position another lease
+        // holder stored since refuses it. With nothing stored before, the new position stays, since a delete could
+        // remove a position another lease holder stored since
+        private final class StoredPositionReplaced {
+            private final UseCheckpointInStorage cfg;
+            private final @Nullable Checkpoint previous;
+            private final CheckpointWriteCondition writeCondition;
+
+            private StoredPositionReplaced(UseCheckpointInStorage cfg, @Nullable Checkpoint previous, CheckpointWriteCondition writeCondition) {
+                this.cfg = cfg;
+                this.previous = previous;
+                this.writeCondition = writeCondition;
+            }
+
+            void putBack(Throwable subscribeFailure) {
+                if (previous == null) {
+                    return;
+                }
+                try {
+                    cfg.storage().save(subscriptionId, previous, writeCondition);
+                } catch (Throwable putBackFailure) {
+                    // Throwable, since a storage written in Kotlin can throw a checked exception
+                    if (putBackFailure != subscribeFailure) {
+                        subscribeFailure.addSuppressed(putBackFailure);
+                    }
                 }
             }
         }

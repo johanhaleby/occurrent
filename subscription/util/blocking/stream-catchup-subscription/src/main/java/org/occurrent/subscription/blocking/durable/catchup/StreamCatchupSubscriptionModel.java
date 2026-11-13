@@ -210,7 +210,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         }
         refuseGlobalPositionWithoutPositions(subscriptionId, firstStartAt);
         Subscription heldPaused = refuseOrHoldIfItsStoredLiveStartIsLost(subscriptionId, firstStartAt,
-                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), liveStart, action, true));
+                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, liveStart), action, true));
         if (heldPaused != null) {
             return heldPaused;
         }

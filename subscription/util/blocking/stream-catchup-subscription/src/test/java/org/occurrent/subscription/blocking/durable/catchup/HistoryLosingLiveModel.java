@@ -66,11 +66,14 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     };
     private volatile Runnable beforeTheNextResume = () -> {
     };
+    private volatile Runnable beforeTheNextSubscribe = () -> {
+    };
     private volatile boolean defersTheNextAfterPause;
     private volatile @Nullable Runnable deferredAfterPause;
 
     final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
     final List<String> subscribePausedCalls = new CopyOnWriteArrayList<>();
+    final List<StartAt> subscribePausedStartAts = new CopyOnWriteArrayList<>();
     final List<String> resumeCalls = new CopyOnWriteArrayList<>();
     final List<String> restartedFromNow = new CopyOnWriteArrayList<>();
     final List<Checkpoint> lossesReported = new CopyOnWriteArrayList<>();
@@ -105,6 +108,12 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     // Runs once, at the start of the next resume at a given position and before the subscription is resumed
     HistoryLosingLiveModel beforeTheNextResumeAt(Runnable beforeTheNextResumeAt) {
         this.beforeTheNextResumeAt = beforeTheNextResumeAt;
+        return this;
+    }
+
+    // Runs once, at the start of the next subscribe and before it fails or opens the subscription
+    HistoryLosingLiveModel beforeTheNextSubscribe(Runnable beforeTheNextSubscribe) {
+        this.beforeTheNextSubscribe = beforeTheNextSubscribe;
         return this;
     }
 
@@ -152,6 +161,10 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         subscribeCalls.add(subscriptionId);
+        Runnable beforeThisSubscribe = beforeTheNextSubscribe;
+        beforeTheNextSubscribe = () -> {
+        };
+        beforeThisSubscribe.run();
         Throwable failure = nextSubscribeThrows;
         if (failure != null) {
             nextSubscribeThrows = null;
@@ -171,6 +184,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     @Override
     public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         subscribePausedCalls.add(subscriptionId);
+        subscribePausedStartAts.add(startAt);
         paused.put(subscriptionId, new Open(filter, action, startAt));
         return handle(subscriptionId);
     }

@@ -69,6 +69,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
 
     final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
     final List<String> subscribePausedCalls = new CopyOnWriteArrayList<>();
+    final List<StartAt> subscribePausedStartAts = new CopyOnWriteArrayList<>();
     final List<String> resumeCalls = new CopyOnWriteArrayList<>();
     final List<String> restartedFromNow = new CopyOnWriteArrayList<>();
     final List<Checkpoint> lossesReported = new CopyOnWriteArrayList<>();
@@ -163,6 +164,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     @Override
     public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         subscribePausedCalls.add(subscriptionId);
+        subscribePausedStartAts.add(startAt);
         paused.put(subscriptionId, new Open(filter, action, startAt));
         return handle(subscriptionId);
     }
