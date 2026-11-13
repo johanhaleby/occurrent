@@ -163,7 +163,8 @@ other sections compile fine and behave differently, so read them first.
 - [A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered). An annotated
   method that a bean's class inherits from a superclass, or gets as an interface default method, starts running, and
   replays the history on its first start when its `startAt` or `source = PUSH` asks for that. The application fails
-  at startup when two beans inherit one annotated method, or when a bean behind a CGLIB proxy inherits a final one.
+  at startup when two beans run one annotated method, for example a bean of the class that declares it and a bean of
+  a subclass, or when a bean behind a CGLIB proxy inherits a final one.
   Compiles unchanged.
 
 ### Brokers
@@ -2091,7 +2092,8 @@ Applications on either starter with one of these:
 
 - a bean whose class inherits an annotated method from a superclass and doesn't override it
 - a bean whose class implements an interface with an annotated default method and doesn't override it
-- two or more beans whose classes extend the same superclass with an annotated method and don't override it
+- two or more beans that run one annotated method without overriding it, either two subclasses of the class that
+  declares it, or that class and a subclass, each a bean
 
 ### What changes
 
@@ -2103,10 +2105,12 @@ Applications on either starter with one of these:
 - A handler declared with a type variable, such as `on(E event)` on `Base<E>`, takes its event type from the bean's
   class. A class that extends `Base<Placed>` subscribes to `Placed`. An inherited factory method declared with a type
   variable reads its state type the same way.
-- Two beans that inherit one annotated method register two handlers with the same id, so the application fails at
-  startup with `DuplicateSubscriptionIdException`. The id is the key the subscription's checkpoint is stored under,
+- Two beans that run one annotated method register two handlers with the same id, so the application fails at
+  startup with `DuplicateSubscriptionIdException`. That holds when both inherit it, and when one of them is a bean of
+  the class that declares it. The id is the key the subscription's checkpoint is stored under,
   so two handlers can't share it.
-- An inherited handler that is static fails at startup with `SubscriptionHandlerNotInvocableException`. So does one
+- An inherited subscription handler that is static fails at startup with `SubscriptionHandlerNotInvocableException`.
+  A static `@Projection`, `@Snapshot` or `@Saga` factory method runs, since it reads no bean. So does one
   on a bean behind a CGLIB proxy when it is private, final, or package-private in another package than the bean's
   class, since the proxy can't override it. A method the bean's class declares already got the same refusal, except
   the package-private case, which can't happen there.
@@ -2133,7 +2137,8 @@ methods. For each one a bean inherits without overriding it:
   it running everywhere.
 - If it's static, make it an instance method. If the bean is behind a CGLIB proxy and the method is private, final,
   or package-private in another package, make it public or protected and not final. In Kotlin, mark it `open`.
-- If two or more beans inherit it, override the method in each class and repeat the annotation with an id of its own.
+- If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
+  A bean of the class that declares it keeps the original id.
 
 The code compiles unchanged, and nothing stored changes. There is no OpenRewrite recipe, because nothing in the code
 says whether an inherited handler was meant to run. See

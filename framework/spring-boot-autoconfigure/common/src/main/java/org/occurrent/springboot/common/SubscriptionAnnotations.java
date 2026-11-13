@@ -328,9 +328,11 @@ public final class SubscriptionAnnotations {
      * A JDK interface proxy runs the factory through the proxy when {@code method} is declared on one of the proxy's
      * interfaces, which is the method the scan reads from such a proxy's class, and refuses any other method, since the
      * proxy does not implement it. A CGLIB proxy passes the check above, since {@code getUserClass} of the proxy's own
-     * class is the class it subclasses, so a factory invoked through it still runs its advice. It refuses a
-     * package-private {@code method} declared in another package than that class, which the proxy cannot override,
-     * so invoking it would run the method's body on the proxy instance instead of on a target.
+     * class is the class it subclasses, so a factory invoked through it still runs its advice. It refuses an instance
+     * {@code method} that is package-private and declared in another package than that class, which the proxy cannot
+     * override, so invoking it would run the method's body on the proxy instance instead of on a target. Only
+     * inheritance reaches that case. A private or final factory runs on the proxy instance, as it did before inherited
+     * factories were found, and a static factory runs, since it reads no instance.
      *
      * @param annotationName the annotation name for error messages, for example {@code "@Projection"}
      * @param bean           the (possibly proxied) bean the factory method was found on
@@ -349,7 +351,7 @@ public final class SubscriptionAnnotations {
             if (!runsUnchanged(targetUserClass, method)) {
                 throw new IllegalStateException("%s factory %s#%s cannot run because %s does not run the factory the scan read from %s, it either overrides it or does not inherit it. This happens when the factory bean built a different implementation than the one the scan recorded, so return the same implementation on every call.".formatted(annotationName, bean.getClass().getName(), method.getName(), targetUserClass.getName(), declaringClass.getName()));
             }
-            if (AopUtils.isCglibProxy(target) && isPackagePrivateOutsidePackageOf(method, targetUserClass)) {
+            if (AopUtils.isCglibProxy(target) && !Modifier.isStatic(method.getModifiers()) && isPackagePrivateOutsidePackageOf(method, targetUserClass)) {
                 throw new IllegalStateException("%s factory %s#%s cannot run because it is package-private and declared in %s, outside the package of %s, so the CGLIB proxy around the bean cannot override it and would run it on the proxy instead of on the bean. Make the method public or protected.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName(), targetUserClass.getName()));
             }
         }

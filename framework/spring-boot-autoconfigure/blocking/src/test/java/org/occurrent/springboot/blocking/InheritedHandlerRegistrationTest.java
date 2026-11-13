@@ -170,6 +170,29 @@ class InheritedHandlerRegistrationTest {
     }
 
     @Test
+    void package_private_handlers_of_the_same_signature_in_a_superclass_and_a_subclass_in_other_packages_are_two_handlers() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", CrossPackageSameSignatureSubscriber.class, () -> new CrossPackageSameSignatureSubscriber(bodies)).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactlyInAnyOrder("cross-package-package-private-handler", "cross-package-subclass-handler");
+            anyHandlerFor(subscriptions, "cross-package-package-private-handler").invoke(null, new CrossPackageEvent());
+            anyHandlerFor(subscriptions, "cross-package-subclass-handler").invoke(null, new CrossPackageEvent());
+            assertThat(bodies).containsExactlyInAnyOrder("package-private-body", "subclass-body");
+        });
+    }
+
+    @Test
+    void a_lazy_bean_that_only_inherits_its_handler_registers_at_startup_without_being_asked_for() {
+        runner.withUserConfiguration(LazyInheritingConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(subscribedIds(context.getBean(Subscriptions.class))).containsExactly("base-handler");
+        });
+    }
+
+    @Test
     void two_beans_extending_the_same_annotated_superclass_fail_startup_because_they_share_one_id() {
         runner.withUserConfiguration(TwoBeansOfOneSuperclassConfiguration.class).run(context -> {
             assertThat(context).hasFailed();
@@ -505,6 +528,17 @@ class InheritedHandlerRegistrationTest {
         }
     }
 
+    static class CrossPackageSameSignatureSubscriber extends CrossPackagePackagePrivateHandler {
+        CrossPackageSameSignatureSubscriber(List<String> bodies) {
+            super(bodies);
+        }
+
+        @Subscription(id = "cross-package-subclass-handler")
+        void on(CrossPackageEvent event) {
+            bodies.add("subclass-body");
+        }
+    }
+
     abstract static class SamePackageHandlerBase {
         final List<String> bodies;
 
@@ -797,6 +831,15 @@ class InheritedHandlerRegistrationTest {
         @Bean
         PrivateSubclassBean privateBean(Invocations invocations) {
             return new PrivateSubclassBean(invocations);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class LazyInheritingConfiguration {
+        @Bean
+        @Lazy
+        InheritingBean lazyInheritingBean(Invocations invocations) {
+            return new InheritingBean(invocations);
         }
     }
 

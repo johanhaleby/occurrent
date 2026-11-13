@@ -826,6 +826,15 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
+    void invokeDescriptorFactory_runs_a_static_package_private_factory_from_another_package_on_a_cglib_proxy_left_proxied() throws Exception {
+        InheritsCrossPackageMethods proxy = cglibProxyOfInheritingBean(false);
+
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, CrossPackageMethods.class.getDeclaredMethod("packagePrivateStatic"));
+
+        assertThat(result).isEqualTo("package-private-static-ran");
+    }
+
+    @Test
     void invokeDescriptorFactory_runs_a_package_private_factory_from_another_package_on_a_bean_nothing_proxies() throws Exception {
         Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", new InheritsCrossPackageMethods(), crossPackagePackagePrivate());
 

@@ -26,6 +26,10 @@ public abstract class CrossPackageMethods {
         return "package-private-ran";
     }
 
+    static String packagePrivateStatic() {
+        return "package-private-static-ran";
+    }
+
     public String publicMethod() {
         return "public-ran";
     }

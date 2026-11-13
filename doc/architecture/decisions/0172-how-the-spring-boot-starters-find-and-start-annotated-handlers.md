@@ -96,10 +96,11 @@ I rejected three smaller changes:
   whole history on the first start, and so does a `@Snapshot`, whose `startAt` is `BEGINNING` by default. A
   `@Projection` or `@Saga` with `source = PUSH` replays the event store's history before it goes live, unless it sets
   `catchup = NONE`.
-- **Two beans whose classes extend one superclass with an annotated handler, and don't override it, fail at startup
-  with `DuplicateSubscriptionIdException`.** Both handlers have the same id, and the id is the key a subscription's
-  checkpoint is stored under, so they can't share it. Overriding the method in each class and repeating the annotation
-  with an id of its own fixes it.
+- **Two beans that run one annotated handler without overriding it fail at startup with
+  `DuplicateSubscriptionIdException`.** They are two subclasses of the class that declares it, or that class and a
+  subclass, each a bean. Both handlers have the same id, and the id is the key a subscription's
+  checkpoint is stored under, so they can't share it. Overriding the method in each subclass and repeating the
+  annotation with an id of its own fixes it.
 - A subscription annotation on a superclass method that is static fails startup with
   `SubscriptionHandlerNotInvocableException`. So does one on a bean behind a CGLIB proxy when the method is private,
   final, or package-private in another package than the bean's class, since the proxy can't override it. A method the

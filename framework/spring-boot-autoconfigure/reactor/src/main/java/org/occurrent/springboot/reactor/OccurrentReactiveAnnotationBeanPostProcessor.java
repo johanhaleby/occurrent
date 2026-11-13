@@ -504,8 +504,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
 
     // A handler is keyed by bean name, method name and parameter types, so a rescan skips it, and so do two passes
     // that read one handler as different Methods, the bean's class method and a JDK proxy's interface method. The
-    // declaring class joins the key only for a private method, the one case where a class and its superclass declare
-    // two handlers of one signature, and a private method is never an interface or proxy method.
+    // declaring class joins the key only for a private or package-private method. Those are the cases where a class and
+    // its superclass declare two handlers of one signature, since neither overrides the other when the method is
+    // private or the two classes are in different packages, and such a method is never an interface or proxy method.
     private boolean isAlreadyRegistered(String beanName, Method method) {
         return registeredHandlers.contains(handlerKey(beanName, method));
     }
@@ -516,7 +517,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     private static String handlerKey(String beanName, Method method) {
-        String owner = Modifier.isPrivate(method.getModifiers()) ? method.getDeclaringClass().getName() + '#' : "";
+        int modifiers = method.getModifiers();
+        String owner = Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers) ? "" : method.getDeclaringClass().getName() + '#';
         return beanName + '#' + owner + method.getName() + Arrays.toString(method.getParameterTypes());
     }
 
