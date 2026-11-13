@@ -71,6 +71,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     final List<String> subscribePausedCalls = new CopyOnWriteArrayList<>();
     final List<StartAt> subscribePausedStartAts = new CopyOnWriteArrayList<>();
     final List<String> resumeCalls = new CopyOnWriteArrayList<>();
+    final List<StartAt> resumedAt = new CopyOnWriteArrayList<>();
     final List<String> restartedFromNow = new CopyOnWriteArrayList<>();
     final List<Checkpoint> lossesReported = new CopyOnWriteArrayList<>();
 
@@ -195,6 +196,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         beforeTheNextResumeAt = () -> {
         };
         beforeThisResume.run();
+        resumedAt.add(startAt);
         RuntimeException failure = nextRepositioningResumeThrows;
         if (failure != null) {
             nextRepositioningResumeThrows = null;

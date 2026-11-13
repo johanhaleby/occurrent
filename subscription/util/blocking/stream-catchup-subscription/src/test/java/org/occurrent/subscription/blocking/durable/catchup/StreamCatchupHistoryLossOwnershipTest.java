@@ -1356,6 +1356,29 @@ class StreamCatchupHistoryLossOwnershipTest {
     }
 
     @Test
+    void refuses_a_later_resume_when_the_live_model_loses_the_present_position_a_resume_at_now_over_a_stored_catch_up_position_resumed_it_at() {
+        // Given
+        StringBasedCheckpoint present = new StringBasedCheckpoint("event-store-live-start");
+        eventStore = eventStoreReportingTheLiveStart(present.asString());
+        create();
+        catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
+        catchup.pauseSubscription(ID);
+        storage.save(ID, new StringBasedCheckpoint(CatchupCheckpoints.format(2, 1, 3, TOKEN)));
+        liveModel.withoutHistoryBack(present);
+
+        // When
+        Throwable resumedAtNow = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
+
+        // Then
+        assertThat(resumedAtNow).as("thrown by the resume at now").isNull();
+        assertAll(
+                () -> assertThat(liveModel.lossesReported).as("losses the live model reported").containsExactly(present),
+                () -> assertThat(catchThrowable(() -> catchup.resumeSubscription(ID))).as("thrown by a later resume").isInstanceOf(CatchupCannotResumeException.class)
+                        .hasMessage(HistoryLossMessages.historyLost(ID, present).getMessage())
+        );
+    }
+
+    @Test
     void throws_IllegalStateException_and_changes_nothing_when_a_replay_held_before_it_went_live_is_resumed_at_now_and_neither_the_event_store_nor_the_live_model_answers_a_present_position() {
         // Given
         eventStore = eventStoreReportingTheLiveStart(null);
