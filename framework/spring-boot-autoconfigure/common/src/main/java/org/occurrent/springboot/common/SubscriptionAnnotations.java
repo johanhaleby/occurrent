@@ -581,8 +581,9 @@ public final class SubscriptionAnnotations {
      * superclasses and its interfaces, so an inherited handler and an interface default method count the way a
      * declared one does.
      * Each method is the one {@code type} actually runs, so an override is found once, under its own annotation if it
-     * repeats one and under the overridden method's if it doesn't. Bridge methods are left out, so a generic handler
-     * is found once too. Overriding follows the JVM's rules, under which a package-private method is overridden only
+     * repeats one and under the overridden method's if it doesn't. Generic bridge methods are left out, so a generic
+     * handler is found once too. A public class that inherits a public method from a package-private superclass gives
+     * the bridge method javac generates for it, which calls the inherited method. Overriding follows the JVM's rules, under which a package-private method is overridden only
      * from its own package or through a chain of overrides that starts there. Spring's annotation search ignores
      * packages, so it can give a method the annotation of a package-private method the method doesn't override. Such a
      * method is refused with an {@link IllegalStateException}, since nothing says which of the two bodies the handler
