@@ -3175,24 +3175,28 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // Outside the monitor, since disposing cancels the subscription to the wrapped model's feed and starting the
             // delete calls the storage. The writers are retired already, so nothing the subscription delivers until it
             // is disposed writes a position, and no step toward starting it begins.
-            for (InternalSubscription cancelled : Arrays.asList(runningSubscription, pausedSubscription)) {
-                if (cancelled != null) {
-                    try {
-                        cancelled.disposable.dispose();
-                        endBeforeItStarted(cancelled, cancelledBeforeItStarted(subscriptionId));
-                        // After the dispose, so the generation it cancelled does not hear of the read ending
-                        cancelled.readsAbandoned.tryEmitError(cancelledBeforeItStarted(subscriptionId));
-                        endPresentRead(cancelled);
-                    } finally {
-                        // Whatever the steps above throw, so no cancel of the id waits for this generation's takeovers.
-                        // Before the delete of this cancel starts, so that delete is the latest of the id and goes ahead
-                        // in place of the deletes given back here, see decideDelete. A throw here also skips starting
-                        // that delete, and a cancel waiting for it then waits until the model shuts down.
-                        giveBackTakeOvers(subscriptionId, cancelled);
+            try {
+                for (InternalSubscription cancelled : Arrays.asList(runningSubscription, pausedSubscription)) {
+                    if (cancelled != null) {
+                        try {
+                            cancelled.disposable.dispose();
+                            endBeforeItStarted(cancelled, cancelledBeforeItStarted(subscriptionId));
+                            // After the dispose, so the generation it cancelled does not hear of the read ending
+                            cancelled.readsAbandoned.tryEmitError(cancelledBeforeItStarted(subscriptionId));
+                            endPresentRead(cancelled);
+                        } finally {
+                            // Whatever the steps above throw, so no cancel of the id waits for this generation's
+                            // takeovers. Before the delete of this cancel starts, so that delete is the latest of the
+                            // id and goes ahead in place of the deletes given back here, see decideDelete.
+                            giveBackTakeOvers(subscriptionId, cancelled);
+                        }
                     }
                 }
+            } finally {
+                // Also after a throw above, since an earlier cancel of the id can wait for this delete to end in place
+                // of its own. The writers are retired already, so no position write starts meanwhile.
+                startDelete(subscriptionId, delete);
             }
-            startDelete(subscriptionId, delete);
             wrappedModelCancelled = Mono.empty();
         }
         return Mono.when(wrappedModelCancelled, delete).cache();
