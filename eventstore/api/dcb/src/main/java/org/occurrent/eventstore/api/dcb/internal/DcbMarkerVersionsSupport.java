@@ -169,8 +169,9 @@ public final class DcbMarkerVersionsSupport {
     }
 
     /**
-     * The versions of {@code keys}, the marker keys of {@code criteria}, present only when every tag key has a reportable
-     * marker in {@code observed}. A type key without a marker is reported as absent.
+     * The versions of {@code keys}, the marker keys of {@code criteria}, present only when every key has a reportable
+     * marker in {@code observed}. The exception is a type key whose marker is missing or has version 0, which is
+     * reported as absent.
      */
     public static Optional<DcbMarkerVersions> versionsOf(DcbCriteria criteria, Set<String> keys, Map<String, MarkerObservation> observed) {
         requireNonNull(criteria, "Criteria cannot be null");
