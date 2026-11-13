@@ -839,12 +839,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * lost the live start it would go live from. This then subscribes it from {@code startAt}, with the filter and
      * action it was made with, as a subscribe at {@code startAt} would, in place of resuming it in the live delegate.
      * The replay it was held for doesn't run again. The position stored for the subscription is replaced by the checkpoint
-     * {@code startAt} gives, or by the live delegate's present position when it starts now, so a resume after a pause or
-     * a restart doesn't replay from where the held replay got to. When that subscribe throws, the loss stays recorded, so
+     * {@code startAt} gives, so a resume after a pause or a restart doesn't replay from where the held replay got to.
+     * When it starts now, the position stored is the live start the event store reports, or the live delegate's present
+     * position when the event store reports none, and the subscription goes live from that position, so an event that
+     * commits between the store and the subscribe is delivered. When that subscribe throws, the loss stays recorded, so
      * a later {@link #resumeSubscription(String)} still refuses, and the position stored before is put back with the
      * write condition the replacing write had, so a position another lease holder stored since refuses it. When nothing
-     * was stored before, the new position stays. When it starts now with checkpoint storage and the live delegate
-     * answers no present position, this throws {@link IllegalStateException} and changes nothing.
+     * was stored before, the new position stays. When it starts now with checkpoint storage and neither the event store
+     * nor the live delegate answers a position, this throws {@link IllegalStateException} and changes nothing.
      * <p>
      * A loss the subscribe in place records, or the replay it starts records, is kept, so a later
      * {@link #resumeSubscription(String)} refuses.
