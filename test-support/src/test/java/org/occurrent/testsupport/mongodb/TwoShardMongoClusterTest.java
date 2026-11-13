@@ -28,6 +28,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.testsupport.mongodb.TwoShardMongoCluster.Hold;
 
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -105,28 +106,55 @@ class TwoShardMongoClusterTest {
         db.createCollection("events");
         MongoCollection<Document> events = db.getCollection("events");
         ExecutorService executor = Executors.newSingleThreadExecutor();
-        try (ClientSession session = mongo.startSession()) {
-            cluster.holdCommitsOnSecondShard();
-            try {
-                session.startTransaction();
-                events.insertOne(session, new Document("_id", "held"));
-                Future<?> commit = executor.submit(session::commitTransaction);
+        try (ClientSession session = mongo.startSession(); Hold ignored = cluster.holdCommitsOnSecondShard()) {
+            session.startTransaction();
+            events.insertOne(session, new Document("_id", "held"));
+            Future<?> commit = executor.submit(session::commitTransaction);
 
-                assertThatThrownBy(() -> commit.get(2, TimeUnit.SECONDS))
-                        .as("the commit on the second shard should still be held after 2 seconds")
-                        .isInstanceOf(TimeoutException.class);
-                assertThat(commit.isDone()).as("commit is done while held").isFalse();
+            assertThatThrownBy(() -> commit.get(2, TimeUnit.SECONDS))
+                    .as("the commit on the second shard should still be held after 2 seconds")
+                    .isInstanceOf(TimeoutException.class);
 
-                cluster.releaseCommitsOnSecondShard();
+            cluster.releaseCommitsOnSecondShard();
 
-                commit.get(30, TimeUnit.SECONDS);
-            } finally {
-                cluster.releaseCommitsOnSecondShard();
-                executor.shutdownNow();
-            }
+            commit.get(30, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
         }
 
         assertThat(events.find(new Document("_id", "held")).first()).isNotNull();
+    }
+
+    @Test
+    void holds_the_second_shards_half_of_a_cross_shard_commit_while_the_first_shard_commits() throws Exception {
+        String database = cluster.createDatabase(SECOND_SHARD);
+        MongoDatabase db = mongo.getDatabase(database);
+        cluster.shardCheckpointCollection(database, CHECKPOINTS);
+        db.createCollection("events");
+        MongoCollection<Document> checkpoints = db.getCollection(CHECKPOINTS);
+        MongoCollection<Document> events = db.getCollection("events");
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (ClientSession session = mongo.startSession(); Hold ignored = cluster.holdCommitsOnSecondShard()) {
+            session.startTransaction();
+            checkpoints.insertOne(session, new Document("_id", ID_ON_FIRST_SHARD));
+            events.insertOne(session, new Document("_id", "event-1"));
+            Future<?> commit = executor.submit(session::commitTransaction);
+
+            assertThatThrownBy(() -> commit.get(2, TimeUnit.SECONDS))
+                    .as("the cross shard commit should still be held after 2 seconds")
+                    .isInstanceOf(TimeoutException.class);
+            assertThat(events.find(new Document("_id", "event-1")).first())
+                    .as("the event on the second shard while its commit is held").isNull();
+
+            cluster.releaseCommitsOnSecondShard();
+
+            commit.get(30, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(checkpoints.find(new Document("_id", ID_ON_FIRST_SHARD)).first()).as("marker after the commit").isNotNull();
+        assertThat(events.find(new Document("_id", "event-1")).first()).as("event after the commit").isNotNull();
     }
 
     private void assertMarkersAreSplitAcrossTheShards(String database) {

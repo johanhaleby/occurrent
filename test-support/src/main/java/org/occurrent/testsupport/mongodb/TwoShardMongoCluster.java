@@ -69,7 +69,7 @@ public final class TwoShardMongoCluster implements AutoCloseable {
      * Starts the container, starts the second shard in it and adds that shard to the cluster.
      */
     public static TwoShardMongoCluster start() {
-        MongoDBContainer container = new MongoDBContainer(ReplicaSetReadyMongoDBContainer.withDefaultVersion().getDockerImageName())
+        MongoDBContainer container = new MongoDBContainer("mongo:" + ReplicaSetReadyMongoDBContainer.defaultVersion())
                 .withSharding()
                 .withEnv("GLIBC_TUNABLES", "glibc.pthread.rseq=1");
         try {
@@ -115,10 +115,21 @@ public final class TwoShardMongoCluster implements AutoCloseable {
 
     /**
      * Makes every transaction that commits on the second shard wait before it commits there, until
-     * {@link #releaseCommitsOnSecondShard()}.
+     * {@link #releaseCommitsOnSecondShard()} or until the returned {@link Hold} is closed. Use it in a
+     * try-with-resources, so a test that fails while commits are held doesn't leave the next test hanging.
      */
-    public void holdCommitsOnSecondShard() {
+    public Hold holdCommitsOnSecondShard() {
         setCommitFailPoint("alwaysOn");
+        return this::releaseCommitsOnSecondShard;
+    }
+
+    /**
+     * Commits held on the second shard. Closing it releases them, and closing it after they were released does nothing.
+     */
+    @FunctionalInterface
+    public interface Hold extends AutoCloseable {
+        @Override
+        void close();
     }
 
     /**
