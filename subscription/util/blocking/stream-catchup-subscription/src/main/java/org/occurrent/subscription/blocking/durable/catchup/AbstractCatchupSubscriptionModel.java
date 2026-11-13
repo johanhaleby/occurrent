@@ -975,6 +975,23 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).ifPresent(liveDelegate -> liveDelegate.removeStartRefusalListener(listener));
     }
 
+    /**
+     * True while the replay held for {@code refusal} is still parked, so a resume, a {@code start(true)} that runs it
+     * again, a resume at a given position or a cancel ends it. Asks the live delegate too, since the listener is passed
+     * on to it.
+     */
+    @Override
+    public boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
+        return holdsTheReplayHeldFor(subscriptionId, refusal)
+               || StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).map(liveDelegate -> liveDelegate.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
+    }
+
+    // Without asking the live delegate, for a dispatcher whose children share one
+    boolean holdsTheReplayHeldFor(String subscriptionId, CatchupCannotResumeException refusal) {
+        ParkedReplay parked = parkedReplays.get(subscriptionId);
+        return parked != null && parked.replay().heldFor == refusal;
+    }
+
     // Without passing it on to the live delegate, for a dispatcher whose children share one
     void addHeldPausedListener(StartRefusalListener listener) {
         heldPausedListeners.add(listener);
@@ -1656,6 +1673,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // is held for it. Its thread fails its handle only after it lets go of that lock, so whatever runs it again
         // reads this, not whether the handle is done yet.
         private volatile boolean lostItsLiveStart = false;
+        // What its handle failed with and the held-paused listeners were told, set along with lostItsLiveStart
+        private volatile @Nullable CatchupCannotResumeException heldFor;
         // The last position an attempt at this replay stored, which the next attempt replays from
         private final AtomicReference<@Nullable Checkpoint> lastStored = new AtomicReference<>();
         // Whether a resume started it, so it resumes the subscription the live delegate holds instead of subscribing it
@@ -3610,6 +3629,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         pauseRequestedDuringCatchup.remove(subscriptionId);
         attempt.heldForLostLiveStart = true;
         attempt.replay.lostItsLiveStart = true;
+        attempt.replay.heldFor = (CatchupCannotResumeException) failure;
         hold(subscriptionId, attempt);
         Checkpoint lost = HistoryLossMessages.lostFromWhereAResumeSkipsEvents(failure);
         Subscribed made = subscribed.get(subscriptionId);

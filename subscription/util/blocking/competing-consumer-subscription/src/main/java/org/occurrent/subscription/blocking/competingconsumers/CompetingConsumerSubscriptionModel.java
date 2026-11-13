@@ -2692,6 +2692,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         return inTheWrappedModelFor(subscriptionId, () -> delegate.isPaused(subscriptionId));
     }
 
+    private boolean isHeldPausedInTheWrappedModelFor(String subscriptionId, CatchupCannotResumeException refused) {
+        return inTheWrappedModelFor(subscriptionId, () -> StartRefusalReportingSubscriptions.findIn(delegate).map(model -> model.isHeldPausedFor(subscriptionId, refused)).orElse(false));
+    }
+
     /**
      * Runs a call this model makes into the wrapped model for a step of its own on the subscription, such as a pause on
      * a loss of the lease, or a look at whether the wrapped model runs the subscription before it acts. Every event of
@@ -4782,8 +4786,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     // Called under the subscription's lock. A consumer the wrapped model holds paused because the history its subscription
     // would go live from is gone delivers nothing, so it is held as one the user paused, which gives up its lease. One the
-    // wrapped model runs again since, or that doesn't run here, is left as it is. One a subscribe hasn't recorded yet is
-    // left to the try that starts once it returns.
+    // wrapped model no longer holds for this report, since a resume ran it again even when a pause or a stop holds it
+    // paused once more, or that doesn't run here, is left as it is. One a subscribe hasn't recorded yet is left to the
+    // try that starts once it returns.
     private void holdIfTheWrappedModelHeldItPaused(SubscriptionIdAndSubscriberId key) {
         @Nullable StartRefusal startRefusal = startRefusals.get(key);
         @Nullable CatchupCannotResumeException refused = startRefusal == null ? null : startRefusal.heldPaused.get();
@@ -4795,7 +4800,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             return;
         }
         startRefusal.heldPaused.compareAndSet(refused, null);
-        if (cc != null && cc.isRunning() && isPausedInTheWrappedModel(key.subscriptionId()) && !isRunningInTheWrappedModel(key.subscriptionId())) {
+        if (cc != null && cc.isRunning() && isHeldPausedInTheWrappedModelFor(key.subscriptionId(), refused)) {
             holdTheRefusedStartPaused(key, cc.state, refused, Boolean.TRUE.equals(registrations.get(key)));
         }
     }

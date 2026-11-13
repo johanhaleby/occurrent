@@ -23,6 +23,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
@@ -533,6 +534,16 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         Objects.requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
         presentCatchupModels().forEach(model -> model.removeHeldPausedListener(listener));
         StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(wrapped -> wrapped.removeStartRefusalListener(listener));
+    }
+
+    /**
+     * True while a catch-up of this model still holds the replay it reported with {@code refusal}, or the wrapped model
+     * still holds the subscription for it, since listeners are passed on to the wrapped model too.
+     */
+    @Override
+    public boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
+        return presentCatchupModels().anyMatch(model -> model.holdsTheReplayHeldFor(subscriptionId, refusal))
+               || StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(wrapped -> wrapped.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
     }
 
     /**

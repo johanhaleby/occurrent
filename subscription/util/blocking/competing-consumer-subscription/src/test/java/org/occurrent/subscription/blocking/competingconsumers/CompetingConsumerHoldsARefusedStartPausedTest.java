@@ -33,6 +33,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
@@ -46,10 +47,14 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -584,6 +589,52 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         );
     }
 
+    @Test
+    void leaves_a_running_consumer_running_with_its_lease_when_a_held_paused_report_deferred_by_a_call_comes_after_the_wrapped_model_ran_the_subscription_again_and_a_pause_there_held_it_once_more() {
+        // Given a consumer that runs and holds the lease, and a call of its own that holds the subscription's lock
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+        CountDownLatch callHoldsTheLock = new CountDownLatch(1);
+        CountDownLatch letTheCallReturn = new CountDownLatch(1);
+        reporting.afterTheNextAnswerToIsRunning.set(() -> {
+            callHoldsTheLock.countDown();
+            awaitLatch(letTheCallReturn);
+        });
+        AtomicReference<@Nullable Throwable> callThrew = new AtomicReference<>();
+        Thread call = new Thread(() -> callThrew.set(catchThrowable(() -> model.resumeSubscription(ID))), "call-holding-the-lock");
+        call.start();
+        awaitLatch(callHoldsTheLock);
+
+        // When the wrapped model holds the subscription paused and tells, so the report waits for the lock
+        reporting.holdsPausedAndTells(ID, HistoryLossMessages.liveStartLost("The live start is gone", (Checkpoint) () -> "live start", true));
+        // And runs it again, which ends that hold, and a pause of its own holds it paused once more
+        reporting.resumeSubscription(ID);
+        reporting.pauseSubscription(ID);
+        letTheCallReturn.countDown();
+
+        // Then the report that was left to wait holds nothing
+        await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                () -> assertThat(callThrew.get()).as("thrown by the call").isInstanceOf(SubscriptionAlreadyRunningException.class),
+                () -> assertThat(model.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(model.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(strategy.registrations).as("registered with the strategy").containsExactly(ID),
+                () -> assertThat(strategy.holders).as("holding the lease").containsExactly(ID),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        ));
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            if (!latch.await(30, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Timed out waiting for the latch");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
     private ReportingWrappedModel useAModelOverAWrappedModelThatReportsHeldPaused() {
         model.shutdown();
         ReportingWrappedModel reporting = new ReportingWrappedModel();
@@ -828,6 +879,8 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
     // its replay is gone
     private static final class ReportingWrappedModel extends WrappedModel implements StartRefusalReportingSubscriptions {
         private final List<StartRefusalListener> listeners = new CopyOnWriteArrayList<>();
+        private final Map<String, CatchupCannotResumeException> heldFor = new ConcurrentHashMap<>();
+        private final AtomicReference<@Nullable Runnable> afterTheNextAnswerToIsRunning = new AtomicReference<>();
 
         @Override
         public void addStartRefusalListener(StartRefusalListener listener) {
@@ -841,7 +894,56 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
 
         void holdsPausedAndTells(String subscriptionId, CatchupCannotResumeException refusal) {
             holdPaused(subscriptionId);
+            heldFor.put(subscriptionId, refusal);
             listeners.forEach(listener -> listener.handleHeldPaused(subscriptionId, refusal));
+        }
+
+        @Override
+        public boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
+            return heldFor.get(subscriptionId) == refusal;
+        }
+
+        // The answer is read before the hook runs, so a call that is held up there answers from before
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            boolean running = super.isRunning(subscriptionId);
+            @Nullable Runnable hook = afterTheNextAnswerToIsRunning.getAndSet(null);
+            if (hook != null) {
+                hook.run();
+            }
+            return running;
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            heldFor.remove(subscriptionId);
+            return super.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            heldFor.remove(subscriptionId);
+            return super.subscribePaused(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            heldFor.remove(subscriptionId);
+            return super.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            heldFor.remove(subscriptionId);
+            super.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            if (resumeSubscriptionsAutomatically) {
+                heldFor.clear();
+            }
+            super.start(resumeSubscriptionsAutomatically);
         }
     }
 

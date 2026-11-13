@@ -56,6 +56,22 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
     void removeStartRefusalListener(StartRefusalListener listener);
 
     /**
+     * Whether this model still holds {@code subscriptionId} paused for the hold it told
+     * {@link StartRefusalListener#handleHeldPaused} about with {@code refusal}. A resume or a {@code start(true)} that runs
+     * the subscription again ends that hold, and so does a cancel, so this answers {@code false} from then on, also once
+     * a pause or a stop holds the subscription paused again. A listener that acts on the hold later than the call can
+     * ask this first. A model that never holds a subscription paused this way answers {@code false}, which this default
+     * does.
+     *
+     * @param subscriptionId The subscription the model reported as held paused.
+     * @param refusal        The exact instance the model passed to {@link StartRefusalListener#handleHeldPaused}.
+     * @return {@code true} while that hold lasts.
+     */
+    default boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
+        return false;
+    }
+
+    /**
      * Finds the {@link StartRefusalReportingSubscriptions} capability behind {@code subscriptionModel}, unwrapping a
      * {@link SubscriptionModelWrapper} chain until one is found.
      *
