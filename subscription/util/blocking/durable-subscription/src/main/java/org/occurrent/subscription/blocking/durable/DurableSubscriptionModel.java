@@ -156,7 +156,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * </ul>
  */
 @NullMarked
-public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions {
+public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions, CommitOrderedSubscriptions {
 
     private static final Logger log = LoggerFactory.getLogger(DurableSubscriptionModel.class);
 
@@ -1095,6 +1095,24 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     @Override
     public CheckpointAwareSubscriptionModel getWrappedSubscriptionModel() {
         return subscriptionModel;
+    }
+
+    /**
+     * {@code false}. A plain {@link #resumeSubscription(String)}, and a {@link #resumeSubscription(String, StartAt)} at
+     * {@link StartAt#subscriptionModelDefault()}, resume at the checkpoint stored for the id. A subscription started
+     * at a {@code StartAt} of its own stores nothing until the checkpoint of one of its events is saved, so a
+     * checkpoint an earlier run of the id stored after that position makes the resume skip the events in between.
+     * <a href="https://github.com/johanhaleby/occurrent/issues/1490">Issue 1490</a> tracks fixing that.
+     * <p>
+     * With {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turned on, the answer
+     * stays {@code false} after that fix. A subscription that starts with no position recorded opens where the wrapped
+     * model's default points, and each time the wrapped model evaluates its start position again before the first
+     * checkpoint is stored, it starts from wherever the feed has reached by then and skips the events written in
+     * between.
+     */
+    @Override
+    public boolean deliversEveryEventInCommitOrder() {
+        return false;
     }
 
     /**

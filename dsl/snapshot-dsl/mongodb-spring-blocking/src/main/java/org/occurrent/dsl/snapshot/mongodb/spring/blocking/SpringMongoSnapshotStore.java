@@ -30,7 +30,6 @@ import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 
-import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -81,7 +80,7 @@ public final class SpringMongoSnapshotStore<S extends @Nullable Object> implemen
         try {
             int schemaVersion = document.getInteger(SCHEMA_VERSION);
             S state = readState(mongoOperations.getConverter(), document.get(STATE));
-            List<?> markerVersions = document.getList(MARKER_VERSIONS, Object.class);
+            Object markerVersions = document.get(MARKER_VERSIONS);
             if (markerVersions != null) {
                 return Optional.of(Snapshot.atMarkerVersions(state, SnapshotMarkerVersionsFields.fromFields(markerVersions), document.getLong(HIGHEST_FOLDED_POSITION), schemaVersion));
             }
@@ -104,7 +103,7 @@ public final class SpringMongoSnapshotStore<S extends @Nullable Object> implemen
         // A snapshot with marker versions is stored without a version, so a node that reads only the version treats
         // it as unreadable and reads in full instead of folding onto it
         snapshot.markerVersions().ifPresentOrElse(
-                markerVersions -> document.append(MARKER_VERSIONS, SnapshotMarkerVersionsFields.toFields(markerVersions).stream().map(Document::new).toList()).append(HIGHEST_FOLDED_POSITION, snapshot.highestFoldedPosition()),
+                markerVersions -> document.append(MARKER_VERSIONS, new Document(SnapshotMarkerVersionsFields.toFields(markerVersions))).append(HIGHEST_FOLDED_POSITION, snapshot.highestFoldedPosition()),
                 () -> document.append(VERSION, snapshot.version()));
         document.append(SCHEMA_VERSION, snapshot.schemaVersion());
         S state = snapshot.state();

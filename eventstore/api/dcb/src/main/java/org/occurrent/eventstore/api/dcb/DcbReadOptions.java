@@ -260,9 +260,10 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
      * example after its markers were pruned or when resuming from versions is turned off. Read the boundary in full
      * with {@link #withVersions()} then. Combining this with a position bound throws {@link IllegalArgumentException}.
      * <p>
-     * Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't always
-     * refuse versions from other criteria. Versions from a read on {@code type("X").tags(a)} pass on a read on
-     * {@code tags(a)}, which returns only what comes after them, with no exception.
+     * The versions hold the criteria they were read with, and the read also throws {@link DcbSnapshotInvalidException}
+     * when its own criteria aren't the same. Criteria are the same when they hold the same alternatives in any order, as
+     * for a {@link DcbConsistencyToken}, so versions from {@code tags(a)} are refused on
+     * {@code tags(a).excludingTypes("Y")}.
      * <p>
      * An event that committed late can come back below a position you already folded. Folding it last can give another
      * state than a read in position order, so a caller that folds onto saved state checks

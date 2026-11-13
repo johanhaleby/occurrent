@@ -19,6 +19,7 @@ package org.occurrent.application.service.blocking.dcb;
 import org.junit.jupiter.api.*;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.util.List;
@@ -285,7 +286,7 @@ class DcbExecuteOptionsTest {
     }
 
     private static DcbMarkerVersions versions(String epoch, long version) {
-        return DcbMarkerVersions.of(Map.of("tag:name:1", new DcbMarkerVersions.MarkerVersion(epoch, version, 0)));
+        return DcbMarkerVersions.of(DcbCriteria.tags(Tag.parse("name:1")), Map.of("tag:name:1", new DcbMarkerVersions.MarkerVersion(epoch, version, 0)));
     }
 
     private record DomainEvent(String type, String name) {

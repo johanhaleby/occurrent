@@ -148,7 +148,8 @@ public final class ReplicaSetReadyMongoDBContainer extends MongoDBContainer {
         return scopedName;
     }
 
-    private static String defaultVersion() {
+    // Package private so TwoShardMongoCluster starts the same version without building a container to read it
+    static String defaultVersion() {
         String fromSystemProperty = System.getProperty("test.mongo.version");
         if (fromSystemProperty != null && !fromSystemProperty.isBlank()) {
             // Trimmed because an image name cannot contain spaces, and a padded -D value would otherwise only

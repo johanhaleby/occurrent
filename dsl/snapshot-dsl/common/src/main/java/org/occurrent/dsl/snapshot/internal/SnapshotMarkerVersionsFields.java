@@ -27,11 +27,14 @@ import java.util.Map;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Converts {@link DcbMarkerVersions} to and from the plain values a snapshot store persists, one map per marker key with
- * the fields {@code k} (key), {@code e} (epoch), {@code v} (version) and {@code u} (unstamped). A list of maps is used
+ * Converts {@link DcbMarkerVersions} to and from the plain values a snapshot store persists. That's a map with the field
+ * {@code c}, the criteria the versions were read with, and {@code m}, a list with one map per marker key holding the
+ * fields {@code k} (key), {@code e} (epoch), {@code v} (version) and {@code u} (unstamped). A list of maps is used
  * instead of one map keyed by marker key, since a marker key can contain a dot, which a MongoDB field name can't.
  */
 public final class SnapshotMarkerVersionsFields {
+    private static final String CRITERIA = "c";
+    private static final String MARKERS = "m";
     private static final String KEY = "k";
     private static final String EPOCH = "e";
     private static final String VERSION = "v";
@@ -41,30 +44,41 @@ public final class SnapshotMarkerVersionsFields {
     }
 
     /**
-     * The fields to persist for {@code markerVersions}, one map per marker key in ascending key order.
+     * The fields to persist for {@code markerVersions}, with one map per marker key in ascending key order.
      */
-    public static List<Map<String, Object>> toFields(DcbMarkerVersions markerVersions) {
+    public static Map<String, Object> toFields(DcbMarkerVersions markerVersions) {
         requireNonNull(markerVersions, "markerVersions cannot be null");
-        List<Map<String, Object>> fields = new ArrayList<>(markerVersions.markers().size());
+        List<Map<String, Object>> markers = new ArrayList<>(markerVersions.markers().size());
         markerVersions.markers().forEach((key, markerVersion) -> {
-            Map<String, Object> field = new LinkedHashMap<>();
-            field.put(KEY, key);
-            field.put(EPOCH, markerVersion.epoch());
-            field.put(VERSION, markerVersion.version());
-            field.put(UNSTAMPED, markerVersion.unstamped());
-            fields.add(field);
+            Map<String, Object> marker = new LinkedHashMap<>();
+            marker.put(KEY, key);
+            marker.put(EPOCH, markerVersion.epoch());
+            marker.put(VERSION, markerVersion.version());
+            marker.put(UNSTAMPED, markerVersion.unstamped());
+            markers.add(marker);
         });
+        Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put(CRITERIA, markerVersions.criteria());
+        fields.put(MARKERS, markers);
         return fields;
     }
 
     /**
      * The marker versions that {@link #toFields(DcbMarkerVersions)} produced. Throws when a field is missing or has the
-     * wrong type, so the caller treats the snapshot as unreadable.
+     * wrong type, so the caller treats the snapshot as unreadable. A list of marker maps without the criteria around it
+     * is refused that way too.
      */
-    public static DcbMarkerVersions fromFields(List<?> fields) {
+    public static DcbMarkerVersions fromFields(Object fields) {
         requireNonNull(fields, "fields cannot be null");
+        if (!(fields instanceof Map<?, ?> stored)) {
+            throw new IllegalArgumentException("Marker versions must be a map with the criteria they were read with, was " + fields);
+        }
+        String criteria = (String) requireNonNull(stored.get(CRITERIA), "Criteria are missing");
+        if (!(requireNonNull(stored.get(MARKERS), "Marker versions are missing") instanceof List<?> markerFields)) {
+            throw new IllegalArgumentException("Marker versions must be a list, was " + stored.get(MARKERS));
+        }
         Map<String, MarkerVersion> markers = new LinkedHashMap<>();
-        for (Object element : fields) {
+        for (Object element : markerFields) {
             if (!(element instanceof Map<?, ?> field)) {
                 throw new IllegalArgumentException("A marker version must be a map, was " + element);
             }
@@ -76,6 +90,6 @@ public final class SnapshotMarkerVersionsFields {
                 throw new IllegalArgumentException("Marker key " + key + " is stored more than once");
             }
         }
-        return DcbMarkerVersions.of(markers);
+        return DcbMarkerVersions.of(criteria, markers);
     }
 }

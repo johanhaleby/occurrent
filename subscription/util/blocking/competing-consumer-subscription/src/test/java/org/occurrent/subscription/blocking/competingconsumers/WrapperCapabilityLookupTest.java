@@ -106,13 +106,13 @@ class WrapperCapabilityLookupTest {
         return Stream.of(
                 Named.of("DurableSubscriptionModel", new Wrapper(
                         beneath -> new DurableSubscriptionModel(beneath, new InMemoryCheckpointStorage()),
-                        with(A_SUBSCRIPTION_MODEL, CheckpointAwareSubscriptionModel.class, RepositionableSubscriptions.class))),
+                        with(A_SUBSCRIPTION_MODEL, CheckpointAwareSubscriptionModel.class, RepositionableSubscriptions.class, CommitOrderedSubscriptions.class))),
                 Named.of("CompetingConsumerSubscriptionModel", new Wrapper(
                         beneath -> new CompetingConsumerSubscriptionModel(beneath, new NoLeases()),
                         with(A_SUBSCRIPTION_MODEL, IntrospectableSubscriptions.class))),
                 Named.of("ManualStartSubscriptionModel", new Wrapper(
                         ManualStartSubscriptionModel::stoppedByDefault,
-                        with(A_SUBSCRIPTION_MODEL, IntrospectableSubscriptions.class))),
+                        with(A_SUBSCRIPTION_MODEL, IntrospectableSubscriptions.class, CommitOrderedSubscriptions.class))),
                 Named.of("CatchupSubscriptionModel over a stream", new Wrapper(
                         beneath -> new CatchupSubscriptionModel(beneath, unused(EventStoreQueries.class, CatchupReads.class), CATCHUP_CONFIG),
                         with(A_SUBSCRIPTION_MODEL, ReplayAwareSubscriptions.class, RepositionableSubscriptions.class))),

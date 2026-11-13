@@ -107,6 +107,7 @@ import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.ONE_SECOND;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
@@ -677,6 +678,47 @@ public class SpringMongoSubscriptionModelTest {
             // Then
             assertThat(handledWhenThePauseReturned).as("the action had returned when the pause did").isTrue();
             await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(deliveredAfterThePause).isEmpty());
+        }
+
+        @Test
+        void a_pause_while_a_failing_listener_backs_off_does_not_skip_the_event_on_resume() {
+            // Given: a model that backs off 5 s between attempts, so the pause comes during the first backoff
+            SpringMongoSubscriptionModel backingOff = new SpringMongoSubscriptionModel(mongoTemplate,
+                    withConfig(eventCollectionName, timeRepresentation).retryStrategy(RetryStrategy.fixed(5000)));
+            try {
+                String subscriptionId = UUID.randomUUID().toString();
+                AtomicBoolean failing = new AtomicBoolean();
+                AtomicInteger failures = new AtomicInteger();
+                CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+                backingOff.subscribe(subscriptionId, StartAt.subscriptionModelDefault(), cloudEvent -> {
+                    if (failing.get()) {
+                        failures.incrementAndGet();
+                        throw new IllegalStateException("expected");
+                    }
+                    handled.add(cloudEvent.getId());
+                }).waitUntilStarted(Duration.ofSeconds(10));
+                NameDefined e1 = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+                NameDefined e2 = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2");
+                NameDefined e3 = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name3");
+                mongoEventStore.write("1", 0, serialize(e1));
+                await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).containsExactly(e1.eventId()));
+                failing.set(true);
+                mongoEventStore.write("2", 0, serialize(e2));
+                await().atMost(FIVE_SECONDS).untilAtomic(failures, greaterThanOrEqualTo(1));
+
+                // When: paused while the retry backs off, then resumed once the listener works again
+                backingOff.pauseSubscription(subscriptionId);
+                assertThat(failures).as("no second attempt before the pause returned").hasValue(1);
+                failing.set(false);
+                backingOff.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+                mongoEventStore.write("3", 0, serialize(e3));
+
+                // Then
+                await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).containsSubsequence(e1.eventId(), e2.eventId(), e3.eventId()));
+                await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(handled).containsExactly(e1.eventId(), e2.eventId(), e3.eventId()));
+            } finally {
+                backingOff.shutdown();
+            }
         }
 
         @Test

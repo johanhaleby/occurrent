@@ -35,6 +35,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
@@ -73,7 +74,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * module.
  */
 @NullMarked
-public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, StartRefusalReportingSubscriptions {
+public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, StartRefusalReportingSubscriptions, CommitOrderedSubscriptions {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -89,6 +90,21 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public boolean retainsEveryEvent() {
         return true;
+    }
+
+    /**
+     * {@code false}. With {@code restartSubscriptionsOnChangeStreamHistoryLost} turned on, a restart after the change
+     * stream's history was lost opens at the present and skips the events written in between. With it off, two gaps in
+     * the change stream loop, tracked in
+     * <a href="https://github.com/johanhaleby/occurrent/issues/1482">issue 1482</a>, still break commit order.
+     * A subscription that opened at the present without an operation time has no recorded position until a read returns
+     * no event or its first event is handled, so a pause and resume or a restart before then opens at a later present
+     * and skips what was written in between. A pause stops waiting for a running action after a second, and a resume
+     * can then deliver later events while that call still runs.
+     */
+    @Override
+    public boolean deliversEveryEventInCommitOrder() {
+        return subscriptions.deliversEveryEventInCommitOrder();
     }
 
     private static final Logger log = LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);

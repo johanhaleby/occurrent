@@ -222,6 +222,6 @@ class SnapshotSupportTest {
     }
 
     private static DcbMarkerVersions versions(String key, long version) {
-        return DcbMarkerVersions.of(Map.of(key, new MarkerVersion("epoch-1", version, 0)));
+        return DcbMarkerVersions.of(CRITERIA, Map.of(key, new MarkerVersion("epoch-1", version, 0)));
     }
 }

@@ -670,9 +670,10 @@ What is new:
   one that committed late below a position an earlier read saw. A failover can make it miss an event, as [What else a
   token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. When the store can't compare `saved` with its own
   markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
-  full. Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't
-  always refuse versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`,
-  which returns only what comes after them, with no exception.
+  full. The versions hold the criteria they were read with, and a read on other criteria throws the same exception.
+  Criteria are the same when they hold the same alternatives in any order, the rule a consistency token uses, so
+  versions from `tags(a)` are refused on `tags(a).excludingTypes("Y")`, and versions from `types("A", "B")` on
+  `anyOf(type("A"), type("B"))`.
 - `DcbAppendConfirmation.isConfirmed(result)` answers whether an append is committed at majority, read outside any
   transaction of yours. The MongoDB stores and `InMemoryEventStore` implement it.
 
@@ -1076,8 +1077,9 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - `Snapshot` gains two components, `Optional<DcbMarkerVersions> markerVersions` and `long highestFoldedPosition`. The
   three-argument constructor stays and sets them to empty and 0, and `Snapshot.atMarkerVersions(..)` creates a DCB
   snapshot, whose `version` is 0.
-- `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot with a `markerVersions` array, a
-  `highestFoldedPosition` field and no `version` field. A stream snapshot is stored as before.
+- `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot with a `markerVersions` document,
+  which holds the criteria the versions were read with and their entries, a `highestFoldedPosition` field and no
+  `version` field. A stream snapshot is stored as before.
 - A DCB snapshot that 0.34.0 saved at a position is never used. After the upgrade an execute or delivery reads the whole
   boundary until one can save over it, so nothing needs migrating. On a boundary whose markers 0.34.0 wrote, a decider's
   append gives them an epoch, and its next command can save.
@@ -1728,17 +1730,48 @@ A `StartAt.dynamic(..)` function that answers `null` to the catch-up can call th
 goes straight to live and hands the function to the model it wraps, and `ReactorMongoSubscriptionModel` can call it
 again inside its own `subscribe(..)`, on the thread that called the catch-up. While that `subscribe(..)` runs, a
 subscribe of the id throws `DuplicateSubscriptionIdException` until the id is cancelled. A cancel of the id then, from
-that thread or another, goes to the wrapped model at once, and the action gets no event after it. When the wrapped
-`subscribe(..)` returns holding the id, the catch-up cancels the id there again, unless a subscribe of the id made after
-the cancel took it there. That cancel waits until no other subscribe of the id is under way. Until that second cancel
-has completed, a subscribe of the id throws
-`DuplicateSubscriptionIdException` whenever the wrapped model holds the id for the cancelled `subscribe(..)`, also after
-the first cancel has completed. When the cancel came before the wrapped model had taken the id for the cancelled
-`subscribe(..)`, the wrapped model can refuse a subscribe of the id made after the cancel with
-`DuplicateSubscriptionIdException`, since the cancelled one can take the id there first. A subscribe that replays history
-first gets that exception from `waitUntilStarted()` once the replay hands over. The catch-up then cancels the id there
-again. A wrapped model that takes the id only after it called the function makes that likely.
-`ReactorMongoSubscriptionModel` takes it before.
+that thread or another, goes to the wrapped model at once, and the action gets no event after it.
+
+When that cancel reaches `ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel` before the cancelled
+`subscribe(..)` took the id there, the model registers nothing for it, and `waitUntilStarted()` on the
+`Subscription` that `subscribe(..)` returned fails with `IllegalStateException`. In 0.34.0 that subscription
+ran and `waitUntilStarted()` completed. When the model was shut down by the time it asks whether the `subscribe(..)` was
+cancelled, `subscribe(..)` throws `SubscriptionModelShutdownException` instead and returns no `Subscription`. Both models take the id before they call the function, so only a cancel from
+another thread can get there first. Only an instance of either exact class takes this path. A subclass or a proxy of
+either model, a Spring AOP proxy for example, registers the cancelled `subscribe(..)` as 0.34.0 did, and the catch-up
+then cancels the id there again, as described below. The catch-up can't tell whether a subclass overrides
+`subscribe(String, SubscriptionFilter, StartAt, Function)` or whether a proxy advises it, so it calls that method on a
+subclass or a proxy. A Mockito spy of either model is an instance of the exact class with Mockito's default inline mock
+maker, so it takes this path, and a stub or a `verify` on its `subscribe(String, SubscriptionFilter, StartAt, Function)`
+doesn't see a catch-up subscribe that goes straight to live.
+
+If another thread can cancel a subscribe whose start you wait for, `waitUntilStarted()` can fail with an
+`IllegalStateException` because of that cancel. That happens when:
+
+- the cancel reached a `ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel` of that exact class before
+  it took the id
+- the cancel, or the catch-up's second cancel of a subclass or a proxy, reached `ReactorMongoSubscriptionModel` while
+  the subscription was starting there
+- the subscribe replays history first and the cancel came before the replay handed over to the wrapped model
+
+When the cancel reached `ReactorDurableSubscriptionModel` after it took the id and before it started the subscription
+or handed it to the model it wraps, the exception is `CancellationException`, which extends `IllegalStateException`.
+
+`IllegalStateException` also comes from failures that have nothing to do with a cancel, so treat it as the cancel only
+when your application cancelled the id.
+
+Another wrapped model can still register the cancelled `subscribe(..)` after the cancel. So can a subclass or a proxy
+of `ReactorMongoSubscriptionModel` or `ReactorDurableSubscriptionModel`, whether or not it overrides or advises
+`subscribe(String, SubscriptionFilter, StartAt, Function)`. When the
+wrapped `subscribe(..)` returns holding the id, the catch-up cancels the id there again, unless a subscribe of the id
+made after the cancel took it there. That cancel waits until no other subscribe of the id is under way. Until that
+second cancel has completed, a subscribe of the id throws `DuplicateSubscriptionIdException` whenever the wrapped model
+holds the id for the cancelled `subscribe(..)`, also after the first cancel has completed. When the cancel came before
+the wrapped model had taken the id for the cancelled `subscribe(..)`, the wrapped model can refuse a subscribe of the id
+made after the cancel with `DuplicateSubscriptionIdException`, since the cancelled one can take the id there first. A
+subscribe that replays history first gets that exception from `waitUntilStarted()` once the replay hands over. The
+catch-up then cancels the id there again. A wrapped model that takes the id only after it called the function makes that
+likely.
 
 A `CatchupListener` given to `listenForCatchup` can still run while the catch-up holds a lock, so don't call the
 catch-up model from it. The listener is told that a catch-up started from inside an operation on a map the catch-up

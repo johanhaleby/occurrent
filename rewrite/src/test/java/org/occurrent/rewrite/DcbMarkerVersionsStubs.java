@@ -63,7 +63,7 @@ final class DcbMarkerVersionsStubs {
 
             import java.util.Map;
 
-            public record DcbMarkerVersions(Map<String, MarkerVersion> markers) {
+            public record DcbMarkerVersions(String criteria, Map<String, MarkerVersion> markers) {
 
                 public record MarkerVersion(String epoch, long version, long unstamped) {
                 }
