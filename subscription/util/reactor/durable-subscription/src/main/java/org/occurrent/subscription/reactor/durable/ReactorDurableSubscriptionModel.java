@@ -406,7 +406,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         this.beforeATakeOverIsGivenBack = requireNonNull(hook, "hook cannot be null");
     }
 
-    // Package-private for the test that checks a decided id leaves nothing behind. Not public, and not part of this
+    // Package-private for the test that checks that a decided id has no decision left in deleteDecisions. Not public, and not part of this
     // model's contract.
     boolean awaitsADeleteDecision(String subscriptionId) {
         synchronized (positionLock) {
@@ -2951,11 +2951,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * <p>
      * So the returned {@code Mono} waits, once the tries and the write back have ended, until every subscribe, resume
      * or start that took the delete over has failed, or its subscription has ended before it started, started, or
-     * written a checkpoint. It then waits until each delete that goes ahead in place of the cancel's delete has ended,
-     * which is a new delete, or the delete of a later cancel of the id when there is one by then. Once it has
-     * completed, no delete of the id that this cancel started or that goes ahead in its place is still running, and
-     * the checkpoint is deleted unless a subscription of the id started or wrote a checkpoint, another subscription of
-     * the id was starting or registered when the last of those calls failed or ended, or the model was shut down.
+     * written a checkpoint. It waits the same way for every other one that took a delete of the id over before the
+     * last of those had, whichever order they end in. It then waits until each delete that goes ahead in place of the
+     * cancel's delete has ended, which is a new delete, or the delete of a later cancel of the id when there is one by
+     * then. Once it has completed, no delete of the id that this cancel started or that goes ahead in its place is
+     * still running, and the checkpoint is deleted unless a subscription of the id started or wrote a checkpoint,
+     * another subscription of the id was starting or registered when the last of those calls failed or ended, or the
+     * model was shut down. Where a new delete has to go ahead and the checkpoint storage throws when asked whether it
+     * evaluates a condition on a delete, the {@code Mono} fails with an {@link IllegalStateException} instead, since
+     * the checkpoint may still be stored.
      * Where this model drives the subscription itself, a subscription that took the delete over and that a pause or a
      * stop set aside before it started holds the {@code Mono} up until it is resumed or started, cancelled, or the
      * model is shut down. A shutdown ends that wait, and the {@code Mono} then fails with
@@ -4412,7 +4416,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // The deletes the takeovers counted, whose cancels wait for this decision
         private final List<PositionDelete> waiting = new ArrayList<>();
         // The newest delete a takeover counted. A kept takeover holds the checkpoint against the decision only when it
-        // counted this one, since a later cancel of the id ends the subscription that kept it.
+        // counted that delete, since a later cancel of the id ends the subscription that kept it.
         private @Nullable PositionDelete newest;
         // Emitted once the decision is made
         private final Sinks.Empty<Void> decided = Sinks.empty();
