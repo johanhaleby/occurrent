@@ -74,6 +74,19 @@ class ManualStartSubscriptionModelCommitOrderTest {
     }
 
     @Test
+    void does_not_deliver_every_event_in_commit_order_when_a_wrapper_that_does_not_declare_it_sits_between_it_and_a_model_that_does() {
+        // Given
+        PlainWrapper wrapper = new PlainWrapper(new DeclaringModel(true));
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(wrapper);
+
+        // When
+        boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
+
+        // Then
+        assertThat(deliversInCommitOrder).isFalse();
+    }
+
+    @Test
     void is_found_as_a_commit_ordered_model_by_the_lookup() {
         // Given
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(new DeclaringModel(true));
@@ -138,6 +151,19 @@ class ManualStartSubscriptionModelCommitOrderTest {
         @Override
         public boolean deliversEveryEventInCommitOrder() {
             return deliversEveryEventInCommitOrder;
+        }
+    }
+
+    private static final class PlainWrapper extends SilentModel implements SubscriptionModelWrapper {
+        private final SubscriptionModel wrapped;
+
+        private PlainWrapper(SubscriptionModel wrapped) {
+            this.wrapped = wrapped;
+        }
+
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return wrapped;
         }
     }
 }

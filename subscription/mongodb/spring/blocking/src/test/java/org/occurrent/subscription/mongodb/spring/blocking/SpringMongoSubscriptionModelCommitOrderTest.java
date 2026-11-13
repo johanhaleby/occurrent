@@ -34,7 +34,8 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 
 /**
  * What {@link SpringMongoSubscriptionModel} answers to {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()}.
- * The answer is fixed when the model is created, so these tests need no MongoDB: nothing here subscribes.
+ * The answer is {@code false} whatever {@code restartSubscriptionsOnChangeStreamHistoryLost} is set to, until issue 1482
+ * is fixed. Nothing here subscribes, so these tests need no MongoDB.
  */
 @DisplayName("SpringMongoSubscriptionModelCommitOrder")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -48,19 +49,7 @@ class SpringMongoSubscriptionModelCommitOrderTest {
     }
 
     @Test
-    void delivers_every_event_in_commit_order_with_the_default_config() {
-        // Given
-        SpringMongoSubscriptionModel model = modelWith(withConfig("events", TimeRepresentation.RFC_3339_STRING));
-
-        // When
-        boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
-
-        // Then
-        assertThat(deliversInCommitOrder).isTrue();
-    }
-
-    @Test
-    void delivers_every_event_in_commit_order_when_restarting_after_lost_history_is_turned_off() {
+    void does_not_deliver_every_event_in_commit_order_when_restarting_after_lost_history_is_turned_off() {
         // Given
         SpringMongoSubscriptionModel model = modelWith(withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(false));
 
@@ -68,7 +57,7 @@ class SpringMongoSubscriptionModelCommitOrderTest {
         boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
 
         // Then
-        assertThat(deliversInCommitOrder).isTrue();
+        assertThat(deliversInCommitOrder).isFalse();
     }
 
     @Test

@@ -31,8 +31,9 @@ import java.util.Optional;
  * written earlier in the same commit, so the events of one commit are delivered in the order they were written. Earlier
  * events count from the position the subscription was started or resumed at, so a subscription started at the present
  * waits for nothing written before it. A model that can move a subscription past events it never delivered, without
- * being asked to, answers {@code false}. A delivery whose listener throws is retried in place before anything after it
- * is delivered.
+ * being asked to, answers {@code false}. A listener call that throws doesn't count as a delivery, and a model that
+ * answers {@code true} never calls a subscription's listener while an earlier call for that subscription is still
+ * running.
  * <p>
  * A caller that finds no implementation, which is an empty result from {@link #findIn(SubscriptionModelCapability)},
  * treats the model as not delivering in commit order.
@@ -54,16 +55,16 @@ public interface CommitOrderedSubscriptions extends SubscriptionModelCapability 
     boolean deliversEveryEventInCommitOrder();
 
     /**
-     * The commit-ordered model behind {@code subscriptionModel}. A {@link SubscriptionModelWrapper} is not unwrapped
-     * for this capability, so a wrapper is found only when it implements it itself. Commit order is a property of the
-     * whole delivery path, and a wrapper can break it, for example with a catch-up handover, a thread pool or a
-     * listener that parks deliveries.
+     * The model behind {@code subscriptionModel} that answers whether it delivers in commit order. A
+     * {@link SubscriptionModelWrapper} is not unwrapped for this capability, so a wrapper is found only when it
+     * implements it itself. Commit order is a property of the whole delivery path, and a wrapper can break it, for
+     * example with a catch-up handover, a thread pool or a listener that parks deliveries.
      * <p>
      * An empty result means the model does not declare it, and a caller treats that as not in commit order.
      *
      * @param subscriptionModel A {@link Subscribable}, a {@link SubscriptionModelLifeCycle}, a whole {@link SubscriptionModel},
      *                          or a {@link SubscriptionModelWrapper} around one of these.
-     * @return The model that declares commit order, or empty when this object doesn't implement it.
+     * @return The model that answers, or empty when this object doesn't implement it.
      */
     static Optional<CommitOrderedSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
         return subscriptionModel.capability(CommitOrderedSubscriptions.class);

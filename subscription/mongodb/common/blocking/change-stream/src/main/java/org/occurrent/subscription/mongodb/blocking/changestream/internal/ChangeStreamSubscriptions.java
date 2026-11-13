@@ -894,13 +894,13 @@ public final class ChangeStreamSubscriptions {
     }
 
     /**
-     * {@code true} unless {@code restartSubscriptionsOnChangeStreamHistoryLost} is turned on. The change stream returns
-     * events in the order they committed, and an action that throws is retried before the subscription reads further,
-     * or the run restarts at the position it had not moved past. A restart after the change stream's history was lost
-     * opens at the present, which skips the events written in between.
+     * {@code false} until <a href="https://github.com/johanhaleby/occurrent/issues/1482">issue 1482</a> is fixed.
+     * A change stream that opened at the present without an operation time records no position, so a restart before its
+     * first event is handled opens at a later present and skips that event. A pause stops waiting for a running action
+     * after a second, and a resume can then deliver later events while that call still runs.
      */
     public boolean deliversEveryEventInCommitOrder() {
-        return !restartSubscriptionsOnChangeStreamHistoryLost;
+        return false;
     }
 
     public boolean isRunning() {
