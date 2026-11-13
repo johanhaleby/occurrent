@@ -870,7 +870,7 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
 
     @Test
     void accepts_a_conditional_append_when_the_unconditional_competitor_appended_another_type_whatever_the_settings() {
-        for (boolean[] settings : new boolean[][]{{false, true}, {true, false}}) {
+        for (boolean[] settings : new boolean[][]{{false, false}, {false, true}, {true, false}, {true, true}}) {
             SpringMongoEventStore reader = storeOver(config -> config.spreadTypeMarkerWrites(settings[0]));
             SpringMongoEventStore writer = storeOver(config -> config.spreadTypeMarkerWrites(settings[1]));
             for (int i = 0; i < 32; i++) {

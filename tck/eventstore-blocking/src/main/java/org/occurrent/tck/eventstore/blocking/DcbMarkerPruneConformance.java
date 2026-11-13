@@ -49,10 +49,10 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
  * An implementation says how to delete a marker and how to delete events, and the suite deletes events and then the
  * marker, the way the pruning rule has an operator do it in one transaction (ADR 149). A marker key is
  * {@code tag:<tag>} for a tag. A type has one marker per stripe, and the suite takes their keys from
- * {@link DcbMarkerVersionsSupport}, the way {@link DcbMarkerVersionsConformance} does. The suite states only that a
- * token read before the deletion is refused after a later append recreated the marker, which holds whichever way a
- * store recreates it. For a type the rule deletes all its stripes together, with every event of the type, since an event
- * of the type can be on any stripe.
+ * {@link DcbMarkerVersionsSupport}, the way {@link DcbMarkerVersionsConformance} does. The suite states what a
+ * token or saved versions read before the deletion get after a later append recreated the marker, which holds whichever
+ * way a store recreates it. The rule only says a stripe of a type may be deleted in a transaction that also finds no
+ * event of the type.
  */
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)
