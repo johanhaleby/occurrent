@@ -2953,7 +2953,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * So the returned {@code Mono} waits, once the tries and the write back have ended, until every subscribe, resume
      * or start that took the delete over has failed, or its subscription has ended before it started, started, or
      * written a checkpoint. It waits the same way for every other one that took a delete of the id over before the
-     * last of those had, whichever order they end in. It then waits until each delete that goes ahead in place of the
+     * last of those had, whichever order they end in, also one that took over only the delete of a later cancel of the
+     * id. It then waits until each delete that goes ahead in place of the
      * cancel's delete has ended, which is a new delete, or the delete of a later cancel of the id when there is one by
      * then. Once it has completed, no delete of the id that this cancel started or that goes ahead in its place is
      * still running, and the checkpoint is deleted unless a subscription of the id started or wrote a checkpoint,
@@ -2961,8 +2962,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * model was shut down. Where a new delete has to go ahead and the checkpoint storage throws when asked whether it
      * evaluates a condition on a delete, the {@code Mono} fails with an {@link IllegalStateException} instead, since
      * the checkpoint may still be stored.
-     * Where this model drives the subscription itself, a subscription that took the delete over and that a pause or a
-     * stop set aside before it started holds the {@code Mono} up until it is resumed or started, cancelled, or the
+     * Where this model drives the subscription itself, a subscription that took the delete, or such a later delete,
+     * over and that a pause or a stop set aside before it started holds the {@code Mono} up until it is resumed or
+     * started, cancelled, or the
      * model is shut down. A shutdown ends that wait, and the {@code Mono} then fails with
      * {@link SubscriptionModelShutdownException}. While the {@code Mono} waits for a subscribe, a resume or a start
      * that took the delete over, a warning naming the id is logged every 10 seconds.
