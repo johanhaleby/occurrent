@@ -89,6 +89,9 @@ public final class SnapshotMarkerVersionsFields {
             String epoch = (String) field.get(EPOCH);
             long version = ((Number) requireNonNull(field.get(VERSION), "Version is missing for marker key " + key)).longValue();
             long unstamped = ((Number) requireNonNull(field.get(UNSTAMPED), "Unstamped count is missing for marker key " + key)).longValue();
+            if (version != 0) {
+                requireNonNull(epoch, "Epoch is missing for marker key " + key);
+            }
             if (markers.put(key, new MarkerVersion(epoch, version, unstamped)) != null) {
                 throw new IllegalArgumentException("Marker key " + key + " is stored more than once");
             }
