@@ -258,8 +258,9 @@ conditional append of an item without tags.
   deployment that turns it on too early. Going back needs the setting off in every process that appends to the store first.
 - An absent stripe no longer stops a read from reporting versions. A missing tag marker or a marker without an epoch
   still does. `MarkerVersion` has an absent value, which only a stripe key may hold.
-- `DcbMarkerVersions` no longer promises that a type's key is `type:<type>`, and the TCK no longer asserts exact key
-  sets. A key is the store's own, as `version()` already is.
+- `DcbMarkerVersions` no longer promises that a type's key is `type:<type>`, so a caller treats it as the store's own,
+  as `version()` already is. The TCK still compares exact key sets, against the keys
+  `DcbMarkerVersionsSupport.queryMarkerKeys` gives, so a store with a key scheme of its own can't pass it as written.
 - The pruning rule of ADR 149 covers stripes. A stripe may be deleted only in a transaction that also finds no event of
   its type.
 - K can change only over two releases.

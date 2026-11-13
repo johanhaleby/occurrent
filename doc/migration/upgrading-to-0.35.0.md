@@ -1013,8 +1013,9 @@ beyond the first of each type stay in the store, and 0.34.0 doesn't use them.
 - **Code that inspects `DcbMarkerVersions`.** `MarkerVersion.epoch()` is `null` for an absent entry. A snapshot store
   of your own has to keep the entry without an epoch, as `SpringMongoSnapshotStore` and
   `ReactiveSpringMongoSnapshotStore` do.
-- **A `DcbEventStore` of your own that reports marker versions.** The TCK expects eight entries per type for a criteria
-  item without tags, with an absent entry for each document that doesn't exist.
+- **A `DcbEventStore` of your own that reports marker versions.** The TCK expects the keys
+  `DcbMarkerVersionsSupport.queryMarkerKeys` gives, which are eight per type for a criteria item without tags, with an
+  absent entry for each document that doesn't exist.
 
 ## The default transaction executors retry on a MongoDB error label
 
