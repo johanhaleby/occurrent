@@ -43,10 +43,13 @@ import reactor.test.StepVerifier;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -395,6 +398,72 @@ class ReactorStreamCatchupSubscriptionModelTest {
             assertThat(received).as("the whole history, replayed again").containsExactly("e1", "e2", "e3");
             assertThat(catchup.isPaused("sub")).as("paused").isFalse();
         } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_resume_of_a_held_replay_that_a_stop_overtakes_before_it_launches_gets_a_start_that_completes_once_a_start_runs_the_replay_and_hands_over() throws InterruptedException {
+        // Given a subscription held paused after a replay from the beginning lost the live start in each of its replays
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.losesEveryToken = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new ThreeEventReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        // A second subscribe of the id asks the wrapped model whether it holds the id while it holds the lock of the id, so
+        // it keeps a resume of the id waiting for that lock until the test lets it go
+        CountDownLatch holdsTheLockOfTheId = new CountDownLatch(1);
+        CountDownLatch letGoOfTheLockOfTheId = new CountDownLatch(1);
+        AtomicReference<Thread> holder = new AtomicReference<>();
+        AtomicReference<Subscription> resumed = new AtomicReference<>();
+        AtomicReference<Throwable> resumeFailure = new AtomicReference<>();
+        try {
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining("4 replays"))
+                    .verify(Duration.ofSeconds(20));
+            wrapped.losesEveryToken = false;
+            received.clear();
+            wrapped.whenAskedWhetherRunning = () -> {
+                boolean underTheLockOfTheId = StackWalker.getInstance().walk(frames -> frames.anyMatch(frame -> frame.getMethodName().equals("underIdLock")));
+                if (Thread.currentThread() == holder.get() && underTheLockOfTheId) {
+                    holdsTheLockOfTheId.countDown();
+                    try {
+                        letGoOfTheLockOfTheId.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            };
+            Thread holding = new Thread(() -> org.assertj.core.api.Assertions.catchThrowable(() -> catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty())));
+            holder.set(holding);
+            holding.start();
+            assertThat(holdsTheLockOfTheId.await(10, TimeUnit.SECONDS)).as("the lock of the id is held").isTrue();
+
+            // When a resume has passed its check that this model is stopped and waits for the lock of the id, and a stop lands
+            Thread resuming = new Thread(() -> resumeFailure.set(org.assertj.core.api.Assertions.catchThrowable(() -> resumed.set(catchup.resumeSubscription("sub")))));
+            resuming.start();
+            await().atMost(Duration.ofSeconds(10)).until(() -> resuming.getState() == Thread.State.WAITING
+                    && Stream.of(resuming.getStackTrace()).anyMatch(frame -> frame.getMethodName().equals("underIdLock")));
+            catchup.stop();
+            letGoOfTheLockOfTheId.countDown();
+            resuming.join(10_000);
+            holding.join(10_000);
+
+            // Then the resume returned a start that waits for the replay to run, instead of the failure that held the replay
+            assertThat(resumeFailure.get()).as("thrown by the resume").isNull();
+            assertThat(resumed.get().waitUntilStarted().toFuture().isDone()).as("start of the resume is done before any replay ran").isFalse();
+            assertThat(wrapped.subscribeCalls).as("handed over before the start").isEmpty();
+
+            // And it completes once a start runs the replay again and hands over
+            catchup.start(true);
+            StepVerifier.create(resumed.get().waitUntilStarted()).verifyComplete();
+            assertThat(received).as("the whole history, replayed again").containsExactly("e1", "e2", "e3");
+            assertThat(wrapped.subscribeCalls).as("handed over").containsExactly("sub");
+        } finally {
+            letGoOfTheLockOfTheId.countDown();
             catchup.shutdown();
         }
     }

@@ -371,12 +371,14 @@ final class NamedCatchupSupport {
             if (state.heldForLostLiveStart && state.resumeSkipsEvents) {
                 return null;
             }
-            if (stopped || !state.parked.getAndSet(false)) {
-                return null;
-            }
-            if (state.heldForLostLiveStart) {
+            // Also while this model is stopped and the replay stays parked, so the handle a resume returns then waits
+            // for the start that runs the replay instead of failing with the loss that held it
+            if (state.heldForLostLiveStart && state.parked.get()) {
                 state.heldForLostLiveStart = false;
                 state.started = Sinks.empty();
+            }
+            if (stopped || !state.parked.getAndSet(false)) {
+                return null;
             }
             return nextLaunch(state);
         }
