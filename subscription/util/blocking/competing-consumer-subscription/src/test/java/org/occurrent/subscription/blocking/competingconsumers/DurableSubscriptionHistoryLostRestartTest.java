@@ -148,6 +148,8 @@ class DurableSubscriptionHistoryLostRestartTest {
         SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
         Checkpoint t0 = checkpointOneEventInProcessOne(storage);
         List<Opening> openings = new CopyOnWriteArrayList<>();
+        // The first change stream the subscription's client opens is the read that records the present, which opens at the present
+        AtomicBoolean readOfThePresentSeen = new AtomicBoolean();
         AtomicBoolean pingWithoutOperationTime = new AtomicBoolean(true);
         AtomicInteger pingsWithoutOperationTime = new AtomicInteger();
         MongoClient subscriptions = MongoClients.create(MongoClientSettings.builder().applyConnectionString(cs).applicationName(SUBSCRIPTION_APP)
@@ -155,7 +157,7 @@ class DurableSubscriptionHistoryLostRestartTest {
                     @Override
                     public void commandStarted(CommandStartedEvent event) {
                         BsonDocument changeStream = changeStreamStage(event);
-                        if (changeStream != null) {
+                        if (changeStream != null && readOfThePresentSeen.getAndSet(true)) {
                             openings.add(new Opening(openedAt(changeStream), storage.read("X")));
                         }
                     }
@@ -172,7 +174,7 @@ class DurableSubscriptionHistoryLostRestartTest {
                 return reply;
             }
         };
-        historyLostOnEveryOpenBy(SUBSCRIPTION_APP);
+        historyLostOnEveryOpenAfterTheReadOfThePresentBy(SUBSCRIPTION_APP);
         CopyOnWriteArrayList<CloudEvent> p2 = new CopyOnWriteArrayList<>();
         running = durable(storage, subscriptionTemplate);
 
@@ -272,8 +274,9 @@ class DurableSubscriptionHistoryLostRestartTest {
                         .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)))), storage);
     }
 
-    private void historyLostOnEveryOpenBy(String appName) {
-        client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", "alwaysOn")
+    // The first aggregate of the app is the read that records the present, which passes, so the subscription's own opening at its stored position is what fails
+    private void historyLostOnEveryOpenAfterTheReadOfThePresentBy(String appName) {
+        client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", new Document("skip", 1))
                 .append("data", new Document("failCommands", List.of("aggregate")).append("errorCode", 286).append("appName", appName)));
     }
 

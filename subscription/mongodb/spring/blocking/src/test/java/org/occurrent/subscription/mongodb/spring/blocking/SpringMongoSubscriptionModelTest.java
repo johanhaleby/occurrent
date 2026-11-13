@@ -2537,7 +2537,7 @@ public class SpringMongoSubscriptionModelTest {
 
         @Override
         protected void append(ILoggingEvent event) {
-            if (event.getFormattedMessage().startsWith("Gave up asking MongoDB for its operation time") && first.compareAndSet(true, false)) {
+            if (event.getFormattedMessage().startsWith("Gave up asking MongoDB where the present is") && first.compareAndSet(true, false)) {
                 held.countDown();
                 try {
                     release.await(20, SECONDS);

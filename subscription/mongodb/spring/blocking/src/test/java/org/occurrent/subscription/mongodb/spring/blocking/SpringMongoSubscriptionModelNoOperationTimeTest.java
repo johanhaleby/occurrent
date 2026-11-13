@@ -344,7 +344,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
         assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse();
         assertThat(presentReads).as("reads of the change stream that records the present").hasValue(1);
-        assertThat(opened).as("change streams opened for the subscription").isEmpty();
+        assertThat(opened.size()).as("number of change streams opened for the subscription").isZero();
     }
 
     @Test
