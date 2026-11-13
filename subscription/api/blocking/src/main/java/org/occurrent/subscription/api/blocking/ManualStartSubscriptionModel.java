@@ -21,7 +21,6 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
-import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpointSource;
 import org.occurrent.subscription.StartAt;
@@ -31,6 +30,7 @@ import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.api.blocking.internal.StartPositionPin;
 import org.occurrent.subscription.internal.LostStartHold;
 
 import java.time.Duration;
@@ -558,16 +558,8 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         return registration instanceof Registration.Deferred || registration == Registration.STARTING;
     }
 
-    // Written with ifAbsent() rather than an exists() check followed by a save(), because those are two calls with
-    // nothing holding them together, so two nodes registering the same subscription id at the same moment would
-    // both see nothing stored and both write.
-    //
-    // checkpointAlreadyExisted answers a presence question, not an identity one, and the checkpoint it read can be
-    // gone by the time the write below runs, replaced by an unrelated one a cancelSubscription-then-register
-    // elsewhere raced in. resolveFirstCheckpointRace is asked first specifically because it settles this by
-    // comparing positions atomically with any write it makes, so it is never fooled by that replacement the way
-    // trusting checkpointAlreadyExisted alone would be. checkpointAlreadyExisted stays as the fallback's own
-    // signal, for a storage that answered resolveFirstCheckpointRace empty. See ADR 130.
+    // The guards decide whether this registration records a position and which one. StartPositionPin writes it and
+    // settles a race with another node, see ADR 130.
     private void pinStartPosition(String subscriptionId, StartAt startAt) {
         if (positionSource == null || checkpointStorage == null) {
             return;
@@ -596,20 +588,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             }
             throw positionSourceAnsweredNothing(subscriptionId);
         }
-        try {
-            checkpointStorage.save(subscriptionId, positionToPin, CheckpointWriteCondition.ifAbsent());
-        } catch (CheckpointWriteConditionNotFulfilledException e) {
-            if (checkpointStorage.resolveFirstCheckpointRace(subscriptionId, positionToPin).isPresent()) {
-                // Settled by position: either this node's own position was durably written in place of a stored one
-                // it proved later, or the stored one was confirmed earlier than or equal to this node's own. Neither
-                // outcome can have skipped anything this node's position would have covered.
-                return;
-            }
-            if (checkpointAlreadyExisted) {
-                return;
-            }
-            refuseUnlessTheStoredPositionIsTheOneRead(checkpointStorage, subscriptionId, positionToPin);
-        }
+        StartPositionPin.pin(checkpointStorage, subscriptionId, checkpointAlreadyExisted, positionToPin);
     }
 
     // No original throwable to carry here, since answering nothing is how the source reports a problem it cannot
@@ -675,26 +654,6 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             }
         }
         return false;
-    }
-
-    // Something was stored between the read above and this write, so it was written where this class cannot order
-    // it against the position it read. Reading it back answers the only question that settles the registration,
-    // whether it holds that same position. Anything else is refused rather than started from a position this
-    // registration never read, which would skip whatever lies between the two.
-    private void refuseUnlessTheStoredPositionIsTheOneRead(CheckpointStorage storage, String subscriptionId, Checkpoint positionRead) {
-        @Nullable Checkpoint stored;
-        try {
-            stored = storage.read(subscriptionId);
-        } catch (RuntimeException e) {
-            throw StartPositionAlreadyPinnedException.readingTheStoredPositionBackFailed(subscriptionId, positionRead, e);
-        }
-        if (stored == null) {
-            throw StartPositionAlreadyPinnedException.readingTheStoredPositionBackFoundNothing(subscriptionId, positionRead);
-        }
-        if (positionRead.asString().equals(stored.asString())) {
-            return;
-        }
-        throw new StartPositionAlreadyPinnedException(subscriptionId, positionRead, stored);
     }
 
     private sealed interface Registration {

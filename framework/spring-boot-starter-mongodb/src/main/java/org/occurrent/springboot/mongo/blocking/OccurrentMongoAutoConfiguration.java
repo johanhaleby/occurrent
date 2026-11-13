@@ -21,6 +21,7 @@ import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
 import org.jspecify.annotations.NonNull;
+import org.bson.BsonTimestamp;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
@@ -46,6 +47,7 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.eventstore.mongodb.internal.OperationTimeLiveStart;
 import org.occurrent.eventstore.mongodb.spring.blocking.CommitRetryingMongoTransactionManager;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
@@ -55,6 +57,7 @@ import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.blocking.*;
 import org.occurrent.springboot.common.*;
+import org.occurrent.springboot.common.internal.LiveStartCheckpoints;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
 import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
@@ -63,6 +66,7 @@ import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModelConfig;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.util.predicate.EveryN;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
@@ -110,6 +114,19 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Bean
     StartupWorkaround occurrentMongoOperationsStartupWorkaround(ApplicationContext applicationContext) {
         return () -> applicationContext.getBean(MongoOperations.class);
+    }
+
+    /**
+     * Turns the live start a MongoDB event store reports into the operation-time checkpoint an annotated subscription's
+     * first start is pinned to. The MongoDB checkpoint storages order an operation-time checkpoint, so two nodes that
+     * pin the same subscription at the same moment keep the earlier position.
+     */
+    @Bean
+    LiveStartCheckpoints occurrentMongoLiveStartCheckpoints() {
+        return liveStart -> {
+            BsonTimestamp operationTime = OperationTimeLiveStart.parse(liveStart);
+            return operationTime == null ? null : new MongoOperationTimeCheckpoint(operationTime);
+        };
     }
 
     /**
