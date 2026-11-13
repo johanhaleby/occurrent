@@ -23,6 +23,7 @@ import org.occurrent.annotation.StreamId;
 import org.occurrent.annotation.StreamVersion;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.between.PublicMethodThatDoesNotOverride;
 import org.occurrent.springboot.common.declaring.OverridesHandlerBelowAMethodThatDoesNot;
@@ -1562,5 +1563,37 @@ class SubscriptionAnnotationsTest {
     void handlerMethods_gives_one_method_for_a_jdk_proxy_listing_two_sub_interfaces_that_each_redeclare_the_same_handler() throws Exception {
         assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(ProxiedRedeclaringHandlerWithOwnId.class, ProxiedSiblingRedeclaringHandlerWithOwnId.class), List.of(Subscription.class)))
                 .containsExactly(ProxiedRedeclaringHandlerWithOwnId.class.getDeclaredMethod("on", String.class));
+    }
+
+    interface ProxiedAsynchronousOn {
+        @Subscription(id = "proxied-differing-a")
+        void on(String event);
+    }
+
+    interface ProxiedSynchronousOn {
+        @SynchronousSubscription(id = "proxied-differing-b")
+        void on(String event);
+    }
+
+    @Test
+    void handlerMethods_refuses_a_jdk_proxy_listing_a_subscription_interface_before_a_synchronous_subscription_interface_declaring_the_same_signature() {
+        Class<?> proxyClass = jdkProxyClassOver(ProxiedAsynchronousOn.class, ProxiedSynchronousOn.class);
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(proxyClass, List.of(Subscription.class, SynchronousSubscription.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("same name and parameter types")
+                .hasMessageContaining("@Subscription")
+                .hasMessageContaining("@SynchronousSubscription");
+    }
+
+    @Test
+    void handlerMethods_refuses_a_jdk_proxy_listing_a_synchronous_subscription_interface_before_a_subscription_interface_declaring_the_same_signature() {
+        Class<?> proxyClass = jdkProxyClassOver(ProxiedSynchronousOn.class, ProxiedAsynchronousOn.class);
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(proxyClass, List.of(Subscription.class, SynchronousSubscription.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("same name and parameter types")
+                .hasMessageContaining("@Subscription")
+                .hasMessageContaining("@SynchronousSubscription");
     }
 }

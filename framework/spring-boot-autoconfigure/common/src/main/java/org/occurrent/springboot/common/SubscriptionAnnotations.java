@@ -634,19 +634,30 @@ public final class SubscriptionAnnotations {
             }
             return annotated ? Boolean.TRUE : null;
         }).keySet();
-        return java.lang.reflect.Proxy.isProxyClass(type) ? firstOfEachSignature(handlers) : handlers;
+        return java.lang.reflect.Proxy.isProxyClass(type) ? firstOfEachSignature(type, handlers, annotationTypes) : handlers;
     }
 
     // A JDK proxy hands its invocation handler one method for each name and parameter types, the one from the first
     // interface it lists that has that signature, so two annotated interface methods of one signature are one method
     // the proxy runs. MethodIntrospector gives the methods in the order the proxy lists its interfaces, so the first
-    // annotated one is kept, the way an annotation search on a class implementing those interfaces finds the first
-    private static Set<Method> firstOfEachSignature(Set<Method> methods) {
+    // annotated one is kept, the way an annotation search on a class implementing those interfaces finds the first.
+    // When the two have different handler annotations, keeping either would let the order of the interfaces decide
+    // how the handler runs, so the scan refuses them, as the post-processors refuse a method with both annotations
+    private static Set<Method> firstOfEachSignature(Class<?> type, Set<Method> methods, List<Class<? extends Annotation>> annotationTypes) {
         Map<List<Object>, Method> bySignature = new LinkedHashMap<>();
         for (Method method : methods) {
-            bySignature.putIfAbsent(List.of(method.getName(), List.of(method.getParameterTypes())), method);
+            Method kept = bySignature.putIfAbsent(List.of(method.getName(), List.of(method.getParameterTypes())), method);
+            if (kept != null && !handlerAnnotationsOf(kept, annotationTypes).equals(handlerAnnotationsOf(method, annotationTypes))) {
+                throw new IllegalStateException("Methods %s and %s have the same name and parameter types, so a JDK proxy %s runs them as one method, but their handler annotations differ, %s and %s. Give both methods the same handler annotation, or rename one of them."
+                        .formatted(kept, method, type.getName(), handlerAnnotationsOf(kept, annotationTypes), handlerAnnotationsOf(method, annotationTypes)));
+            }
         }
         return new LinkedHashSet<>(bySignature.values());
+    }
+
+    private static List<String> handlerAnnotationsOf(Method method, List<Class<? extends Annotation>> annotationTypes) {
+        MergedAnnotations annotations = MergedAnnotations.from(method, SearchStrategy.TYPE_HIERARCHY);
+        return annotationTypes.stream().filter(annotations::isPresent).map(annotationType -> "@" + annotationType.getSimpleName()).toList();
     }
 
     // The method the JVM runs when method is invoked on an instance of type, bridges resolved to the method they
