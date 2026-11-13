@@ -36,8 +36,9 @@ import static org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMon
 
 /**
  * What {@link NativeMongoSubscriptionModel} answers to {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()}.
- * The answer is {@code false} whatever {@code restartSubscriptionsOnChangeStreamHistoryLost} is set to, until issue 1482
- * is fixed. Nothing here subscribes, so these tests need no MongoDB.
+ * The answer is {@code false} whatever {@code restartSubscriptionsOnChangeStreamHistoryLost} is set to. With it on, a
+ * restart after lost history skips events, and with it off, issue 1482 tracks two gaps that still break commit order.
+ * Nothing here subscribes, so these tests need no MongoDB.
  */
 @DisplayName("NativeMongoSubscriptionModelCommitOrder")
 @DisplayNameGeneration(ReplaceUnderscores.class)

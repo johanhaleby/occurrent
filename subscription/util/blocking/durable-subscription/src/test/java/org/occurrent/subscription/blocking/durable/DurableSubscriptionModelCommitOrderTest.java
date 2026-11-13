@@ -48,7 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DurableSubscriptionModelCommitOrderTest {
 
     @Test
-    void delivers_every_event_in_commit_order_when_the_wrapped_model_declares_that_it_does() {
+    void delivers_every_event_in_commit_order_by_default_when_the_wrapped_model_declares_that_it_does() {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(new DeclaringModel(true), new InMemoryCheckpointStorage());
 
@@ -57,6 +57,19 @@ class DurableSubscriptionModelCommitOrderTest {
 
         // Then
         assertThat(deliversInCommitOrder).isTrue();
+    }
+
+    @Test
+    void does_not_deliver_every_event_in_commit_order_when_it_starts_without_a_recorded_start_position_even_though_the_wrapped_model_declares_that_it_does() {
+        // Given
+        DurableSubscriptionModelConfig config = new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true);
+        DurableSubscriptionModel model = new DurableSubscriptionModel(new DeclaringModel(true), new InMemoryCheckpointStorage(), config);
+
+        // When
+        boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
+
+        // Then
+        assertThat(deliversInCommitOrder).isFalse();
     }
 
     @Test
