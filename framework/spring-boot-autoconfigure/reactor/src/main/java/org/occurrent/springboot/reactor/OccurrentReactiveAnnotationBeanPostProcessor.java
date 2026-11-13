@@ -41,9 +41,7 @@ import org.springframework.util.ClassUtils;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -390,7 +388,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                     release -> subscribeCall(mayBlock, release),
                     method -> markRegistered(beanName, method),
                     this::claimSubscriptionId,
-                    method -> registeredHandlers.remove(handlerKey(beanName, method)),
+                    method -> forgetRegistered(beanName, method),
                     registeredIds::remove);
         }
         // No early return here. The build step at the end of this method is what lets the loop above finish, so a
@@ -446,12 +444,12 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // The registration is handed the same release, for a subscribe that failed after it returned.
     private void registerDescriptor(String beanName, Method method, String id, String duplicateIdMessage, Consumer<Runnable> registration) {
         if (!registeredIds.add(id)) {
-            registeredHandlers.remove(handlerKey(beanName, method));
+            forgetRegistered(beanName, method);
             throw new DuplicateSubscriptionIdException(id, duplicateIdMessage);
         }
         Runnable release = () -> {
             registeredIds.remove(id);
-            registeredHandlers.remove(handlerKey(beanName, method));
+            forgetRegistered(beanName, method);
         };
         try {
             registration.accept(release);
@@ -502,24 +500,29 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
     }
 
-    // A handler is keyed by bean name, method name and parameter types, so a rescan skips it, and so do two passes
-    // that read one handler as different Methods, the bean's class method and a JDK proxy's interface method. The
-    // declaring class joins the key only for a private or package-private method. Those are the cases where a class and
-    // its superclass declare two handlers of one signature, since neither overrides the other when the method is
-    // private or the two classes are in different packages, and such a method is never an interface or proxy method.
+    // A handler is recorded under the keys SubscriptionAnnotations.handlerKeys gives, so a rescan skips it, and so do
+    // two passes that read one handler as different Methods, the bean's class method and a JDK proxy's interface method.
     private boolean isAlreadyRegistered(String beanName, Method method) {
-        return registeredHandlers.contains(handlerKey(beanName, method));
+        return handlerKeys(beanName, method).stream().anyMatch(registeredHandlers::contains);
     }
 
-    // True the first time a handler is registered, false every time after, so a caller registers it exactly once.
+    // True the first time a handler is registered, false every time after, so a caller registers it exactly once. The
+    // add of the signature key is what decides between two concurrent registrations of the same Method.
     private boolean markRegistered(String beanName, Method method) {
-        return registeredHandlers.add(handlerKey(beanName, method));
+        List<String> keys = handlerKeys(beanName, method);
+        if (registeredHandlers.contains(keys.get(1)) || !registeredHandlers.add(keys.get(0))) {
+            return false;
+        }
+        registeredHandlers.add(keys.get(1));
+        return true;
     }
 
-    private static String handlerKey(String beanName, Method method) {
-        int modifiers = method.getModifiers();
-        String owner = Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers) ? "" : method.getDeclaringClass().getName() + '#';
-        return beanName + '#' + owner + method.getName() + Arrays.toString(method.getParameterTypes());
+    private void forgetRegistered(String beanName, Method method) {
+        handlerKeys(beanName, method).forEach(registeredHandlers::remove);
+    }
+
+    private static List<String> handlerKeys(String beanName, Method method) {
+        return SubscriptionAnnotations.handlerKeys(beanName, method, HANDLER_ANNOTATIONS);
     }
 
     // Stop every catch-up the projection registrar started, so no replay outlives the context that owns the store it

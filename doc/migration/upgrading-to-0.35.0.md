@@ -2110,10 +2110,13 @@ Applications on either starter with one of these:
   the class that declares it. The id is the key the subscription's checkpoint is stored under,
   so two handlers can't share it.
 - An inherited subscription handler that is static fails at startup with `SubscriptionHandlerNotInvocableException`.
-  A static `@Projection`, `@Snapshot` or `@Saga` factory method runs, since it reads no bean. So does one
-  on a bean behind a CGLIB proxy when it is private, final, or package-private in another package than the bean's
-  class, since the proxy can't override it. A method the bean's class declares already got the same refusal, except
-  the package-private case, which can't happen there.
+  So does one on a bean behind a CGLIB proxy when it is private, final, or package-private in another package than
+  the bean's class, since the proxy can't override it. A handler method the bean's class declares already got the same
+  refusal, except the package-private case, which can't happen there.
+- An inherited `@Projection`, `@Snapshot` or `@Saga` factory method that is private, final, or package-private in
+  another package fails at startup with an `IllegalStateException` when the bean is behind a CGLIB proxy whose target
+  can't be unwrapped, for example a scoped proxy. A factory method the bean's class declares runs there as before, and
+  a static factory method always runs, since it reads no bean.
 - In Kotlin a superclass method is final unless it is marked `open`, and the `kotlin-spring` plugin opens a class only
   when the class itself has a Spring annotation such as `@Component`. So an annotated method on a plain Kotlin
   superclass fails at startup when the bean that inherits it is behind a CGLIB proxy, for example because it has a

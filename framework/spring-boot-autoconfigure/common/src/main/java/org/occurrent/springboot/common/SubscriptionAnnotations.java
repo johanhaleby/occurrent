@@ -35,6 +35,8 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.core.MethodIntrospector;
 import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotationUtils;
+import org.springframework.core.annotation.MergedAnnotation;
+import org.springframework.core.annotation.MergedAnnotations;
 import org.springframework.util.ClassUtils;
 
 import java.lang.annotation.Annotation;
@@ -328,11 +330,11 @@ public final class SubscriptionAnnotations {
      * A JDK interface proxy runs the factory through the proxy when {@code method} is declared on one of the proxy's
      * interfaces, which is the method the scan reads from such a proxy's class, and refuses any other method, since the
      * proxy does not implement it. A CGLIB proxy passes the check above, since {@code getUserClass} of the proxy's own
-     * class is the class it subclasses, so a factory invoked through it still runs its advice. It refuses an instance
-     * {@code method} that is package-private and declared in another package than that class, which the proxy cannot
-     * override, so invoking it would run the method's body on the proxy instance instead of on a target. Only
-     * inheritance reaches that case. A private or final factory runs on the proxy instance, as it did before inherited
-     * factories were found, and a static factory runs, since it reads no instance.
+     * class is the class it subclasses, so a factory invoked through it still runs its advice. It refuses an inherited
+     * instance {@code method} the proxy cannot override, one that is private, final, or package-private and declared in
+     * another package than that class, since invoking it would run the method's body on the proxy instance instead of
+     * on a target. A private or final factory that class declares runs on the proxy instance, as it did before
+     * inherited factories were found, and a static factory runs, since it reads no instance.
      *
      * @param annotationName the annotation name for error messages, for example {@code "@Projection"}
      * @param bean           the (possibly proxied) bean the factory method was found on
@@ -351,8 +353,14 @@ public final class SubscriptionAnnotations {
             if (!runsUnchanged(targetUserClass, method)) {
                 throw new IllegalStateException("%s factory %s#%s cannot run because %s does not run the factory the scan read from %s, it either overrides it or does not inherit it. This happens when the factory bean built a different implementation than the one the scan recorded, so return the same implementation on every call.".formatted(annotationName, bean.getClass().getName(), method.getName(), targetUserClass.getName(), declaringClass.getName()));
             }
-            if (AopUtils.isCglibProxy(target) && !Modifier.isStatic(method.getModifiers()) && isPackagePrivateOutsidePackageOf(method, targetUserClass)) {
-                throw new IllegalStateException("%s factory %s#%s cannot run because it is package-private and declared in %s, outside the package of %s, so the CGLIB proxy around the bean cannot override it and would run it on the proxy instead of on the bean. Make the method public or protected.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName(), targetUserClass.getName()));
+            int modifiers = method.getModifiers();
+            if (AopUtils.isCglibProxy(target) && !Modifier.isStatic(modifiers) && !declaringClass.equals(targetUserClass)) {
+                if (Modifier.isPrivate(modifiers) || Modifier.isFinal(modifiers)) {
+                    throw new IllegalStateException("%s factory %s#%s cannot run because it is inherited from %s and %s, so the CGLIB proxy around the bean cannot override it and would run it on the proxy instead of on the bean. Make the method public or protected and not final, or declare the factory on %s.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName(), Modifier.isPrivate(modifiers) ? "private" : "final", targetUserClass.getName()));
+                }
+                if (isPackagePrivateOutsidePackageOf(method, targetUserClass)) {
+                    throw new IllegalStateException("%s factory %s#%s cannot run because it is package-private and declared in %s, outside the package of %s, so the CGLIB proxy around the bean cannot override it and would run it on the proxy instead of on the bean. Make the method public or protected.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName(), targetUserClass.getName()));
+                }
             }
         }
         try {
@@ -450,6 +458,43 @@ public final class SubscriptionAnnotations {
      */
     public static Class<?> implementationClassOf(Object bean) {
         return ClassUtils.getUserClass(ultimateTarget(bean).getClass());
+    }
+
+    /**
+     * The keys a post-processor records a registered handler under, so a later scan of the same bean skips it. Two
+     * scans can read one handler as different {@link Method}s, the method of the bean's class and the method of a JDK
+     * proxy's interface. When the handler overrides a generic interface method, such as {@code on(Placed)} for
+     * {@code on(E)}, the two have different parameter types, so a key from the signature alone misses the second.
+     * <p>
+     * The first key is the signature, bean name, method name and parameter types, with the declaring class added for
+     * a private or package-private method. Neither overrides a method of the same signature in a superclass when the
+     * method is private or the two classes are in different packages, so those are two handlers. The second key is
+     * the signature of the method the annotation is declared on, with its declaring class, which both scans of a
+     * handler annotated on a generic interface method resolve to. A handler is already registered when either key is.
+     *
+     * @param beanName    the name of the bean the handler belongs to
+     * @param method      the handler method a scan found
+     * @param annotations the handler annotations the scan looks for
+     * @return the signature key, then the key of the annotated declaration
+     */
+    public static List<String> handlerKeys(String beanName, Method method, List<Class<? extends Annotation>> annotations) {
+        int modifiers = method.getModifiers();
+        String owner = Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers) ? "" : method.getDeclaringClass().getName() + '#';
+        String signature = beanName + '#' + owner + method.getName() + Arrays.toString(method.getParameterTypes());
+        Method declaration = annotatedDeclaration(method, annotations);
+        String annotated = beanName + "#@" + declaration.getDeclaringClass().getName() + '#' + declaration.getName() + Arrays.toString(declaration.getParameterTypes());
+        return List.of(signature, annotated);
+    }
+
+    private static Method annotatedDeclaration(Method method, List<Class<? extends Annotation>> annotations) {
+        MergedAnnotations merged = MergedAnnotations.from(method, MergedAnnotations.SearchStrategy.TYPE_HIERARCHY);
+        for (Class<? extends Annotation> annotation : annotations) {
+            MergedAnnotation<? extends Annotation> found = merged.get(annotation);
+            if (found.isPresent() && found.getSource() instanceof Method declaration) {
+                return declaration;
+            }
+        }
+        return method;
     }
 
     /**

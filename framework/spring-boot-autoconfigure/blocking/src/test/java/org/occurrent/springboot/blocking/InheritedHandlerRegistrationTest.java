@@ -679,6 +679,83 @@ class InheritedHandlerRegistrationTest {
         }
     }
 
+    @Test
+    void a_generic_interface_handler_read_from_the_class_and_later_from_a_jdk_proxys_interface_method_registers_once() {
+        AtomicBoolean proxying = new AtomicBoolean();
+        runner.withBean(JdkProxyingPostProcessor.class, () -> new JdkProxyingPostProcessor(proxying))
+                .withUserConfiguration(PrototypeGenericHandlerConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    proxying.set(true);
+
+                    Object[] second = new Object[1];
+                    assertThatCode(() -> second[0] = context.getBean("prototypeGenericHandler")).doesNotThrowAnyException();
+
+                    assertThat(Proxy.isProxyClass(second[0].getClass())).describedAs("the second instance reached the scan as a JDK proxy").isTrue();
+                    verify(context.getBean(Subscriptions.class), times(1))
+                            .subscribe(eq("proxied-generic-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+                });
+    }
+
+    @Test
+    void a_handler_annotated_on_both_the_class_and_the_interface_method_registers_once_across_a_jdk_proxy() {
+        AtomicBoolean proxying = new AtomicBoolean();
+        runner.withBean(JdkProxyingPostProcessor.class, () -> new JdkProxyingPostProcessor(proxying))
+                .withUserConfiguration(PrototypeDoublyAnnotatedHandlerConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    proxying.set(true);
+
+                    Object[] second = new Object[1];
+                    assertThatCode(() -> second[0] = context.getBean("prototypeDoublyAnnotatedHandler")).doesNotThrowAnyException();
+
+                    assertThat(Proxy.isProxyClass(second[0].getClass())).describedAs("the second instance reached the scan as a JDK proxy").isTrue();
+                    verify(context.getBean(Subscriptions.class), times(1))
+                            .subscribe(eq("proxied-doubly-annotated-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+                });
+    }
+
+    interface GenericInterfaceHandler<E> {
+        @Subscription(id = "proxied-generic-handler")
+        void on(E event);
+    }
+
+    static class GenericInterfaceHandlerBean implements GenericInterfaceHandler<TestEvent> {
+        @Override
+        public void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class PrototypeGenericHandlerConfiguration {
+        @Bean
+        @Scope("prototype")
+        GenericInterfaceHandlerBean prototypeGenericHandler() {
+            return new GenericInterfaceHandlerBean();
+        }
+    }
+
+    interface DoublyAnnotatedHandler {
+        @Subscription(id = "proxied-doubly-annotated-handler")
+        void on(TestEvent event);
+    }
+
+    static class DoublyAnnotatedHandlerBean implements DoublyAnnotatedHandler {
+        @Override
+        @Subscription(id = "proxied-doubly-annotated-handler")
+        public void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class PrototypeDoublyAnnotatedHandlerConfiguration {
+        @Bean
+        @Scope("prototype")
+        DoublyAnnotatedHandlerBean prototypeDoublyAnnotatedHandler() {
+            return new DoublyAnnotatedHandlerBean();
+        }
+    }
+
     // Runs before the Occurrent post processor, so the instance it hands that one is already the proxy.
     static class JdkProxyingPostProcessor implements BeanPostProcessor, PriorityOrdered {
         private final AtomicBoolean proxying;
@@ -689,15 +766,15 @@ class InheritedHandlerRegistrationTest {
 
         @Override
         public Object postProcessAfterInitialization(Object bean, String beanName) {
-            if (!proxying.get() || !(bean instanceof InterfaceHandlerBean)) {
+            if (!proxying.get() || !(bean instanceof InterfaceHandlerBean || bean instanceof GenericInterfaceHandlerBean || bean instanceof DoublyAnnotatedHandlerBean)) {
                 return bean;
             }
             ProxyFactory proxyFactory = new ProxyFactory();
-            proxyFactory.setInterfaces(InterfaceHandler.class);
+            proxyFactory.setInterfaces(bean.getClass().getInterfaces());
             proxyFactory.setTargetSource(new TargetSource() {
                 @Override
                 public Class<?> getTargetClass() {
-                    return InterfaceHandlerBean.class;
+                    return bean.getClass();
                 }
 
                 @Override

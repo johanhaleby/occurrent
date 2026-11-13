@@ -842,6 +842,146 @@ class SubscriptionAnnotationsTest {
     }
 
     // ------------------------------------------------------------------------------------------------------
+    // invokeDescriptorFactory: a private or final factory on a cglib proxy left proxied
+    // ------------------------------------------------------------------------------------------------------
+
+    static class DeclaresPrivateAndFinalFactories {
+        @SuppressWarnings("unused")
+        private String privateFactory() {
+            return "private-ran";
+        }
+
+        public final String finalFactory() {
+            return "final-ran";
+        }
+
+        public static String staticFactory() {
+            return "static-ran";
+        }
+    }
+
+    static class InheritsPrivateAndFinalFactories extends DeclaresPrivateAndFinalFactories {
+    }
+
+    private static <T> T cglibProxyLeftProxied(Class<T> beanClass) {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setTargetSource(new AlwaysFreshTargetSource(beanClass));
+        proxyFactory.setProxyTargetClass(true);
+        proxyFactory.addAdvice((MethodInterceptor) invocation -> invocation.proceed());
+        return beanClass.cast(proxyFactory.getProxy());
+    }
+
+    @Test
+    void invokeDescriptorFactory_refuses_an_inherited_private_factory_on_a_cglib_proxy_left_proxied() throws Exception {
+        InheritsPrivateAndFinalFactories proxy = cglibProxyLeftProxied(InheritsPrivateAndFinalFactories.class);
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, DeclaresPrivateAndFinalFactories.class.getDeclaredMethod("privateFactory")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("@Projection factory")
+                .hasMessageContaining("it is inherited from " + DeclaresPrivateAndFinalFactories.class.getName() + " and private");
+    }
+
+    @Test
+    void invokeDescriptorFactory_refuses_an_inherited_final_factory_on_a_cglib_proxy_left_proxied() throws Exception {
+        InheritsPrivateAndFinalFactories proxy = cglibProxyLeftProxied(InheritsPrivateAndFinalFactories.class);
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, DeclaresPrivateAndFinalFactories.class.getDeclaredMethod("finalFactory")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("@Projection factory")
+                .hasMessageContaining("it is inherited from " + DeclaresPrivateAndFinalFactories.class.getName() + " and final");
+    }
+
+    @Test
+    void invokeDescriptorFactory_runs_a_private_factory_the_beans_own_class_declares_on_a_cglib_proxy_left_proxied() throws Exception {
+        DeclaresPrivateAndFinalFactories proxy = cglibProxyLeftProxied(DeclaresPrivateAndFinalFactories.class);
+
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, DeclaresPrivateAndFinalFactories.class.getDeclaredMethod("privateFactory"));
+
+        assertThat(result).isEqualTo("private-ran");
+    }
+
+    @Test
+    void invokeDescriptorFactory_runs_a_final_factory_the_beans_own_class_declares_on_a_cglib_proxy_left_proxied() throws Exception {
+        DeclaresPrivateAndFinalFactories proxy = cglibProxyLeftProxied(DeclaresPrivateAndFinalFactories.class);
+
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, DeclaresPrivateAndFinalFactories.class.getDeclaredMethod("finalFactory"));
+
+        assertThat(result).isEqualTo("final-ran");
+    }
+
+    @Test
+    void invokeDescriptorFactory_runs_an_inherited_static_factory_on_a_cglib_proxy_left_proxied() throws Exception {
+        InheritsPrivateAndFinalFactories proxy = cglibProxyLeftProxied(InheritsPrivateAndFinalFactories.class);
+
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, DeclaresPrivateAndFinalFactories.class.getDeclaredMethod("staticFactory"));
+
+        assertThat(result).isEqualTo("static-ran");
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // handlerKeys
+    // ------------------------------------------------------------------------------------------------------
+
+    interface GenericHandler<E> {
+        @Marked
+        void on(E event);
+    }
+
+    static class GenericHandlerBean implements GenericHandler<String> {
+        @Override
+        public void on(String event) {
+        }
+    }
+
+    static class PrivateHandlerBase {
+        @Marked
+        @SuppressWarnings("unused")
+        private void handle(String event) {
+        }
+    }
+
+    static class PrivateHandlerSubclass extends PrivateHandlerBase {
+        @Marked
+        @SuppressWarnings("unused")
+        private void handle(String event) {
+        }
+    }
+
+    static class PackagePrivateSubclassOfOtherPackage extends CrossPackageMethods {
+        @SuppressWarnings("unused")
+        String packagePrivate() {
+            return "subclass";
+        }
+    }
+
+    @Test
+    void handlerKeys_gives_the_class_and_interface_methods_of_a_generic_handler_the_same_second_key() throws Exception {
+        List<String> fromClass = SubscriptionAnnotations.handlerKeys("bean", GenericHandlerBean.class.getDeclaredMethod("on", String.class), MARKERS);
+        List<String> fromInterface = SubscriptionAnnotations.handlerKeys("bean", GenericHandler.class.getDeclaredMethod("on", Object.class), MARKERS);
+
+        assertThat(fromClass.get(1)).isEqualTo(fromInterface.get(1));
+        assertThat(fromClass.get(0)).describedAs("the signature keys differ, which is the bug the second key covers").isNotEqualTo(fromInterface.get(0));
+    }
+
+    @Test
+    void handlerKeys_gives_a_private_method_and_the_private_method_of_its_subclass_distinct_keys() throws Exception {
+        List<String> base = SubscriptionAnnotations.handlerKeys("bean", PrivateHandlerBase.class.getDeclaredMethod("handle", String.class), MARKERS);
+        List<String> subclass = SubscriptionAnnotations.handlerKeys("bean", PrivateHandlerSubclass.class.getDeclaredMethod("handle", String.class), MARKERS);
+
+        assertThat(base.get(0)).isNotEqualTo(subclass.get(0));
+        assertThat(base.get(1)).isNotEqualTo(subclass.get(1));
+    }
+
+    @Test
+    void handlerKeys_gives_a_cross_package_package_private_method_and_its_subclass_method_distinct_keys() throws Exception {
+        List<String> base = SubscriptionAnnotations.handlerKeys("bean", CrossPackageMethods.class.getDeclaredMethod("packagePrivate"), MARKERS);
+        List<String> subclass = SubscriptionAnnotations.handlerKeys("bean", PackagePrivateSubclassOfOtherPackage.class.getDeclaredMethod("packagePrivate"), MARKERS);
+
+        assertThat(base.get(0)).isNotEqualTo(subclass.get(0));
+        assertThat(base.get(1)).isNotEqualTo(subclass.get(1));
+    }
+
+    // ------------------------------------------------------------------------------------------------------
     // isPackagePrivateOutsidePackageOf
     // ------------------------------------------------------------------------------------------------------
 
