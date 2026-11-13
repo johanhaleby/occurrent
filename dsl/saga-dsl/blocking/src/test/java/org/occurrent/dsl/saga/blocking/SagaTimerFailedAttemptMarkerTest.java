@@ -172,7 +172,7 @@ class SagaTimerFailedAttemptMarkerTest {
                 () -> assertThat(store.markerWrites.get()).as("write attempts").isEqualTo(MAX_CAS_ATTEMPTS),
                 () -> assertThat(backing.find("s1").orElseThrow().timers()).as("no marker was written").containsExactly(new TimerEntry(TIMER, FIRES_AT)),
                 () -> assertThat(markerWarnings()).hasSize(1),
-                () -> assertThat(markerWarnings().get(0)).contains("s1", "'expiry'", "3 attempts")
+                () -> assertThat(markerWarnings().get(0)).contains("s1", "'expiry'", "3 attempts", "kept changing").doesNotContain("refuses")
         );
     }
 
@@ -350,7 +350,10 @@ class SagaTimerFailedAttemptMarkerTest {
                 () -> assertThat(dispatched).as("the healthy instance fired").containsExactly(new CancelOrder("b-healthy")),
                 () -> assertThat(backing.find("a-failing").orElseThrow().timers()).as("never marked").containsExactly(new TimerEntry(TIMER, FIRES_AT)),
                 () -> assertThat(failures.get()).as("tried again by the later poll").isEqualTo(2),
-                () -> assertThat(markerWarnings()).as("one per poll, none fatal").hasSize(2)
+                () -> assertThat(markerWarnings()).as("one per poll, none fatal").hasSize(2),
+                () -> assertThat(store.markerWrites.get()).as("one refused write per failed fire, not maxCasAttempts").isEqualTo(2),
+                () -> assertThat(markerWarnings()).as("names the refusing store").allSatisfy(message -> assertThat(message)
+                        .contains("a-failing", "refuses a save that keeps the version").doesNotContain("kept changing"))
         );
     }
 
