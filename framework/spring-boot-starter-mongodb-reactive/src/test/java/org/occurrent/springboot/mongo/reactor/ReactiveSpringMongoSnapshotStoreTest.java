@@ -26,8 +26,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.mongodb.spring.reactor.ReactiveSpringMongoSnapshotStore;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions.MarkerVersion;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -87,7 +89,7 @@ class ReactiveSpringMongoSnapshotStoreTest {
 
     @Test
     void round_trips_marker_versions_including_a_marker_key_with_a_dot() {
-        DcbMarkerVersions versions = DcbMarkerVersions.of(Map.of(
+        DcbMarkerVersions versions = DcbMarkerVersions.of(DcbCriteria.anyOf(DcbCriteria.tags(Tag.parse("account:a.b")), DcbCriteria.type("Deposited")), Map.of(
                 "tag:account:a.b", new MarkerVersion("epoch-1", 3, 1),
                 "type:Deposited", new MarkerVersion("epoch-2", 8, 0)));
         ReactiveSpringMongoSnapshotStore<Balance> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, Balance.class, "reactive-snapshot-marker-versions");
@@ -105,7 +107,7 @@ class ReactiveSpringMongoSnapshotStoreTest {
 
     @Test
     void round_trips_the_highest_folded_position() {
-        DcbMarkerVersions versions = DcbMarkerVersions.of(Map.of("tag:account:6", new MarkerVersion("epoch-1", 3, 0)));
+        DcbMarkerVersions versions = DcbMarkerVersions.of(DcbCriteria.tags(Tag.parse("account:6")), Map.of("tag:account:6", new MarkerVersion("epoch-1", 3, 0)));
         ReactiveSpringMongoSnapshotStore<Balance> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, Balance.class, "reactive-snapshot-highest-folded-position");
         store.save("account-8", Snapshot.atMarkerVersions(new Balance(40, false), versions, 4_000_000_000L, 3)).block();
 
@@ -117,7 +119,7 @@ class ReactiveSpringMongoSnapshotStoreTest {
     @Test
     void degrades_to_empty_when_the_stored_marker_versions_have_no_highest_folded_position() {
         String collection = "reactive-snapshot-no-highest-folded-position";
-        DcbMarkerVersions versions = DcbMarkerVersions.of(Map.of("tag:account:9", new MarkerVersion("epoch-1", 3, 0)));
+        DcbMarkerVersions versions = DcbMarkerVersions.of(DcbCriteria.tags(Tag.parse("account:9")), Map.of("tag:account:9", new MarkerVersion("epoch-1", 3, 0)));
         ReactiveSpringMongoSnapshotStore<Balance> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, Balance.class, collection);
         store.save("account-9", Snapshot.atMarkerVersions(new Balance(40, false), versions, 41, 3)).block();
         Document stored = mongoOperations.findById("account-9", Document.class, collection).block();
@@ -130,7 +132,7 @@ class ReactiveSpringMongoSnapshotStoreTest {
     @Test
     void stores_a_snapshot_at_marker_versions_without_a_version_field() {
         ReactiveSpringMongoSnapshotStore<Balance> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, Balance.class, "reactive-snapshot-no-version");
-        store.save("account-5", Snapshot.atMarkerVersions(new Balance(1, false), DcbMarkerVersions.of(Map.of("tag:account:5", new MarkerVersion("epoch-1", 1, 0))), 1, 1)).block();
+        store.save("account-5", Snapshot.atMarkerVersions(new Balance(1, false), DcbMarkerVersions.of(DcbCriteria.tags(Tag.parse("account:5")), Map.of("tag:account:5", new MarkerVersion("epoch-1", 1, 0))), 1, 1)).block();
 
         Document stored = mongoOperations.findById("account-5", Document.class, "reactive-snapshot-no-version").block();
 

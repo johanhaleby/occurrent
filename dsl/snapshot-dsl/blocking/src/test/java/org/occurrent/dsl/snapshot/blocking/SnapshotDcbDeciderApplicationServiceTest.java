@@ -364,7 +364,7 @@ class SnapshotDcbDeciderApplicationServiceTest {
     void a_refusal_after_the_append_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
         // A synchronous subscription without a transaction throws after the append has committed
         AtomicBoolean refuseAfterAppend = new AtomicBoolean();
-        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by a synchronous subscription (test double)");
+        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(criteria(), Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by a synchronous subscription (test double)");
         SynchronousEventDispatcher refusingDispatcher = new SynchronousEventDispatcher() {
             @Override
             public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
@@ -601,7 +601,7 @@ class SnapshotDcbDeciderApplicationServiceTest {
     void a_refusal_marked_by_another_service_and_thrown_by_the_transaction_executor_after_the_action_returned_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
         // The executor raises it after the action committed the append, for example when it runs more work in the same transaction
         Function<List<DomainEvent>, List<DomainEvent>> otherServicesFunction = events -> List.of();
-        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by another service (test double)").beforeAppend(otherServicesFunction);
+        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(criteria(), Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by another service (test double)").beforeAppend(otherServicesFunction);
         AtomicBoolean refuseAfterTheAction = new AtomicBoolean();
         TransactionExecutor raisingAfterTheAction = new TransactionExecutor() {
             @Override
@@ -958,7 +958,7 @@ class SnapshotDcbDeciderApplicationServiceTest {
                 return delegate.read(criteria, DcbReadOptions.fromBeginning().withVersions());
             }
             if (refuseEveryRead || refuseThisResume) {
-                DcbMarkerVersions refused = options.afterVersions().orElseGet(() -> DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))));
+                DcbMarkerVersions refused = options.afterVersions().orElseGet(() -> DcbMarkerVersions.of(criteria(), Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))));
                 throw new DcbSnapshotInvalidException(criteria, refused, "refused (test double)");
             }
             DcbEventStream stream = delegate.read(criteria, options);

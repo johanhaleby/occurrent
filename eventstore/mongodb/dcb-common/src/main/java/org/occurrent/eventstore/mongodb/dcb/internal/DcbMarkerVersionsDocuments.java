@@ -283,7 +283,7 @@ public final class DcbMarkerVersionsDocuments {
             return Optional.empty();
         }
         Set<String> keys = DcbMarkerVersionsSupport.queryMarkerKeys(condition.criteria());
-        return DcbMarkerVersionsSupport.versionsOf(keys, observe(keys, markersByKey));
+        return DcbMarkerVersionsSupport.versionsOf(condition.criteria(), keys, observe(keys, markersByKey));
     }
 
 

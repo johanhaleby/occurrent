@@ -518,7 +518,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                 mongoQuery.with(Sort.by(backward ? Sort.Direction.DESC : Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
                                 mongoQuery.skip(options.skip());
                                 options.limit().ifPresent(mongoQuery::limit);
-                                Optional<DcbMarkerVersions> markerVersions = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(markerKeys, observed) : Optional.empty();
+                                Optional<DcbMarkerVersions> markerVersions = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(criteria, markerKeys, observed) : Optional.empty();
                                 return template.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName)
                                         .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
                                         .collectList()

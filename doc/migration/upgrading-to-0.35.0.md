@@ -663,9 +663,10 @@ What is new:
   one that committed late below a position an earlier read saw. A failover can make it miss an event, as [What else a
   token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. When the store can't compare `saved` with its own
   markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
-  full. Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't
-  always refuse versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`,
-  which returns only what comes after them, with no exception.
+  full. The versions hold the criteria they were read with, and a read on other criteria throws the same exception.
+  Criteria are the same when they hold the same alternatives in any order, the rule a consistency token uses, so
+  versions from `tags(a)` are refused on `tags(a).excludingTypes("Y")`, and versions from `types("A", "B")` on
+  `anyOf(type("A"), type("B"))`.
 - `DcbAppendConfirmation.isConfirmed(result)` answers whether an append is committed at majority, read outside any
   transaction of yours. The MongoDB stores and `InMemoryEventStore` implement it.
 
@@ -1069,8 +1070,9 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
 - `Snapshot` gains two components, `Optional<DcbMarkerVersions> markerVersions` and `long highestFoldedPosition`. The
   three-argument constructor stays and sets them to empty and 0, and `Snapshot.atMarkerVersions(..)` creates a DCB
   snapshot, whose `version` is 0.
-- `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot with a `markerVersions` array, a
-  `highestFoldedPosition` field and no `version` field. A stream snapshot is stored as before.
+- `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot with a `markerVersions` document,
+  which holds the criteria the versions were read with and their entries, a `highestFoldedPosition` field and no
+  `version` field. A stream snapshot is stored as before.
 - A DCB snapshot that 0.34.0 saved at a position is never used. After the upgrade an execute or delivery reads the whole
   boundary until one can save over it, so nothing needs migrating. On a boundary whose markers 0.34.0 wrote, a decider's
   append gives them an epoch, and its next command can save.

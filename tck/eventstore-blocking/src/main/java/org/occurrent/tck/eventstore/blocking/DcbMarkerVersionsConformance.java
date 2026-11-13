@@ -615,7 +615,9 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A, ACCOUNT_B)));
             DcbMarkerVersions onlyA = versionsOf(dcbEventStore().read(DcbCriteria.tags(tag(ACCOUNT_A)), DcbReadOptions.fromBeginning().withVersions()));
 
-            assertRefused(DcbCriteria.tags(tag(ACCOUNT_A), tag(ACCOUNT_B)), onlyA)
+            DcbCriteria bothAccounts = DcbCriteria.tags(tag(ACCOUNT_A), tag(ACCOUNT_B));
+
+            assertRefused(bothAccounts, readWith(bothAccounts, onlyA))
                     .hasMessageContaining(KEY_B);
         }
 
@@ -624,7 +626,9 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A, ACCOUNT_B)));
             DcbMarkerVersions bothKeys = versionsOf(dcbEventStore().read(DcbCriteria.tags(tag(ACCOUNT_A), tag(ACCOUNT_B)), DcbReadOptions.fromBeginning().withVersions()));
 
-            assertRefused(DcbCriteria.tags(tag(ACCOUNT_A)), bothKeys)
+            DcbCriteria onlyAccountA = DcbCriteria.tags(tag(ACCOUNT_A));
+
+            assertRefused(onlyAccountA, readWith(onlyAccountA, bothKeys))
                     .hasMessageContaining(KEY_B);
         }
 
@@ -633,7 +637,9 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)));
             DcbMarkerVersions ofType = versionsOf(dcbEventStore().read(DcbCriteria.type(DEPOSITED), DcbReadOptions.fromBeginning().withVersions()));
 
-            assertRefused(DcbCriteria.tags(tag(ACCOUNT_A)), ofType);
+            DcbCriteria accountA = DcbCriteria.tags(tag(ACCOUNT_A));
+
+            assertRefused(accountA, readWith(accountA, ofType)).hasMessageContaining(KEY_A);
         }
 
         @Test
@@ -698,7 +704,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
 
         @Test
         void checks_for_criteria_that_match_every_event_before_it_looks_at_the_saved_versions() {
-            DcbMarkerVersions nothingTheStoreHas = DcbMarkerVersions.of(Map.of("tag:unknown", new MarkerVersion("unknown-epoch", 1, 0)));
+            DcbMarkerVersions nothingTheStoreHas = DcbMarkerVersions.of(DcbCriteria.tags(tag(ACCOUNT_A)), Map.of("tag:unknown", new MarkerVersion("unknown-epoch", 1, 0)));
 
             Throwable thrown = catchThrowable(() -> dcbEventStore().read(DcbCriteria.all(), DcbReadOptions.afterVersions(nothingTheStoreHas)));
 
@@ -708,11 +714,12 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
         @Test
         void checks_the_saved_marker_keys_before_the_epochs() {
             dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A, ACCOUNT_B)));
-            DcbMarkerVersions onlyAWithAnotherEpoch = changed(
+            DcbCriteria bothAccounts = DcbCriteria.tags(tag(ACCOUNT_A), tag(ACCOUNT_B));
+            DcbMarkerVersions onlyAWithAnotherEpoch = DcbMarkerVersions.of(bothAccounts, changed(
                     versionsOf(dcbEventStore().read(DcbCriteria.tags(tag(ACCOUNT_A)), DcbReadOptions.fromBeginning().withVersions())),
-                    marker -> new MarkerVersion(marker.epoch() + "-removed-and-created-again", marker.version(), marker.unstamped()));
+                    marker -> new MarkerVersion(marker.epoch() + "-removed-and-created-again", marker.version(), marker.unstamped())).markers());
 
-            assertThat(catchThrowable(() -> dcbEventStore().read(DcbCriteria.tags(tag(ACCOUNT_A), tag(ACCOUNT_B)), DcbReadOptions.afterVersions(onlyAWithAnotherEpoch))))
+            assertThat(catchThrowable(() -> dcbEventStore().read(bothAccounts, DcbReadOptions.afterVersions(onlyAWithAnotherEpoch))))
                     .isInstanceOf(DcbSnapshotInvalidException.class)
                     .hasMessageContaining(KEY_B)
                     .hasMessageNotContaining("epoch");
@@ -752,6 +759,42 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
     }
 
     @Nested
+    @DisplayName("a read after versions saved from other criteria")
+    class AReadAfterVersionsSavedFromOtherCriteria {
+
+        @Test
+        void is_refused_when_the_criteria_have_the_marker_keys_of_the_saved_ones_and_also_select_other_events() {
+            dcbEventStore().append(List.of(taggedEvent(WITHDRAWN, ACCOUNT_A)));
+            dcbEventStore().append(List.of(taggedEvent(DEPOSITED, ACCOUNT_A)));
+            DcbMarkerVersions saved = versionsOf(dcbEventStore().read(DcbCriteria.type(DEPOSITED).tags(tag(ACCOUNT_A)), DcbReadOptions.fromBeginning().withVersions()));
+
+            assertThat(catchThrowable(() -> dcbEventStore().read(DcbCriteria.tags(tag(ACCOUNT_A)), DcbReadOptions.afterVersions(saved))))
+                    .as("Versions saved for Deposited events of the tag say nothing about the Withdrawn event of the tag, so a read of the whole tag after them must be refused")
+                    .isInstanceOf(DcbSnapshotInvalidException.class)
+                    .hasMessageContaining("read with other criteria");
+            assertThat(catchThrowable(() -> dcbEventStore().read(DcbCriteria.types(DEPOSITED, WITHDRAWN).tags(tag(ACCOUNT_A)), DcbReadOptions.afterVersions(saved))))
+                    .as("Versions saved for one type of the tag say nothing about a read of two types of the tag")
+                    .isInstanceOf(DcbSnapshotInvalidException.class)
+                    .hasMessageContaining("read with other criteria");
+        }
+
+        @Test
+        void resumes_when_the_criteria_have_the_same_alternatives_in_another_order() {
+            DcbCriteria saveWith = DcbCriteria.anyOf(DcbCriteria.tags(tag(ACCOUNT_A)), DcbCriteria.tags(tag(ACCOUNT_B)));
+            DcbCriteria resumeWith = DcbCriteria.anyOf(DcbCriteria.tags(tag(ACCOUNT_B)), DcbCriteria.tags(tag(ACCOUNT_A)));
+            dcbEventStore().append(List.of(taggedEventWithId("before-a", DEPOSITED, ACCOUNT_A)));
+            dcbEventStore().append(List.of(taggedEventWithId("before-b", DEPOSITED, ACCOUNT_B)));
+            DcbMarkerVersions saved = versionsOf(dcbEventStore().read(saveWith, DcbReadOptions.fromBeginning().withVersions()));
+            dcbEventStore().append(List.of(taggedEventWithId("after-a", DEPOSITED, ACCOUNT_A)));
+            dcbEventStore().append(List.of(taggedEventWithId("after-b", WITHDRAWN, ACCOUNT_B)));
+
+            assertThatCode(() -> dcbEventStore().read(resumeWith, DcbReadOptions.afterVersions(saved))).doesNotThrowAnyException();
+            assertThat(idsOf(dcbEventStore().read(resumeWith, DcbReadOptions.afterVersions(saved)).events()))
+                    .containsExactly("after-a", "after-b");
+        }
+    }
+
+    @Nested
     @DisplayName("the events a read returns")
     class TheEventsAReadReturns {
 
@@ -779,6 +822,11 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
         }
     }
 
+    // The versions of another read, claimed to have been read with criteria, so that the checks after the one on the criteria are reached
+    private static DcbMarkerVersions readWith(DcbCriteria criteria, DcbMarkerVersions versions) {
+        return DcbMarkerVersions.of(criteria, versions.markers());
+    }
+
     private static DcbMarkerVersions versionsOf(DcbEventStream read) {
         return read.markerVersions().orElseThrow(() -> new AssertionError(
                 "A full forward read that asks for versions must report them, so the test has versions to resume from. "
@@ -788,7 +836,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
     private static DcbMarkerVersions changed(DcbMarkerVersions versions, UnaryOperator<MarkerVersion> change) {
         Map<String, MarkerVersion> changed = new TreeMap<>();
         versions.markers().forEach((key, marker) -> changed.put(key, change.apply(marker)));
-        return DcbMarkerVersions.of(changed);
+        return DcbMarkerVersions.of(versions.criteria(), changed);
     }
 
     private static CloudEvent untaggedWithId(String id, String type) {

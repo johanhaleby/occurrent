@@ -460,7 +460,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (backward) {
             Collections.reverse(events);
         }
-        Optional<DcbMarkerVersions> markerVersions = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(markerKeys, observed) : Optional.empty();
+        Optional<DcbMarkerVersions> markerVersions = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(criteria, markerKeys, observed) : Optional.empty();
         return new DcbEventStream(events, highWatermark, DcbMarkerVersionsDocuments.consistencyToken(criteria, markers), markerVersions);
     }
 

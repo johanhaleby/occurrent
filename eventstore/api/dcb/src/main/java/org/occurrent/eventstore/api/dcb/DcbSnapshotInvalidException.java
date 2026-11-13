@@ -28,11 +28,11 @@ import java.util.StringJoiner;
  * start a new snapshot from that read.
  * <p>
  * The message names the check that failed and, when there is one, the marker key it failed on. A store refuses when
- * the saved versions cover other marker keys than the criteria has, when a marker is missing or has no epoch, when an
- * epoch differs from the saved one, when a saved version is above the store's, when a marker was incremented by a
- * writer that wrote no marker versions, when the criteria is {@link DcbCriteria.MatchAll}, when resuming from marker
- * versions is turned off for the store, when the read runs inside a transaction the caller owns, and when the store
- * couldn't take a consistent snapshot to compare against.
+ * the saved versions were read with other criteria, when they cover other marker keys than the criteria has, when a
+ * marker is missing or has no epoch, when an epoch differs from the saved one, when a saved version is above the
+ * store's, when a marker was incremented by a writer that wrote no marker versions, when the criteria is
+ * {@link DcbCriteria.MatchAll}, when resuming from marker versions is turned off for the store, when the read runs
+ * inside a transaction the caller owns, and when the store couldn't take a consistent snapshot to compare against.
  * <p>
  * The stores don't check the order of what they return, so an application service and a snapshot view throw it too, via
  * {@link #eventBelowFoldedPosition(DcbCriteria, DcbMarkerVersions, long)}.

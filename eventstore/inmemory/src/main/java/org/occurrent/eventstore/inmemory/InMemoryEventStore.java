@@ -345,7 +345,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 DcbMarkerVersionsSupport.requireResumable(criteria, afterVersions.get(), observed);
                 matchingEvents = matchingEvents.stream().filter(event -> appendedAfter(event, criteria, afterVersions.get())).toList();
             }
-            Optional<DcbMarkerVersions> reported = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(markerKeys, observed) : Optional.empty();
+            Optional<DcbMarkerVersions> reported = DcbMarkerVersionsSupport.mayReportVersions(options) ? DcbMarkerVersionsSupport.versionsOf(criteria, markerKeys, observed) : Optional.empty();
             return new DcbEventStream(applySelection(matchingEvents, options), highWatermark, DcbConsistencyToken.of(criteria, highWatermark), reported);
         }
     }
@@ -539,7 +539,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 markerVersionsByPosition.put(position(added), Map.copyOf(eventVersions));
             }
             Optional<DcbMarkerVersions> appendedVersions = reportsVersions
-                    ? DcbMarkerVersionsSupport.versionsOf(DcbMarkerVersionsSupport.queryMarkerKeys(condition.criteria()), observedMarkers(DcbMarkerVersionsSupport.queryMarkerKeys(condition.criteria())))
+                    ? DcbMarkerVersionsSupport.versionsOf(condition.criteria(), DcbMarkerVersionsSupport.queryMarkerKeys(condition.criteria()), observedMarkers(DcbMarkerVersionsSupport.queryMarkerKeys(condition.criteria())))
                     : Optional.empty();
 
             long firstPosition = position(addedEvents.getFirst());

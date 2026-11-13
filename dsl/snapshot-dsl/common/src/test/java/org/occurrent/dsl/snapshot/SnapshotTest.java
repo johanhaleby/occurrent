@@ -19,8 +19,10 @@ package org.occurrent.dsl.snapshot;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions.MarkerVersion;
+import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.util.Map;
 import java.util.Optional;
@@ -31,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SnapshotTest {
 
-    private static final DcbMarkerVersions VERSIONS = DcbMarkerVersions.of(Map.of("tag:a", new MarkerVersion("epoch-1", 3, 0)));
+    private static final DcbMarkerVersions VERSIONS = DcbMarkerVersions.of(DcbCriteria.tags(Tag.parse("a:1")), Map.of("tag:a", new MarkerVersion("epoch-1", 3, 0)));
 
     @Test
     void a_snapshot_without_marker_versions_keeps_its_version() {
