@@ -1475,8 +1475,37 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void handlerMethods_gives_one_method_for_a_jdk_proxy_listing_both_an_interface_and_its_redeclaring_sub_interface() {
+    void handlerMethods_gives_one_method_for_a_jdk_proxy_listing_both_an_interface_and_its_redeclaring_sub_interface() throws Exception {
         assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(ProxiedBaseHandler.class, ProxiedRedeclaringHandler.class), List.of(Subscription.class)))
-                .hasSize(1);
+                .containsExactly(ProxiedBaseHandler.class.getDeclaredMethod("on", String.class));
+    }
+
+    interface UnrelatedProxiedHandler {
+        @Subscription(id = "proxied-unrelated")
+        void on(String event);
+    }
+
+    @Test
+    void handlerMethods_gives_one_method_for_a_jdk_proxy_listing_an_unrelated_interface_before_a_sub_interface_redeclaring_the_handler_of_another() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(UnrelatedProxiedHandler.class, ProxiedRedeclaringHandler.class), List.of(Subscription.class)))
+                .containsExactly(UnrelatedProxiedHandler.class.getDeclaredMethod("on", String.class));
+    }
+
+    interface ProxiedRedeclaringHandlerWithOwnId extends ProxiedBaseHandler {
+        @Override
+        @Subscription(id = "proxied-redeclared-b")
+        void on(String event);
+    }
+
+    interface ProxiedSiblingRedeclaringHandlerWithOwnId extends ProxiedBaseHandler {
+        @Override
+        @Subscription(id = "proxied-redeclared-c")
+        void on(String event);
+    }
+
+    @Test
+    void handlerMethods_gives_one_method_for_a_jdk_proxy_listing_two_sub_interfaces_that_each_redeclare_the_same_handler() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(ProxiedRedeclaringHandlerWithOwnId.class, ProxiedSiblingRedeclaringHandlerWithOwnId.class), List.of(Subscription.class)))
+                .containsExactly(ProxiedRedeclaringHandlerWithOwnId.class.getDeclaredMethod("on", String.class));
     }
 }
