@@ -567,6 +567,9 @@ report is [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
   time across the instance's timers. For a timer that keeps failing that is its last failed attempt, not its `firesAt`.
 - `SagaInstance.nextTimerAt()` still returns the earliest `firesAt`, so an instance stuck on a failing timer still
   shows a time in the past.
+- The write that records a failed timer keeps the instance's version. It reaches `compareAndSaveWithoutState`, or
+  `compareAndSave` through its default, with an envelope whose version equals `expectedVersion`. Every other save
+  still raises the version by one.
 
 ### What to do
 
@@ -574,6 +577,9 @@ report is [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
   sets it to null.
 - In a store of your own, persist the new component and return `findWithDueTimers` ordered by
   `SagaEnvelope.earliestDueAtEpochMilli()`. A store that does neither keeps working, with the 0.34.0 order.
+- In a store of your own, store the version in the envelope as it comes, even when it equals `expectedVersion`. A
+  store that refuses that save refuses every record of a failed timer, so the poller logs a `WARN` for each failed fire
+  and the instance keeps the 0.34.0 order.
 - Point a monitoring query at `SagaInstance.nextTimerAt()` rather than at `nextTimerFiresAt`, if it looks for instances
   whose timers have been due for a long time.
 

@@ -75,8 +75,16 @@ I rejected three other designs.
 - **The `SagaStateStore` contract asks for the earliest due instance first.** A store of your own that ignores the
   order keeps the starvation of 0.34.0. It still gets a write on every failed fire, which buys it nothing.
 - **Every failed attempt is a write.** It costs a read and a compare and set, at most `timerBatchLimit` of them per
-  poll, and it raises the instance's version. An event delivered to that instance loses its compare and set whenever a
-  failure is recorded between the event's read and its save, and retries.
+  poll.
+- **The write keeps the instance's version.** It compares on the version it read and stores that same version. When it
+  raised the version, an event whose delivery took longer than the poll interval read the instance before a record and
+  saved after it, so it lost its compare and set on every attempt and failed with `SagaConcurrencyException`. Now that
+  event saves, and the timers it writes are the ones it read, so the record is gone and the timer is due at its
+  `firesAt` again until it fails once more. Every other write the executor makes raises the version, so a record can
+  only replace another record made at the same version, never another write. The version is no longer a count of every
+  write, and nothing in Occurrent reads it as one. A `SagaStateStore` of your own has to store the version in the
+  envelope even when it equals `expectedVersion`. One that refuses that save refuses every record, the poller logs a
+  `WARN` for each failed fire, and that store keeps the order of 0.34.0.
 - **A 0.34.0 MongoDB document needs no migration.** Its timer subdocuments have no `nextAttemptAtEpochMilli`, which
   reads as a timer that has not failed, and its `nextTimerFiresAt` is already the earliest due time.
 - **A rolling deploy works both ways.** 0.34.0 reads only `name` and `firesAtEpochMilli` from a timer subdocument, so
