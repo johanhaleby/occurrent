@@ -20,6 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
@@ -111,8 +112,8 @@ class SagaTimerFairnessTest {
 
         assertAll(
                 IntStream.range(0, FAILING_INSTANCES)
-                        .mapToObj(i -> (org.junit.jupiter.api.function.Executable) () ->
-                                assertThat(attempts.get("failing-" + i)).as("attempts at failing-" + i).isGreaterThanOrEqualTo(2))
+                        .mapToObj(i -> (Executable) () ->
+                                assertThat(attempts.getOrDefault("failing-" + i, 0)).as("attempts at failing-" + i).isGreaterThanOrEqualTo(2))
         );
     }
 
