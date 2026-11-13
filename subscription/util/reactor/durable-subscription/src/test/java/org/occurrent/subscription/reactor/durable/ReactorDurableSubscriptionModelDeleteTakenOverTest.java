@@ -92,6 +92,8 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     private static final String START_FAILED = "The wrapped model could not start the subscription";
     private static final String EVALUATION_FAILED = "The storage cannot tell whether it evaluates a condition on a delete";
     private static final String START_POSITION_FAILED = "The start position could not be chosen right now";
+    private static final String READ_CANCEL_FAILED = "The wrapped model failed while its read of where the feed is was cancelled";
+    private static final String PAUSE_FAILED = "The wrapped model could not pause the subscription";
 
     /**
      * The subscription from the model default starts where it would with no delete running, and the subscribe returns
@@ -1117,6 +1119,121 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             release.countDown();
             releaseRead.countDown();
             caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe takes over the delete a cancel of the id started, with nothing stored, and a cancel of it comes before
+     * the subscribe has taken the id. The wrapped model throws while the subscribe ends the read of where the feed was,
+     * so the subscribe throws that, and still gives the delete back. The cancel completes, and no decision is awaited.
+     */
+    @Test
+    void a_cancel_completes_once_the_subscribe_that_took_its_delete_over_throws_while_it_ends_its_reads_after_a_cancel_came_before_it_started() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        FeedThatFailsWhenItsReadIsCancelled feed = new FeedThatFailsWhenItsReadIsCancelled();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        CountDownLatch release = new CountDownLatch(1);
+        IllegalStateException cancelFailed = new IllegalStateException(READ_CANCEL_FAILED);
+        AtomicInteger asked = new AtomicInteger();
+        try {
+            Mono<Void> cancelled = cancelWithNothingStored(model, storage, release);
+            feed.cancelFails = cancelFailed;
+
+            // When
+            // Answers true from the second time on, so a cancel comes after the check at the call and before the id is taken
+            Throwable subscribeEnded = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(),
+                    action(new CopyOnWriteArrayList<>()), () -> asked.incrementAndGet() > 1));
+            release.countDown();
+            Throwable cancelEnded = catchThrowable(() -> cancelled.block(TIMEOUT));
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(subscribeEnded).as("how the subscribe that took the delete over ended").isSameAs(cancelFailed);
+                softly.assertThat(cancelEnded).as("how the cancel ended").isNull();
+                softly.assertThat(model.awaitsADeleteDecision(SUBSCRIPTION_ID)).as("a delete decision awaited once the cancel completed").isFalse();
+            });
+        } finally {
+            release.countDown();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A cancel of the id holds its delete, and a subscribe takes it over and hands the subscription to a wrapped model.
+     * The wrapped model already holds the id, made on it directly, and a pause comes meanwhile, so the refusal as a
+     * duplicate puts that pause in place there. The wrapped model throws a checked exception on the pause, which
+     * Kotlin code throws without declaring it. The subscribe still gives the delete back, so the cancel completes with
+     * the checkpoint removed.
+     */
+    @Test
+    void a_cancel_completes_with_the_checkpoint_removed_once_the_subscribe_that_took_its_delete_over_throws_while_it_puts_a_pause_in_place_after_a_duplicate_refusal() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        PausableFeed feed = new PausableFeed(false);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        CountDownLatch release = new CountDownLatch(1);
+        Throwable pauseFailed = ThrownAtTheCall.of("checked exception", PAUSE_FAILED);
+        try {
+            Mono<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release);
+            Subscription takingOver = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>()));
+            feed.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), action(new CopyOnWriteArrayList<>()));
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            feed.pauseFails = pauseFailed;
+
+            // When
+            release.countDown();
+            Throwable notStarted = catchThrowable(() -> takingOver.waitUntilStarted(TIMEOUT).block());
+            Throwable cancelEnded = catchThrowable(() -> cancelled.block(TIMEOUT));
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(notStarted).as("why the subscribe that took the delete over did not start").hasStackTraceContaining(PAUSE_FAILED);
+                softly.assertThat(cancelEnded).as("how the cancel ended").isNull();
+                softly.assertThat(storage.stored()).as("checkpoint stored once the cancel completed").isEqualTo("-");
+                softly.assertThat(model.awaitsADeleteDecision(SUBSCRIPTION_ID)).as("a delete decision awaited once the cancel completed").isFalse();
+            });
+        } finally {
+            release.countDown();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe takes over the delete a first cancel of the id started, with nothing stored, and a second cancel
+     * ends it. The wrapped model throws while that cancel ends the read of where the feed was, so the second cancel
+     * throws that and its own delete is never started, which is known. The first cancel still completes, since the
+     * subscribe gave back what it took over, and no decision is awaited.
+     */
+    @Test
+    void a_cancel_completes_once_a_later_cancel_that_ends_the_subscribe_that_took_its_delete_over_throws_while_it_ends_the_reads_of_where_the_feed_was() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        FeedThatFailsWhenItsReadIsCancelled feed = new FeedThatFailsWhenItsReadIsCancelled();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        CountDownLatch release = new CountDownLatch(1);
+        IllegalStateException cancelFailed = new IllegalStateException(READ_CANCEL_FAILED);
+        try {
+            Mono<Void> firstCancel = cancelWithNothingStored(model, storage, release);
+            feed.cancelFails = cancelFailed;
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>()));
+            boolean decisionAwaitedWhileItIsRegistered = model.awaitsADeleteDecision(SUBSCRIPTION_ID);
+
+            // When
+            Throwable secondCancelEnded = catchThrowable(() -> model.cancelSubscription(SUBSCRIPTION_ID));
+            release.countDown();
+            Throwable firstCancelEnded = catchThrowable(() -> firstCancel.block(TIMEOUT));
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(decisionAwaitedWhileItIsRegistered).as("a delete decision awaited while the subscribe that took the delete over is registered").isTrue();
+                softly.assertThat(secondCancelEnded).as("how the second cancel ended").isSameAs(cancelFailed);
+                softly.assertThat(firstCancelEnded).as("how the first cancel ended").isNull();
+                softly.assertThat(model.awaitsADeleteDecision(SUBSCRIPTION_ID)).as("a delete decision awaited once the first cancel completed").isFalse();
+            });
+        } finally {
+            release.countDown();
             model.shutdown();
         }
     }
@@ -2729,6 +2846,16 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         return called;
     }
 
+    // Subscribes the id from StartAt.now(), then cancels it while the try of the delete is held until release opens, with
+    // nothing stored. Answers the cancel.
+    private static Mono<Void> cancelWithNothingStored(ReactorDurableSubscriptionModel model, GatedStorage storage, CountDownLatch release) throws InterruptedException {
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), action(new CopyOnWriteArrayList<>())).waitUntilStarted(TIMEOUT).block();
+        storage.deleteGate = release;
+        Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
+        assertThat(storage.deleteEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete held").isTrue();
+        return cancelled;
+    }
+
     // Starts a subscription of the id from the model default and has it store the checkpoint of three events, and
     // answers the position of the last
     private static long storedBeforeTheCancel(ReactorDurableSubscriptionModel model, GatedStorage storage, Feed feed) {
@@ -3117,6 +3244,30 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         }
     }
 
+    // A feed whose read of where it is never answers once cancelFails is set, and throws it when that read is cancelled, as
+    // a wrapped model whose cancel fails does
+    private static final class FeedThatFailsWhenItsReadIsCancelled extends Feed {
+        private volatile @Nullable RuntimeException cancelFails;
+
+        @Override
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            @Nullable RuntimeException failure = cancelFails;
+            if (failure == null) {
+                return super.globalCheckpointAsOfNow();
+            }
+            return Mono.from(subscriber -> subscriber.onSubscribe(new org.reactivestreams.Subscription() {
+                @Override
+                public void request(long n) {
+                }
+
+                @Override
+                public void cancel() {
+                    throw failure;
+                }
+            }));
+        }
+    }
+
     // A feed for subscriptions it manages by name that it pauses, resumes, stops and starts. A subscription moves past an
     // event only once its action for it has ended, and a pause ends the action under way, so a resume delivers that
     // event again. A subscribe while stopped keeps the subscription paused. It refuses a duplicate subscribe, unless
@@ -3131,6 +3282,8 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         private final CountDownLatch letGo = new CountDownLatch(1);
         private volatile int heldSubscribe = -1;
         private volatile @Nullable Throwable thrownByTheHeldSubscribe;
+        // Set, a pause throws it without declaring it
+        private volatile @Nullable Throwable pauseFails;
         private volatile int heldCancel = -1;
         private volatile boolean cancelHeldBeforeItRemoves;
         private boolean stopped;
@@ -3202,6 +3355,10 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
 
         @Override
         public synchronized void pauseSubscription(String subscriptionId) {
+            @Nullable Throwable failure = pauseFails;
+            if (failure != null) {
+                throw ThrownAtTheCall.undeclared(failure);
+            }
             Reading reading = known(subscriptionId);
             if (reading.paused) {
                 throw new IllegalStateException("Subscription " + subscriptionId + " is already paused");
