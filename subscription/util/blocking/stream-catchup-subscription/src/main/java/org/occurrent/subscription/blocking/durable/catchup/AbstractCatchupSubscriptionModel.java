@@ -3501,6 +3501,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // when what decides its failure throws, so endUndecidedAttempt reads the flag again under the lock.
         Thread.ofVirtual().name("occurrent-catchup-" + subscriptionId).start(() -> {
             CURRENT_ATTEMPT.set(attempt);
+            CatchupCannotResumeException heldPaused = null;
             try {
                 Subscription subscription = replayUntilHandedOver(subscriptionId, attempt);
                 if (!attempt.parked) {
@@ -3520,11 +3521,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     // A startup that waits for the handle fails as it did before the hold, and a resume that runs the
                     // replay again gets a handle of its own
                     attempt.replay.result.completeExceptionally(failure);
-                    reportHeldPaused(subscriptionId, (CatchupCannotResumeException) failure);
+                    heldPaused = (CatchupCannotResumeException) failure;
                 }
             } finally {
                 CURRENT_ATTEMPT.remove();
                 attempt.earlierAttemptsDone.whenComplete((ignored, alsoIgnored) -> attempt.done.complete(null));
+            }
+            // Once this thread no longer reads as the replay's and the attempt is done, so a listener can resume or pause
+            // the subscription it is told about
+            if (heldPaused != null) {
+                reportHeldPaused(subscriptionId, heldPaused);
             }
         });
     }
