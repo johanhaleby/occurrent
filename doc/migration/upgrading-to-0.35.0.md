@@ -123,6 +123,10 @@ other sections compile fine and behave differently, so read them first.
 - [A resumed MongoDB subscription waits for the action that ran when it was paused](#a-resumed-mongodb-subscription-waits-for-the-action-that-ran-when-it-was-paused).
   A resumed `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` subscription calls its action only once the
   call from before the pause has returned. Compiles unchanged.
+- [A MongoDB subscription at the present is refused when the server gives it no position](#a-mongodb-subscription-at-the-present-is-refused-when-the-server-gives-it-no-position).
+  On a server that sends no operation time, a `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel`
+  subscription at the present reads the change stream once to record its position, and `waitUntilStarted(..)` and
+  `start(true)` throw `UnsupportedStartAtException` when that read gives none. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
@@ -1591,9 +1595,7 @@ reactor model counts a driver cursor that opened for a subscription with an id. 
 and a subscription with an id when the model can't read through the driver's cursor, count the first document the
 change stream reads instead.
 
-Once a change stream has opened, the model opens it again at the same position and doesn't call the function again,
-unless, on the blocking models, it opened at the present with no operation time in MongoDB's reply and its first read
-hasn't returned.
+Once a change stream has opened, the model opens it again at the same position and doesn't call the function again.
 That covers a pause and a resume, an action that throws, and a failure reading the change stream before the first
 event. A reactor subscription that counts the first document takes the position the function answered when its `Flux`
 was subscribed to. It gives that position back to the function only when the change stream fails before it reads a
@@ -1609,7 +1611,7 @@ fails with a `HistoryLostException` that names that checkpoint, whatever the con
 before the first event, and a catch-up's checkpoint from
 that later call opened at the present and skipped the events written in between.
 
-Four cases still lose events, as they did in 0.34.0:
+Three cases still lose events, as they did in 0.34.0:
 
 - A resume token of another collection as the function's first answer, on the blocking models and on a reactor
   subscription that reads through the driver's cursor. The server opens the change stream at it and rejects it only on
@@ -1620,10 +1622,6 @@ Four cases still lose events, as they did in 0.34.0:
 - A position the server rejects only after an event is written, such as a resume token of another collection, on a
   reactor subscription that counts the first document. The model calls the function again, and an answer that comes
   after that event skips it.
-- On the blocking models, a change stream that opened at the present with no operation time in MongoDB's reply, which a
-  replica set's reply normally has. Nothing records where it opened until its first read returns, so an opening before
-  then can call the function again, and a catch-up's checkpoint it answers then opens at the present and skips the
-  events written in between.
 
 ### Who is affected
 
@@ -1708,10 +1706,7 @@ Every subscription made through `CatchupSubscriptionModel`, `StreamCatchupSubscr
 - the reactive starter when `occurrent.event-store.capabilities` contains `DCB` and the context has a DCB store, or
   when it contains `STREAM` and the stream store writes positions, which is the default
 
-`restart-on-change-stream-history-lost` keeps its meaning only where the starter composes no catch-up subscription,
-and in one case on the blocking stack. A subscription that opened at the present when MongoDB answered with no
-operation time, and loses the history before it reads anything, still restarts from now when the property is `true`.
-[#1358](https://github.com/johanhaleby/occurrent/issues/1358) tracks it.
+`restart-on-change-stream-history-lost` keeps its meaning only where the starter composes no catch-up subscription.
 
 A catch-up subscription you build yourself is affected too, also when the MongoDB subscription model under it doesn't
 restart, which is how that model is built by default. There the subscription used to end with an error in the log,
@@ -2303,6 +2298,40 @@ affected too.
 
 Give an action that can block for good a timeout of its own, since a resume no longer gets past it. The code compiles
 unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
+
+## A MongoDB subscription at the present is refused when the server gives it no position
+
+`NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel` record a position for a subscription started at the
+present before its change stream opens. A replica set and a sharded cluster send MongoDB's operation time with every
+reply, and the models record that. On a server whose reply to `ping` has no operation time, the model logs a `WARN`,
+reads the change stream once, and records the commit time of the event that read returns, or the resume token of an
+empty read. A pause and resume, or a restart, before the first event then opens at that position, where 0.34.0 opened
+at a later present and skipped what was written in between.
+
+When that read returns neither an event nor a resume token, the subscription can't start at the present:
+
+* `subscribe(..)` returns without waiting for MongoDB, as in 0.34.0.
+* `waitUntilStarted(..)` on the handle it returned throws an `UnsupportedStartAtException`, and so does `start(true)`
+  when it starts the subscription. The message says MongoDB gave neither an operation time nor a change stream
+  position. The subscription is removed from the model, and the listeners added through
+  `StartRefusalReportingSubscriptions` are told, as for a catch-up's checkpoint.
+* A `resumeSubscription(id, StartAt.now())` does the read when the resumed change stream opens, and is refused the same
+  way.
+
+In 0.34.0 such a subscription opened at the present.
+
+### Who is affected
+
+Code that subscribes one of these models at `StartAt.now()`, at the model default, or at a `StartAt.dynamic(..)` that
+resolves to one of those, on a MongoDB server that sends no operation time. A `StartAt.dynamic(..)` start does the read
+at the subscribe whatever it resolves to, and is refused only when it resolves to the present. A replica set and a
+sharded cluster aren't affected.
+
+### What to do
+
+Subscribe at a checkpoint instead, such as a `MongoOperationTimeCheckpoint` for the time to start from, and handle the
+`UnsupportedStartAtException` where you call `waitUntilStarted(..)` or `start(true)`. The code compiles unchanged, and
+there is no OpenRewrite recipe, because no signature changes.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 

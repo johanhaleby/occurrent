@@ -204,7 +204,7 @@ class MongoCommonsTest {
     void resolving_the_present_pins_it_to_the_operation_time_before_the_stream_opens() {
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(StartAt.now());
 
-        StartAt opening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> OPERATION_TIME);
+        StartAt opening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> new MongoOperationTimeCheckpoint(OPERATION_TIME));
 
         assertThat(checkpointOf(opening)).isEqualTo(new MongoOperationTimeCheckpoint(OPERATION_TIME));
         assertThat(checkpointOf(currentStartAt.get())).isEqualTo(new MongoOperationTimeCheckpoint(OPERATION_TIME));
@@ -213,12 +213,12 @@ class MongoCommonsTest {
     @Test
     void resolving_a_pinned_position_again_asks_the_server_nothing_and_opens_where_it_first_opened() {
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(StartAt.subscriptionModelDefault());
-        StartAt firstOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> OPERATION_TIME);
+        StartAt firstOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> new MongoOperationTimeCheckpoint(OPERATION_TIME));
         AtomicInteger asked = new AtomicInteger();
 
         StartAt secondOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> {
             asked.incrementAndGet();
-            return new BsonTimestamp(1_800_000_000, 1);
+            return new MongoOperationTimeCheckpoint(new BsonTimestamp(1_800_000_000, 1));
         });
 
         assertThat(checkpointOf(secondOpening)).isEqualTo(checkpointOf(firstOpening));
@@ -232,7 +232,7 @@ class MongoCommonsTest {
 
         StartAt opening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> {
             asked.incrementAndGet();
-            return OPERATION_TIME;
+            return new MongoOperationTimeCheckpoint(OPERATION_TIME);
         });
 
         assertThat(opening).isSameAs(RESUME_TOKEN_POSITION);
@@ -246,7 +246,7 @@ class MongoCommonsTest {
 
         StartAt opening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> {
             currentStartAt.set(RESUME_TOKEN_POSITION);
-            return OPERATION_TIME;
+            return new MongoOperationTimeCheckpoint(OPERATION_TIME);
         });
 
         assertThat(opening).isSameAs(RESUME_TOKEN_POSITION);
@@ -257,7 +257,7 @@ class MongoCommonsTest {
     void a_checkpoint_this_model_does_not_recognize_is_pinned_like_the_present() {
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(StartAt.checkpoint(new StringBasedCheckpoint("somewhere-else")));
 
-        StartAt opening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> OPERATION_TIME);
+        StartAt opening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> new MongoOperationTimeCheckpoint(OPERATION_TIME));
 
         assertThat(checkpointOf(opening)).isEqualTo(new MongoOperationTimeCheckpoint(OPERATION_TIME));
     }
@@ -277,10 +277,10 @@ class MongoCommonsTest {
     void a_pinned_dynamic_position_still_answers_its_own_checkpoint_once_it_has_one() {
         AtomicReference<StartAt> answer = new AtomicReference<>(StartAt.subscriptionModelDefault());
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(StartAt.dynamic(answer::get));
-        StartAt firstOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> OPERATION_TIME);
+        StartAt firstOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> new MongoOperationTimeCheckpoint(OPERATION_TIME));
 
         answer.set(RESUME_TOKEN_POSITION);
-        StartAt secondOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> OPERATION_TIME);
+        StartAt secondOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> new MongoOperationTimeCheckpoint(OPERATION_TIME));
 
         assertThat(checkpointOf(firstOpening)).isEqualTo(new MongoOperationTimeCheckpoint(OPERATION_TIME));
         assertThat(secondOpening).isSameAs(RESUME_TOKEN_POSITION);
@@ -289,9 +289,9 @@ class MongoCommonsTest {
     @Test
     void a_pinned_dynamic_position_answers_the_pin_where_it_would_have_answered_the_present() {
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(StartAt.dynamic(StartAt::now));
-        StartAt firstOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> OPERATION_TIME);
+        StartAt firstOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> new MongoOperationTimeCheckpoint(OPERATION_TIME));
 
-        StartAt secondOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> new BsonTimestamp(1_800_000_000, 1));
+        StartAt secondOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> new MongoOperationTimeCheckpoint(new BsonTimestamp(1_800_000_000, 1)));
 
         assertThat(checkpointOf(secondOpening)).isEqualTo(checkpointOf(firstOpening));
     }
@@ -360,7 +360,7 @@ class MongoCommonsTest {
 
     @Test
     void record_where_it_opened_replaces_a_position_pinned_to_an_operation_time_with_that_operation_time() {
-        StartAt tracked = MongoCommons.pinnedTo(StartAt.dynamic(StartAt::now), OPERATION_TIME);
+        StartAt tracked = MongoCommons.pinnedTo(StartAt.dynamic(StartAt::now), new MongoOperationTimeCheckpoint(OPERATION_TIME));
         StartAt operationTimePosition = StartAt.checkpoint(new MongoOperationTimeCheckpoint(OPERATION_TIME));
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(tracked);
 
