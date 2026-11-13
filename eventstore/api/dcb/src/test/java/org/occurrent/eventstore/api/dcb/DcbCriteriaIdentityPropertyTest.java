@@ -107,6 +107,31 @@ class DcbCriteriaIdentityPropertyTest {
         assertThat(DcbCriteriaIdentity.canonical(type)).isNotEqualTo(DcbCriteriaIdentity.canonical(tag));
     }
 
+    // The strings in the next three examples are stored in snapshots, so a change to them makes saved versions stop resuming
+    @Example
+    void criteria_that_match_every_event_have_the_canonical_form_all() {
+        assertThat(DcbCriteriaIdentity.canonical(DcbCriteria.all())).isEqualTo("all");
+    }
+
+    @Example
+    void alternatives_have_a_canonical_form_with_their_parts_and_the_alternatives_sorted() {
+        DcbCriteria criteria = DcbCriteria.anyOf(
+                DcbCriteria.type("OrderPlaced").tags(Tag.of("order", "1"), Tag.of("customer", "7")),
+                DcbCriteria.types("Shipped", "Cancelled").excludingTypes("Refunded", "Archived"));
+
+        assertThat(DcbCriteriaIdentity.canonical(criteria)).isEqualTo(
+                "[{\"types\":[\"Cancelled\",\"Shipped\"],\"tags\":[],\"excludedTypes\":[\"Archived\",\"Refunded\"]},"
+                        + "{\"types\":[\"OrderPlaced\"],\"tags\":[\"customer:7\",\"order:1\"],\"excludedTypes\":[]}]");
+    }
+
+    @Example
+    void a_type_and_a_tag_holding_a_quote_a_backslash_and_a_comma_are_escaped_in_the_canonical_form() {
+        DcbCriteria criteria = DcbCriteria.type("a\"b\\c,d").tags(Tag.of("e\"f\\g,h"));
+
+        assertThat(DcbCriteriaIdentity.canonical(criteria)).isEqualTo(
+                "[{\"types\":[\"a\\\"b\\\\c,d\"],\"tags\":[\"e\\\"f\\\\g,h\"],\"excludedTypes\":[]}]");
+    }
+
     @Provide
     Arbitrary<DcbCriteria> criteria() {
         return specs().flatMap(spec -> Arbitraries.longs().map(seed -> spec.build(new Random(seed), Shape.REBUILT)));
