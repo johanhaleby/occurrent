@@ -914,16 +914,27 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 ReplayInTheWay neverWentLive = inTheWay.stream().filter(ReplayInTheWay::neverWentLive).findFirst().orElse(null);
                 Subscription resumed;
                 StoredPositionReplaced replaced = null;
+                // The position the live delegate resumes at, whose loss the clear below keeps
+                @Nullable Checkpoint givenPosition = resumedAt(startAt);
                 try {
                     if (neverWentLive != null) {
                         resumed = neverWentLive.subscribeInPlaceOfTheHeldReplay(startAt);
                     } else {
                         // A position a catch-up replays from makes a later resume replay from it, and the live delegate
                         // may not store one of its own over it, so the position given here replaces it. A start from now
-                        // stores the present position and goes live from it, as the subscribe in place does.
+                        // stores the present position and goes live from it, as the subscribe in place does. The child
+                        // that made the subscription reads that position, since each child reads its own event store.
+                        Subscribed owned = subscribed.get(subscriptionId);
+                        AbstractCatchupSubscriptionModel owner = owned == null ? this : owned.owner();
                         StartAt answered = answeredForThisModel(startAt);
-                        replaced = replaceTheStoredPosition(subscriptionId, answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered, true);
+                        @Nullable StartAt forThisModel = answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered;
+                        replaced = owner.replaceTheStoredPosition(subscriptionId, forThisModel, true);
                         Checkpoint present = replaced == null ? null : replaced.present;
+                        if (present != null) {
+                            givenPosition = present;
+                        } else if (forThisModel != null) {
+                            givenPosition = resumedAt(forThisModel);
+                        }
                         resumed = repositionable.resumeSubscription(subscriptionId, present == null ? startAt : goingLiveFrom(answered, StartAt.checkpoint(present)));
                     }
                 } catch (Throwable e) {
@@ -945,7 +956,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // The subscribe in place of a held replay cleared it before it started a replay of its own.
                 Subscribed made = subscribed.get(subscriptionId);
                 if (neverWentLive == null && made != null) {
-                    logResumedAfterLoss(subscriptionId, startAt, made.historyLost().clear(resumedAt(startAt)));
+                    logResumedAfterLoss(subscriptionId, startAt, made.historyLost().clear(givenPosition));
                 }
                 inTheWay.forEach(ReplayInTheWay::end);
                 models.forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
