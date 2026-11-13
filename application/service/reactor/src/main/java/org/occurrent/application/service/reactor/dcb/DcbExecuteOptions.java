@@ -170,6 +170,10 @@ public final class DcbExecuteOptions<E> {
      * {@code markerVersions} with its own, for example after its markers were pruned, and when it returns an event below
      * {@code highestFoldedPosition}. That event committed late, and folding it last could give another state than a read
      * in position order. Execute again without this method, with only {@link #withVersions()}, and fold from the initial state then.
+     * <p>
+     * The versions hold the criteria they were read with, and the read also throws
+     * {@link org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException} when the boundary's criteria aren't the same.
+     * Versions saved for one boundary don't resume another.
      *
      * @param markerVersions        the versions to read after
      * @param highestFoldedPosition the highest position among the events folded into the saved state. After an append
