@@ -33,6 +33,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -43,6 +44,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -418,6 +420,140 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
     @Test
     @Timeout(30)
+    void a_resume_made_while_a_subscribe_still_runs_after_its_named_catch_up_was_held_leaves_the_start_the_subscribe_returns_failing_with_the_held_replay() {
+        // Given a model that loses the live start in each of the replays, whose replay runs on the thread of the subscribe,
+        // and a resume made where the hold is logged, which is before the subscribe returns
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.losesEveryToken = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new ThreeEventReader());
+        AtomicBoolean asked = new AtomicBoolean();
+        AtomicReference<Subscription> resumed = new AtomicReference<>();
+        AtomicReference<Throwable> resumeFailure = new AtomicReference<>();
+        Logger supportLogger = (Logger) LoggerFactory.getLogger(NamedCatchupSupport.class);
+        AppenderBase<ILoggingEvent> resumesWhereTheHoldIsLogged = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getFormattedMessage().contains("held paused, and resuming it or start(true) on this model replays again from the beginning") && asked.compareAndSet(false, true)) {
+                    wrapped.losesEveryToken = false;
+                    resumeFailure.set(org.assertj.core.api.Assertions.catchThrowable(() -> resumed.set(catchup.resumeSubscription("sub"))));
+                }
+            }
+        };
+        resumesWhereTheHoldIsLogged.start();
+        supportLogger.addAppender(resumesWhereTheHoldIsLogged);
+        try {
+            // When
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+
+            // Then the resume ran before the subscribe returned, and handed over
+            assertThat(asked).as("resumed before the subscribe returned").isTrue();
+            assertThat(resumeFailure.get()).as("thrown by the resume").isNull();
+            StepVerifier.create(resumed.get().waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(5));
+            assertThat(wrapped.subscribeCalls).as("handed over").containsExactly("sub");
+
+            // And the subscribe returned the start of the replay it made, which was held
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining("4 replays"))
+                    .verify(Duration.ofSeconds(5));
+        } finally {
+            supportLogger.detachAppender(resumesWhereTheHoldIsLogged);
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_resume_made_while_a_resume_still_runs_after_its_replay_was_held_again_leaves_the_start_the_first_resume_returns_failing_with_the_held_replay() {
+        // Given a subscription held after a replay that lost the live start in each run, and a model that loses it again
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.losesEveryToken = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new ThreeEventReader());
+        AtomicInteger holds = new AtomicInteger();
+        AtomicReference<Subscription> resumedFromTheHold = new AtomicReference<>();
+        AtomicReference<Throwable> resumeFailure = new AtomicReference<>();
+        Logger supportLogger = (Logger) LoggerFactory.getLogger(NamedCatchupSupport.class);
+        // A resume made where the second hold is logged, which is before the first resume returns
+        AppenderBase<ILoggingEvent> resumesWhereTheSecondHoldIsLogged = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getFormattedMessage().contains("held paused, and resuming it or start(true) on this model replays again from the beginning") && holds.incrementAndGet() == 2) {
+                    wrapped.losesEveryToken = false;
+                    resumeFailure.set(org.assertj.core.api.Assertions.catchThrowable(() -> resumedFromTheHold.set(catchup.resumeSubscription("sub"))));
+                }
+            }
+        };
+        resumesWhereTheSecondHoldIsLogged.start();
+        supportLogger.addAppender(resumesWhereTheSecondHoldIsLogged);
+        try {
+            catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+            await().atMost(Duration.ofSeconds(20)).until(() -> holds.get() == 1);
+
+            // When it is resumed and the replay is held again
+            Subscription firstResume = catchup.resumeSubscription("sub");
+
+            // Then the resume made where that hold is logged handed over
+            assertThat(holds).as("holds logged").hasValue(2);
+            assertThat(resumeFailure.get()).as("thrown by the resume").isNull();
+            StepVerifier.create(resumedFromTheHold.get().waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(5));
+            assertThat(wrapped.subscribeCalls).as("handed over").containsExactly("sub");
+
+            // And the first resume returned the start of the replay it ran, which was held
+            StepVerifier.create(firstResume.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining("4 replays"))
+                    .verify(Duration.ofSeconds(5));
+        } finally {
+            supportLogger.detachAppender(resumesWhereTheSecondHoldIsLogged);
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_history_loss_that_ends_a_replay_a_stop_and_a_start_replaced_holds_nothing_for_the_replay_that_runs_since() {
+        // Given a first replay that reads one event, whose action stops the model and starts it again so a second replay
+        // runs, and that then fails with a lost live start, which is before the subscribe has registered the first replay
+        // to be disposed. The second replay reads nothing more, so it is the one in flight.
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        AtomicInteger reads = new AtomicInteger();
+        AtomicReference<ReactorStreamCatchupSubscriptionModel> model = new AtomicReference<>();
+        UnscopedPositionOrderedReader reader = new ThreeEventReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                if (reads.incrementAndGet() == 1) {
+                    return super.readInPositionOrder(filter, range).take(1)
+                            .concatWith(Flux.error(() -> HistoryLossMessages.liveStartLost("The live start was lost.", GlobalCheckpoint.of(3), true)));
+                }
+                return Flux.never();
+            }
+        };
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        model.set(catchup);
+        AtomicBoolean replaced = new AtomicBoolean();
+        try (ErrorsLoggedByTheCatchup errors = new ErrorsLoggedByTheCatchup()) {
+            // When
+            catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+                if (replaced.compareAndSet(false, true)) {
+                    model.get().stop();
+                    model.get().start(true);
+                }
+                return Mono.empty();
+            });
+
+            // Then the failure of the first replay holds nothing, and records nothing
+            assertThat(replaced).as("the first replay was replaced").isTrue();
+            assertThat(reads.get()).as("reads, which a second replay made").isGreaterThan(1);
+            assertThat(errors.errors()).as("errors logged").noneMatch(message -> message.contains("held paused"));
+            assertThat(catchup.isPaused("sub")).as("paused").isFalse();
+            assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
     void a_named_catch_up_that_started_above_the_beginning_and_lost_its_live_start_is_held_paused_and_recorded_so_a_resume_refuses_and_a_start_replays_nothing_until_it_is_cancelled() {
         // Given a stored position above 0 whose live start the model still has when the replay starts, and loses during it
         NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
@@ -515,7 +651,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
     }
 
     // Three events at positions 1 to 3, and a head that stays at 3
-    private static final class ThreeEventReader implements UnscopedPositionOrderedReader {
+    private static class ThreeEventReader implements UnscopedPositionOrderedReader {
         @Override
         public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
             long from = range.afterPosition().orElse(0L) + 1;
