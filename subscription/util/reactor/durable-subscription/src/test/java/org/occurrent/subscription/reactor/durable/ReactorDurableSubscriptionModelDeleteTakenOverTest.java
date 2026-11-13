@@ -1203,12 +1203,11 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     /**
      * A subscribe takes over the delete a first cancel of the id started, with nothing stored, and a second cancel
      * ends it. The wrapped model throws while that cancel ends the read of where the feed was, so the second cancel
-     * throws that, and its own delete is never started, which is known. The subscribe still gives back what it took
-     * over, so no decision on the deletes of the id is left awaited. The first cancel waits for the delete of the
-     * second, so it does not complete, which is not asserted.
+     * throws that. Its delete still starts, and the first cancel completes once that delete has ended, with nothing
+     * stored. The subscribe gave back what it took over, so no decision on the deletes of the id is left awaited.
      */
     @Test
-    void a_cancel_that_throws_while_it_ends_the_reads_of_the_subscribe_that_took_a_delete_over_leaves_no_decision_on_the_deletes_of_the_id_awaited() throws Exception {
+    void a_cancel_completes_when_a_later_cancel_throws_while_it_ends_the_reads_of_the_subscribe_that_took_its_delete_over() throws Exception {
         // Given
         GatedStorage storage = new GatedStorage(false);
         FeedThatFailsWhenItsReadIsCancelled feed = new FeedThatFailsWhenItsReadIsCancelled();
@@ -1216,19 +1215,23 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         CountDownLatch release = new CountDownLatch(1);
         IllegalStateException cancelFailed = new IllegalStateException(READ_CANCEL_FAILED);
         try {
-            cancelWithNothingStored(model, storage, release);
+            Mono<Void> firstCancel = cancelWithNothingStored(model, storage, release);
             feed.cancelFails = cancelFailed;
             model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>()));
             boolean decisionAwaitedWhileItIsRegistered = model.awaitsADeleteDecision(SUBSCRIPTION_ID);
 
             // When
             Throwable secondCancelEnded = catchThrowable(() -> model.cancelSubscription(SUBSCRIPTION_ID));
+            release.countDown();
+            Throwable firstCancelEnded = catchThrowable(() -> firstCancel.block(TIMEOUT));
 
             // Then
             SoftAssertions.assertSoftly(softly -> {
                 softly.assertThat(decisionAwaitedWhileItIsRegistered).as("a delete decision awaited while the subscribe that took the delete over is registered").isTrue();
                 softly.assertThat(secondCancelEnded).as("how the second cancel ended").isSameAs(cancelFailed);
-                softly.assertThat(model.awaitsADeleteDecision(SUBSCRIPTION_ID)).as("a delete decision awaited once the second cancel threw").isFalse();
+                softly.assertThat(firstCancelEnded).as("how the first cancel ended").isNull();
+                softly.assertThat(storage.stored()).as("checkpoint stored once the first cancel completed").isEqualTo("-");
+                softly.assertThat(model.awaitsADeleteDecision(SUBSCRIPTION_ID)).as("a delete decision awaited once the first cancel completed").isFalse();
             });
         } finally {
             release.countDown();
