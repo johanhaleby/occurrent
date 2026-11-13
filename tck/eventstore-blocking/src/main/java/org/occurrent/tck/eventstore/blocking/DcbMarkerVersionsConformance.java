@@ -58,7 +58,9 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
 /**
  * What a DCB caller sees of marker versions, the values a snapshot saves to resume a read without comparing positions.
  * A marker key stands for a tag or for a part of an event type, and a read reports the versions of the keys of its
- * criteria. A key for a type is the store's own, so the suite derives the keys it expects the way the stores do.
+ * criteria. The suite expects the keys {@link DcbMarkerVersionsSupport#queryMarkerKeys} gives, which for a criteria
+ * item without tags are {@link DcbMarkerVersionsSupport#STRIPES} keys per type. A store with a key scheme of its own
+ * can't pass it as written.
  * <p>
  * The suite states only what a caller sees, which is the same for every store. These things are left out on purpose,
  * because they describe how a store keeps the contract rather than the contract:
