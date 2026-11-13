@@ -3467,7 +3467,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             String at = lost.asString();
             log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, at, at, failure);
         } else {
-            logFailure(subscriptionId, failure, "the subscription is held paused, and resuming it or start(true) on this model replays again from the beginning");
+            logFailure(subscriptionId, failure, lost == null ? "the subscription is held paused, and resuming it or start(true) on this model replays again from the beginning"
+                    : "the subscription is held paused");
         }
     }
 
