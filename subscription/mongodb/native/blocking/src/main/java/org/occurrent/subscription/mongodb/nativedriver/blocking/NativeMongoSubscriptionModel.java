@@ -93,10 +93,14 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     /**
-     * {@code false} until <a href="https://github.com/johanhaleby/occurrent/issues/1482">issue 1482</a> is fixed.
-     * A change stream that opened at the present without an operation time records no position, so a restart before its
-     * first event is handled opens at a later present and skips that event. A pause stops waiting for a running action
-     * after a second, and a resume can then deliver later events while that call still runs.
+     * {@code false}. With {@code restartSubscriptionsOnChangeStreamHistoryLost} turned on, a restart after the change
+     * stream's history was lost opens at the present and skips the events written in between. With it off, two gaps in
+     * the change stream loop, tracked in
+     * <a href="https://github.com/johanhaleby/occurrent/issues/1482">issue 1482</a>, still break commit order.
+     * A subscription that opened at the present without an operation time has no recorded position until a read returns
+     * no event or its first event is handled, so a pause and resume or a restart before then opens at a later present
+     * and skips what was written in between. A pause stops waiting for a running action after a second, and a resume
+     * can then deliver later events while that call still runs.
      */
     @Override
     public boolean deliversEveryEventInCommitOrder() {

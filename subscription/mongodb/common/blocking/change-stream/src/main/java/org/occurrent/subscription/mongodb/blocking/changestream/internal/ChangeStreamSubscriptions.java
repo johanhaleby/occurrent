@@ -894,10 +894,10 @@ public final class ChangeStreamSubscriptions {
     }
 
     /**
-     * {@code false} until <a href="https://github.com/johanhaleby/occurrent/issues/1482">issue 1482</a> is fixed.
-     * A change stream that opened at the present without an operation time records no position, so a restart before its
-     * first event is handled opens at a later present and skips that event. A pause stops waiting for a running action
-     * after a second, and a resume can then deliver later events while that call still runs.
+     * {@code false}. The javadoc of {@code deliversEveryEventInCommitOrder()} in {@code NativeMongoSubscriptionModel}
+     * and {@code SpringMongoSubscriptionModel} says why. Once
+     * <a href="https://github.com/johanhaleby/occurrent/issues/1482">issue 1482</a> is fixed, this answers {@code true}
+     * only while {@code restartSubscriptionsOnChangeStreamHistoryLost} is off.
      */
     public boolean deliversEveryEventInCommitOrder() {
         return false;

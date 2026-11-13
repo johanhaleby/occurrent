@@ -1098,11 +1098,17 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     /**
-     * What the wrapped model answers, and {@code false} when it doesn't declare it. This model calls each action on the
-     * wrapped model's thread and stores the checkpoint only after the action returned normally.
+     * {@code false} when {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} is turned
+     * on, since a crash before a subscription's first checkpoint is saved starts it over from wherever the feed has
+     * reached, and an event whose delivery failed before the crash is not delivered again. Otherwise what the wrapped
+     * model answers, and {@code false} when it doesn't declare it. This model calls each action on the wrapped model's
+     * thread and stores an event's checkpoint only after its action returned normally.
      */
     @Override
     public boolean deliversEveryEventInCommitOrder() {
+        if (config.startWhenNoStartPositionCanBeRecorded) {
+            return false;
+        }
         return CommitOrderedSubscriptions.findIn(subscriptionModel).map(CommitOrderedSubscriptions::deliversEveryEventInCommitOrder).orElse(false);
     }
 

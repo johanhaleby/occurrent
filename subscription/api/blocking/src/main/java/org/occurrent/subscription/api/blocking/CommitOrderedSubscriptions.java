@@ -29,11 +29,12 @@ import java.util.Optional;
  * A model that answers {@code true} delivers no event to a subscription before every earlier event matching it has been
  * delivered and its listener call returned normally. An event is earlier when it committed earlier, or when it was
  * written earlier in the same commit, so the events of one commit are delivered in the order they were written. Earlier
- * events count from the position the subscription was started or resumed at, so a subscription started at the present
- * waits for nothing written before it. A model that can move a subscription past events it never delivered, without
- * being asked to, answers {@code false}. A listener call that throws doesn't count as a delivery, and a model that
- * answers {@code true} never calls a subscription's listener while an earlier call for that subscription is still
- * running.
+ * events count from the position the subscription was started at, or from the position a caller gave when resuming it,
+ * so a subscription started at the present waits for nothing written before it. A model that can move a subscription
+ * past events it never delivered, without being asked to, answers {@code false}. A listener call that throws doesn't
+ * count as a delivery, and a model that answers {@code true} never calls a subscription's listener while an earlier call
+ * for that subscription is still running. An event can still be delivered again after its listener returned normally,
+ * together with the events after it, so a listener has to tolerate a repeat.
  * <p>
  * A caller that finds no implementation, which is an empty result from {@link #findIn(SubscriptionModelCapability)},
  * treats the model as not delivering in commit order.
