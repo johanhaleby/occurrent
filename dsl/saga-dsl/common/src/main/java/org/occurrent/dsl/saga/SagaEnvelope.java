@@ -36,7 +36,8 @@ import static java.util.Objects.requireNonNull;
  * @param sagaId            the instance id (the saga's correlation id)
  * @param state             the user state {@code S}
  * @param status            whether the instance is active or completed
- * @param version           the optimistic-lock version, incremented on every save. A fresh instance is saved at version 1.
+ * @param version           the optimistic-lock version, incremented on every save except the one that marks a failed
+ *                          timer. A fresh instance is saved at version 1.
  * @param timers            the pending timers, by name
  * @param streamWatermarks  the highest stream version folded per stream id, for deduplicating redelivered stream events
  * @param positionWatermark ignored. 0.31.0 to 0.34.0 stored the highest global position folded here, and the saga no

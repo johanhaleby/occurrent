@@ -556,8 +556,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * get their timers fired.
      * <p>
      * Read without the state and written without it, so an instance whose state no longer decodes is marked too. A lost
-     * compare-and-set is read again and retried up to {@link SagaRunnerConfig#maxCasAttempts()} times. When the write
-     * cannot be made, the timer keeps the due time it had and the next poll tries it as early as before. Nothing is
+     * compare-and-set is read again and retried up to {@link SagaRunnerConfig#maxCasAttempts()} times. The write keeps
+     * the instance's version, so a slow event delivery that read the instance before the mark still saves. When the
+     * write cannot be made, the timer keeps the due time it had and the next poll tries it as early as before. Nothing is
      * thrown, because the exception that matters is the one the fire threw.
      */
     private void markFailedAttempt(String sagaId, TimerEntry timer, Instant polledAt) {
@@ -570,7 +571,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     return;
                 }
             }
-            log.warn("Saga '{}' instance '{}' could not record that its timer '{}' failed, because the instance kept changing under {} attempts. "
+            log.warn("Saga '{}' instance '{}' could not record that its timer '{}' failed, because the instance kept changing under {} attempts "
+                     + "or the store refuses a save at the same version. "
                      + "The timer keeps its due time, so the next poll tries it before instances that became due after it.",
                     subscriptionId, sagaId, timer.name(), config.maxCasAttempts());
         } catch (Throwable storeFailure) {

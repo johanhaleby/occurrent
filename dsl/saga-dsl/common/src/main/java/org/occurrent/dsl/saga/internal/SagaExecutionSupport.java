@@ -655,8 +655,11 @@ public final class SagaExecutionSupport {
     /**
      * The instance with the timer {@code attempted} due again from {@code nextAttemptAt}, so the due-timer query orders
      * it behind the instances due before that. Save it with
-     * {@code compareAndSaveWithoutState(..., current.version())}. It changes the timer and the version and nothing
-     * else the executor reads. {@code updatedAt} stays where it was, because a failed fire is no progress.
+     * {@code compareAndSaveWithoutState(..., current.version())}. It changes the timer and nothing else the executor
+     * reads. The version stays the same, so an event read before the mark still saves at that version instead of
+     * losing its compare-and-set to every poll. That save writes the timers it read, so it drops the mark, and the
+     * timer is due at its {@code firesAt} again until it fails once more. {@code updatedAt} stays where it was, because
+     * a failed fire is no progress.
      * <p>
      * {@code null} when there is nothing to write. That is when the instance is gone, completed or quarantined, when it
      * no longer has a timer of that name set to fire at that instant, or when the timer is already marked at or after
@@ -684,7 +687,7 @@ public final class SagaExecutionSupport {
         if (!marked) {
             return null;
         }
-        return new SagaEnvelope<>(current.sagaId(), current.state(), current.status(), current.version() + 1, timers,
+        return new SagaEnvelope<>(current.sagaId(), current.state(), current.status(), current.version(), timers,
                 current.streamWatermarks(), null, current.createdAt(), current.updatedAt(),
                 current.completedAt(), current.currentStep(), current.started(), current.failure(), current.streamMarks());
     }
