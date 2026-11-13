@@ -370,6 +370,37 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
     @Test
     @Timeout(30)
+    void a_stop_and_a_start_replay_a_named_catch_up_that_started_at_the_beginning_and_lost_its_live_start_each_time_again_from_the_beginning_and_hand_over() {
+        // Given a subscription held paused after a replay from the beginning lost the live start in each of its replays
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.losesEveryToken = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new ThreeEventReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        try {
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining("4 replays"))
+                    .verify(Duration.ofSeconds(20));
+            assertThat(catchup.isPaused("sub")).as("paused").isTrue();
+
+            // When the model has the live start again and this model is stopped and started
+            wrapped.losesEveryToken = false;
+            received.clear();
+            catchup.stop();
+            catchup.start(true);
+
+            // Then it replays the whole history again and hands over
+            await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(wrapped.subscribeCalls).as("handed over").containsExactly("sub"));
+            assertThat(received).as("the whole history, replayed again").containsExactly("e1", "e2", "e3");
+            assertThat(catchup.isPaused("sub")).as("paused").isFalse();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
     void a_resume_after_a_named_catch_up_that_started_at_the_beginning_is_held_and_before_the_waiters_of_the_held_replay_are_failed_gets_a_start_that_completes_once_the_replay_run_again_hands_over() {
         // Given a model that loses the live start in each of the replays, and a resume made where the hold is logged, which
         // comes after the hold and before the waiters of the held replay are told it failed
@@ -399,7 +430,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
             Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
                     StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> letTheReplayGo.asMono());
             letTheReplayGo.tryEmitEmpty();
-            await().atMost(Duration.ofSeconds(20)).untilTrue(asked);
+            await().atMost(Duration.ofSeconds(20)).until(() -> resumed.get() != null || resumeFailure.get() != null);
             assertThat(resumeFailure.get()).as("thrown by the resume").isNull();
             // The start of the resume waits for the start signal of the wrapped model, held back until below, so only a
             // failure can end it before then
