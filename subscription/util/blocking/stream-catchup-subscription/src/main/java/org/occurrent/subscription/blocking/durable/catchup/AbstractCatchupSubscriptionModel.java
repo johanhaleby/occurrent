@@ -1426,17 +1426,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
         CatchupCheckpoints.Start stored = CatchupCheckpoints.parse(at.checkpoint);
         Checkpoint liveFrom = stored.liveFrom();
-        boolean startedAtTheBeginning = switch (stored) {
-            case CatchupCheckpoints.Position position -> position.replayOrigin() == 0;
-            case CatchupCheckpoints.Time time -> timeOf(time.replayOrigin()).isBeginningOfTime();
-        };
-        if (liveFrom == null || startedAtTheBeginning || subscriptionModel.canResumeFrom(liveFrom)) {
+        String origin = originAfterTheBeginning(stored);
+        if (liveFrom == null || origin == null || subscriptionModel.canResumeFrom(liveFrom)) {
             return null;
         }
-        String origin = switch (stored) {
-            case CatchupCheckpoints.Position position -> "position " + position.replayOrigin();
-            case CatchupCheckpoints.Time time -> "time " + time.replayOrigin();
-        };
         return refuseOrHoldPaused(subscriptionId, liveStartLostAfterTheBeginning(subscriptionId, origin, liveFrom), liveFrom,
                 () -> subscribeLivePausedAt.apply(StartAt.checkpoint(liveFrom)));
     }
@@ -2455,13 +2448,27 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         if (subscriptionModel.canResumeFrom(storedLiveFrom)) {
             return new TimeReplayStart(time, storedLiveFrom, replayOrigin, noLive);
         }
-        if (!replayOrigin.isBeginningOfTime()) {
-            throw liveStartLostAfterTheBeginning(subscriptionId, "time " + replayOrigin.asString(), storedLiveFrom);
+        String origin = originAfterTheBeginning(stored);
+        if (origin != null) {
+            throw liveStartLostAfterTheBeginning(subscriptionId, origin, storedLiveFrom);
         }
         log.warn("The subscription model no longer has the history from the live start stored for catch-up subscription {}, so the catch-up replays again from time {} instead of {} and redelivers the events in between. Live start: {}",
                 subscriptionId, replayOrigin.asString(), time.asString(), storedLiveFrom.asString());
         countReplayAgainFromOrigin();
         return new TimeReplayStart(replayOrigin, captureLiveResumeCheckpoint(liveStart), replayOrigin, noLive);
+    }
+
+    // The origin the replay that stored a checkpoint started from, as a refusal names it, or null when it started at
+    // position 0 or the beginning of time, where a replay again skips nothing. One rule for a subscribe that checks a
+    // stored checkpoint and for the replay that starts from it.
+    private static @Nullable String originAfterTheBeginning(CatchupCheckpoints.Start stored) {
+        return switch (stored) {
+            case CatchupCheckpoints.Position position -> position.replayOrigin() > 0 ? "position " + position.replayOrigin() : null;
+            case CatchupCheckpoints.Time time -> {
+                TimeBasedCheckpoint origin = timeOf(time.replayOrigin());
+                yield origin.isBeginningOfTime() ? null : "time " + origin.asString();
+            }
+        };
     }
 
     private static TimeBasedCheckpoint timeOf(String time) {
@@ -2499,8 +2506,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         if (subscriptionModel.canResumeFrom(storedLiveFrom)) {
             return new PositionReplayStart(stored.position(), storedLiveFrom, replayOrigin, stored.replayTo(), noLive);
         }
-        if (replayOrigin > 0) {
-            throw liveStartLostAfterTheBeginning(subscriptionId, "position " + replayOrigin, storedLiveFrom);
+        String origin = originAfterTheBeginning(stored);
+        if (origin != null) {
+            throw liveStartLostAfterTheBeginning(subscriptionId, origin, storedLiveFrom);
         }
         log.warn("The subscription model no longer has the history from the live start stored for catch-up subscription {}, so the catch-up replays again from position {} instead of {} and redelivers the events in between. Live start: {}",
                 subscriptionId, replayOrigin, stored.position(), storedLiveFrom.asString());
