@@ -31,11 +31,17 @@ import static java.util.Objects.requireNonNull;
  * epoch, its version, and the number of its increments that wrote no marker versions on their events. All three are
  * plain values, so a snapshot store can persist them as they are. Compare these versions only within the store that
  * reported them.
+ * <p>
+ * The versions also hold the criteria they were read with, as a string, so that a read after them can refuse versions
+ * from other criteria. Two criteria are the same when they hold the same alternatives in any order, as for a
+ * {@link DcbConsistencyToken}, so {@code types("A", "B")} isn't the same as {@code anyOf(type("A"), type("B"))}.
  *
- * @param markers the marker versions by marker key, never empty
+ * @param criteria the criteria these versions were read with, in a canonical form that only this class creates. Persist it
+ *                 as it is and pass it back to {@link #of(String, Map)}.
+ * @param markers  the marker versions by marker key, never empty
  */
 @NullMarked
-public record DcbMarkerVersions(Map<String, MarkerVersion> markers) {
+public record DcbMarkerVersions(String criteria, Map<String, MarkerVersion> markers) {
 
     /**
      * The version of one marker.
@@ -64,6 +70,10 @@ public record DcbMarkerVersions(Map<String, MarkerVersion> markers) {
     }
 
     public DcbMarkerVersions {
+        requireNonNull(criteria, "Criteria cannot be null");
+        if (criteria.isBlank()) {
+            throw new IllegalArgumentException("Criteria cannot be blank");
+        }
         requireNonNull(markers, "Markers cannot be null");
         if (markers.isEmpty()) {
             throw new IllegalArgumentException("Markers cannot be empty");
@@ -81,10 +91,25 @@ public record DcbMarkerVersions(Map<String, MarkerVersion> markers) {
     }
 
     /**
-     * Creates marker versions from the supplied entries.
+     * Creates marker versions of the supplied entries, read with {@code criteria}.
      */
-    public static DcbMarkerVersions of(Map<String, MarkerVersion> markers) {
-        return new DcbMarkerVersions(markers);
+    public static DcbMarkerVersions of(DcbCriteria criteria, Map<String, MarkerVersion> markers) {
+        return new DcbMarkerVersions(DcbCriteriaIdentity.canonical(criteria), markers);
+    }
+
+    /**
+     * Creates marker versions of the supplied entries, read with the criteria whose canonical form is {@code criteria},
+     * as {@link #criteria()} gave it. A snapshot store uses this to load the versions it persisted.
+     */
+    public static DcbMarkerVersions of(String criteria, Map<String, MarkerVersion> markers) {
+        return new DcbMarkerVersions(criteria, markers);
+    }
+
+    /**
+     * Whether these versions were read with {@code criteria}, or with criteria that are the same.
+     */
+    public boolean readWith(DcbCriteria criteria) {
+        return this.criteria.equals(DcbCriteriaIdentity.canonical(criteria));
     }
 
     /**

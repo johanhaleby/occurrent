@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 class DcbSnapshotInvalidExceptionTest {
 
     private static final DcbCriteria CRITERIA = DcbCriteria.tags(Tag.parse("name:1"));
-    private static final DcbMarkerVersions AFTER = DcbMarkerVersions.of(Map.of("tag:name:1", new MarkerVersion("epoch-1", 3, 0)));
+    private static final DcbMarkerVersions AFTER = DcbMarkerVersions.of(CRITERIA, Map.of("tag:name:1", new MarkerVersion("epoch-1", 3, 0)));
 
     @Test
     void an_event_below_the_folded_position_names_the_position_in_the_message() {

@@ -221,7 +221,7 @@ class DcbMarkerVersionsSupportTest {
                     KEY_A, new MarkerObservation(EPOCH, 4, 1),
                     KEY_B, new MarkerObservation("epoch-2", 9, 9));
 
-            Optional<DcbMarkerVersions> versions = DcbMarkerVersionsSupport.versionsOf(Set.of(KEY_A, KEY_B), observed);
+            Optional<DcbMarkerVersions> versions = DcbMarkerVersionsSupport.versionsOf(DcbCriteria.tags(A), Set.of(KEY_A, KEY_B), observed);
 
             assertThat(versions).isPresent();
             assertThat(versions.get().markers()).containsOnly(
@@ -235,21 +235,21 @@ class DcbMarkerVersionsSupportTest {
                     KEY_A, new MarkerObservation(EPOCH, 4, 0),
                     KEY_B, new MarkerObservation(EPOCH, 2, 0));
 
-            Optional<DcbMarkerVersions> versions = DcbMarkerVersionsSupport.versionsOf(Set.of(KEY_A), observed);
+            Optional<DcbMarkerVersions> versions = DcbMarkerVersionsSupport.versionsOf(DcbCriteria.tags(A), Set.of(KEY_A), observed);
 
             assertThat(versions.orElseThrow().keys()).containsExactly(KEY_A);
         }
 
         @Test
         void are_absent_when_no_key_is_asked_for() {
-            assertThat(DcbMarkerVersionsSupport.versionsOf(Set.of(), Map.of(KEY_A, new MarkerObservation(EPOCH, 4, 0)))).isEmpty();
+            assertThat(DcbMarkerVersionsSupport.versionsOf(DcbCriteria.tags(A), Set.of(), Map.of(KEY_A, new MarkerObservation(EPOCH, 4, 0)))).isEmpty();
         }
 
         @Test
         void are_absent_when_a_key_has_no_observed_marker() {
             Map<String, MarkerObservation> observed = Map.of(KEY_A, new MarkerObservation(EPOCH, 4, 0));
 
-            assertThat(DcbMarkerVersionsSupport.versionsOf(Set.of(KEY_A, KEY_B), observed)).isEmpty();
+            assertThat(DcbMarkerVersionsSupport.versionsOf(DcbCriteria.tags(A), Set.of(KEY_A, KEY_B), observed)).isEmpty();
         }
 
         @Test
@@ -258,32 +258,32 @@ class DcbMarkerVersionsSupportTest {
                     KEY_A, new MarkerObservation(EPOCH, 4, 0),
                     KEY_B, new MarkerObservation(null, 4, 4));
 
-            assertThat(DcbMarkerVersionsSupport.versionsOf(Set.of(KEY_A, KEY_B), observed)).isEmpty();
+            assertThat(DcbMarkerVersionsSupport.versionsOf(DcbCriteria.tags(A), Set.of(KEY_A, KEY_B), observed)).isEmpty();
         }
 
         @Test
         void are_absent_when_a_marker_has_a_blank_epoch() {
-            assertThat(DcbMarkerVersionsSupport.versionsOf(Set.of(KEY_A), Map.of(KEY_A, new MarkerObservation(" ", 4, 0)))).isEmpty();
+            assertThat(DcbMarkerVersionsSupport.versionsOf(DcbCriteria.tags(A), Set.of(KEY_A), Map.of(KEY_A, new MarkerObservation(" ", 4, 0)))).isEmpty();
         }
 
         @Test
         void are_absent_when_a_marker_has_a_version_below_one() {
-            assertThat(DcbMarkerVersionsSupport.versionsOf(Set.of(KEY_A), Map.of(KEY_A, new MarkerObservation(EPOCH, 0, 0)))).isEmpty();
+            assertThat(DcbMarkerVersionsSupport.versionsOf(DcbCriteria.tags(A), Set.of(KEY_A), Map.of(KEY_A, new MarkerObservation(EPOCH, 0, 0)))).isEmpty();
         }
 
         @Test
         void are_absent_when_a_marker_has_a_negative_unstamped_count() {
-            assertThat(DcbMarkerVersionsSupport.versionsOf(Set.of(KEY_A), Map.of(KEY_A, new MarkerObservation(EPOCH, 4, -1)))).isEmpty();
+            assertThat(DcbMarkerVersionsSupport.versionsOf(DcbCriteria.tags(A), Set.of(KEY_A), Map.of(KEY_A, new MarkerObservation(EPOCH, 4, -1)))).isEmpty();
         }
 
         @Test
         void are_absent_when_a_marker_has_an_unstamped_count_above_its_version() {
-            assertThat(DcbMarkerVersionsSupport.versionsOf(Set.of(KEY_A), Map.of(KEY_A, new MarkerObservation(EPOCH, 4, 5)))).isEmpty();
+            assertThat(DcbMarkerVersionsSupport.versionsOf(DcbCriteria.tags(A), Set.of(KEY_A), Map.of(KEY_A, new MarkerObservation(EPOCH, 4, 5)))).isEmpty();
         }
 
         @Test
         void are_present_for_a_marker_whose_unstamped_count_equals_its_version() {
-            assertThat(DcbMarkerVersionsSupport.versionsOf(Set.of(KEY_A), Map.of(KEY_A, new MarkerObservation(EPOCH, 4, 4)))).isPresent();
+            assertThat(DcbMarkerVersionsSupport.versionsOf(DcbCriteria.tags(A), Set.of(KEY_A), Map.of(KEY_A, new MarkerObservation(EPOCH, 4, 4)))).isPresent();
         }
     }
 
@@ -443,7 +443,7 @@ class DcbMarkerVersionsSupportTest {
         @Test
         void checks_the_keys_of_every_item_of_criteria_that_has_several() {
             DcbCriteria several = DcbCriteria.anyOf(DcbCriteria.tags(A), DcbCriteria.type("Deposited"));
-            DcbMarkerVersions saved = versions(KEY_A, 3, 0);
+            DcbMarkerVersions saved = DcbMarkerVersions.of(several, Map.of(KEY_A, new MarkerVersion(EPOCH, 3, 0)));
 
             assertThatThrownBy(() -> DcbMarkerVersionsSupport.requireResumable(several, saved, Map.of(KEY_A, new MarkerObservation(EPOCH, 3, 0))))
                     .isExactlyInstanceOf(DcbSnapshotInvalidException.class)
@@ -468,6 +468,6 @@ class DcbMarkerVersionsSupportTest {
     }
 
     private static DcbMarkerVersions versions(Map<String, MarkerVersion> markers) {
-        return DcbMarkerVersions.of(markers);
+        return DcbMarkerVersions.of(DcbCriteria.tags(A, B), markers);
     }
 }

@@ -663,9 +663,10 @@ What is new:
   one that committed late below a position an earlier read saw. A failover can make it miss an event, as [What else a
   token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. When the store can't compare `saved` with its own
   markers, for example after they were pruned, it throws `DcbSnapshotInvalidException`, and you read the boundary in
-  full. Pass versions only to a read on the same criteria as the read or append that reported them. A store doesn't
-  always refuse versions from other criteria. Versions from a read on `type("X").tags(a)` pass on a read on `tags(a)`,
-  which returns only what comes after them, with no exception.
+  full. The versions hold the criteria they were read with, and a read on other criteria throws the same exception.
+  Criteria are the same when they hold the same alternatives in any order, the rule a consistency token uses, so
+  versions from `tags(a)` are refused on `tags(a).excludingTypes("Y")`, and versions from `types("A", "B")` on
+  `anyOf(type("A"), type("B"))`.
 - `DcbAppendConfirmation.isConfirmed(result)` answers whether an append is committed at majority, read outside any
   transaction of yours. The MongoDB stores and `InMemoryEventStore` implement it.
 

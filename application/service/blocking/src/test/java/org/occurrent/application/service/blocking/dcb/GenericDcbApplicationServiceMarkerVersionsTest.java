@@ -125,7 +125,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
         @Test
         void drops_the_versions_when_the_read_did_not_report_a_key_of_the_append() {
-            var store = new ScriptedStore(Optional.of(DcbMarkerVersions.of(Map.of("tag:other:1", new MarkerVersion("epoch-1", 2, 0)))), Optional.of(versions("epoch-1", 3)));
+            var store = new ScriptedStore(Optional.of(DcbMarkerVersions.of(CRITERIA, Map.of("tag:other:1", new MarkerVersion("epoch-1", 2, 0)))), Optional.of(versions("epoch-1", 3)));
 
             Optional<DcbAppendResult> result = executeWithVersions(store);
 
@@ -143,7 +143,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
 
         @Test
         void keeps_the_versions_when_the_read_reported_more_keys_than_the_append_has() {
-            var readVersions = DcbMarkerVersions.of(Map.of(KEY, new MarkerVersion("epoch-1", 2, 0), "tag:other:1", new MarkerVersion("epoch-9", 5, 0)));
+            var readVersions = DcbMarkerVersions.of(CRITERIA, Map.of(KEY, new MarkerVersion("epoch-1", 2, 0), "tag:other:1", new MarkerVersion("epoch-9", 5, 0)));
             var store = new ScriptedStore(Optional.of(readVersions), Optional.of(versions("epoch-1", 3)));
 
             Optional<DcbAppendResult> result = executeWithVersions(store);
@@ -579,7 +579,7 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
     }
 
     private static DcbMarkerVersions versions(String epoch, long version) {
-        return DcbMarkerVersions.of(Map.of(KEY, new MarkerVersion(epoch, version, 0)));
+        return DcbMarkerVersions.of(CRITERIA, Map.of(KEY, new MarkerVersion(epoch, version, 0)));
     }
 
     private static CloudEventConverter<DomainEvent> converter() {

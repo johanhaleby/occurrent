@@ -18,8 +18,11 @@ package org.occurrent.eventstore.api.dcb;
 
 import org.jspecify.annotations.NullMarked;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 import static java.util.Objects.requireNonNull;
 
@@ -33,6 +36,9 @@ import static java.util.Objects.requireNonNull;
  * the same, even when they select the same events, so {@code types("A", "B")} isn't the same as
  * {@code anyOf(type("A"), type("B"))}.
  * {@link DcbCriteria}'s own {@code equals} still compares an {@code Items} in order.
+ * <p>
+ * {@link #canonical(DcbCriteria)} gives the same rule as a string, which {@link DcbMarkerVersions} keeps, so two criteria
+ * are the same exactly when their canonical forms are equal.
  */
 @NullMarked
 final class DcbCriteriaIdentity {
@@ -46,6 +52,44 @@ final class DcbCriteriaIdentity {
 
     static int hash(DcbCriteria criteria) {
         return alternatives(criteria).hashCode();
+    }
+
+    // all for MatchAll, otherwise a JSON array of the distinct alternatives in sorted order, each with its types, tags and
+    // excluded types sorted. Changing it makes every saved DcbMarkerVersions unresumable
+    static String canonical(DcbCriteria criteria) {
+        return alternatives(criteria)
+                .map(items -> items.stream().map(DcbCriteriaIdentity::canonical).collect(Collectors.toCollection(TreeSet::new)))
+                .map(items -> String.join(",", items))
+                .map(items -> "[" + items + "]")
+                .orElse("all");
+    }
+
+    private static String canonical(DcbCriterion criterion) {
+        return "{\"types\":" + array(criterion.types())
+                + ",\"tags\":" + array(criterion.tags().stream().map(Tag::canonical).toList())
+                + ",\"excludedTypes\":" + array(criterion.excludedTypes()) + "}";
+    }
+
+    private static String array(Collection<String> values) {
+        return values.stream().sorted().map(DcbCriteriaIdentity::quoted).collect(Collectors.joining(",", "[", "]"));
+    }
+
+    private static String quoted(String value) {
+        StringBuilder quoted = new StringBuilder(value.length() + 2).append('"');
+        value.chars().forEach(c -> {
+            switch (c) {
+                case '"' -> quoted.append("\\\"");
+                case '\\' -> quoted.append("\\\\");
+                default -> {
+                    if (c < 0x20) {
+                        quoted.append(String.format("\\u%04x", c));
+                    } else {
+                        quoted.append((char) c);
+                    }
+                }
+            }
+        });
+        return quoted.append('"').toString();
     }
 
     // Empty for MatchAll, so it is the same only as another MatchAll

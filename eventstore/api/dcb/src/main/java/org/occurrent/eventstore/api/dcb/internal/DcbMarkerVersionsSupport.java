@@ -127,9 +127,11 @@ public final class DcbMarkerVersionsSupport {
     }
 
     /**
-     * The versions of {@code keys}, present only when every key has a reportable marker in {@code observed}.
+     * The versions of {@code keys}, the marker keys of {@code criteria}, present only when every key has a reportable
+     * marker in {@code observed}.
      */
-    public static Optional<DcbMarkerVersions> versionsOf(Set<String> keys, Map<String, MarkerObservation> observed) {
+    public static Optional<DcbMarkerVersions> versionsOf(DcbCriteria criteria, Set<String> keys, Map<String, MarkerObservation> observed) {
+        requireNonNull(criteria, "Criteria cannot be null");
         if (keys.isEmpty()) {
             return Optional.empty();
         }
@@ -141,17 +143,21 @@ public final class DcbMarkerVersionsSupport {
             }
             versions.put(key, new DcbMarkerVersions.MarkerVersion(requireNonNull(marker.epoch()), marker.version(), marker.unstamped()));
         }
-        return Optional.of(new DcbMarkerVersions(versions));
+        return Optional.of(DcbMarkerVersions.of(criteria, versions));
     }
 
     /**
      * Throws {@link DcbSnapshotInvalidException} unless the events after {@code saved} can be selected from the
-     * markers in {@code observed}. That needs the saved keys to be the marker keys of {@code criteria}, and for each key
+     * markers in {@code observed}. That needs {@code saved} to be read with {@code criteria}, the saved keys to be the
+     * marker keys of {@code criteria}, and for each key
      * a marker with an epoch, the saved epoch, a version at or above the saved one, and the saved unstamped count.
      */
     public static void requireResumable(DcbCriteria criteria, DcbMarkerVersions saved, Map<String, MarkerObservation> observed) {
         if (criteria instanceof DcbCriteria.MatchAll) {
             throw new DcbSnapshotInvalidException(criteria, saved, "Cannot read after marker versions for criteria that match every event");
+        }
+        if (!saved.readWith(criteria)) {
+            throw new DcbSnapshotInvalidException(criteria, saved, "The saved marker versions were read with other criteria, " + saved.criteria());
         }
         Set<String> keys = queryMarkerKeys(criteria);
         for (String key : keys) {

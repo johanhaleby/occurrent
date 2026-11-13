@@ -513,8 +513,10 @@ The read path:
    can't be compared with the read's. That's a saved epoch that differs from the marker's current epoch, which means the
    marker was pruned. It's a saved version above the version in the read's snapshot, which means the snapshot is ahead
    of the read, after a prune. And
-   it's a marker written by 0.34 with no epoch, a key missing from the snapshot, or saved keys that differ from
-   `keys(C)`. Last, it's a key whose count of increments without `mv`, `u`, differs from the saved one, which a section
+   it's a marker written by 0.34 with no epoch, a key missing from the snapshot, saved keys that differ from
+   `keys(C)`, or versions read with criteria other than C. `DcbMarkerVersions` holds a canonical string of the criteria
+   it was read with, and two criteria are the same by the rule of ADR 147
+   ([#1477](https://github.com/johanhaleby/occurrent/issues/1477)). Last, it's a key whose count of increments without `mv`, `u`, differs from the saved one, which a section
    below explains.
 8. `DcbEventStream` gets an `Optional<DcbMarkerVersions>`, the versions of `keys(C)` in the snapshot the events came
    from. It is present only when the read asked for versions and had no limit, skip, backward order or position bound. A
@@ -579,8 +581,8 @@ The consumers, on both stacks:
   refuse it, because `@Snapshot` shipped in 0.34.0 and refusing it would stop an application that starts today. A
   decider or view that gets no versions from a store that can't give them logs one warning.
 - `SpringMongoSnapshotStore` and `ReactiveSpringMongoSnapshotStore` store a DCB snapshot's versions as a
-  `markerVersions` array of `{k, e, v, u}` elements, since a marker key can contain a dot, and write no `version` field
-  for it. A 0.34 node that loads such a snapshot finds no version and reads the boundary in full. A DCB snapshot that
+  `markerVersions` document with the criteria, `c`, and an array `m` of `{k, e, v, u}` elements, since a marker key
+  can contain a dot, and write no `version` field for it. A 0.34 node that loads such a snapshot finds no version and reads the boundary in full. A DCB snapshot that
   0.34 saved has no marker versions, so a 0.35 decider or view never uses it, and can save over it once its read reports versions.
 - `InMemoryEventStore` keeps a counter and an epoch per key under its existing lock and reports the same versions.
 

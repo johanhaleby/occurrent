@@ -347,7 +347,7 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     void a_refusal_after_the_append_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
         // A synchronous subscription without a transaction fails after the append has committed
         AtomicBoolean refuseAfterAppend = new AtomicBoolean();
-        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by a synchronous subscription (test double)");
+        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(criteria(), Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by a synchronous subscription (test double)");
         ReactiveSynchronousEventDispatcher refusingDispatcher = new ReactiveSynchronousEventDispatcher() {
             @Override
             public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
@@ -446,7 +446,7 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     void a_refusal_marked_by_another_service_thrown_synchronously_from_a_side_effect_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
         // The function throws instead of returning an erroring Mono, which the service has to defer to see
         Function<List<DomainEvent>, List<DomainEvent>> otherServicesFunction = events -> List.of();
-        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by another service (test double)").beforeAppend(otherServicesFunction);
+        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(criteria(), Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by another service (test double)").beforeAppend(otherServicesFunction);
 
         assertSideEffectRefusalReachesTheCallerWithoutRunningTheCommandAgain(otherServicesFunction, events -> {
             throw refusal;
@@ -587,7 +587,7 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     void a_refusal_marked_by_another_service_and_raised_by_the_transaction_executor_after_the_action_completed_reaches_the_caller_and_the_command_is_not_run_a_second_time() {
         // The executor raises it after the action committed the append, for example when it runs more work in the same transaction
         Function<List<DomainEvent>, List<DomainEvent>> otherServicesFunction = events -> List.of();
-        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by another service (test double)").beforeAppend(otherServicesFunction);
+        DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(criteria(), Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by another service (test double)").beforeAppend(otherServicesFunction);
         AtomicBoolean refuseAfterTheAction = new AtomicBoolean();
         ReactiveTransactionExecutor raisingAfterTheAction = new ReactiveTransactionExecutor() {
             @Override
@@ -1104,7 +1104,7 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
                 return delegate.read(criteria, DcbReadOptions.fromBeginning().withVersions()).map(stream -> reportsVersions ? stream : new DcbEventStream(stream.events(), stream.lastSequencePosition(), stream.consistencyToken()));
             }
             if (refuseEveryRead || refuseThisResume) {
-                DcbMarkerVersions refused = options.afterVersions().orElseGet(() -> DcbMarkerVersions.of(Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))));
+                DcbMarkerVersions refused = options.afterVersions().orElseGet(() -> DcbMarkerVersions.of(criteria(), Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))));
                 return Mono.error(new DcbSnapshotInvalidException(criteria, refused, "refused (test double)"));
             }
             return delegate.read(criteria, options).map(stream -> reportsVersions ? stream : new DcbEventStream(stream.events(), stream.lastSequencePosition(), stream.consistencyToken()));

@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayName("DcbReadOptions and marker versions")
 class DcbReadOptionsTest {
 
-    private static final DcbMarkerVersions SAVED = DcbMarkerVersions.of(Map.of("tag:a", new MarkerVersion("epoch-1", 3, 0)));
+    private static final DcbMarkerVersions SAVED = DcbMarkerVersions.of(DcbCriteria.tags(Tag.parse("name:1")), Map.of("tag:a", new MarkerVersion("epoch-1", 3, 0)));
 
     @Nested
     @DisplayName("a read that does not ask for versions")

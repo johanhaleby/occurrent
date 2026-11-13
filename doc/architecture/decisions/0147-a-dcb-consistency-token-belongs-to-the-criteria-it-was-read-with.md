@@ -176,12 +176,11 @@ catch that.
   prune between the read and the append can't let a conflicting append through because of that, since
   [ADR 149](0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md) compares each marker's
   epoch and version instead of a sum.
-- A read with `afterVersions` can't tell versions saved from other criteria when the marker keys are the same. Versions
-  from a read on `type("X").tags(a)` have the key `tag:a`, like a read on `tags(a)`, so that read no longer throws
-  `DcbSnapshotInvalidException` and returns only what comes after the versions, with no exception. The javadoc and the
-  guide say to pass versions only to a read on the same criteria, and nothing enforces that. A criteria-derived snapshot
-  key (ADR 61) gives a changed criteria another snapshot, so a decider with such a key doesn't pass versions from the old
-  criteria.
+- Versions from a read on `type("X").tags(a)` have the key `tag:a`, like a read on `tags(a)`, so comparing keys can't
+  tell them apart. That's why `DcbMarkerVersions` holds the criteria it was read with, the way the token does, and a read with
+  `afterVersions` on other criteria throws `DcbSnapshotInvalidException` (ADR 148,
+  [#1477](https://github.com/johanhaleby/occurrent/issues/1477)). Criteria are the same by the token's rule, so versions
+  from `tags(a)` are refused on `tags(a).excludingTypes("Y")` too, and those take a full read.
 - `DcbConsistencyToken` becomes a class and the two stream constructors are removed, which breaks store
   implementations and code that creates tokens or streams. The refusal breaks code that appends with other criteria
   than it read with. There is no OpenRewrite recipe for either, because the replacement needs the read criteria,
