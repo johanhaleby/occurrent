@@ -79,7 +79,7 @@ import static java.util.Objects.requireNonNull;
  * @see #stoppedByDefault(SubscriptionModel)
  */
 @NullMarked
-public final class ManualStartSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, IntrospectableSubscriptions {
+public final class ManualStartSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, IntrospectableSubscriptions, CommitOrderedSubscriptions {
 
     private final SubscriptionModel delegate;
     private final @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource;
@@ -483,6 +483,16 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     @Override
     public SubscriptionModel getWrappedSubscriptionModel() {
         return delegate;
+    }
+
+    /**
+     * What the delegate answers, and {@code false} when it doesn't declare it. This model hands each action to the
+     * delegate unchanged. Without a position source, a first run starts where the delegate's default points when it is
+     * started, so earlier events count from that start and not from the registration.
+     */
+    @Override
+    public boolean deliversEveryEventInCommitOrder() {
+        return CommitOrderedSubscriptions.findIn(delegate).map(CommitOrderedSubscriptions::deliversEveryEventInCommitOrder).orElse(false);
     }
 
     /**

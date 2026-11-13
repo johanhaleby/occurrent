@@ -893,6 +893,16 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
+    /**
+     * {@code false}. The javadoc of {@code deliversEveryEventInCommitOrder()} in {@code NativeMongoSubscriptionModel}
+     * and {@code SpringMongoSubscriptionModel} says why. Once
+     * <a href="https://github.com/johanhaleby/occurrent/issues/1482">issue 1482</a> is fixed, this answers {@code true}
+     * only while {@code restartSubscriptionsOnChangeStreamHistoryLost} is off.
+     */
+    public boolean deliversEveryEventInCommitOrder() {
+        return false;
+    }
+
     public boolean isRunning() {
         return running;
     }

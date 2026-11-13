@@ -40,6 +40,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
@@ -65,6 +66,7 @@ import java.util.List;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -548,6 +550,45 @@ public class SpringMongoCheckpointStorageTest {
         // Then
         await().atMost(ONE_SECOND).until(state::size, is(1));
         assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getName()));
+    }
+
+    @Test
+    void a_pause_while_a_failing_listener_backs_off_does_not_skip_the_event_on_resume() {
+        // Given: a wrapped model that backs off 5 s between attempts, so the pause comes during the first backoff
+        subscriptionModel.shutdown();
+        SpringMongoSubscriptionModel backingOff = new SpringMongoSubscriptionModel(mongoTemplate, "events", RFC_3339_STRING, RetryStrategy.fixed(5000));
+        subscriptionModel = new DurableSubscriptionModel(backingOff, new SpringMongoCheckpointStorage(mongoTemplate, RESUME_TOKEN_COLLECTION));
+        String subscriptionId = UUID.randomUUID().toString();
+        AtomicBoolean failing = new AtomicBoolean();
+        AtomicInteger failures = new AtomicInteger();
+        CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe(subscriptionId, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            if (failing.get()) {
+                failures.incrementAndGet();
+                throw new IllegalStateException("expected");
+            }
+            handled.add(cloudEvent.getId());
+        }).waitUntilStarted(Duration.ofSeconds(10));
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined e1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined e2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+        NameDefined e3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name3");
+        mongoEventStore.write("1", 0, serialize(e1));
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(handled).containsExactly(e1.eventId()));
+        failing.set(true);
+        mongoEventStore.write("2", 0, serialize(e2));
+        await().atMost(5, SECONDS).untilAtomic(failures, greaterThanOrEqualTo(1));
+
+        // When: paused while the retry backs off, then resumed once the listener works again
+        subscriptionModel.pauseSubscription(subscriptionId);
+        assertThat(failures).as("no second attempt before the pause returned").hasValue(1);
+        failing.set(false);
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+        mongoEventStore.write("3", 0, serialize(e3));
+
+        // Then
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(handled).containsSubsequence(e1.eventId(), e2.eventId(), e3.eventId()));
+        await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(handled).containsExactly(e1.eventId(), e2.eventId(), e3.eventId()));
     }
 
     @Test
