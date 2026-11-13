@@ -26,6 +26,7 @@ import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.between.PublicMethodThatDoesNotOverride;
+import org.occurrent.springboot.common.bridged.PublicLeafWithBridges;
 import org.occurrent.springboot.common.declaring.OverridesHandlerBelowAMethodThatDoesNot;
 import org.occurrent.springboot.common.declaring.PackagePrivateFactoryBase;
 import org.occurrent.springboot.common.declaring.PackagePrivateHandlerBase;
@@ -1110,6 +1111,74 @@ class SubscriptionAnnotationsTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("@Projection factory")
                 .hasMessageContaining(SubOfPackagePrivateOverridingFactoryMid.class.getName() + " does not run the factory the scan read from " + PackagePrivateFactoryBase.class.getName())
+                .hasMessageContaining("it either overrides it or does not inherit it");
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // a public class inheriting from a package-private class has bridge methods the scan reads
+    // ------------------------------------------------------------------------------------------------------
+
+    static class SubOfPublicLeafWithBridges extends PublicLeafWithBridges {
+    }
+
+    static class OverridesHandlerAndFactoryOfPublicLeafWithBridges extends PublicLeafWithBridges {
+        @Override
+        public void on(String event) {
+        }
+
+        @Override
+        public String factory() {
+            return "overridden-factory-built";
+        }
+    }
+
+    private static Method bridgeTheScanReadsFrom(Class<?> type) {
+        Set<Method> handlers = SubscriptionAnnotations.handlerMethods(type, List.of(Subscription.class));
+        assertThat(handlers).singleElement().satisfies(handler -> {
+            assertThat(handler.isBridge()).isTrue();
+            assertThat(handler.getDeclaringClass()).isEqualTo(PublicLeafWithBridges.class);
+        });
+        return handlers.iterator().next();
+    }
+
+    @Test
+    void runsImplementationOf_is_true_for_a_public_class_and_the_bridge_the_scan_read_from_it() {
+        Method read = bridgeTheScanReadsFrom(PublicLeafWithBridges.class);
+
+        assertThat(SubscriptionAnnotations.runsImplementationOf(new PublicLeafWithBridges(), read)).isTrue();
+    }
+
+    @Test
+    void runsImplementationOf_is_true_for_a_public_class_in_another_package_that_extends_the_one_with_the_bridge() {
+        Method read = bridgeTheScanReadsFrom(PublicLeafWithBridges.class);
+
+        assertThat(SubscriptionAnnotations.runsImplementationOf(new SubOfPublicLeafWithBridges(), read)).isTrue();
+    }
+
+    @Test
+    void runsImplementationOf_is_false_for_a_class_that_overrides_the_handler_behind_the_bridge_the_scan_read() throws Exception {
+        Method read = PublicLeafWithBridges.class.getDeclaredMethod("on", String.class);
+        assertThat(read.isBridge()).isTrue();
+
+        assertThat(SubscriptionAnnotations.runsImplementationOf(new OverridesHandlerAndFactoryOfPublicLeafWithBridges(), read)).isFalse();
+    }
+
+    @Test
+    void invokeDescriptorFactory_runs_the_factory_read_from_the_bridge_of_a_public_class_instead_of_refusing_it() throws Exception {
+        Method read = PublicLeafWithBridges.class.getDeclaredMethod("factory");
+        assertThat(read.isBridge()).isTrue();
+
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", new SubOfPublicLeafWithBridges(), read);
+
+        assertThat(result).isEqualTo("bridged-factory-built");
+    }
+
+    @Test
+    void invokeDescriptorFactory_refuses_a_class_that_overrides_the_factory_behind_the_bridge_the_scan_read() throws Exception {
+        Method read = PublicLeafWithBridges.class.getDeclaredMethod("factory");
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Projection", new OverridesHandlerAndFactoryOfPublicLeafWithBridges(), read))
+                .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("it either overrides it or does not inherit it");
     }
 

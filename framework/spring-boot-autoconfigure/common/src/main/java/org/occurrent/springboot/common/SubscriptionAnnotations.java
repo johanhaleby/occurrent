@@ -452,8 +452,12 @@ public final class SubscriptionAnnotations {
         return runsUnchanged(ClassUtils.getUserClass(target.getClass()), method);
     }
 
+    // methodTheJvmRuns answers with the method a bridge stands for, so the method is compared the same way. A public
+    // class that inherits a public method from a package-private superclass gets a bridge method from javac, and the
+    // scan reads the handler from that bridge
     private static boolean runsUnchanged(Class<?> implementation, Method method) {
-        return method.getDeclaringClass().isAssignableFrom(implementation) && methodTheJvmRuns(method, implementation).equals(method);
+        return method.getDeclaringClass().isAssignableFrom(implementation)
+                && methodTheJvmRuns(method, implementation).equals(BridgeMethodResolver.findBridgedMethod(method));
     }
 
     /**

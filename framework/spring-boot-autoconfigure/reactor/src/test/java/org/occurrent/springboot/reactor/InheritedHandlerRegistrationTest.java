@@ -34,6 +34,7 @@ import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.reactor.bridged.PublicBridgedSubscriber;
 import org.occurrent.springboot.reactor.other.CrossPackageEvent;
 import org.occurrent.springboot.reactor.other.CrossPackageFixedShadowing;
 import org.occurrent.springboot.reactor.other.CrossPackageOverridingMid;
@@ -501,6 +502,18 @@ class InheritedHandlerRegistrationTest {
 
     @SuppressWarnings("rawtypes")
     static class RawBoundedDcb extends BoundedDcb {
+    }
+
+    @Test
+    void a_public_handler_inherited_from_a_package_private_class_through_a_public_subclass_registers_and_runs() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", PublicBridgedSubscriber.class, () -> new PublicBridgedSubscriber(bodies)).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            anyHandlerFor(context.getBean(Subscriptions.class), "bridged-handler").invoke(null, new CrossPackageEvent());
+
+            assertThat(bodies).containsExactly("bridged-body");
+        });
     }
 
     // ------------------------------------------------------------------------------------------------------
