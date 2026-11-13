@@ -523,7 +523,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             List<SagaEnvelope<S>> due = stateStore.findWithDueTimers(now, config.timerBatchLimit());
             for (SagaEnvelope<S> envelope : due) {
                 List<TimerEntry> dueTimers = envelope.timers().stream()
-                        .filter(timer -> timer.firesAtEpochMilli() <= nowMillis)
+                        // Due time rather than firesAt, so a failed timer is not tried again ahead of its turn when another
+                        // timer on the same instance brought the instance into the batch
+                        .filter(timer -> timer.dueAtEpochMilli() <= nowMillis)
                         .toList();
                 for (TimerEntry timer : dueTimers) {
                     String timerName = timer.name();
@@ -693,7 +695,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return false;
         }
         long nowMillis = now.toEpochMilli();
-        return envelope.timers().stream().anyMatch(timer -> timer.name().equals(timerName) && timer.firesAtEpochMilli() <= nowMillis);
+        return envelope.timers().stream().anyMatch(timer -> timer.name().equals(timerName) && timer.dueAtEpochMilli() <= nowMillis);
     }
 
     // An event without a stream id and a stream version leaves nothing to compare a redelivery against, so the reaction
