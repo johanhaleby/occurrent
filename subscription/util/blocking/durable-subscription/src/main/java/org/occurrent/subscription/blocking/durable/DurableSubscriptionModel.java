@@ -1099,8 +1099,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     /**
      * {@code false} when {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} is turned
-     * on, since a crash before a subscription's first checkpoint is saved starts it over from wherever the feed has
-     * reached, and an event whose delivery failed before the crash is not delivered again. Otherwise what the wrapped
+     * on. A subscription that then starts with no position recorded opens where the wrapped model's default points, and
+     * each time the wrapped model evaluates its start position again before the first checkpoint is stored, it starts
+     * from wherever the feed has reached by then and skips the events written in between. Otherwise what the wrapped
      * model answers, and {@code false} when it doesn't declare it. This model calls each action on the wrapped model's
      * thread and stores an event's checkpoint only after its action returned normally.
      */

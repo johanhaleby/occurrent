@@ -40,8 +40,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * What {@link DurableSubscriptionModel} answers to {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()}.
- * It calls each action on the wrapped model's thread and stores the checkpoint after the action returned, so it says
- * what the wrapped model says and nothing more.
+ * It answers {@code false} when {@code startWhenNoStartPositionCanBeRecorded} is turned on, and otherwise what the
+ * wrapped model answers.
  */
 @DisplayName("DurableSubscriptionModelCommitOrder")
 @DisplayNameGeneration(ReplaceUnderscores.class)
