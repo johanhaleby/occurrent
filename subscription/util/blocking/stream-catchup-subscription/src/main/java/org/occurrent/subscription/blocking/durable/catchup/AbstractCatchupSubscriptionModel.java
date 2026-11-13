@@ -914,7 +914,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 ReplayInTheWay neverWentLive = inTheWay.stream().filter(ReplayInTheWay::neverWentLive).findFirst().orElse(null);
                 Subscription resumed;
                 StoredPositionReplaced replaced = null;
-                // The position the live delegate resumes at, whose loss the clear below keeps
+                // The checkpoint this resume hands the live delegate, whose loss the clear below keeps. Null for a start
+                // the live delegate resolves itself, whose loss it reports again when it resumes the subscription again.
                 @Nullable Checkpoint givenPosition = resumedAt(startAt);
                 try {
                     if (neverWentLive != null) {
@@ -932,8 +933,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                         Checkpoint present = replaced == null ? null : replaced.present;
                         if (present != null) {
                             givenPosition = present;
-                        } else if (forThisModel != null) {
-                            givenPosition = resumedAt(forThisModel);
                         }
                         resumed = repositionable.resumeSubscription(subscriptionId, present == null ? startAt : goingLiveFrom(answered, StartAt.checkpoint(present)));
                     }
