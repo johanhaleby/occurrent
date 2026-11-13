@@ -1580,6 +1580,69 @@ class InheritedHandlerRegistrationTest {
         }
     }
 
+    // A JDK proxy whose target source names no target class is scanned as its own class, whose only handlers are the
+    // interface's methods. Comparing those to the proxy class's generated methods dropped the handler without a trace.
+    @Test
+    void an_interface_handler_registers_for_a_jdk_proxy_bean_whose_target_source_names_no_target_class() {
+        runner.withUserConfiguration(NoTargetClassJdkProxyConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(Proxy.isProxyClass(context.getBean("noTargetClassHandler").getClass())).describedAs("the bean is a JDK proxy").isTrue();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactly("no-target-class-handler");
+            handlerFor(subscriptions, "no-target-class-handler").invoke(null, new TestEvent());
+            assertThat(context.getBean(Invocations.class).bodies()).containsExactly("no-target-class-body");
+        });
+    }
+
+    interface NoTargetClassHandler {
+        @Subscription(id = "no-target-class-handler")
+        void on(TestEvent event);
+    }
+
+    static class NoTargetClassHandlerBean implements NoTargetClassHandler {
+        private final Invocations invocations;
+
+        NoTargetClassHandlerBean(Invocations invocations) {
+            this.invocations = invocations;
+        }
+
+        @Override
+        public void on(TestEvent event) {
+            invocations.bodies().add("no-target-class-body");
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class NoTargetClassJdkProxyConfiguration {
+        @Bean
+        NoTargetClassHandler noTargetClassHandler(Invocations invocations) {
+            ProxyFactory proxyFactory = new ProxyFactory();
+            proxyFactory.setInterfaces(NoTargetClassHandler.class);
+            proxyFactory.setTargetSource(new TargetSource() {
+                @Override
+                public Class<?> getTargetClass() {
+                    return null;
+                }
+
+                @Override
+                public boolean isStatic() {
+                    return false;
+                }
+
+                @Override
+                public Object getTarget() {
+                    return new NoTargetClassHandlerBean(invocations);
+                }
+
+                @Override
+                public void releaseTarget(Object target) {
+                }
+            });
+            return (NoTargetClassHandler) proxyFactory.getProxy();
+        }
+    }
+
     abstract static class GenericRedeclaredBaseHandler<E> {
         public void on(E event) {
         }

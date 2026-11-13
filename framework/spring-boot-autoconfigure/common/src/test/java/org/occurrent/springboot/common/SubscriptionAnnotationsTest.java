@@ -26,7 +26,9 @@ import org.occurrent.annotation.Subscription;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.between.PublicMethodThatDoesNotOverride;
 import org.occurrent.springboot.common.declaring.OverridesHandlerBelowAMethodThatDoesNot;
+import org.occurrent.springboot.common.declaring.PackagePrivateFactoryBase;
 import org.occurrent.springboot.common.declaring.PackagePrivateHandlerBase;
+import org.occurrent.springboot.common.declaring.PackagePrivateOverridingFactoryMid;
 import org.occurrent.springboot.common.declaring.PackagePrivateOverridingMid;
 import org.occurrent.springboot.common.declaring.PublicOverridingMid;
 import org.occurrent.springboot.common.declaring.PublicOverridingOfPackagePrivateMid;
@@ -45,6 +47,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1075,6 +1078,55 @@ class SubscriptionAnnotationsTest {
     // ------------------------------------------------------------------------------------------------------
 
     static class SubOfPackagePrivateOverridingMid extends PackagePrivateOverridingMid {
+    }
+
+    static class SubOfPackagePrivateOverridingFactoryMid extends PackagePrivateOverridingFactoryMid {
+    }
+
+    // The scan read the handler off the base, and the class below the overriding mid sits in another package. Spring
+    // looks the method up from that package alone, so it finds the base's method and not the mid's override the JVM runs.
+    @Test
+    void runsImplementationOf_is_false_for_a_class_in_another_package_whose_superclass_overrides_the_package_private_handler_the_scan_read() throws Exception {
+        Method read = PackagePrivateHandlerBase.class.getDeclaredMethod("on", String.class);
+
+        assertThat(SubscriptionAnnotations.runsImplementationOf(new SubOfPackagePrivateOverridingMid(), read)).isFalse();
+    }
+
+    @Test
+    void runsImplementationOf_is_true_for_the_override_the_scan_read_on_a_class_in_another_package_that_declares_nothing() throws Exception {
+        Method read = PackagePrivateOverridingMid.class.getDeclaredMethod("on", String.class);
+
+        assertThat(SubscriptionAnnotations.runsImplementationOf(new SubOfPackagePrivateOverridingMid(), read)).isTrue();
+    }
+
+    @Test
+    void invokeDescriptorFactory_refuses_a_class_in_another_package_whose_superclass_overrides_the_package_private_factory_the_scan_read() throws Exception {
+        Method read = PackagePrivateFactoryBase.class.getDeclaredMethod("factory");
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Projection", new SubOfPackagePrivateOverridingFactoryMid(), read))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("@Projection factory")
+                .hasMessageContaining(SubOfPackagePrivateOverridingFactoryMid.class.getName() + " does not run the factory the scan read from " + PackagePrivateFactoryBase.class.getName())
+                .hasMessageContaining("it either overrides it or does not inherit it");
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // handlerMethods on a JDK proxy class
+    // ------------------------------------------------------------------------------------------------------
+
+    interface ProxiedHandler {
+        @Subscription(id = "proxied")
+        void on(String event);
+    }
+
+    // A JDK proxy hands every interface method to its invocation handler, so the interface method is the handler and
+    // the proxy class's generated method of the same signature is not.
+    @Test
+    void handlerMethods_returns_the_interface_method_for_a_jdk_proxy_class() throws Exception {
+        Class<?> proxyClass = Proxy.newProxyInstance(ProxiedHandler.class.getClassLoader(), new Class<?>[]{ProxiedHandler.class}, (proxy, method, args) -> null).getClass();
+
+        assertThat(SubscriptionAnnotations.handlerMethods(proxyClass, List.of(Subscription.class)))
+                .containsExactly(ProxiedHandler.class.getDeclaredMethod("on", String.class));
     }
 
     static class OverridesWidenedMid extends PublicOverridingMid {

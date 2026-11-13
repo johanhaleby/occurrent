@@ -453,8 +453,7 @@ public final class SubscriptionAnnotations {
     }
 
     private static boolean runsUnchanged(Class<?> implementation, Method method) {
-        return method.getDeclaringClass().isAssignableFrom(implementation)
-                && ClassUtils.getMostSpecificMethod(method, implementation).equals(method);
+        return method.getDeclaringClass().isAssignableFrom(implementation) && methodTheJvmRuns(method, implementation).equals(method);
     }
 
     /**
@@ -645,6 +644,11 @@ public final class SubscriptionAnnotations {
         int modifiers = method.getModifiers();
         if (Modifier.isStatic(modifiers) || Modifier.isPrivate(modifiers)) {
             return method;
+        }
+        // A JDK proxy class hands every interface method to its invocation handler, so the interface method is the one
+        // that runs, not the proxy class's generated method
+        if (declaringClass.isInterface() && java.lang.reflect.Proxy.isProxyClass(type)) {
+            return BridgeMethodResolver.findBridgedMethod(method);
         }
         if (declaringClass.isInterface() || !declaringClass.isAssignableFrom(type)) {
             return BridgeMethodResolver.findBridgedMethod(AopUtils.getMostSpecificMethod(method, type));
