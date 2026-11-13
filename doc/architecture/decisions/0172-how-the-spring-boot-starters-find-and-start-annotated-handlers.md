@@ -85,7 +85,9 @@ whose class overrides the method, since that runs code the scan didn't read. Two
 target, because their target source isn't a fixed singleton:
 
 - A JDK interface proxy runs the factory through the proxy when one of the proxy's interfaces declares the method the
-  scan read from the class behind it, the way 0.34.0 ran it. It refuses any other method, since the proxy doesn't implement it.
+  scan read from the class behind it, and refuses any other method, since the proxy doesn't implement it. It doesn't
+  check that the target the proxy reaches runs the method the scan read. 0.34.0 refused at startup a factory it read
+  from the class behind such a proxy.
 - A CGLIB proxy refuses a package-private factory method declared in another package than the class it subclasses.
   The proxy can't override such a method, so invoking it would run the method's body on the proxy instance.
 
