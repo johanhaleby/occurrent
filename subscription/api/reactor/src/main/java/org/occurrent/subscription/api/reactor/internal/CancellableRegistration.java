@@ -65,11 +65,12 @@ public interface CancellableRegistration {
      * it. Calling the {@code subscribe(..)} of this interface would skip that override or that advice. So a subclass
      * that doesn't override this method answers {@code false}, since its class isn't the model's own class. A proxy that
      * forwards this call to the model it proxies gets {@code false} from that model, since {@code asSeenByCaller} is the
-     * proxy. An instance of the model's own class that is changed in place answers {@code true}, a Mockito spy made with
-     * Mockito's default inline mock maker for example, so a stub on its
-     * {@code subscribe(String, SubscriptionFilter, StartAt, Function)} doesn't run for such a caller. A caller that gets
-     * {@code false} calls {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, and the model gets the
-     * cleanup a model that doesn't implement this interface gets.
+     * proxy. A Mockito spy made with Mockito's default inline mock maker answers {@code true}. That mock maker changes
+     * the model's own class instead of making a subclass, and the spy is a new instance of that class with the fields of
+     * the model it spies on copied into it. So a stub on the spy's
+     * {@code subscribe(String, SubscriptionFilter, StartAt, Function)} doesn't run for a caller that holds the spy. A
+     * caller that gets {@code false} calls {@code subscribe(String, SubscriptionFilter, StartAt, Function)}, and the
+     * model gets the cleanup a model that doesn't implement this interface gets.
      *
      * @param asSeenByCaller The reference the caller calls this model's {@code subscribe(..)} through.
      * @return {@code true} when the {@code subscribe(..)} of this interface can be called on {@code asSeenByCaller} in

@@ -106,9 +106,10 @@ import static java.util.Objects.requireNonNull;
  * it took the id. Of Occurrent's models, only a {@code ReactorMongoSubscriptionModel} or
  * {@code ReactorDurableSubscriptionModel} of that exact class answers {@code true}. The subscribe then returns a
  * {@link Subscription} whose {@code waitUntilStarted()} fails with an {@link IllegalStateException}. On a wrapped model
- * shut down by the time it asks whether the subscribe was cancelled, the subscribe throws that model's
- * {@code SubscriptionModelShutdownException} instead and returns nothing. A cancel that reaches {@code ReactorDurableSubscriptionModel} after it took the
- * id fails {@code waitUntilStarted()} with that model's {@code CancellationException}. Any other wrapped model can
+ * shut down by the time it asks whether the subscribe was cancelled, the subscribe throws
+ * {@code SubscriptionModelShutdownException} instead and returns nothing. A cancel that reaches
+ * {@code ReactorDurableSubscriptionModel} after it took the id fails {@code waitUntilStarted()} with a
+ * {@code CancellationException}. Any other wrapped model can
  * register the subscribe after the cancel, so the id is cancelled there again once the wrapped {@code subscribe(..)}
  * returned holding it, unless a later subscribe took the id there. A subclass or a proxy of either model has its
  * {@code subscribe(String, SubscriptionFilter, StartAt, Function)} called, and gets that second cancel too. These calls still run with a lock held.
