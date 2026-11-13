@@ -652,6 +652,43 @@ public final class SagaExecutionSupport {
         return failureRecord(saga, sagaId, current, current == null ? null : current.failure(), currentStatus(current), now, false, meta, null, reorderWindow);
     }
 
+    /**
+     * The instance with {@code attempted} marked as failed at {@code attemptedAt}, so the due-timer query orders it
+     * behind the instances that have been due for longer. Save it with
+     * {@code compareAndSaveWithoutState(..., current.version())}. It changes the timer and the version and nothing
+     * else the executor reads. {@code updatedAt} stays where it was, because a failed fire is no progress.
+     * <p>
+     * {@code null} when there is nothing to write. That is when the instance is gone, completed or quarantined, when it
+     * no longer has a timer of that name set to fire at that instant, or when the timer is already marked at or after
+     * {@code attemptedAt}.
+     */
+    public static <S extends @Nullable Object> @Nullable SagaEnvelope<S> withFailedTimerAttempt(@Nullable SagaEnvelope<S> current,
+                                                                                               TimerEntry attempted,
+                                                                                               Instant attemptedAt) {
+        if (current == null || current.status() != SagaStatus.ACTIVE) {
+            return null;
+        }
+        long attemptedAtMillis = attemptedAt.toEpochMilli();
+        List<TimerEntry> timers = new ArrayList<>(current.timers().size());
+        boolean marked = false;
+        for (TimerEntry timer : current.timers()) {
+            Long markedAt = timer.nextAttemptAtEpochMilli();
+            if (timer.name().equals(attempted.name()) && timer.firesAtEpochMilli() == attempted.firesAtEpochMilli()
+                && (markedAt == null || markedAt < attemptedAtMillis)) {
+                timers.add(new TimerEntry(timer.name(), timer.firesAtEpochMilli(), attemptedAtMillis));
+                marked = true;
+            } else {
+                timers.add(timer);
+            }
+        }
+        if (!marked) {
+            return null;
+        }
+        return new SagaEnvelope<>(current.sagaId(), current.state(), current.status(), current.version() + 1, timers,
+                current.streamWatermarks(), null, current.createdAt(), current.updatedAt(),
+                current.completedAt(), current.currentStep(), current.started(), current.failure(), current.streamMarks());
+    }
+
     // Pending, or a failure recorded before pending existed. Either says the version was handed to the saga and failed.
     private static boolean isOutstanding(@Nullable StreamMarks marks, EventMeta meta) {
         return isPending(marks, meta) || marks != null && meta.streamVersion() != null && marks.legacyFailed().contains(meta.streamVersion());

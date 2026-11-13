@@ -61,22 +61,20 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
         requireNonNull(now, "now cannot be null");
         long nowMillis = now.toEpochMilli();
-        List<SagaEnvelope<S>> due = new ArrayList<>();
-        for (SagaEnvelope<S> envelope : store.values()) {
-            // ACTIVE rather than "not completed", so a quarantined instance drops out of the poll and fires no timers.
-            // Firing one would advance its state across the gap the quarantine exists to hold open.
-            if (envelope.status() != SagaStatus.ACTIVE) {
-                continue;
-            }
-            OptionalLong earliest = envelope.earliestTimerFiresAtEpochMilli();
-            if (earliest.isPresent() && earliest.getAsLong() <= nowMillis) {
-                due.add(envelope);
-                if (due.size() >= limit) {
-                    break;
-                }
-            }
-        }
-        return due;
+        // Sorted before truncating, so the instances that have been due longest are the ones kept. Ties go by saga id so
+        // the answer does not depend on the map's iteration order.
+        return store.values().stream()
+                // ACTIVE rather than "not completed", so a quarantined instance drops out of the poll and fires no timers.
+                // Firing one would advance its state across the gap the quarantine exists to hold open.
+                .filter(envelope -> envelope.status() == SagaStatus.ACTIVE)
+                .filter(envelope -> {
+                    OptionalLong earliest = envelope.earliestTimerFiresAtEpochMilli();
+                    return earliest.isPresent() && earliest.getAsLong() <= nowMillis;
+                })
+                .sorted(Comparator.<SagaEnvelope<S>>comparingLong(envelope -> envelope.earliestTimerFiresAtEpochMilli().getAsLong())
+                        .thenComparing(SagaEnvelope::sagaId))
+                .limit(limit)
+                .toList();
     }
 
     @Override
@@ -86,10 +84,7 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         if (limit < 1) {
             throw new IllegalArgumentException("limit must be positive, was " + limit);
         }
-        // Sort before truncating, so "the first limit" is the stalest instances the contract promises. Note that
-        // findWithDueTimers above breaks at limit mid-iteration and so returns an arbitrary subset, which this method
-        // may not do. That subset is also how an instance whose timer never fires can be returned every time while
-        // others wait, which nothing here prevents, see #1003.
+        // Sort before truncating, so "the first limit" is the stalest instances the contract promises
         return store.values().stream()
                 .filter(envelope -> envelope.status() == status)
                 .filter(envelope -> {

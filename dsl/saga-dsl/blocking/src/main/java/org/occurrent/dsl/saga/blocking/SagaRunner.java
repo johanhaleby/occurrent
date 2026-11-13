@@ -126,26 +126,26 @@ import static java.util.Objects.requireNonNull;
  *       That is also what a subscription
  *       model that does not guarantee it holds every event it delivers gets, since
  *       the event could not be obtained again there.</li>
- *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so it stays
- *       eligible for a later poll to retry. Which poll is not promised, for the reason below. It does not propagate
+ *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so a later poll
+ *       retries it. It does not propagate
  *       anywhere, so only the poller ever retries it, never a subscription redelivery. The catch takes anything the reaction throws, an {@link Error} from a class that will not load as
  *       much as a {@link RuntimeException}, so that one instance costs its own turn rather than the rest of the
  *       batch's. An {@link OutOfMemoryError} is the exception and abandons the poll, because it says nothing about the
  *       instance that happened to be running.
  *       <p>
- *       <strong>Nothing isolates an instance that keeps failing from the saga's other instances.</strong> A poll
- *       fires at most {@link SagaRunnerConfig#timerBatchLimit()} instances, a hundred by default, and nothing in
- *       {@link org.occurrent.dsl.saga.SagaStateStore#findWithDueTimers} requires a store to give a different instance
- *       a turn, so once that many instances cannot fire their timers the saga can stop firing timers altogether.
- *       That many is enough rather than more than that many, since a batch full of them leaves no place for anything
- *       else. A downstream
- *       that every timer reaction calls being down for an afternoon is enough to produce that.
+ *       A poll fires at most {@link SagaRunnerConfig#timerBatchLimit()} instances, a hundred by default, earliest due
+ *       first. A failed fire saves the time of that attempt on the timer, so the next poll tries that timer after
+ *       every instance that was due before the attempt. When more than {@code timerBatchLimit} instances keep
+ *       failing, for example because a downstream that every timer reaction calls is down, later polls work through
+ *       them in order and the healthy instances due among them still fire. Each healthy instance waits longer the
+ *       more failing instances are due ahead of it. A store whose
+ *       {@link org.occurrent.dsl.saga.SagaStateStore#findWithDueTimers} ignores that order can fill every batch with
+ *       the same failing instances instead.
  *       <p>
- *       Nothing in 0.34.0 bounds that. <a href="https://github.com/johanhaleby/occurrent/issues/1003">#1003</a> is
- *       where it is being fixed. Until then, find the instances it is happening to with
- *       {@link org.occurrent.dsl.saga.SagaInstances#findByStatus} and the warning each failed fire logs, and raise
- *       {@code timerBatchLimit} above the number of stuck instances, since one healthy instance is starved by a batch
- *       that is already full whatever the healthy count is. Why it happens is in #1003 rather than here.</li>
+ *       An instance whose timer keeps failing shows the time of its last attempt as
+ *       {@link org.occurrent.dsl.saga.SagaInstance#nextTimerAt()}, and its {@code updatedAt} stays at the last input it
+ *       handled. Find it with {@link org.occurrent.dsl.saga.SagaInstances#findByStatus} and the warning each failed fire
+ *       logs.</li>
  * </ul>
  * Commands are dispatched before the save, and a lost compare-and-set retries the step, so a single input can
  * re-dispatch its whole command list several times (up to {@code maxCasAttempts}). Receivers must be idempotent and

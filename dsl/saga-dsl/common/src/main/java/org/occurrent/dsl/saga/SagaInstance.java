@@ -69,15 +69,20 @@ public interface SagaInstance {
     /** When the instance was created, or {@code null} if the store did not record it. */
     @Nullable Instant createdAt();
 
-    /** When the instance was last saved, which is when it last handled an input or recorded a failure. */
+    /**
+     * When the instance last handled an input or recorded a failure. A timer fire that throws does not move it, so an
+     * instance whose timer keeps failing still shows when it last made progress.
+     */
     @Nullable Instant updatedAt();
 
     /** When the instance completed, or {@code null} when it has not, which includes a quarantined one. */
     @Nullable Instant completedAt();
 
     /**
-     * When the earliest pending timer is due, or {@code null} when the instance has none. A timer whose due time is
-     * well in the past is the signal that an instance is stuck: the poller should have fired it already.
+     * When the earliest pending timer is due, or {@code null} when the instance has none. A timer whose fire threw is
+     * due again from the instant of that attempt, so an instance whose timer keeps failing shows its last attempt here,
+     * not the time the timer was set for. Use {@link #updatedAt()} to find an instance like that. A due time well in
+     * the past means no attempt to fire the timer has been recorded since then.
      * <p>
      * The timer's <em>name</em> is not exposed, because which timers a saga arms is part of how the process is
      * written, not of its observable lifecycle.

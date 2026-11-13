@@ -44,7 +44,7 @@ import static java.util.Objects.requireNonNull;
  *                          A stored value still loads, and the executor writes {@code null}. Deprecated since 0.35.0
  *                          and removed in a later release
  * @param createdAt         when the instance was created
- * @param updatedAt         when the instance was last saved
+ * @param updatedAt         when the instance last handled an input or recorded a failure, see {@link SagaInstance#updatedAt()}
  * @param completedAt       when the instance completed, or {@code null} while active
  * @param started           whether a start transition has been saved for this instance, which is not the same as
  *                          whether {@code onStart} was ever called. An instance whose very first event failed after
@@ -191,10 +191,32 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         }
     }
 
-    /** A pending timer: its name and when it should fire (epoch millis). */
-    public record TimerEntry(String name, long firesAtEpochMilli) {
+    /**
+     * A pending timer.
+     *
+     * @param name                    the timer's name
+     * @param firesAtEpochMilli       when the timer should fire (epoch millis)
+     * @param nextAttemptAtEpochMilli when the poller last tried to fire this timer and the fire threw (epoch millis),
+     *                                which the timer is due again from, or {@code null} when no fire of it has failed.
+     *                                Arming the timer again replaces the entry, which clears this
+     */
+    public record TimerEntry(String name, long firesAtEpochMilli, @Nullable Long nextAttemptAtEpochMilli) {
         public TimerEntry {
             requireNonNull(name, "name cannot be null");
+        }
+
+        /** A timer that no fire has failed for yet. */
+        public TimerEntry(String name, long firesAtEpochMilli) {
+            this(name, firesAtEpochMilli, null);
+        }
+
+        /**
+         * The earliest instant the poller tries to fire this timer (epoch millis). That is
+         * {@link #firesAtEpochMilli()}, or the failed attempt in {@link #nextAttemptAtEpochMilli()} when that is later,
+         * so the poller tries a timer that keeps failing after the timers that have been due for longer.
+         */
+        public long dueAtEpochMilli() {
+            return nextAttemptAtEpochMilli == null ? firesAtEpochMilli : Math.max(firesAtEpochMilli, nextAttemptAtEpochMilli);
         }
     }
 
@@ -209,9 +231,13 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         return status == SagaStatus.QUARANTINED;
     }
 
-    /** The earliest firing time across all pending timers, or empty when there are none. Drives the due-timer query. */
+    /**
+     * The earliest {@link TimerEntry#dueAtEpochMilli()} across all pending timers, or empty when there are none. Drives
+     * the due-timer query and its order. A timer whose last fire failed counts from that attempt rather than from when
+     * it was set to fire.
+     */
     public OptionalLong earliestTimerFiresAtEpochMilli() {
-        return timers.stream().mapToLong(TimerEntry::firesAtEpochMilli).min();
+        return timers.stream().mapToLong(TimerEntry::dueAtEpochMilli).min();
     }
 
     /**
