@@ -832,7 +832,8 @@ the reservation, as [the next section](#an-append-on-mongodb-waits-for-majority-
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
 read concern snapshot. Earlier versions said pruning during quiescence was harmless. It isn't, because a token can be
-held across the prune.
+held across the prune. A type has eight marker documents, `marker:type:<type>` and `marker:typestripe:<n>:<type>` for
+`<n>` from 1 to 7, and the rule holds for each of them.
 
 A `DcbEventStore` of your own needs no change, and `DcbConsistencyToken.of(criteria, version)` keeps working for it.
 A MongoDB store throws `IllegalArgumentException` for a token built that way.

@@ -124,7 +124,7 @@ class SnapshotMarkerVersionsFieldsTest {
 
         assertThatThrownBy(() -> SnapshotMarkerVersionsFields.fromFields(stored(noEpoch)))
                 .isInstanceOf(NullPointerException.class)
-                .hasMessage("Epoch cannot be null");
+                .hasMessage("Epoch is missing for marker key tag:a");
     }
 
     @Test
