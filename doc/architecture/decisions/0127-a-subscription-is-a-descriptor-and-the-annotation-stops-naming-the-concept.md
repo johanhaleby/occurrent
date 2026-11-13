@@ -17,6 +17,10 @@ Spring proxy cannot invoke fails at startup only on a bean created during startu
 created, or on the first delivery when a later `BeanPostProcessor` wraps it in such a proxy, so the amendment below
 saying it fails fast at startup holds only for a bean created during startup.
 
+Amended by [ADR 172](0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md) on Decision point 4. The
+starters also read a handler or factory method that a bean's class inherits from a superclass or an interface, and a
+descriptor factory method runs on a bean whose class inherits it unchanged, not only on one whose class declares it.
+
 ## Context
 
 ### A subscription is the only concept that never became data

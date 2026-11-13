@@ -28,6 +28,11 @@ import org.springframework.aop.TargetSource;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.context.support.GenericApplicationContext;
 
+import java.lang.annotation.Annotation;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
@@ -119,6 +124,215 @@ class SubscriptionAnnotationsTest {
                 .hasMessageContaining("factory")
                 .hasMessageContaining("spring.aop.proxy-target-class=true")
                 .hasMessageContaining("move the factory method off the advised bean");
+    }
+
+    static class InheritedFactoryBase {
+        String factory() {
+            return "base-built";
+        }
+    }
+
+    static class InheritingFactoryHolder extends InheritedFactoryBase {
+    }
+
+    static class OverridingFactoryHolder extends InheritedFactoryBase {
+        @Override
+        String factory() {
+            return "override-built";
+        }
+    }
+
+    @Test
+    void invokeDescriptorFactory_runs_a_factory_the_beans_class_inherits_unchanged() throws Exception {
+        Method inherited = InheritedFactoryBase.class.getDeclaredMethod("factory");
+
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", new InheritingFactoryHolder(), inherited);
+
+        assertThat(result).isEqualTo("base-built");
+    }
+
+    @Test
+    void invokeDescriptorFactory_runs_a_factory_the_beans_class_inherits_unchanged_through_a_cglib_proxy() throws Exception {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setTarget(new InheritingFactoryHolder());
+        proxyFactory.setProxyTargetClass(true);
+        proxyFactory.addAdvice((MethodInterceptor) invocation -> invocation.proceed());
+
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Snapshot", proxyFactory.getProxy(), InheritedFactoryBase.class.getDeclaredMethod("factory"));
+
+        assertThat(result).isEqualTo("base-built");
+    }
+
+    @Test
+    void invokeDescriptorFactory_refuses_a_bean_whose_class_overrides_the_inherited_factory() throws Exception {
+        Method inherited = InheritedFactoryBase.class.getDeclaredMethod("factory");
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Projection", new OverridingFactoryHolder(), inherited))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("@Projection")
+                .hasMessageContaining(OverridingFactoryHolder.class.getName())
+                .hasMessageContaining(InheritedFactoryBase.class.getName());
+    }
+
+    @Test
+    void invokeDescriptorFactory_refuses_a_bean_whose_class_does_not_inherit_the_factory() throws Exception {
+        Method factory = InheritedFactoryBase.class.getDeclaredMethod("factory");
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Saga", new CglibFactoryHolder(), factory))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("@Saga")
+                .hasMessageContaining(CglibFactoryHolder.class.getName());
+    }
+
+    @Test
+    void invokeDescriptorFactory_runs_a_factory_the_target_of_a_jdk_proxy_inherits_unchanged() throws Exception {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setTarget(new InheritingFactoryHolderWithMarker());
+        proxyFactory.setInterfaces(NonSingletonMarker.class);
+        proxyFactory.setProxyTargetClass(false);
+        proxyFactory.addAdvice((MethodInterceptor) invocation -> invocation.proceed());
+        Object jdkProxy = proxyFactory.getProxy();
+        Method inherited = InheritedFactoryBase.class.getDeclaredMethod("factory");
+
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Snapshot", jdkProxy, inherited);
+
+        assertThat(result).isEqualTo("base-built");
+    }
+
+    static class InheritingFactoryHolderWithMarker extends InheritedFactoryBase implements NonSingletonMarker {
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // handlerMethods (issue #983: inherited handlers, interface default methods, overrides and bridge methods)
+    // ------------------------------------------------------------------------------------------------------
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.METHOD)
+    @interface Marked {
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.METHOD)
+    @interface OtherMarked {
+    }
+
+    private static final List<Class<? extends Annotation>> MARKERS = List.of(Marked.class, OtherMarked.class);
+
+    abstract static class AnnotatedBase {
+        @Marked
+        public void handle(String event) {
+        }
+
+        public void notAHandler(String event) {
+        }
+    }
+
+    static class InheritsHandler extends AnnotatedBase {
+    }
+
+    interface DefaultHandler {
+        @Marked
+        default void handle(String event) {
+        }
+    }
+
+    static class GetsDefaultHandler implements DefaultHandler {
+    }
+
+    static class OverridesWithoutAnnotation extends AnnotatedBase {
+        @Override
+        public void handle(String event) {
+        }
+    }
+
+    static class OverridesDefaultWithoutAnnotation implements DefaultHandler {
+        @Override
+        public void handle(String event) {
+        }
+    }
+
+    static class GenericBase<E> {
+        @Marked
+        public void handle(E event) {
+        }
+    }
+
+    static class ConcreteOfGeneric extends GenericBase<String> {
+        @Override
+        public void handle(String event) {
+        }
+    }
+
+    static class ReDeclaresOnGeneric extends GenericBase<String> {
+        @Override
+        @OtherMarked
+        public void handle(String event) {
+        }
+    }
+
+    static class PrivateBase {
+        @Marked
+        private void handle(String event) {
+        }
+    }
+
+    static class PrivateSub extends PrivateBase {
+        @Marked
+        private void handle(String event) {
+        }
+    }
+
+    @Test
+    void handlerMethods_finds_a_method_the_class_inherits_from_a_superclass() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(InheritsHandler.class, MARKERS))
+                .containsExactly(AnnotatedBase.class.getDeclaredMethod("handle", String.class));
+    }
+
+    @Test
+    void handlerMethods_finds_an_interface_default_method() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(GetsDefaultHandler.class, MARKERS))
+                .containsExactly(DefaultHandler.class.getDeclaredMethod("handle", String.class));
+    }
+
+    @Test
+    void handlerMethods_leaves_out_a_method_without_any_of_the_annotations() {
+        assertThat(SubscriptionAnnotations.handlerMethods(InheritsHandler.class, List.of(OtherMarked.class))).isEmpty();
+    }
+
+    @Test
+    void handlerMethods_gives_an_override_that_drops_the_annotation_once_as_the_override() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(OverridesWithoutAnnotation.class, MARKERS))
+                .containsExactly(OverridesWithoutAnnotation.class.getDeclaredMethod("handle", String.class));
+    }
+
+    @Test
+    void handlerMethods_gives_an_override_of_an_interface_default_method_once_as_the_override() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(OverridesDefaultWithoutAnnotation.class, MARKERS))
+                .containsExactly(OverridesDefaultWithoutAnnotation.class.getDeclaredMethod("handle", String.class));
+    }
+
+    @Test
+    void handlerMethods_leaves_out_the_bridge_method_of_a_generic_override() {
+        assertThat(SubscriptionAnnotations.handlerMethods(ConcreteOfGeneric.class, MARKERS))
+                .singleElement()
+                .satisfies(method -> {
+                    assertThat(method.isBridge()).isFalse();
+                    assertThat(method.getDeclaringClass()).isEqualTo(ConcreteOfGeneric.class);
+                    assertThat(method.getParameterTypes()).containsExactly(String.class);
+                });
+    }
+
+    @Test
+    void handlerMethods_leaves_out_the_bridge_method_when_the_generic_override_re_declares_an_annotation() {
+        assertThat(SubscriptionAnnotations.handlerMethods(ReDeclaresOnGeneric.class, MARKERS))
+                .singleElement()
+                .satisfies(method -> assertThat(method.isBridge()).isFalse());
+    }
+
+    @Test
+    void handlerMethods_keeps_two_private_methods_of_one_signature_on_a_class_and_its_superclass_apart() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(PrivateSub.class, MARKERS))
+                .containsExactlyInAnyOrder(PrivateBase.class.getDeclaredMethod("handle", String.class), PrivateSub.class.getDeclaredMethod("handle", String.class));
     }
 
     @Test

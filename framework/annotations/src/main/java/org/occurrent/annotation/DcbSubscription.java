@@ -73,6 +73,11 @@ import java.lang.annotation.*;
  * {@link org.occurrent.cloudevents.EventMetadata} or the DCB specific
  * {@code org.occurrent.dsl.dcb.DcbEventMetadata}, which also exposes the DCB position and tags.
  * </p>
+ * <p>
+ * The Spring Boot starter finds this annotation on a method the bean's class declares, inherits from a superclass, or
+ * gets as an interface default method. An override without an annotation of its own runs under the overridden
+ * method's annotation, and an override that repeats the annotation uses its own.
+ * </p>
  */
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)

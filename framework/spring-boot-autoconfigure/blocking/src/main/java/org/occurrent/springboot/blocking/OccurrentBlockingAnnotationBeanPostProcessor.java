@@ -38,6 +38,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -73,6 +74,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // the only source that cannot fall short of the real class, see resolveScanType below for why the prediction
     // this replaces can.
     private final Map<String, Class<?>> userClassByBeanName = new ConcurrentHashMap<>();
+    private static final List<Class<? extends Annotation>> HANDLER_ANNOTATIONS = List.of(StreamSubscription.class, Subscription.class,
+            DcbSubscription.class, SynchronousSubscription.class, org.occurrent.annotation.Projection.class,
+            org.occurrent.annotation.Snapshot.class, org.occurrent.annotation.Saga.class);
+
     // Every handler already registered, so scanning a bean a second time registers only what is new. Concurrent
     // rather than lock-guarded, because a bean created after startup is created on whatever thread asked for it,
     // and claiming an id is an add that answers false when something else already holds it, which is the whole
@@ -323,7 +328,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
                 continue;
             }
-            for (Method method : type.getDeclaredMethods()) {
+            for (Method method : SubscriptionAnnotations.handlerMethods(type, HANDLER_ANNOTATIONS)) {
                 if (isAlreadyRegistered(beanName, method)) {
                     continue;
                 }
@@ -429,18 +434,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
 
 
     private static boolean declaresAnyOccurrentAnnotation(Class<?> type) {
-        for (Method method : type.getDeclaredMethods()) {
-            if (AnnotationUtils.findAnnotation(method, StreamSubscription.class) != null
-                    || AnnotationUtils.findAnnotation(method, Subscription.class) != null
-                    || AnnotationUtils.findAnnotation(method, DcbSubscription.class) != null
-                    || AnnotationUtils.findAnnotation(method, SynchronousSubscription.class) != null
-                    || AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class) != null
-                    || AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Snapshot.class) != null
-                    || AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Saga.class) != null) {
-                return true;
-            }
-        }
-        return false;
+        return !SubscriptionAnnotations.handlerMethods(type, HANDLER_ANNOTATIONS).isEmpty();
     }
 
 
@@ -509,11 +503,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
     }
 
-    // A handler is identified by its bean name, method name and parameter types, so the same method found again on
-    // a rescan is skipped while a second method on the same bean is not. The declaring class is deliberately left
-    // out. A method an interface declares and the bean's class overrides is one handler, and the two passes see a
-    // different Method for it, so including the declaring class would register that handler's id twice and the
-    // second registration would be refused as a duplicate.
+    // A handler is identified by its bean name and the method the scan found, declaring class included. Every pass
+    // calls SubscriptionAnnotations.handlerMethods on the bean's class, which returns the same Method each time, so a
+    // rescan skips it. The declaring class tells apart two private methods of one signature, one on the bean's class
+    // and one on a superclass, which are two handlers.
     private boolean isAlreadyRegistered(String beanName, Method method) {
         return registeredHandlers.contains(handlerKey(beanName, method));
     }
@@ -524,7 +517,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     private static String handlerKey(String beanName, Method method) {
-        return beanName + '#' + method.getName() + Arrays.toString(method.getParameterTypes());
+        return beanName + '#' + method.getDeclaringClass().getName() + '#' + method.getName() + Arrays.toString(method.getParameterTypes());
     }
 
     // getType(beanName) predicts the type from the bean definition without forcing creation, which is what lets a

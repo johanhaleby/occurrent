@@ -160,6 +160,10 @@ other sections compile fine and behave differently, so read them first.
 - [A subscription with no start position resumes from a catch-up's checkpoint](#a-subscription-with-no-start-position-resumes-from-a-catch-ups-checkpoint).
   On the blocking stack a subscription with `startAt` unset no longer skips the events written while the application
   was down when a catch-up's replay stopped before it went live. Compiles unchanged.
+- [A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered). An annotated
+  method that a bean's class inherits from a superclass, or gets as an interface default method, starts running, and
+  replays the history on its first start when its `startAt` asks for that. Two beans that inherit one annotated method fail at
+  startup with `DuplicateSubscriptionIdException`. Compiles unchanged.
 
 ### Brokers
 
@@ -2066,6 +2070,56 @@ A subscription whose live checkpoint MongoDB no longer has stops the application
 `startupMode = BACKGROUND` to have it paused instead, and see
 [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now)
 for how to recover it.
+
+## A handler method the bean inherits is registered
+
+Both Spring Boot starters used to read a bean's handlers only from the methods its class declares. An annotated method
+that the class inherits from a superclass, or gets as an interface default method, never registered when the class
+didn't override it, and nothing was logged. Both starters now register it.
+
+This covers `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@SynchronousSubscription`, `@Projection` and
+`@Snapshot`, and `@Saga` on the blocking starter. An inherited `@Projection`, `@Snapshot` or `@Saga` factory method
+runs too, where it used to be refused with an `IllegalStateException`.
+
+An override registered before and still does. Without an annotation of its own, it runs under the overridden method's
+annotation, and when it repeats the annotation, it uses its own.
+
+### Who is affected
+
+Applications on either starter with one of these:
+
+- a bean whose class inherits an annotated method from a superclass and doesn't override it
+- a bean whose class implements an interface with an annotated default method and doesn't override it
+- two or more beans whose classes extend the same superclass with an annotated method and don't override it
+
+### What changes
+
+- An inherited handler starts running on the first start after the upgrade, from its own start settings. It never
+  ran, so nothing is stored for its id. With `startAt = BEGINNING`, or `startAt = BEGINNING_OF_TIME` on
+  `@StreamSubscription`, it replays the whole history. So does a `@Snapshot`, whose `startAt` is `BEGINNING` by
+  default.
+- Two beans that inherit one annotated method register two handlers with the same id, so the application fails at
+  startup with `DuplicateSubscriptionIdException`. The id is the key the subscription's checkpoint is stored under,
+  so two handlers can't share it.
+- A class that overrides a generic handler with a concrete parameter type, such as `on(String event)` in a class that
+  extends `Base<String>` and overrides `on(E event)`, failed at startup with `DuplicateSubscriptionIdException`. The
+  scan also found the bridge method `on(Object)` that the compiler adds, under the same id. The handler now registers
+  once.
+
+### What to do
+
+Before you upgrade, search for Occurrent annotations on methods of classes your beans extend, and on interface default
+methods. For each one a bean inherits without overriding it:
+
+- If the handler should run, check where its `startAt` starts it. `BEGINNING` replays the history it missed, and
+  `NOW` starts at the present.
+- If it shouldn't run, remove the annotation from the method. An override without the annotation still runs, under
+  the annotation of the method it overrides.
+- If two or more beans inherit it, override the method in each class and repeat the annotation with an id of its own.
+
+The code compiles unchanged, and nothing stored changes. There is no OpenRewrite recipe, because nothing in the code
+says whether an inherited handler was meant to run. See
+[ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md).
 
 ## `ComposedDefaultStartPosition` and its bean are removed
 

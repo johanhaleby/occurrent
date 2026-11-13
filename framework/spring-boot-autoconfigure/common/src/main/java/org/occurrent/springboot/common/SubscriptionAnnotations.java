@@ -32,8 +32,11 @@ import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
+import org.springframework.core.MethodIntrospector;
+import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
@@ -290,27 +293,25 @@ public final class SubscriptionAnnotations {
      * both stacks, so the unwrap only has to be right in one place.
      * <p>
      * A descriptor factory runs exactly once at startup to build a value, so there is no request for advice to
-     * usefully observe, and invoking it through a proxy is a hazard rather than a feature. Every registrar records
-     * {@code method} from the exact class the scan resolved, never a supertype, so on a legitimate target the
-     * unwrapped target's own user class, {@link ClassUtils#getUserClass}, equals {@code method}'s declaring class
-     * exactly, not merely a subtype of it, since a subtype could override {@code method} with a different
-     * implementation the scan never saw. When it does, {@code method} runs directly on the unwrapped target,
-     * bypassing any advice on a fixed target. When it does not, the factory refuses instead of guessing which
-     * method to run, because the mismatch itself is the defect, either an interface proxy that could not be
-     * unwrapped to a fixed target, or a factory bean that built a different implementation than the one the scan
-     * recorded. A CGLIB proxy left proxied by {@link #ultimateTarget}, because its target source is not a fixed
-     * singleton, still passes this check, since {@code getUserClass} of the proxy's own class equals the same
-     * declaring class, so a factory invoked through such a proxy still runs its advice.
+     * usefully observe, and invoking it through a proxy is a hazard rather than a feature. The scan reads
+     * {@code method} from the bean's class, its superclasses and its interfaces, so the factory runs when the
+     * unwrapped target's own user class, {@link ClassUtils#getUserClass}, declares {@code method} or inherits it
+     * unchanged. Otherwise the factory refuses instead of guessing which method to run. That happens for a JDK
+     * interface proxy that could not be unwrapped to a fixed target, and for a factory bean that built a different
+     * implementation than the one the scan recorded, such as a subclass overriding {@code method}, which would run
+     * code the scan never read. A CGLIB proxy left proxied by {@link #ultimateTarget}, because its target source is
+     * not a fixed singleton, still passes this check, since {@code getUserClass} of the proxy's own class is the class
+     * it subclasses, so a factory invoked through such a proxy still runs its advice.
      *
      * @param annotationName the annotation name for error messages, for example {@code "@Projection"}
      * @param bean           the (possibly proxied) bean the factory method was found on
-     * @param method         the no-argument factory method found by scanning {@code bean}'s declared or predicted type
+     * @param method         the no-argument factory method the scan found for {@code bean}
      * @return the descriptor the factory method returned, never {@code null}
      */
     public static Object invokeDescriptorFactory(String annotationName, Object bean, Method method) {
         Object target = ultimateTarget(bean);
         Class<?> targetUserClass = ClassUtils.getUserClass(target.getClass());
-        if (!method.getDeclaringClass().equals(targetUserClass)) {
+        if (java.lang.reflect.Proxy.isProxyClass(target.getClass()) || !runsUnchanged(targetUserClass, method)) {
             throw new IllegalStateException("%s factory %s#%s cannot run because %s does not implement %s. This happens when the bean is an interface proxy whose target is not a fixed singleton, so it cannot be unwrapped safely (set spring.aop.proxy-target-class=true so this bean is proxied by subclassing instead of by interface, or move the factory method off the advised bean), or when the factory bean built a different implementation than the one the scan recorded (return the same implementation on every call).".formatted(annotationName, bean.getClass().getName(), method.getName(), targetUserClass.getName(), method.getDeclaringClass().getName()));
         }
         try {
@@ -390,9 +391,29 @@ public final class SubscriptionAnnotations {
         if (java.lang.reflect.Proxy.isProxyClass(target.getClass())) {
             return true;
         }
-        Class<?> implementation = ClassUtils.getUserClass(target.getClass());
+        return runsUnchanged(ClassUtils.getUserClass(target.getClass()), method);
+    }
+
+    private static boolean runsUnchanged(Class<?> implementation, Method method) {
         return method.getDeclaringClass().isAssignableFrom(implementation)
                 && ClassUtils.getMostSpecificMethod(method, implementation).equals(method);
+    }
+
+    /**
+     * The methods of {@code type} annotated with any of {@code annotationTypes}, read from {@code type}, its
+     * superclasses and its interfaces, so an inherited handler and an interface default method count the way a
+     * declared one does.
+     * Each method is the one {@code type} actually runs, so an override is found once, under its own annotation if it
+     * repeats one and under the overridden method's if it doesn't. Bridge methods are left out, so a generic handler
+     * is found once too. Both annotation post-processors call this, so they find the same methods.
+     *
+     * @param type            the concrete class the scan reads
+     * @param annotationTypes the handler annotations to look for, searched with {@link AnnotationUtils#findAnnotation(Method, Class)}
+     * @return the matching methods, empty if there are none
+     */
+    public static Set<Method> handlerMethods(Class<?> type, List<Class<? extends Annotation>> annotationTypes) {
+        return MethodIntrospector.selectMethods(type, (MethodIntrospector.MetadataLookup<Boolean>) method ->
+                annotationTypes.stream().anyMatch(annotationType -> AnnotationUtils.findAnnotation(method, annotationType) != null) ? Boolean.TRUE : null).keySet();
     }
 
     /**
