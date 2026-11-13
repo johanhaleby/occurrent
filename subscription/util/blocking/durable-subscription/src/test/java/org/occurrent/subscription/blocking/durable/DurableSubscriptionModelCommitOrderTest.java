@@ -30,8 +30,6 @@ import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.util.function.Consumer;
@@ -40,30 +38,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * What {@link DurableSubscriptionModel} answers to {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()}.
- * It answers {@code false} when {@code startWhenNoStartPositionCanBeRecorded} is turned on, and otherwise what the
- * wrapped model answers.
+ * It answers {@code false} whatever the wrapped model answers, since a plain resume of a subscription started at a
+ * position of its own can skip to a later checkpoint an earlier run stored.
  */
 @DisplayName("DurableSubscriptionModelCommitOrder")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelCommitOrderTest {
 
     @Test
-    void delivers_every_event_in_commit_order_by_default_when_the_wrapped_model_declares_that_it_does() {
+    void does_not_deliver_every_event_in_commit_order_even_when_the_wrapped_model_declares_that_it_does() {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(new DeclaringModel(true), new InMemoryCheckpointStorage());
-
-        // When
-        boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
-
-        // Then
-        assertThat(deliversInCommitOrder).isTrue();
-    }
-
-    @Test
-    void does_not_deliver_every_event_in_commit_order_when_it_starts_without_a_recorded_start_position_even_though_the_wrapped_model_declares_that_it_does() {
-        // Given
-        DurableSubscriptionModelConfig config = new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true);
-        DurableSubscriptionModel model = new DurableSubscriptionModel(new DeclaringModel(true), new InMemoryCheckpointStorage(), config);
 
         // When
         boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
@@ -73,9 +58,10 @@ class DurableSubscriptionModelCommitOrderTest {
     }
 
     @Test
-    void does_not_deliver_every_event_in_commit_order_when_the_wrapped_model_declares_that_it_does_not() {
+    void does_not_deliver_every_event_in_commit_order_when_it_starts_without_a_recorded_start_position_even_though_the_wrapped_model_declares_that_it_does() {
         // Given
-        DurableSubscriptionModel model = new DurableSubscriptionModel(new DeclaringModel(false), new InMemoryCheckpointStorage());
+        DurableSubscriptionModelConfig config = new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true);
+        DurableSubscriptionModel model = new DurableSubscriptionModel(new DeclaringModel(true), new InMemoryCheckpointStorage(), config);
 
         // When
         boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
@@ -109,36 +95,10 @@ class DurableSubscriptionModelCommitOrderTest {
     }
 
     @Test
-    void a_manual_start_model_over_it_delivers_every_event_in_commit_order_when_the_wrapped_model_declares_that_it_does() {
+    void a_manual_start_model_over_it_does_not_deliver_every_event_in_commit_order_even_when_the_wrapped_model_declares_that_it_does() {
         // Given
         DurableSubscriptionModel durable = new DurableSubscriptionModel(new DeclaringModel(true), new InMemoryCheckpointStorage());
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(durable);
-
-        // When
-        boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
-
-        // Then
-        assertThat(deliversInCommitOrder).isTrue();
-    }
-
-    @Test
-    void a_manual_start_model_over_it_does_not_deliver_every_event_in_commit_order_when_the_wrapped_model_declares_that_it_does_not() {
-        // Given
-        DurableSubscriptionModel durable = new DurableSubscriptionModel(new DeclaringModel(false), new InMemoryCheckpointStorage());
-        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(durable);
-
-        // When
-        boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
-
-        // Then
-        assertThat(deliversInCommitOrder).isFalse();
-    }
-
-    @Test
-    void does_not_deliver_every_event_in_commit_order_when_a_wrapper_that_does_not_declare_it_sits_between_it_and_a_model_that_does() {
-        // Given
-        PlainWrapper wrapper = new PlainWrapper(new DeclaringModel(true));
-        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapper, new InMemoryCheckpointStorage());
 
         // When
         boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
@@ -205,19 +165,6 @@ class DurableSubscriptionModelCommitOrderTest {
         @Override
         public boolean deliversEveryEventInCommitOrder() {
             return deliversEveryEventInCommitOrder;
-        }
-    }
-
-    private static final class PlainWrapper extends SilentModel implements SubscriptionModelWrapper {
-        private final SubscriptionModel wrapped;
-
-        private PlainWrapper(SubscriptionModel wrapped) {
-            this.wrapped = wrapped;
-        }
-
-        @Override
-        public SubscriptionModel getWrappedSubscriptionModel() {
-            return wrapped;
         }
     }
 }

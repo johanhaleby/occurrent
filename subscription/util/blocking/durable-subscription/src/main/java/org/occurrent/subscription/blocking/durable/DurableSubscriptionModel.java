@@ -1098,19 +1098,20 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     /**
-     * {@code false} when {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} is turned
-     * on. A subscription that then starts with no position recorded opens where the wrapped model's default points, and
-     * each time the wrapped model evaluates its start position again before the first checkpoint is stored, it starts
-     * from wherever the feed has reached by then and skips the events written in between. Otherwise what the wrapped
-     * model answers, and {@code false} when it doesn't declare it. This model calls each action on the wrapped model's
-     * thread and stores an event's checkpoint only after its action returned normally.
+     * {@code false}. A plain {@link #resumeSubscription(String)} resumes at the checkpoint stored for the id. A
+     * subscription started at a {@code StartAt} of its own stores nothing until the checkpoint of one of its events is
+     * saved, so a checkpoint an earlier run of the id stored after that position makes the resume skip the events in
+     * between. <a href="https://github.com/johanhaleby/occurrent/issues/1490">Issue 1490</a> tracks fixing that.
+     * <p>
+     * With {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turned on, the answer
+     * stays {@code false} after that fix. A subscription that starts with no position recorded opens where the wrapped
+     * model's default points, and each time the wrapped model evaluates its start position again before the first
+     * checkpoint is stored, it starts from wherever the feed has reached by then and skips the events written in
+     * between.
      */
     @Override
     public boolean deliversEveryEventInCommitOrder() {
-        if (config.startWhenNoStartPositionCanBeRecorded) {
-            return false;
-        }
-        return CommitOrderedSubscriptions.findIn(subscriptionModel).map(CommitOrderedSubscriptions::deliversEveryEventInCommitOrder).orElse(false);
+        return false;
     }
 
     /**
