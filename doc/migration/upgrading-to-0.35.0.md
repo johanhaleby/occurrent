@@ -1329,12 +1329,12 @@ until you resume the subscription.
 
 A replay that started later and loses its live start is held paused the same way. A replay again from its start would
 skip events, so `resumeSubscription(id)` throws `CatchupCannotResumeException` until you cancel the subscription, and so
-does `start(true)` on the blocking stack. On a blocking catch-up subscription model you call
-directly, `resumeSubscription(id, startAt)` at a position the change stream history still reaches resumes it. With
-checkpoint storage that position replaces the one the catch-up stored, so a resume after a later pause doesn't replay
-from where the lost replay got to. A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts
-around its catch-up, can't resume a subscription at a position. Through one, cancel the subscription and subscribe it
-again from the beginning or from a checkpoint you kept.
+does `start(true)` on the blocking stack. A reactor `start(true)` keeps it held paused and replays nothing. On a
+blocking catch-up subscription model you call directly, `resumeSubscription(id, startAt)` at a position the change
+stream history still reaches resumes it. With checkpoint storage that position replaces the one the catch-up stored, so
+a resume after a later pause doesn't replay from where the lost replay got to. A `CompetingConsumerSubscriptionModel`,
+which the blocking Spring Boot starter puts around its catch-up, can't resume a subscription at a position. Through one,
+cancel the subscription and subscribe it again from the beginning or from a checkpoint you kept.
 
 A DCB catch-up and the reactor catch-ups replay only by position, and throw the same exception when you start them from
 a time replay's checkpoint in the new form.
