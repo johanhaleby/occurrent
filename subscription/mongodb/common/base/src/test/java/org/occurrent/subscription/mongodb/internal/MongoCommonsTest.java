@@ -263,13 +263,27 @@ class MongoCommonsTest {
     }
 
     @Test
-    void no_operation_time_leaves_the_position_unpinned_and_opens_at_the_present() {
+    void a_position_that_cannot_be_answered_records_nothing_and_the_exception_reaches_the_caller() {
+        StartAt now = StartAt.now();
+        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(now);
+        IllegalStateException noPosition = new IllegalStateException("no position at the present");
+
+        Throwable thrown = catchThrowable(() -> MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> {
+            throw noPosition;
+        }));
+
+        assertThat(thrown).isSameAs(noPosition);
+        assertThat(currentStartAt.get()).isSameAs(now);
+    }
+
+    @Test
+    void a_position_that_is_answered_as_null_is_never_recorded_or_opened_at() {
         StartAt now = StartAt.now();
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(now);
 
-        StartAt opening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> null);
+        Throwable thrown = catchThrowable(() -> MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> null));
 
-        assertThat(opening.isNow()).isTrue();
+        assertThat(thrown).isInstanceOf(NullPointerException.class);
         assertThat(currentStartAt.get()).isSameAs(now);
     }
 
