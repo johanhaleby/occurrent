@@ -81,6 +81,9 @@ I rejected three smaller changes:
   with `DuplicateSubscriptionIdException`.** Both handlers have the same id, and the id is the key a subscription's
   checkpoint is stored under, so they can't share it. Overriding the method in each class and repeating the annotation
   with an id of its own fixes it.
+- A subscription annotation on a superclass method that is static, or that is private on a bean behind a CGLIB proxy,
+  fails startup with `SubscriptionHandlerNotInvocableException`, the same refusal a method the bean's class declares
+  already gets.
 - An application with a class that overrides a generic handler with a concrete parameter type starts, and the handler
   registers once.
 - There is no OpenRewrite recipe, because nothing in the code says whether an inherited handler was meant to run. The

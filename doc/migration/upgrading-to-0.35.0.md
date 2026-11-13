@@ -2101,6 +2101,9 @@ Applications on either starter with one of these:
 - Two beans that inherit one annotated method register two handlers with the same id, so the application fails at
   startup with `DuplicateSubscriptionIdException`. The id is the key the subscription's checkpoint is stored under,
   so two handlers can't share it.
+- A subscription annotation on a superclass method that is static, or that is private on a bean behind a CGLIB proxy,
+  now fails startup with `SubscriptionHandlerNotInvocableException`, the way it already did on a method the bean's
+  class declares.
 - A class that overrides a generic handler with a concrete parameter type, such as `on(String event)` in a class that
   extends `Base<String>` and overrides `on(E event)`, failed at startup with `DuplicateSubscriptionIdException`. The
   scan also found the bridge method `on(Object)` that the compiler adds, under the same id. The handler now registers
@@ -2115,6 +2118,7 @@ methods. For each one a bean inherits without overriding it:
   `NOW` starts at the present.
 - If it shouldn't run, remove the annotation from the method. An override without the annotation still runs, under
   the annotation of the method it overrides.
+- If it's static, make it an instance method. If it's private and the bean is a CGLIB proxy, make it non-private.
 - If two or more beans inherit it, override the method in each class and repeat the annotation with an id of its own.
 
 The code compiles unchanged, and nothing stored changes. There is no OpenRewrite recipe, because nothing in the code

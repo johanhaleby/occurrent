@@ -412,6 +412,9 @@ public final class SubscriptionAnnotations {
      * @return the matching methods, empty if there are none
      */
     public static Set<Method> handlerMethods(Class<?> type, List<Class<? extends Annotation>> annotationTypes) {
+        if (!AnnotationUtils.isCandidateClass(type, annotationTypes)) {
+            return Set.of();
+        }
         return MethodIntrospector.selectMethods(type, (MethodIntrospector.MetadataLookup<Boolean>) method ->
                 annotationTypes.stream().anyMatch(annotationType -> AnnotationUtils.findAnnotation(method, annotationType) != null) ? Boolean.TRUE : null).keySet();
     }

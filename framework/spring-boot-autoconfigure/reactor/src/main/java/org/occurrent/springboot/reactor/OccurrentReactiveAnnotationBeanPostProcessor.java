@@ -93,9 +93,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             DcbSubscription.class, SynchronousSubscription.class);
     // @Projection and @Snapshot need a Subscribable bean to register against, so the scan looks for them only when one
     // exists.
-    private static final List<Class<? extends Annotation>> HANDLER_ANNOTATIONS = List.of(StreamSubscription.class, Subscription.class,
-            DcbSubscription.class, SynchronousSubscription.class, org.occurrent.annotation.Projection.class,
-            org.occurrent.annotation.Snapshot.class);
+    private static final List<Class<? extends Annotation>> HANDLER_ANNOTATIONS = java.util.stream.Stream.concat(SUBSCRIPTION_ANNOTATIONS.stream(),
+            java.util.stream.Stream.of(org.occurrent.annotation.Projection.class, org.occurrent.annotation.Snapshot.class)).toList();
 
     // Every handler already registered, so scanning a bean a second time registers only what is new. Concurrent
     // rather than lock-guarded, because a bean created after startup is created on whatever thread asked for it,
