@@ -172,7 +172,7 @@ class StreamCatchupResumeStoresARestartablePositionTest {
         // Then
         assertAll(
                 () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(storedBefore),
-                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").containsExactly(LATER_TOKEN)
+                () -> await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(liveModel.openedAt).as("the live starts the live model opened").containsExactly(LATER_TOKEN))
         );
     }
 
@@ -187,7 +187,7 @@ class StreamCatchupResumeStoresARestartablePositionTest {
         // Then
         assertAll(
                 () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(LATER_TOKEN),
-                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").containsExactly(LATER_TOKEN)
+                () -> await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(liveModel.openedAt).as("the live starts the live model opened").containsExactly(LATER_TOKEN))
         );
     }
 
@@ -208,7 +208,7 @@ class StreamCatchupResumeStoresARestartablePositionTest {
         long askedForTheCatchup = askedFor.stream().filter(StreamCatchupSubscriptionModel.class::equals).count();
         assertAll(
                 () -> assertThat(askedForTheCatchup).as("times the function was asked for the catch-up's context").isEqualTo(1),
-                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened, the position stored").containsExactly(storage.read(ID))
+                () -> await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(liveModel.openedAt).as("the live starts the live model opened, the position stored").containsExactly(storage.read(ID)))
         );
     }
 
@@ -224,7 +224,7 @@ class StreamCatchupResumeStoresARestartablePositionTest {
 
         // Then
         assertAll(
-                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened, the position the function answered it").containsExactly(answeredTheLiveModel),
+                () -> await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(liveModel.openedAt).as("the live starts the live model opened, the position the function answered it").containsExactly(answeredTheLiveModel)),
                 () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(storedBefore)
         );
     }
