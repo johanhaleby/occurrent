@@ -89,7 +89,9 @@ The rest stays as it was.
   although the read returned E. That's the torn token ADR 175 refuses. The test that builds a torn token by hand covers
   that refusal, and no test appends with a token this read returned.
 - A plain read through a mongos outside a caller's session can now take as long as a commit in flight on the events'
-  shard. In the probe it waited for as long as the commit was held.
+  shard. In the probe it waited for as long as the commit was held. With nothing held, the probe's read in a causally
+  consistent session took about 98 ms at read concern majority and about 3 ms at local. The probe didn't time the same
+  read without a session, so I don't know how much of the 98 ms is new.
 - Two holes remain, and this decision doesn't cover them. A read in a caller's transaction or in a session already
   bound, which in the Spring stores includes the session the template binds while transaction synchronization is
   active, reads in that session as before. So does a read in a transaction a `TransactionExecutor` opened. No test
