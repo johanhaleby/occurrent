@@ -149,15 +149,15 @@ class StreamCatchupResumeRacesTheHandoverTest {
         }
         assertThat(received).as("events delivered, each of the replayed events once").extracting(DomainEvent::eventId)
                 .containsExactlyInAnyOrderElementsOf(replayed.stream().map(DomainEvent::eventId).toList());
-        // A resume that fails leaves the subscription as it was, so the replay goes live from its own live start. A
-        // resume that succeeds at the present position skips what lies before it by its own request
-        if (thrown != null) {
-            assertAll("the resume threw " + thrown + ", the stored position at the end is " + storage.read(ID) + ", the present position is " + presentPosition,
-                    () -> assertThat(liveModel.openedAt).as("live starts the live model opened, and the event committed after the live start of the replay lies between it and the present position")
-                            .containsExactly(liveStartOfTheReplay),
-                    () -> assertThat(storage.read(ID)).as("stored position at the end").isNotNull().isNotEqualTo(presentPosition)
-            );
-        }
+        // The live model does not hold the subscription while its subscribe replay runs, so the resume fails there
+        // and the replay goes live from its own live start
+        assertThat(thrown).as("the resume fails in the live model, which does not hold the subscription while its replay runs")
+                .isExactlyInstanceOf(IllegalStateException.class).hasMessage("Subscription " + ID + " is not paused");
+        assertAll("the resume threw " + thrown + ", the stored position at the end is " + storage.read(ID) + ", the present position is " + presentPosition,
+                () -> assertThat(liveModel.openedAt).as("live starts the live model opened, and the event committed after the live start of the replay lies between it and the present position")
+                        .containsExactly(liveStartOfTheReplay),
+                () -> assertThat(storage.read(ID)).as("stored position at the end").isNotNull().isNotEqualTo(presentPosition)
+        );
     }
 
     private CatchupSubscriptionModelConfig config() {
