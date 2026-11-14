@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.UnsupportedStartAtException;
 
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 
 /**
  * A subscription model that can refuse a subscription's start position after {@code subscribe} has returned, on a
@@ -33,7 +34,7 @@ import java.util.Optional;
  * keeps state for them, such as a lease, needs to know so it can let go of that state. A restart from the present
  * after a loss of history, and a resume at the present, that gets no position isn't refused. The model holds the
  * subscription paused and keeps its id instead, and tells the listeners through
- * {@link StartRefusalListener#handleStartHeldPaused(String, UnsupportedStartAtException)}.
+ * {@link StartRefusalListener#handleStartHeldPaused(String, UnsupportedStartAtException, BooleanSupplier)}.
  * <p>
  * Not every subscription model implements this, so reach it with {@link #findIn(SubscriptionModelCapability)}.
  */
@@ -93,15 +94,24 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
          * {@link SubscriptionModelLifeCycle#resumeSubscription(String)} asks for the present again, and a handle that
          * still waits for the held run to start throws {@code refusal}. Nothing is freed, so a listener that keeps
          * state for the subscription keeps it. A resume or a cancel of the subscription may already have run by the
-         * time the listener runs. Does nothing unless overridden.
+         * time the listener runs, and once the model no longer has the subscription a {@code subscribe} with the same
+         * id may have made a new one. {@code stillSubscribed} answers {@code false} once the model lets go of the
+         * subscription that was held, by a cancel, a shutdown, a refused start of a later resume, or a loss of history
+         * it doesn't restart after, and stays {@code false}. It answers {@code false} before a cancel returns and before
+         * the listeners are told of a refusal. A listener that keeps state per id, and replaces it only after the
+         * model let go of the subscription, such as after a cancel returned or after it was told of a refusal, can read
+         * that state first and ask after. An answer of {@code true} then means the state it read belongs to the
+         * subscription that was held, not to a later one with the same id. Does nothing unless overridden.
          * <p>
          * Called as {@link #handleStartRefusal(String, UnsupportedStartAtException)} is, on the thread that would have
          * read the subscription, without any lock of the model, and a listener that throws is logged.
          *
-         * @param subscriptionId The subscription the model holds paused.
-         * @param refusal        What a handle that waits for the held run to start throws.
+         * @param subscriptionId  The subscription the model holds paused.
+         * @param refusal         What a handle that waits for the held run to start throws.
+         * @param stillSubscribed Whether the subscription that was held is still subscribed, asked when the listener
+         *                        needs to know.
          */
-        default void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+        default void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
         }
     }
 }

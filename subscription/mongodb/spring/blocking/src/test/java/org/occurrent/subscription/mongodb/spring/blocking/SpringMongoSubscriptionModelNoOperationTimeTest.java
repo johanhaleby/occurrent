@@ -80,6 +80,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import static java.time.ZoneOffset.UTC;
@@ -665,7 +666,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
             }
 
             @Override
-            public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+            public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
                 throw new IllegalStateException("listener failed");
             }
         });
@@ -676,7 +677,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
             }
 
             @Override
-            public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+            public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
                 heldPaused.add(subscriptionId);
             }
         });

@@ -107,7 +107,7 @@ import static java.util.Objects.requireNonNull;
  * neither an operation time nor a change stream position to start from, and this model handles that refusal as above.
  * When a resume, or a restart from the present after a loss of history, gets no such position, they hold the
  * subscription paused instead and report it through
- * {@link StartRefusalReportingSubscriptions.StartRefusalListener#handleStartHeldPaused(String, UnsupportedStartAtException)}.
+ * {@link StartRefusalReportingSubscriptions.StartRefusalListener#handleStartHeldPaused(String, UnsupportedStartAtException, BooleanSupplier)}.
  * This node then keeps the subscription and its lease, so no other node runs it until it is resumed on this node, and a
  * handle that waits for that start throws the refusal.
  * <br>
@@ -481,8 +481,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
 
         @Override
-        public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
-            startHeldPaused(subscriptionId);
+        public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
+            startHeldPaused(subscriptionId, stillSubscribed);
         }
     };
     // A handle waits for a refusal to be acted on only when the wrapped model reports it
@@ -4745,10 +4745,18 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     // The wrapped model keeps the subscription and its id, so nothing is given back or forgotten, and a handle whose
     // wrapped handle throws the refusal stops waiting for a report that never comes. The consumer keeps its lease.
-    private void startHeldPaused(String subscriptionId) {
+    // stillSubscribed is asked after the read. The wrapped model turns it false before a cancel there returns, before
+    // it tells of a refused start, and before it removes a run whose history was lost. This node frees the id, and a
+    // subscribe of the same id puts a new StartRefusal, only after one of those. True after the read means the
+    // StartRefusal read is the held subscription's and not that of a later subscribe, whose handle would then stop
+    // waiting before its own refusal was acted on. A cancel and a subscribe after the check put a new StartRefusal, and
+    // actedOn() still goes to the one read. After a loss of history the wrapped model doesn't restart after, the answer
+    // is false, and a handle that waits for the held run without a timeout keeps waiting until a cancel or a shutdown
+    // here.
+    private void startHeldPaused(String subscriptionId, BooleanSupplier stillSubscribed) {
         @Nullable SubscriptionIdAndSubscriberId key = competingConsumerWithId(subscriptionId);
         @Nullable StartRefusal startRefusal = key == null ? null : startRefusals.get(key);
-        if (startRefusal != null) {
+        if (startRefusal != null && stillSubscribed.getAsBoolean()) {
             startRefusal.actedOn();
         }
     }

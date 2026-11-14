@@ -1485,7 +1485,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
             }
 
             @Override
-            public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+            public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
                 throw new IllegalStateException("listener failed");
             }
         });
@@ -1575,7 +1575,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         }
 
         @Override
-        public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+        public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
             heldPausedWith.add(refusal);
             heldPaused.add(subscriptionId);
         }

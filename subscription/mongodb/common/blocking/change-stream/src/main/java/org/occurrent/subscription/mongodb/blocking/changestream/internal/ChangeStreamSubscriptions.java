@@ -568,6 +568,7 @@ public final class ChangeStreamSubscriptions {
                 return current;
             }
             internalSubscription.recordFailureToStart(refusal);
+            internalSubscription.presentAtSubscribe.removedFromTheModel();
             refused.set(true);
             return null;
         });
@@ -592,7 +593,7 @@ public final class ChangeStreamSubscriptions {
         if (pausedOnThisRun(subscriptionId, internalSubscription, () -> internalSubscription.recordHeldBeforeStarting(refusal))) {
             internalSubscription.releaseWaitersOfAFailedStart();
             log.error("Cannot open the change stream of subscription {} at the present: {} It is paused, and resuming it asks MongoDB again.", subscriptionId, noPosition.getMessage(), noPosition);
-            startHeldPaused(subscriptionId, refusal);
+            startHeldPaused(subscriptionId, refusal, internalSubscription.presentAtSubscribe::isSubscribed);
         } else {
             log.debug("Cannot open the change stream of subscription {} at the present, but it was paused, resumed or cancelled meanwhile, so it isn't held.", subscriptionId, noPosition);
         }
@@ -812,10 +813,10 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
-    private void startHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+    private void startHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
         for (StartRefusalListener listener : startRefusalListeners) {
             try {
-                listener.handleStartHeldPaused(subscriptionId, copyOf(refusal));
+                listener.handleStartHeldPaused(subscriptionId, copyOf(refusal), stillSubscribed);
             } catch (RuntimeException e) {
                 log.error("A listener failed when told that subscription {} is held paused without a position at the present. The subscription stays paused, and the other listeners are told.", subscriptionId, e);
             }
@@ -835,7 +836,13 @@ public final class ChangeStreamSubscriptions {
     // Only while the subscription is still on this run. A pause and a resume in the meantime started a new run, which
     // has not lost anything. Runs on the executor thread without the model's monitor.
     private void forget(String subscriptionId, InternalSubscription internalSubscription) {
-        runningSubscriptions.remove(subscriptionId, internalSubscription);
+        runningSubscriptions.computeIfPresent(subscriptionId, (__, current) -> {
+            if (current != internalSubscription) {
+                return current;
+            }
+            internalSubscription.presentAtSubscribe.removedFromTheModel();
+            return null;
+        });
     }
 
     // The position the run's change stream opens at when its position resolves to the present. Refused for a dynamic
@@ -1263,6 +1270,9 @@ public final class ChangeStreamSubscriptions {
         private volatile @Nullable Checkpoint answer;
         private volatile FutureTask<Void> asking;
         private volatile boolean cancelled;
+        // Set where the model removes the subscription without a cancel, as a refused start and a loss of history it
+        // doesn't restart after do
+        private volatile boolean removed;
         // Set by the first run to get here, whether it waits for the answer or not
         private volatile boolean reached;
         // Set when the read gave no position, and kept, so the question isn't asked again
@@ -1279,6 +1289,19 @@ public final class ChangeStreamSubscriptions {
 
         void ask() {
             asking.run();
+        }
+
+        // Marked before the model lets go of the subscription's last run, so whoever finds the id free finds this
+        // marked too
+        void removedFromTheModel() {
+            removed = true;
+        }
+
+        // False once a cancel, a shutdown, a refused start or a loss of history the model doesn't restart after
+        // removed this subscribe, which every run of it shares. A listener told about one of its runs can then tell
+        // it from a later subscribe with the same id
+        boolean isSubscribed() {
+            return !cancelled && !removed;
         }
 
         void answered(Checkpoint position) {
@@ -1837,8 +1860,11 @@ public final class ChangeStreamSubscriptions {
             } finally {
                 lock.unlock();
             }
-            close();
-            presentAtSubscribe.cancel();
+            try {
+                close();
+            } finally {
+                presentAtSubscribe.cancel();
+            }
         }
 
         // Marked before closing so the change-stream error this deliberately triggers is recognized as benign

@@ -42,8 +42,10 @@ import org.junit.jupiter.api.Timeout;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoLeaseCompetingConsumerStrategy;
@@ -57,9 +59,14 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -96,6 +103,15 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
     private final AtomicBoolean historyLost = new AtomicBoolean();
     private final AtomicBoolean presentRefused = new AtomicBoolean();
     private final AtomicInteger reads = new AtomicInteger();
+    // Open until a test closes them. The first listener on the wrapped model runs before the one of the node and blocks on these
+    private volatile CountDownLatch heldPausedGate = new CountDownLatch(0);
+    private volatile CountDownLatch refusalGate = new CountDownLatch(0);
+    private final CountDownLatch heldPausedReachedTheTestListener = new CountDownLatch(1);
+    private final CountDownLatch refusalReachedTheTestListener = new CountDownLatch(1);
+    private final CountDownLatch heldPausedReachedTheListenerAfterTheNode = new CountDownLatch(1);
+    // The refusals the test listener lets through to the node before it blocks on refusalGate
+    private final AtomicInteger refusalsTold = new AtomicInteger();
+    private volatile int refusalsLetThrough;
     private MongoClient mongoClient;
     private MongoDatabase database;
     private String eventCollectionName;
@@ -114,15 +130,46 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
         String locks = "locks-" + UUID.randomUUID();
         strategyA = new NativeMongoLeaseCompetingConsumerStrategy.Builder(database, locks).leaseTime(LEASE_TIME).build();
         strategyB = new NativeMongoLeaseCompetingConsumerStrategy.Builder(database, locks).leaseTime(LEASE_TIME).build();
-        wrappedA = new NativeMongoSubscriptionModel(databaseThatSendsNoOperationTime(), collectionThatLosesItsHistoryAndRefusesThePresent(), TimeRepresentation.RFC_3339_STRING,
-                Executors.newCachedThreadPool(), NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(true)
-                        .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))).maxAwaitTime(Duration.ofSeconds(1)));
-        nodeA = new CompetingConsumerSubscriptionModel(wrappedA, strategyA);
+        nodeAOverAWrappedModelThatRestartsOnHistoryLoss(true);
         nodeB = new CompetingConsumerSubscriptionModel(new NativeMongoSubscriptionModel(database, eventCollectionName, TimeRepresentation.RFC_3339_STRING, Executors.newCachedThreadPool()), strategyB);
+    }
+
+    private void nodeAOverAWrappedModelThatRestartsOnHistoryLoss(boolean restarts) {
+        wrappedA = new NativeMongoSubscriptionModel(databaseThatSendsNoOperationTime(), collectionThatLosesItsHistoryAndRefusesThePresent(), TimeRepresentation.RFC_3339_STRING,
+                Executors.newCachedThreadPool(), NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(restarts)
+                        .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))).maxAwaitTime(Duration.ofSeconds(1)));
+        wrappedA.addStartRefusalListener(new StartRefusalListener() {
+            @Override
+            public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+                if (refusalsTold.incrementAndGet() > refusalsLetThrough) {
+                    refusalReachedTheTestListener.countDown();
+                    awaitUninterruptibly(refusalGate);
+                }
+            }
+
+            @Override
+            public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
+                heldPausedReachedTheTestListener.countDown();
+                awaitUninterruptibly(heldPausedGate);
+            }
+        });
+        nodeA = new CompetingConsumerSubscriptionModel(wrappedA, strategyA);
+        wrappedA.addStartRefusalListener(new StartRefusalListener() {
+            @Override
+            public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+            }
+
+            @Override
+            public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
+                heldPausedReachedTheListenerAfterTheNode.countDown();
+            }
+        });
     }
 
     @AfterEach
     void shutdown() {
+        heldPausedGate.countDown();
+        refusalGate.countDown();
         nodeA.shutdown();
         nodeB.shutdown();
         mongoClient.close();
@@ -186,6 +233,134 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
         assertTimeoutPreemptively(Duration.ofSeconds(10), () -> assertThatThrownBy(() -> resumed.waitUntilStarted(Duration.ofSeconds(30))).isInstanceOf(UnsupportedStartAtException.class));
         assertThat(wrappedA.isPaused(SUBSCRIPTION_ID)).as("wrapped model on A is held paused").isTrue();
         assertThat(nodeA.subscriptionIds()).as("node A still knows the subscription").contains(SUBSCRIPTION_ID);
+    }
+
+    @Timeout(value = 60, unit = SECONDS)
+    @Test
+    void a_late_report_that_the_wrapped_model_held_a_cancelled_subscription_paused_does_not_end_the_wait_of_a_handle_for_the_same_id_subscribed_again_before_the_node_acted_on_its_refusal() throws Exception {
+        // Given generation 1 held paused, with the wrapped model's report of it blocked in front of the node's listener
+        heldPausedGate = new CountDownLatch(1);
+        Subscription generation1 = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
+        });
+        assertThat(generation1.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+        presentRefused.set(true);
+        historyLost.set(true);
+        assertThat(heldPausedReachedTheTestListener.await(15, SECONDS)).as("the wrapped model reported that it held generation 1 paused").isTrue();
+        assertThat(heldPausedReachedTheListenerAfterTheNode.getCount()).as("the node's listener has not run for generation 1 yet").isEqualTo(1);
+
+        // And generation 1 cancelled and the id subscribed again, with a start the wrapped model refuses and the node not told of yet
+        refusalGate = new CountDownLatch(1);
+        nodeA.cancelSubscription(SUBSCRIPTION_ID);
+        Subscription generation2 = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), refusedStartAt(), (CloudEvent __) -> {
+        });
+        assertThat(refusalReachedTheTestListener.await(15, SECONDS)).as("the wrapped model refused the start of generation 2").isTrue();
+
+        // When / Then
+        theReportForGeneration1ReachesTheNodeWhileTheRefusalOfGeneration2IsHeld(generation2);
+    }
+
+    @Timeout(value = 60, unit = SECONDS)
+    @Test
+    void a_late_report_that_the_wrapped_model_held_a_subscription_paused_does_not_end_the_wait_of_a_handle_for_the_same_id_after_a_refused_resume_freed_the_id() throws Exception {
+        // Given generation 1 held paused after a history loss, with the report of it blocked in front of the node's listener
+        heldPausedGate = new CountDownLatch(1);
+        Subscription generation1 = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
+        });
+        assertThat(generation1.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+        presentRefused.set(true);
+        historyLost.set(true);
+        assertThat(heldPausedReachedTheTestListener.await(15, SECONDS)).as("the wrapped model reported that it held generation 1 paused").isTrue();
+
+        // And a resume that the wrapped model refuses, which the node acted on by giving the lease and the id back
+        refusalsLetThrough = 1;
+        refusalGate = new CountDownLatch(1);
+        wrappedA.resumeSubscription(SUBSCRIPTION_ID, StartAt.dynamic(__ -> {
+            throw new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "refused on purpose");
+        }));
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A gave the lease back after the refusal").isFalse());
+
+        // And the id subscribed again with a start the wrapped model refuses and the node not told of yet
+        Subscription generation2 = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), refusedStartAt(), (CloudEvent __) -> {
+        });
+        assertThat(refusalReachedTheTestListener.await(15, SECONDS)).as("the wrapped model refused the start of generation 2").isTrue();
+
+        // When / Then
+        theReportForGeneration1ReachesTheNodeWhileTheRefusalOfGeneration2IsHeld(generation2);
+    }
+
+    @Timeout(value = 60, unit = SECONDS)
+    @Test
+    void a_late_report_that_the_wrapped_model_held_a_subscription_paused_does_not_end_the_wait_of_a_handle_for_the_same_id_after_a_lost_history_removed_it_and_a_cancel_freed_the_id() throws Exception {
+        // Given a wrapped model that does not restart on lost history, and generation 1 held paused at a resume at the present, with the report of it blocked
+        nodeA.shutdown();
+        nodeAOverAWrappedModelThatRestartsOnHistoryLoss(false);
+        Subscription generation1 = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
+        });
+        assertThat(generation1.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+        nodeA.pauseSubscription(SUBSCRIPTION_ID);
+        heldPausedGate = new CountDownLatch(1);
+        presentRefused.set(true);
+        wrappedA.resumeSubscription(SUBSCRIPTION_ID, StartAt.now());
+        assertThat(heldPausedReachedTheTestListener.await(15, SECONDS)).as("the wrapped model reported that it held generation 1 paused").isTrue();
+
+        // And a resume whose run loses its history, which removes the subscription from the wrapped model without telling a listener
+        presentRefused.set(false);
+        historyLost.set(true);
+        wrappedA.resumeSubscription(SUBSCRIPTION_ID, StartAt.now());
+        await().atMost(15, SECONDS).until(() -> !wrappedA.isRunning(SUBSCRIPTION_ID) && !wrappedA.isPaused(SUBSCRIPTION_ID));
+
+        // And a cancel that frees the id in the node, and the id subscribed again with a start the wrapped model refuses and the node not told of yet
+        refusalGate = new CountDownLatch(1);
+        nodeA.cancelSubscription(SUBSCRIPTION_ID);
+        Subscription generation2 = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), refusedStartAt(), (CloudEvent __) -> {
+        });
+        assertThat(refusalReachedTheTestListener.await(15, SECONDS)).as("the wrapped model refused the start of generation 2").isTrue();
+
+        // When / Then
+        theReportForGeneration1ReachesTheNodeWhileTheRefusalOfGeneration2IsHeld(generation2);
+    }
+
+    private void theReportForGeneration1ReachesTheNodeWhileTheRefusalOfGeneration2IsHeld(Subscription generation2) throws Exception {
+        // When the report for generation 1 reaches the node, and the node still has not been told of the refusal of generation 2
+        heldPausedGate.countDown();
+        assertThat(heldPausedReachedTheListenerAfterTheNode.await(15, SECONDS)).as("the node's listener ran for generation 1").isTrue();
+        CompletableFuture<Boolean> waiting = CompletableFuture.supplyAsync(() -> generation2.waitUntilStarted(Duration.ofSeconds(20)));
+
+        // Then the handle of generation 2 keeps waiting for the node to act on the refusal
+        assertThatThrownBy(() -> waiting.get(1, SECONDS))
+                .as("[waitUntilStarted on generation 2 ended before the node was told of its refusal, which a report for generation 1 ended]")
+                .isInstanceOf(TimeoutException.class);
+
+        // And it throws the refusal once the node acted on it, with the id free then
+        refusalGate.countDown();
+        assertThatThrownBy(() -> waiting.get(10, SECONDS)).isInstanceOf(ExecutionException.class).hasCauseInstanceOf(UnsupportedStartAtException.class);
+        presentRefused.set(false);
+        Subscription again = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
+        });
+        assertThat(again.waitUntilStarted(Duration.ofSeconds(10))).as("the id is free to subscribe again right after the handle threw").isTrue();
+    }
+
+    private static void awaitUninterruptibly(CountDownLatch latch) {
+        boolean interrupted = false;
+        try {
+            while (true) {
+                try {
+                    latch.await();
+                    return;
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    // A catch-up's checkpoint that a native model has no change stream position for
+    private static StartAt refusedStartAt() {
+        return StartAt.dynamic(context -> StartAt.checkpoint(GlobalCheckpoint.of(0)));
     }
 
     private Subscription resumeTheHeldSubscriptionOnNodeA() {
