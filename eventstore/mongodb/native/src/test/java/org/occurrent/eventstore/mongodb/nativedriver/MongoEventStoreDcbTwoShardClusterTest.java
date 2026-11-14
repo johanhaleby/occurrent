@@ -27,7 +27,10 @@ import com.mongodb.client.MongoClients;
 import com.mongodb.event.CommandListener;
 import com.mongodb.event.CommandStartedEvent;
 import io.cloudevents.CloudEvent;
+import org.assertj.core.api.SoftAssertions;
 import org.bson.BsonDocument;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -46,6 +49,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.TwoShardMongoCluster;
 import org.occurrent.testsupport.mongodb.TwoShardMongoCluster.Hold;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -87,6 +91,7 @@ class MongoEventStoreDcbTwoShardClusterTest {
 
     private static final int WTIMEOUT_MS = 12_345;
     private static final int MAX_COMMIT_TIME_MS = 7_000;
+    private static final long MARKER_VERSIONS_COMMIT_TIMEOUT_MS = 6_543;
     private static final WriteConcern CONFIGURED_WRITE_CONCERN = WriteConcern.W1.withWTimeout(WTIMEOUT_MS, MILLISECONDS).withJournal(true);
 
     private static TwoShardMongoCluster cluster;
@@ -357,11 +362,12 @@ class MongoEventStoreDcbTwoShardClusterTest {
         List<BsonDocument> commands = commandsOfAnAppend(options, WriteConcern.ACKNOWLEDGED, true);
 
         BsonDocument commit = single(theAppendsTransaction(commands), "commitTransaction");
-        assertThat(commit.getDocument("writeConcern"))
-                .as("the commitTransaction of the append, which keeps the write concern the store's transaction options configure, not majority")
-                .isEqualTo(BsonDocument.parse("{\"w\": 1, \"wtimeout\": " + WTIMEOUT_MS + ", \"j\": true}"));
-        assertThat(commit.get("maxTimeMS")).as("the max commit time of the store's transaction options").isNotNull();
-        assertThat(commit.get("maxTimeMS").asNumber().longValue()).as("the max commit time of the store's transaction options").isEqualTo(MAX_COMMIT_TIME_MS);
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(commit.getDocument("writeConcern"))
+                    .as("the commitTransaction of the append, which keeps the write concern the store's transaction options configure, not majority")
+                    .isEqualTo(BsonDocument.parse("{\"w\": 1, \"wtimeout\": " + WTIMEOUT_MS + ", \"j\": true}"));
+            softly.assertThat(commit.getNumber("maxTimeMS", new BsonInt32(0)).longValue()).as("the max commit time of the store's transaction options").isEqualTo(MAX_COMMIT_TIME_MS);
+        });
     }
 
     @Test
@@ -383,12 +389,19 @@ class MongoEventStoreDcbTwoShardClusterTest {
         List<BsonDocument> append = theAppendsTransaction(commands);
         List<BsonDocument> snapshot = theOtherTransactions(commands);
         assertThat(snapshot).as("the commands of a transaction on another session than the append's").isNotEmpty();
-        assertThat(snapshot).extracting(command -> command.get("lsid")).as("the session of every command of that transaction").containsOnly(snapshot.get(0).get("lsid"));
-        assertThat(snapshot).extracting(command -> command.get("txnNumber")).as("the transaction of every command").containsOnly(snapshot.get(0).get("txnNumber"));
-        assertThat(snapshot.get(0).getDocument("readConcern").getString("level").getValue()).as("the first command of the transaction that asks for the events").isEqualTo("snapshot");
-        assertThat(snapshot).filteredOn(command -> asksForTheEventsOfAMovedMarker(command)).as("the events query of the moved marker in that transaction").hasSize(1);
-        assertThat(snapshot.get(snapshot.size() - 1).getFirstKey()).as("that transaction ends with a commit, since it only reads").isEqualTo("commitTransaction");
-        assertThat(append).filteredOn(command -> asksForTheEventsOfAMovedMarker(command)).as("the events query of the moved marker in the append's own transaction").isEmpty();
+        BsonDocument commit = snapshot.get(snapshot.size() - 1);
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(snapshot).extracting(command -> command.get("lsid")).as("the session of every command of that transaction").containsOnly(snapshot.get(0).get("lsid"));
+            softly.assertThat(snapshot).extracting(command -> command.get("txnNumber")).as("the transaction of every command").containsOnly(snapshot.get(0).get("txnNumber"));
+            softly.assertThat(snapshot.get(0).getDocument("readConcern").getString("level").getValue()).as("the first command of the transaction that asks for the events").isEqualTo("snapshot");
+            softly.assertThat(snapshot).filteredOn(command -> asksForTheEventsOfAMovedMarker(command)).as("the events query of the moved marker in that transaction").hasSize(1);
+            softly.assertThat(commit.getFirstKey()).as("that transaction ends with a commit, since it only reads").isEqualTo("commitTransaction");
+            softly.assertThat(commit.getNumber("maxTimeMS", new BsonInt32(0)).longValue())
+                    .as("the max time of that commit, bounded by the configured marker versions commit timeout. Under a client timeout the driver sends what remains of it")
+                    .isBetween(1L, MARKER_VERSIONS_COMMIT_TIMEOUT_MS);
+            softly.assertThat(commit.getDocument("writeConcern", new BsonDocument()).get("w")).as("the write concern of that commit").isEqualTo(new BsonString("majority"));
+            softly.assertThat(append).filteredOn(command -> asksForTheEventsOfAMovedMarker(command)).as("the events query of the moved marker in the append's own transaction").isEmpty();
+        });
     }
 
     @Test
@@ -398,10 +411,13 @@ class MongoEventStoreDcbTwoShardClusterTest {
         List<BsonDocument> commands = commandsOfAnAppend(options, WriteConcern.ACKNOWLEDGED, false);
 
         BsonDocument first = commands.stream().filter(command -> command.containsKey("autocommit")).findFirst().orElseThrow();
-        assertThat(first.getDocument("readConcern").getString("level").getValue()).as("the first command of the transaction of an append without a condition").isEqualTo("majority");
-        assertThat(single(commands, "commitTransaction").getDocument("writeConcern"))
-                .as("the commitTransaction of an append without a condition, which isn't raised to majority")
-                .isEqualTo(BsonDocument.parse("{\"w\": 1, \"wtimeout\": " + WTIMEOUT_MS + ", \"j\": true}"));
+        BsonDocument commit = single(commands, "commitTransaction");
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(first.getDocument("readConcern").getString("level").getValue()).as("the first command of the transaction of an append without a condition").isEqualTo("majority");
+            softly.assertThat(commit.getDocument("writeConcern"))
+                    .as("the commitTransaction of an append without a condition, which isn't raised to majority")
+                    .isEqualTo(BsonDocument.parse("{\"w\": 1, \"wtimeout\": " + WTIMEOUT_MS + ", \"j\": true}"));
+        });
     }
 
     // The caller's transaction on the ambient session, which the append joins. Commits when the append returns, aborts when it throws
@@ -464,6 +480,7 @@ class MongoEventStoreDcbTwoShardClusterTest {
             MongoEventStore store = new MongoEventStore(recordingClient, recordingDatabase, "events", new EventStoreConfig.Builder()
                     .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                     .transactionOptions(options)
+                    .markerVersionsCommitTimeout(Duration.ofMillis(MARKER_VERSIONS_COMMIT_TIMEOUT_MS))
                     .eventStoreCapabilities(STREAM, DCB)
                     .build());
             cluster.shardCheckpointCollection(recordingDatabase, "events_dcb_checkpoints");
