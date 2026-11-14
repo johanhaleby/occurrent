@@ -467,9 +467,9 @@ public final class SubscriptionAnnotations {
     /**
      * The class whose code runs when a handler or factory is invoked on {@code bean}: the user class,
      * {@link ClassUtils#getUserClass}, of the target class {@link AopProxyUtils#ultimateTargetClass} reads from
-     * {@link #ultimateTarget}. A proxy whose target source is not a fixed singleton is not unwrapped, but its target
-     * source names the class it hands out, so a JDK interface proxy like that answers with its target's class rather
-     * than its own. Both annotation post-processors scan this class, and handler and factory generics are read
+     * {@link #ultimateTarget}. A proxy whose target source is not a fixed singleton is not unwrapped. When its target
+     * source names the class it hands out, a JDK interface proxy like that answers with that class, and when the
+     * target source names no class, with the proxy's own class. Both annotation post-processors scan this class, and handler and factory generics are read
      * against it, so the two agree on one {@link Method} per handler.
      *
      * @param bean the (possibly proxied) bean
