@@ -400,8 +400,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * A {@code startAt} at the present records its position when the resumed change stream opens, from MongoDB's
      * operation time or from one read of the change stream, as a subscription started at the present does. When that
      * read returns neither an event nor a resume token, {@code waitUntilStarted(..)} on the handle this call returns
-     * throws an {@code UnsupportedStartAtException}, and the subscription is removed from this model, so its id can be
-     * subscribed again.
+     * throws an {@code UnsupportedStartAtException}, and the subscription stays in this model, paused. A later
+     * {@link #resumeSubscription(String)} reads the change stream again, and a subscribe with the same id throws a
+     * {@code DuplicateSubscriptionIdException} until {@code cancelSubscription(id)} frees it.
      *
      * @see RepositionableSubscriptions#resumeSubscription(String, StartAt)
      */

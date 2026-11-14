@@ -827,7 +827,7 @@ public class MongoCommons {
      */
     public static String noOperationTimeToPinToMessage(Document reply) {
         return "The reply to " + CURRENT_OPERATION_TIME_COMMAND.toJson() + " carried no " + OPERATION_TIME + ", so the subscription reads the change stream once to record where the present is. " +
-                "When that read returns neither an event nor a resume token, a subscription starting at the present is refused and waiting for it to start throws, and one restarting after its history was lost is held paused. Reply was: " + reply.toJson();
+                "When that read returns neither an event nor a resume token, a subscription made at the present is refused and waiting for it to start throws, and a resume at the present or a restart after its history was lost holds it paused. Reply was: " + reply.toJson();
     }
 
     public static Checkpoint calculateCheckpointFromMongoStreamPositionDocument(Document checkpointDocument) {
