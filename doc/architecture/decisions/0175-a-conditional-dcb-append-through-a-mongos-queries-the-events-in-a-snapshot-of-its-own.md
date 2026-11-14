@@ -109,7 +109,7 @@ version.
   `TransactionExecutor`'s and in a caller's, a snapshot transaction that fails, and two conditional appends in one
   caller's transaction. A unit test checks the comparison. [ADR 176](0176-a-plain-dcb-read-through-a-mongos-reads-in-a-causally-consistent-session-of-its-own.md) turned
   the test of a token read while a matching event had committed on one shard and not the other into a test that the
-  read returns that event.
+  read returns that event and that an append with the token it returns is refused.
 - A conditional append through a mongos that has to query the events costs a second session and a read-only
   transaction, whose commit waits for `majority` for at most `markerVersionsCommitTimeout`. An append whose markers
   didn't move, or rule out every item, doesn't start it.

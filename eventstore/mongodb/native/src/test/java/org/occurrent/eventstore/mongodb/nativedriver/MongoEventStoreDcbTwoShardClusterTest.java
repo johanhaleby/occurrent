@@ -186,36 +186,6 @@ class MongoEventStoreDcbTwoShardClusterTest {
     }
 
     @Test
-    void returns_a_matching_event_with_a_tag_marker_on_each_shard_whose_commit_was_in_flight_on_the_events_shard_when_the_read_began() throws Exception {
-        ExecutorService executor = Executors.newFixedThreadPool(2);
-        DcbEventStream read;
-        try {
-            Future<?> matching = null;
-            try (Hold hold = cluster.holdCommitsOnSecondShard()) {
-                matching = executor.submit(() -> eventStore.append(List.of(taggedEventWithId("matching", ENROLLED, COURSE_C1, STUDENT_S1))));
-                awaitMarkerOnTheFirstShard(COURSE_C1_KEY);
-                Future<DcbEventStream> reading = executor.submit(() -> eventStore.read(ENROLLMENTS_OF_S1_IN_C1));
-                // Gives the read a fair chance to return or to block on the held commit
-                try {
-                    reading.get(2, TimeUnit.SECONDS);
-                } catch (TimeoutException blockedOnTheHeldCommit) {
-                    // Released below
-                }
-                hold.close();
-                // A read that never returns would hang the test, so it gets a bound
-                read = reading.get(10, TimeUnit.SECONDS);
-            } finally {
-                awaitSettled(matching);
-            }
-        } finally {
-            executor.shutdownNow();
-        }
-        // The marker of tag student:s1 lives on the events' shard and is read before the events wait for the commit, so it can be at either version
-        assertThat(read.events()).as("The read returns the matching event once its commit on the events shard is visible").extracting(CloudEvent::getId).containsExactly("matching");
-        assertThat(read.consistencyToken().markers().get(COURSE_C1_KEY).version()).as("The marker of tag course:c1 in the token is at the version the matching event created").isEqualTo(1);
-    }
-
-    @Test
     void refuses_an_append_with_a_token_whose_marker_on_the_events_shard_was_read_before_a_matching_event_the_read_returned() throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         DcbEventStream read;
@@ -231,6 +201,7 @@ class MongoEventStoreDcbTwoShardClusterTest {
                 } catch (TimeoutException blockedOnTheHeldCommit) {
                     // Released below
                 }
+                assertThat(reading).as("The read waits for the held commit of the matching event on the events shard").isNotDone();
                 hold.close();
                 // A read that never returns would hang the test, so it gets a bound
                 read = reading.get(10, TimeUnit.SECONDS);
@@ -268,6 +239,7 @@ class MongoEventStoreDcbTwoShardClusterTest {
                 } catch (TimeoutException blockedOnTheHeldCommit) {
                     // Released below
                 }
+                assertThat(reading).as("The read waits for the held commit of the matching event on the events shard").isNotDone();
                 hold.close();
                 // A read that never returns would hang the test, so it gets a bound
                 read = reading.get(10, TimeUnit.SECONDS);
@@ -298,6 +270,7 @@ class MongoEventStoreDcbTwoShardClusterTest {
                 } catch (TimeoutException blockedOnTheHeldCommit) {
                     // Released below
                 }
+                assertThat(reading).as("The read waits for the held commit of the matching event on the events shard").isNotDone();
                 hold.close();
                 // A read that never returns would hang the test, so it gets a bound
                 read = reading.get(10, TimeUnit.SECONDS);
@@ -451,6 +424,27 @@ class MongoEventStoreDcbTwoShardClusterTest {
                         + "The first event matches the criteria and isn't committed, so the snapshot can't find it, and the store refuses an append whose snapshot is behind its own read")
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
         assertThat(eventStore.read(TICKETS_OF_K1).events()).as("neither of the caller's events was stored").extracting(CloudEvent::getId).containsExactly("seed");
+    }
+
+    @Test
+    void returns_its_own_uncommitted_event_to_a_plain_read_in_a_callers_transaction() {
+        List<String> readInTheTransaction;
+        try (ClientSession session = client.startSession()) {
+            session.startTransaction();
+            ClientSessionHolder.set(session);
+            try {
+                eventStore.append(List.of(taggedEventWithId("uncommitted", TICKET_SOLD, CONCERT_K1)));
+                readInTheTransaction = eventStore.read(TICKETS_OF_K1).events().stream().map(CloudEvent::getId).toList();
+            } finally {
+                ClientSessionHolder.remove();
+                if (session.hasActiveTransaction()) {
+                    session.abortTransaction();
+                }
+            }
+        }
+
+        assertThat(readInTheTransaction).as("A plain read in the caller's transaction sees the event the same transaction appended and hasn't committed").containsExactly("uncommitted");
+        assertThat(eventStore.read(TICKETS_OF_K1).events()).as("The rolled back event wasn't stored").isEmpty();
     }
 
     @Test

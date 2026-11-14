@@ -852,10 +852,12 @@ moved, the events read waits for that event's commit on the shard that holds the
 Such a read can take as long as that commit. A marker in its token that's on the shard holding the events can still be
 from before the event.
 
-A read in a transaction or session of yours reads in it as before, and so does one in a transaction that
-`NativeMongoTransactionExecutor`, `SpringTransactionExecutor` or `SpringReactiveTransactionExecutor` opened. On the
-Spring stores that includes a read while transaction synchronization is active, since the template then reads in the
-session bound there, or binds one. No test checks whether such a read can miss the event. A read with `withVersions()`
+The store doesn't make a read in a transaction or session of yours wait, as before. On the Spring stores it reads the markers, the
+counter and the events in that session, and so does one in a transaction that `SpringTransactionExecutor` or
+`SpringReactiveTransactionExecutor` opened. That includes a read while transaction synchronization is active, since the
+template then reads in the session bound there, or binds one. On `MongoEventStore`, a read with a session bound in
+`ClientSessionHolder`, as `NativeMongoTransactionExecutor` binds one, reads the markers and the counter outside that
+session and only the events in it, as 0.34.0 did. No test checks whether such a read can miss the event. A read with `withVersions()`
 doesn't miss it when its stream reports `markerVersions()`, because it read the markers and the events in one snapshot
 transaction. On a replica set the read is the same as before.
 

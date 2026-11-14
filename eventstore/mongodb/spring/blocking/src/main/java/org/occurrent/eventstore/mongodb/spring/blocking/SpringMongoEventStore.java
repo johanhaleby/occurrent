@@ -325,6 +325,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         try (ClientSession session = mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().causallyConsistent(true).build())) {
             MongoTemplate sessionTemplate = mongoTemplate.withSession(session);
             sessionTemplate.setSessionSynchronization(NEVER);
+            // withSession doesn't copy the read preference set on the template
+            if (mongoTemplate.hasReadPreference()) {
+                sessionTemplate.setReadPreference(mongoTemplate.getReadPreference());
+            }
             return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(criteria, sessionTemplate), () -> positionOf(sessionTemplate), sessionTemplate, queryOptions);
         }
     }

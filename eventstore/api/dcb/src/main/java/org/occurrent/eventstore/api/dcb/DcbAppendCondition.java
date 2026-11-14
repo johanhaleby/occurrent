@@ -41,8 +41,9 @@ import static java.util.Objects.requireNonNull;
  * Through a mongos, outside a transaction or session of the caller's, the MongoDB stores run a read without
  * {@link DcbReadOptions#withVersions()} in a causally consistent session of their own. When the read's token holds a
  * marker that a matching event moved, the read waits for that event's commit on the shard that holds the events and
- * returns the event. A read in a transaction or session of the caller's, including one a transaction executor opened,
- * runs in that session, and the stores don't make it wait. A read through a mongos with
+ * returns the event. They don't make a read in a transaction or session of the caller's wait, including one a
+ * transaction executor opened. The Spring stores read its markers and its events in that session, and the native
+ * {@code MongoEventStore} reads only its events in it and its markers outside it. A read through a mongos with
  * {@link DcbReadOptions#withVersions()} whose stream reports {@link DcbEventStream#markerVersions()} returns such an
  * event too. The append can pass on any deployment when a read preference or a read concern puts a read's events behind its
  * token, and with a token read inside a transaction after that transaction's own append, once the transaction has

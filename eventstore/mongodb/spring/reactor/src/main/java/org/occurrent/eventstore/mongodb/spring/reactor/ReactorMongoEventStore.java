@@ -583,19 +583,30 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     if (template instanceof ReactiveMongoTemplate sessionTemplate) {
                         // Under ALWAYS an active synchronization would bind another session to the read
                         sessionTemplate.setSessionSynchronization(NEVER);
+                        if (synchronization == Synchronization.INACTIVE) {
+                            // withSession doesn't copy the read preference set on the template, and with synchronization inactive asking the template for it binds no session
+                            return mongoTemplate.execute(eventStoreCollectionName, collection -> Mono.just(collection.getReadPreference())).single().flatMap(readPreference -> {
+                                sessionTemplate.setReadPreference(readPreference);
+                                return readWithoutMarkerVersionsInSession(criteria, options, sessionTemplate);
+                            });
+                        }
                     } else if (synchronization != Synchronization.INACTIVE) {
                         // NEVER can't be set on what a subclass's withSession returned, and without it the active synchronization would bind another session
                         return Mono.error(new IllegalStateException("Cannot read in a session of the event store's own, because the session-bound template is a " + template.getClass().getName() + " and not a ReactiveMongoTemplate, so it can't be kept out of the session the active transaction synchronization binds."));
                     }
-                    // Nothing binds another session now, so every read below runs in the causally consistent one
-                    Mono<Long> position = template.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName)
-                            .map(document -> ((Number) document.get(DcbMarkerModel.COUNTER_POSITION)).longValue())
-                            .defaultIfEmpty(0L);
-                    return readWithoutMarkerVersions(criteria, options, consistencyToken(criteria, template), position, template, queryOptions);
+                    return readWithoutMarkerVersionsInSession(criteria, options, template);
                 }),
                 clientSession -> Mono.fromRunnable(clientSession::close),
                 (clientSession, error) -> Mono.fromRunnable(clientSession::close),
                 clientSession -> Mono.fromRunnable(clientSession::close));
+    }
+
+    // Nothing binds another session to a template passed here, so every read runs in the causally consistent session it's bound to
+    private Mono<DcbEventStream> readWithoutMarkerVersionsInSession(DcbCriteria criteria, DcbReadOptions options, ReactiveMongoOperations template) {
+        Mono<Long> position = template.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName)
+                .map(document -> ((Number) document.get(DcbMarkerModel.COUNTER_POSITION)).longValue())
+                .defaultIfEmpty(0L);
+        return readWithoutMarkerVersions(criteria, options, consistencyToken(criteria, template), position, template, queryOptions);
     }
 
     // Carries the phase a read with marker versions failed in to the fallback, and never leaves this class

@@ -48,7 +48,7 @@ What counts as outside a session of the caller's differs per store.
 
 | Store | Reads in a session of its own when |
 | --- | --- |
-| `MongoEventStore` | No session is bound in `ClientSessionHolder`. `NativeMongoTransactionExecutor` binds one, so a read inside its transaction stays in it. |
+| `MongoEventStore` | No session is bound in `ClientSessionHolder`. `NativeMongoTransactionExecutor` binds one. With one bound, the read takes the markers and the position counter outside that session and only the events in it, as in 0.34.0. |
 | `SpringMongoEventStore` | Transaction synchronization isn't active. With it active, the template reads in the session bound to it, or binds one, since the store sets session synchronization `ALWAYS` on the template. |
 | `ReactorMongoEventStore` | No caller transaction is active and the reactive transaction synchronization is inactive. The session is closed when the read's `Mono` completes, fails or is cancelled. |
 
@@ -72,12 +72,22 @@ say, so that read doesn't change.
 
 The rest stays as it was.
 
-- A read in a caller's transaction or in a session already bound reads in that session. So does a read in a
-  transaction a `TransactionExecutor` opened.
+- In the Spring and reactor stores, a read in a caller's transaction or in a session already bound reads the markers,
+  the counter and the events in that session. So does a read in a transaction `SpringTransactionExecutor` or
+  `SpringReactiveTransactionExecutor` opened.
+- In `MongoEventStore`, a read with a session bound in `ClientSessionHolder`, which `NativeMongoTransactionExecutor`
+  binds, reads the markers and the counter outside that session and only the events in it.
 - A read with `withVersions()` whose stream reports `markerVersions()` keeps its own snapshot transaction.
 - On a replica set and on every other deployment, the read is the same as before.
-- There's no new setting and no way to turn this off. Each read keeps the read concern and the read preference the
-  store used.
+- There's no new setting and no way to turn this off. Each read keeps the read concern the store used.
+- `MongoEventStore` reads through the same collections as before, so it keeps their read preference. `withSession`
+  doesn't copy the read preference set on a Spring template, so the Spring and reactor stores set it on the copy bound
+  to the session. There are two exceptions in the reactor store. With synchronization active and no session bound,
+  which only the fallback of a read with `withVersions()` reaches, asking the template for its read preference would
+  bind a session, so that read runs at the database's read preference, as it did before this decision. A template
+  whose `withSession` returns something other than a `ReactiveMongoTemplate` gives the store no copy to set it on, so
+  the read runs at whatever read preference that object applies. The probe and the tests that hold E's commit read at
+  the primary, so I don't know whether the events read waits for E when a read preference sends it to a secondary.
 - The native catch-up read scopes already read the token, the head and the events in one causally consistent session,
   and don't change.
 
@@ -85,30 +95,31 @@ The rest stays as it was.
 
 - Through a mongos, when the markers read of a plain read outside a caller's session sees a marker E incremented, the
   read returns E. A test on two shards for each store holds E's commit on the events' shard, starts the read, releases
-  the hold after up to 2 seconds and asserts that the read returns E. It does so for criteria whose only tag marker is
-  on the first shard, for `DcbCriteria.all()` after E was appended with an `all()` condition, and for criteria with a
-  tag marker on each shard. All three returned no events before this change.
+  the hold after up to 2 seconds and asserts that the read waited and returns E. It does so for criteria whose only
+  tag marker is on the first shard, for `DcbCriteria.all()` after E was appended with an `all()` condition, and for
+  criteria with a tag marker on each shard. All three returned no events before this change.
 - The token isn't one point in time. The markers read is the session's first operation and sends no
-  `afterClusterTime`, so a marker on the events' shard can be from before E. In a run of the test with a tag marker on
-  each shard in each store, an assertion that this marker was at version 1 failed with version 0, so the test asserts
-  only the events and the marker on the first shard.
+  `afterClusterTime`, so a marker on the events' shard can be from before E. The test with a tag marker on each shard
+  asserts that the read returns E with `course:c1` at version 1 and `student:s1` at version 0.
 - A conditional append through a mongos with such a token is refused, although the read returned E.
   `DcbAppendConditionCheck` sees the marker from before E as moved and asks the events above it on that key, where it
-  finds E. That's the torn token ADR 175 refuses. A test on two shards for each store reads a token with `course:c1` at
-  version 1 and `student:s1` at version 0 while the read returns E, appends with it and asserts the refusal. With the
-  check changed to pass whenever a marker moved, that test fails on its refusal assertion in all three stores.
+  finds E. That's the torn token ADR 175 refuses. The test with a tag marker on each shard then appends with that
+  token and asserts the refusal. With the check changed to pass whenever a marker moved, that test fails on its
+  refusal assertion in all three stores.
 - A plain read through a mongos outside a caller's session can now take as long as a commit in flight on the events'
-  shard. In the probe it waited for as long as the commit was held. With nothing held, the probe's read in a causally
+  shard. In the probe it waited for as long as the commit was held. The store sets no bound on that wait, and I didn't
+  check whether a client `timeoutMS` cuts it short. With nothing held, the probe's read in a causally
   consistent session took about 98 ms at read concern majority and about 3 ms at local. The probe didn't time the same
   read without a session, so I don't know how much of the 98 ms is new.
-- Two holes remain, and this decision doesn't cover them. A read in a caller's transaction or in a session already
-  bound, which in the Spring stores includes the session the template binds while transaction synchronization is
-  active, reads in that session as before. So does a read in a transaction a `TransactionExecutor` opened. No test
-  checks whether such a read can miss E, so I don't know whether it can.
+- Two holes remain, and this decision doesn't cover them. In the Spring and reactor stores, a read in a caller's
+  transaction or in a session already bound, which includes the session the template binds while transaction
+  synchronization is active, reads in that session as before. In `MongoEventStore`, a read with a session bound in
+  `ClientSessionHolder` reads the markers and the counter outside that session and only the events in it, as 0.34.0
+  did. No test checks whether either read can miss E, so I don't know whether it can.
 - `withVersions()` isn't one of the holes. A stream that reports `markerVersions()` came from its snapshot
   transaction.
 - ADR 175 lists a two-shard test of a token read while a matching event had committed on one shard and not the other.
-  That test asserted the torn read as its setup, so it's now the read test with a tag marker on each shard.
+  That test asserted the torn read as its setup, so it's now the test with a tag marker on each shard.
 
 ## Alternatives considered
 
