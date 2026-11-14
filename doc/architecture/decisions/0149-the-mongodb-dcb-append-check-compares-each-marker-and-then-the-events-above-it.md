@@ -71,8 +71,9 @@ Like `version()`, the map is for store implementations. ADR 147 made the token a
 be added this way. A `DcbEventStore` of your own can keep using `of(DcbCriteria, long)`, and a MongoDB store refuses a
 token made that way, as the next section says. The MongoDB stores keep the sum in `version()`.
 `MarkerObservation` replaces the stores' internal `ObservedMarker`. It can't be `DcbMarkerVersions.MarkerVersion`,
-which requires an epoch and a version of at least 1, because a token also has to hold a marker that was missing or
-had no epoch.
+which holds either an epoch and a version of at least 1 or, since
+[ADR 162](0162-a-dcb-type-marker-is-split-into-stripes.md), no epoch and version 0, because a token also has to hold a
+marker that had a version and no epoch.
 
 Every MongoDB read already loads the marker documents to sum them (`MongoEventStore.java:764-782`), and the marker
 documents already hold the epoch and `s`. So the map costs no extra read. Each store fills it on every read path,

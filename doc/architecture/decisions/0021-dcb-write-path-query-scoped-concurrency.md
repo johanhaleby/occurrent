@@ -19,6 +19,10 @@ appends of one type that run at the same time still write the same `type:` marke
 
 Amended by [ADR 164](0164-a-spring-mongo-dcb-append-retries-a-transaction-conflict-for-about-two-minutes.md). "Contention surfaces as a retry, not a spurious command failure" holds while an append loses fewer than 240 attempts in a row on the blocking store, or 321 on the reactive one, within about two minutes of waiting. An append that loses every attempt fails with the last error.
 
+Amended by [ADR 162](0162-a-dcb-type-marker-is-split-into-stripes.md) on which markers an append increments. The marker
+of a type is split into eight stripes, and with `spreadTypeMarkerWrites` on an append increments one of them, picked
+from its `AppendId`, instead of the `type:` marker.
+
 See [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md) and
 [ADR 155](0155-a-catch-up-reads-its-live-start-from-the-event-store-and-refuses-to-resume-where-it-could-skip-an-event.md)
 for why a `dcbposition` isn't a safe place to resume from on MongoDB.
