@@ -192,6 +192,37 @@ class StreamCatchupResumeRacesALostLiveStartTest {
         assertThat(liveModel.subscribeCalls).as("running subscribes on the live model").isEmpty();
     }
 
+    @Test
+    void tells_the_next_start_refusal_listener_that_the_subscription_is_held_paused_when_the_one_before_it_throws() throws InterruptedException {
+        // Given a first start refusal listener that throws when told a subscription is held paused, and a second one
+        catchup.removeStartRefusalListener(reports);
+        catchup.addStartRefusalListener(new StartRefusalListener() {
+            @Override
+            public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+                throw new IllegalStateException("The listener failed.");
+            }
+        });
+        catchup.addStartRefusalListener(reports);
+
+        // When the catch-up holds the subscription paused for a lost live start
+        Subscription subscribed = catchup.subscribe(ID, StartAt.checkpoint(STORED), actionThatLosesTheLiveStartAndIsHeld());
+        assertThat(reached(replayHeldInTheHistoryRead)).as("the replay reached its history read").isTrue();
+        releaseTheReplay.countDown();
+        Throwable thrownWaitingForTheReplay = catchThrowable(() -> subscribed.waitUntilStarted(WAIT));
+        long deadline = System.nanoTime() + WAIT.toNanos();
+        while (reports.heldPaused.isEmpty() && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        // Then the second listener is told, with the refusal the start failed with
+        assertThat(thrownWaitingForTheReplay).as("thrown waiting for the replay").isInstanceOf(CatchupCannotResumeException.class);
+        assertThat(reports.heldPaused).as("held paused reports").containsExactly(new Report(ID, (CatchupCannotResumeException) thrownWaitingForTheReplay));
+    }
+
     private void assertHeldPausedForTheLostLiveStart(Throwable thrownWaitingForTheReplay, Throwable thrownWaitingForTheResumeThatCameDuringIt) {
         Report report = reports.heldPaused.get(0);
         Throwable thrownByALaterResume = catchThrowable(() -> catchup.resumeSubscription(ID));
