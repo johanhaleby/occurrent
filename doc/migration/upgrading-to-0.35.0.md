@@ -2351,6 +2351,12 @@ Subscribe at a checkpoint instead, such as a `MongoOperationTimeCheckpoint` for 
 `UnsupportedStartAtException` where you call `waitUntilStarted(..)` or `start(true)`. The code compiles unchanged, and
 there is no OpenRewrite recipe, because no signature changes.
 
+The blocking Spring Boot starter waits for a subscription at `NOW` or `DEFAULT` to start by default, so on such a server
+the exception can stop the application from starting, with no call of your own in the stack trace. Set
+`startupMode = BACKGROUND` on the annotation to start the subscription in the background instead, or pass
+`waitUntilStarted = false` to the Kotlin DSL's `subscribe(..)`. The refusal is then logged as an error and the
+subscription is removed.
+
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
 `HistoryLossReportingSubscriptions` in `org.occurrent.subscription.api.reactor` gains an abstract method:
