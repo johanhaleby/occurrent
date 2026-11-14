@@ -10,11 +10,15 @@ import java.util.Set;
  */
 final class BlockingHandoverSpec {
 
-    /** An answer to a payload offered through one of the accept calls, null while it has none. */
-    record Offer(String payload, String call, String answer) {
+    /**
+     * An answer to a payload offered through one of the accept calls, null while it has none. failureAfterInItsReplay
+     * is true when a fold, callback or interrupt failure came after the offer while the replay open at the offer was
+     * still open, the only failure that can explain a reported payload being lost.
+     */
+    record Offer(String payload, String call, String answer, boolean failureAfterInItsReplay) {
     }
 
-    record Trace(List<String> history, List<String> delivered, List<Offer> offers, List<String> markerFindings, List<String> notes, List<String> replayed, boolean failuresInjected) {
+    record Trace(List<String> history, List<String> delivered, List<Offer> offers, List<String> markerFindings, List<String> notes, List<String> replayed) {
     }
 
     private BlockingHandoverSpec() {
@@ -59,7 +63,7 @@ final class BlockingHandoverSpec {
                     if (offer.answer().equals("applied") && !delivered) {
                         violations.add(offer.payload() + " was answered as applied but never delivered");
                     }
-                } else if (offer.answer().equals("reported:true") && !delivered && (offer.call().equals("acceptIfLive") || !trace.failuresInjected())) {
+                } else if (offer.answer().equals("reported:true") && !delivered && (offer.call().equals("acceptIfLive") || !offer.failureAfterInItsReplay())) {
                     violations.add(offer.payload() + " was reported delivered or buffered by " + offer.call() + " but never delivered");
                 } else if (offer.answer().equals("reported:false") && delivered) {
                     violations.add(offer.payload() + " was reported not delivered by " + offer.call() + " but delivered");

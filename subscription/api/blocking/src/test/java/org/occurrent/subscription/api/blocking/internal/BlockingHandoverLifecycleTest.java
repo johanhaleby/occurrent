@@ -63,4 +63,18 @@ class BlockingHandoverLifecycleTest {
         Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(CATCH_UP, STEP, STEP, STEP, CANCEL)));
         assertThat(BlockingHandoverSpec.markerViolations(trace)).isEmpty();
     }
+
+    @Example
+    void a_failure_outside_the_replay_of_a_reported_payload_does_not_excuse_losing_it() {
+        BlockingHandoverSpec.Offer lost = new BlockingHandoverSpec.Offer("p0", "acceptReportingDelivery", "reported:true", false);
+        Trace trace = new Trace(BlockingHandoverRunner.HISTORY, List.of(), List.of(lost), List.of(), List.of(), List.of());
+        assertThat(BlockingHandoverSpec.deliveryViolations(trace)).hasSize(1).first().asString().contains("p0").contains("never delivered");
+    }
+
+    @Example
+    void a_failure_after_the_offer_in_the_replay_that_buffered_it_excuses_losing_a_reported_payload() {
+        BlockingHandoverSpec.Offer lost = new BlockingHandoverSpec.Offer("p0", "acceptReportingDelivery", "reported:true", true);
+        Trace trace = new Trace(BlockingHandoverRunner.HISTORY, List.of(), List.of(lost), List.of(), List.of(), List.of());
+        assertThat(BlockingHandoverSpec.deliveryViolations(trace)).isEmpty();
+    }
 }

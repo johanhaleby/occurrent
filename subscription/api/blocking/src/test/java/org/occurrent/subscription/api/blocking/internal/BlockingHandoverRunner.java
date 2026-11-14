@@ -32,7 +32,18 @@ final class BlockingHandoverRunner {
     private BlockingHandoverRunner() {
     }
 
-    private record Helper(Thread thread, String payload, String call, AtomicReference<String> answer) {
+    /**
+     * replay is the replay that was open when the offer was made, null when none was, so an offer made between replays
+     * is excused by no failure. failureAfter turns true when a failure action comes after the offer while that same
+     * replay is still the open one. A payload buffered across two replays is bound to the first only.
+     */
+    private record Helper(Thread thread, String payload, String call, AtomicReference<String> answer, Replay replay, AtomicBoolean failureAfter) {
+    }
+
+    private static void failureCame(List<Helper> helpers, Replay current, boolean replaying) {
+        if (replaying) {
+            helpers.stream().filter(helper -> helper.replay() == current).forEach(helper -> helper.failureAfter().set(true));
+        }
     }
 
     private record Replay(ControllableSource source, Thread thread, AtomicReference<String> result) {
@@ -98,13 +109,18 @@ final class BlockingHandoverRunner {
                         notes.add("stopIfNotCatchingUp threw " + t);
                     }
                 }
-                case FAIL_FOLD -> failNextFold.set(true);
+                case FAIL_FOLD -> {
+                    failNextFold.set(true);
+                    failureCame(helpers, current, replaying);
+                }
                 case FAIL_CALLBACK -> {
+                    failureCame(helpers, current, replaying);
                     failCallback = true;
                     replays.forEach(replay -> replay.source().failCallback = true);
                 }
                 case INTERRUPT -> {
                     if (replaying) {
+                        failureCame(helpers, current, true);
                         current.thread().interrupt();
                         current.source().awaitParkedOrDone(current.thread());
                     }
@@ -114,7 +130,7 @@ final class BlockingHandoverRunner {
                     String call = action == Action.ACCEPT_REPORTING ? "acceptReportingDelivery" : action == Action.ACCEPT_IF_LIVE ? "acceptIfLive" : "accept";
                     AtomicReference<String> answer = new AtomicReference<>();
                     Thread thread = Thread.ofPlatform().name("handover-accept-" + payload).unstarted(() -> answer.set(offer(handover, call, payload)));
-                    helpers.add(new Helper(thread, payload, call, answer));
+                    helpers.add(new Helper(thread, payload, call, answer, replaying ? current : null, new AtomicBoolean()));
                     thread.start();
                     settle(thread);
                 }
@@ -122,9 +138,8 @@ final class BlockingHandoverRunner {
         }
         List<String> replayed = new ArrayList<>();
         finish(replays, helpers, handover, marker, notes, markerFindings, replayed);
-        List<Offer> offers = helpers.stream().map(helper -> new Offer(helper.payload(), helper.call(), helper.answer().get())).toList();
-        return new Trace(HISTORY, List.copyOf(delivered), offers, List.copyOf(markerFindings), List.copyOf(notes), replayed,
-                script.actions().stream().anyMatch(action -> action == Action.FAIL_FOLD || action == Action.FAIL_CALLBACK || action == Action.INTERRUPT));
+        List<Offer> offers = helpers.stream().map(helper -> new Offer(helper.payload(), helper.call(), helper.answer().get(), helper.failureAfter().get())).toList();
+        return new Trace(HISTORY, List.copyOf(delivered), offers, List.copyOf(markerFindings), List.copyOf(notes), replayed);
     }
 
     private static String offer(BlockingHandover<String, String> handover, String call, String payload) {
