@@ -199,6 +199,11 @@ class DcbMarkerVersionsSupportTest {
         }
 
         @Test
+        void name_a_stripe_above_the_first_by_its_number_and_then_the_type() {
+            assertThat(DcbMarkerVersionsSupport.stripeKey("X", 3)).isEqualTo("typestripe:3:X");
+        }
+
+        @Test
         void refuse_a_stripe_below_zero() {
             assertThatThrownBy(() -> DcbMarkerVersionsSupport.stripeKey("X", -1))
                     .isExactlyInstanceOf(IllegalArgumentException.class)
