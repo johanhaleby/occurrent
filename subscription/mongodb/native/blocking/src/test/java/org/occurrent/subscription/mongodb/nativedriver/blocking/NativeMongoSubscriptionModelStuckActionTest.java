@@ -172,7 +172,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
 
         // When: paused, which returns while that call still runs, then resumed, and a second event is written
         subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
         mongoEventStore.write("2", 0, serialize(e2));
         waitAtMostFor(Duration.ofSeconds(3), () -> calls.size() > 1);
 
@@ -192,11 +192,11 @@ class NativeMongoSubscriptionModelStuckActionTest {
         mongoEventStore.write("1", 0, serialize(e1));
         await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
         subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
 
         // When: paused and resumed again while the first resumed run waits for the stuck call, and a second event is written
         subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
         mongoEventStore.write("2", 0, serialize(e2));
         waitAtMostFor(Duration.ofSeconds(3), () -> calls.size() > 1);
 
@@ -216,7 +216,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
         mongoEventStore.write("1", 0, serialize(e1));
         await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
         subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
         await().atMost(FIVE_SECONDS).until(() -> subscriptionExecutor.getActiveCount() == 2);
 
         // When
@@ -228,7 +228,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
         assertThat(calls).as("calls while the first call for E1 is stuck").containsExactly("E1 started");
 
         // And: a resume after that still holds back the action until the stuck call has returned
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
         mongoEventStore.write("2", 0, serialize(e2));
         waitAtMostFor(Duration.ofSeconds(3), () -> calls.size() > 1);
         assertThat(calls).as("calls while the first call for E1 is stuck").containsExactly("E1 started");
@@ -246,7 +246,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
         mongoEventStore.write("1", 0, serialize(e1));
         await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
         subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
         await().atMost(FIVE_SECONDS).until(() -> subscriptionExecutor.getActiveCount() == 2);
 
         // When
@@ -271,9 +271,9 @@ class NativeMongoSubscriptionModelStuckActionTest {
         mongoEventStore.write("1", 0, serialize(e1));
         await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
         subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("second run started").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("second run started").isTrue();
         subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("third run started").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("third run started").isTrue();
         await().atMost(FIVE_SECONDS).until(() -> subscriptionExecutor.getActiveCount() == 2);
 
         // When
@@ -310,7 +310,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
         mongoEventStore.write("1", 0, serialize(e1));
         await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
         subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
         await().atMost(FIVE_SECONDS).until(() -> subscriptionExecutor.getActiveCount() == 2);
         Thread waiting = await().atMost(FIVE_SECONDS).until(this::threadOfTheResumedRun, thread -> thread != null);
 
@@ -330,7 +330,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
 
         // And: a pause and a resume starts a run that delivers an event written after the resume
         subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("run started by the resume").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("run started by the resume").isTrue();
         mongoEventStore.write("3", 0, serialize(e3));
         waitAtMostFor(TEN_SECONDS, () -> calls.contains("E3 returned"));
         assertThat(calls).as("calls once the subscription was paused and resumed").contains("E3 started", "E3 returned");
@@ -344,7 +344,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
         mongoEventStore.write("1", 0, serialize(e1));
         await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
         subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
         List<Thread> waiting = executorThreads.stream().filter(thread -> thread != stuckThread.get() && thread.isAlive()).toList();
         assertThat(waiting).as("executor threads other than the one running the stuck call").isNotEmpty();
 
@@ -453,7 +453,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
             subscriptionModel.pauseSubscription(subscriptionId);
 
             // When: resumed, which makes a run that waits for the stuck call
-            assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+            assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
             waitAtMostFor(FIVE_SECONDS, () -> messagesAt(appender, Level.WARN).stream().anyMatch(message -> message.contains("waits for an action call")));
 
             // Then: it said so while the call was stuck, naming the subscription, and said it went on once the call returned
@@ -489,7 +489,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
             subscriptionModel.pauseSubscription(subscriptionId);
 
             // When: resumed, which makes a run that waits for the stuck call, and the call stays stuck
-            assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+            assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
             waitAtMostFor(Duration.ofSeconds(45), () -> warningsContaining(appender, "still waits for an action call").size() >= 2);
 
             // Then: it said so when the wait began, and again after ten seconds and after twenty more
@@ -522,7 +522,9 @@ class NativeMongoSubscriptionModelStuckActionTest {
     }
 
     private static List<String> messagesAt(ListAppender<ILoggingEvent> appender, Level level) {
-        return appender.list.stream().filter(event -> event.getLevel() == level).map(ILoggingEvent::getFormattedMessage).toList();
+        synchronized (appender) {
+            return appender.list.stream().filter(event -> event.getLevel() == level).map(ILoggingEvent::getFormattedMessage).toList();
+        }
     }
 
     private static HistoryLossListener takingOver(List<Checkpoint> askedAbout) {

@@ -142,10 +142,12 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
         historyLost.set(true);
         await().atMost(15, SECONDS).until(() -> wrappedA.isPaused(SUBSCRIPTION_ID));
         int readsWhenHeld = reads.get();
+        // A sleep, since what is asserted is that nothing happens over four lease times, and no condition ends that wait
         Thread.sleep(LEASE_TIME.multipliedBy(4).toMillis());
         int readsAfterFourLeaseTimes = reads.get();
         nodeB.subscribe("B", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
         });
+        // A sleep for the same reason, since B must not get the lease over two lease times
         Thread.sleep(LEASE_TIME.multipliedBy(2).toMillis());
 
         // Then

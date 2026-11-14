@@ -571,7 +571,10 @@ class ActionThatOutlivesItsRunTest {
                 .as("stored checkpoint stays between the slow event and the declined event while it is the last one delivered").isGreaterThanOrEqualTo(afterTheSlowEvent).isLessThan(declinedAt));
     }
 
-    // Resume tokens of one change stream order by their hex data, so a position is before an event when its token is lower
+    // Resume tokens of one change stream order by their hex data, so a position is before an event when its token is lower.
+    // MongoDB documents the token as opaque, and the checkpoint stored here holds nothing else to order by, since the
+    // cluster time of a resume token can only be read from that same data. This holds for the token format of the server
+    // version these tests run on
     private static String resumeTokenOf(@Nullable Checkpoint checkpoint) {
         assertThat(checkpoint).as("stored checkpoint").isInstanceOf(MongoResumeTokenCheckpoint.class);
         return ((MongoResumeTokenCheckpoint) checkpoint).resumeToken.getString("_data").getValue();

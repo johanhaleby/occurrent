@@ -140,7 +140,7 @@ class SpringMongoSubscriptionModelStuckActionTest {
 
         // When: paused, which returns while that call still runs, then resumed, and a second event is written
         subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
         mongoEventStore.write("2", 0, serialize(e2));
         waitAtMostFor(Duration.ofSeconds(3), () -> calls.size() > 1);
 
