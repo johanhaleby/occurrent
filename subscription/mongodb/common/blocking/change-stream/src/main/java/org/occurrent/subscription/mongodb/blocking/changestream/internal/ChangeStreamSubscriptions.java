@@ -191,6 +191,10 @@ public final class ChangeStreamSubscriptions {
     // ten seconds once the backoff has reached two
     private static final RetryStrategy.Retry HAND_TO_THE_EXECUTOR_AGAIN = RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0);
     private static final int REJECTIONS_BETWEEN_WARNINGS = 5;
+    // How long a run waits for a stuck action call before it warns again that it still waits. Doubled after each
+    // warning up to the longest, so an operator sees the wait soon and a wait of hours logs a line every ten minutes
+    private static final Duration FIRST_STILL_WAITING_WARNING_AFTER = Duration.ofSeconds(10);
+    private static final Duration LONGEST_BETWEEN_STILL_WAITING_WARNINGS = Duration.ofMinutes(10);
 
     private final Predicate<Throwable> NOT_SHUTDOWN = __ -> !shutdown;
     // A refused checkpoint write must never be retried, on either retry loop below. The call sites already pass
@@ -1352,6 +1356,8 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
+    private enum Waited {RETURNED, STILL_DELIVERING, CLOSED}
+
     // What a read of the present throws when MongoDB gives no position to record. Private, so an action or a dynamic
     // position can't throw it
     private static final class NoPositionAtThePresent extends RuntimeException {
@@ -1473,7 +1479,7 @@ public final class ChangeStreamSubscriptions {
         // reached, adds a run to the chain until a wait succeeds. False when this run is closed while it
         // waits, so a pause or a cancel frees its thread, or when interrupted, and the interrupt is set again
         boolean waitForThePreviousRuns(String subscriptionId) {
-            // Set when the wait first finds a call still running, so the wait is logged once
+            // Set when the wait first finds a call still running, so the first warning is logged once
             @Nullable Long waitingSince = null;
             try {
                 for (InternalSubscription run = previous; run != null; run = run.previous) {
@@ -1485,8 +1491,20 @@ public final class ChangeStreamSubscriptions {
                         started();
                         log.warn("Subscription {} waits for an action call of a run it replaced to return before it goes on. The call hasn't returned since the subscription was paused. It waits with no deadline, and a pause or a cancel of the subscription ends the wait.", subscriptionId);
                     }
-                    if (!run.awaitNotDeliveringUnlessClosed(this)) {
-                        return false;
+                    Duration untilTheNextWarning = FIRST_STILL_WAITING_WARNING_AFTER;
+                    while (true) {
+                        Waited waited = run.awaitNotDeliveringUnlessClosed(this, untilTheNextWarning);
+                        if (waited == Waited.CLOSED) {
+                            return false;
+                        } else if (waited == Waited.RETURNED) {
+                            break;
+                        }
+                        if (waitingSince == null) {
+                            waitingSince = System.nanoTime();
+                        }
+                        log.warn("Subscription {} still waits for an action call of a run it replaced to return, after {} ms. A pause or a cancel of the subscription ends the wait.", subscriptionId, Duration.ofNanos(System.nanoTime() - waitingSince).toMillis());
+                        Duration doubled = untilTheNextWarning.multipliedBy(2);
+                        untilTheNextWarning = doubled.compareTo(LONGEST_BETWEEN_STILL_WAITING_WARNINGS) < 0 ? doubled : LONGEST_BETWEEN_STILL_WAITING_WARNINGS;
                     }
                 }
             } catch (InterruptedException e) {
@@ -1511,16 +1529,20 @@ public final class ChangeStreamSubscriptions {
 
         // The waiter's flag is read under this run's lock, and close() of the waiter signals under it after setting
         // the flag, so the waiter either sees the flag or is already waiting when the signal comes
-        private boolean awaitNotDeliveringUnlessClosed(InternalSubscription waiter) throws InterruptedException {
+        private Waited awaitNotDeliveringUnlessClosed(InternalSubscription waiter, Duration atMost) throws InterruptedException {
             lock.lock();
             try {
+                long remaining = atMost.toNanos();
                 while (delivering != null) {
                     if (waiter.intentionallyClosed) {
-                        return false;
+                        return Waited.CLOSED;
                     }
-                    stoppedDelivering.await();
+                    if (remaining <= 0) {
+                        return Waited.STILL_DELIVERING;
+                    }
+                    remaining = stoppedDelivering.awaitNanos(remaining);
                 }
-                return true;
+                return Waited.RETURNED;
             } finally {
                 lock.unlock();
             }
