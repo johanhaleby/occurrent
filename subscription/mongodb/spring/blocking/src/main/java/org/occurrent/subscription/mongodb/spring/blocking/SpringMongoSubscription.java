@@ -58,6 +58,13 @@ public class SpringMongoSubscription implements Subscription {
      * <p>
      * Throws the {@link org.occurrent.subscription.UnsupportedStartAtException} when the model refused the start
      * position, since the change stream then never opens.
+     * <p>
+     * It answers {@code true} also for a resumed subscription that waits for an action call from before its pause to
+     * return, so a caller isn't held back by a call that doesn't return. When the change stream of that subscription
+     * lost its history as it opened, the subscription can still stop after this answered {@code true}, or be held
+     * paused when its restart from the present gets no position.
+     * <a href="https://github.com/johanhaleby/occurrent/issues/1502">#1502</a> tracks a subscription that stops after
+     * this answered {@code true}.
      */
     @Override
     public boolean waitUntilStarted(Duration timeout) {

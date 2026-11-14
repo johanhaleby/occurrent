@@ -555,9 +555,10 @@ public class MongoCommons {
      * change stream opens.
      * <p>
      * An answer after that isn't checked. Once a change stream has opened, the subscription model records the position it opened
-     * at with {@link #recordWhereItOpened(OpenedAt, BiPredicate)} and doesn't ask the function again. A blocking one asks
-     * again only after a stream opened at the present without an operation time to record, and a catch-up answer then
-     * opens at the present as well. The reactor one stops a subscription it can't find an operation time to open at.
+     * at with {@link #recordWhereItOpened(OpenedAt, BiPredicate)} and doesn't ask the function again. A blocking one
+     * refuses to start a subscription when it can't record a position for the present, and holds one paused when that
+     * happens as it restarts after its history was lost. The reactor one stops a subscription it can't find an
+     * operation time to open at.
      *
      * @param subscriptionId The id the exception message names, or {@code null} for a subscription that has none
      * @param opened         Whether a change stream of the subscription has opened, as the subscription model counts it
@@ -736,13 +737,13 @@ public class MongoCommons {
 
     /**
      * The position a subscription records in place of {@code tracked} once a change stream opened from it at the
-     * present, at {@code operationTime}. Opening the stream again then starts at {@code operationTime} and not at a
-     * later present. A dynamic {@code tracked} stays dynamic until {@link #recordWhereItOpened(OpenedAt, BiPredicate)}
-     * replaces it, so an opening before that still evaluates it, and only the answers that would have opened at the
-     * present are replaced by {@code operationTime}.
+     * present, at {@code present}, a change stream position. Opening the stream again then starts at {@code present}
+     * and not at a later present. A dynamic {@code tracked} stays dynamic until
+     * {@link #recordWhereItOpened(OpenedAt, BiPredicate)} replaces it, so an opening before that still evaluates it,
+     * and only the answers that would have opened at the present are replaced by {@code present}.
      */
-    public static StartAt pinnedTo(StartAt tracked, BsonTimestamp operationTime) {
-        StartAt pinned = StartAt.checkpoint(new MongoOperationTimeCheckpoint(operationTime));
+    public static StartAt pinnedTo(StartAt tracked, Checkpoint present) {
+        StartAt pinned = StartAt.checkpoint(requireNonNull(present, "present cannot be null"));
         if (!tracked.isDynamic()) {
             return pinned;
         }
@@ -754,34 +755,30 @@ public class MongoCommons {
 
     /**
      * Resolves the position a change stream is about to open at from {@code currentStartAt}, the position a
-     * subscription records. When that resolves to the present, this asks {@code currentOperationTime} for the
-     * server's operation time, records it in {@code currentStartAt} with {@link #pinnedTo(StartAt, BsonTimestamp)},
-     * and opens the stream at that time. Because it is recorded before the stream opens, a pause and resume, or a
-     * restart, before the first event is handled opens at that operation time too. Without it the position resolves
-     * to the present again at that point, and the event being handled and everything written in between are never
-     * delivered.
+     * subscription records. When that resolves to the present, this asks {@code currentPosition} for a change stream
+     * position at the present, records it in {@code currentStartAt} with {@link #pinnedTo(StartAt, Checkpoint)}, and
+     * opens the stream there. Because it is recorded before the stream opens, a pause and resume, or a restart, before
+     * the first event is handled opens there too, and nothing written in between is skipped.
      * <p>
-     * The operation time is recorded only if {@code currentStartAt} still holds the position read at the start,
-     * since the checkpoint of a handled event is written from another thread and must not be overwritten. When it
-     * has changed, the position is resolved again. When {@code currentOperationTime} answers {@code null}, nothing
-     * is recorded and the stream opens at the present. When it throws, nothing is recorded and the exception reaches
-     * the caller.
+     * The position is recorded only if {@code currentStartAt} still holds the position read at the start, since the
+     * checkpoint of a handled event is written from another thread and must not be overwritten. When it has changed,
+     * the position is resolved again. When {@code currentPosition} throws, nothing is recorded and the exception
+     * reaches the caller, so the stream never opens at a present it hasn't recorded.
      *
+     * @param currentPosition Answers a change stream position at the present, a resume token or an operation time, or
+     *                        throws
      * @return The position to open the change stream at, never {@code null}
      */
-    public static StartAt resolveOpeningPosition(AtomicReference<StartAt> currentStartAt, SubscriptionModelContext ctx, Supplier<@Nullable BsonTimestamp> currentOperationTime) {
+    public static StartAt resolveOpeningPosition(AtomicReference<StartAt> currentStartAt, SubscriptionModelContext ctx, Supplier<Checkpoint> currentPosition) {
         while (true) {
             StartAt tracked = currentStartAt.get();
             StartAt resolved = tracked.get(ctx);
             if (!opensAtThePresent(resolved)) {
                 return requireNonNull(resolved);
             }
-            BsonTimestamp operationTime = currentOperationTime.get();
-            if (operationTime == null) {
-                return StartAt.now();
-            }
-            if (currentStartAt.compareAndSet(tracked, pinnedTo(tracked, operationTime))) {
-                return StartAt.checkpoint(new MongoOperationTimeCheckpoint(operationTime));
+            Checkpoint present = requireNonNull(currentPosition.get(), "currentPosition answered null");
+            if (currentStartAt.compareAndSet(tracked, pinnedTo(tracked, present))) {
+                return StartAt.checkpoint(present);
             }
         }
     }
@@ -799,9 +796,9 @@ public class MongoCommons {
      * Records the position a change stream opened at in place of the dynamic position the subscription tracked, once
      * the stream has opened, or as it opens when the subscription model can't tell when the server accepted the
      * position. Opening again then starts at that position and doesn't call the dynamic position's function again,
-     * which could answer another position. Nothing is recorded when the tracked position isn't dynamic,
-     * when the stream opened at the present without an operation time, or when the tracked position has changed since
-     * {@code openedAt} was read, so a checkpoint written from another thread is kept.
+     * which could answer another position. Nothing is recorded when the tracked position isn't dynamic, when the
+     * stream opened at the present, or when the tracked position has changed since {@code openedAt} was read, so a
+     * checkpoint written from another thread is kept.
      *
      * @param compareAndSet Sets the tracked position to its second argument when it still holds its first
      * @return What {@code compareAndSet} answered, or {@code false} when it wasn't asked
@@ -814,9 +811,8 @@ public class MongoCommons {
      * The checkpoint a subscription reports when MongoDB no longer has the history it reads from. While
      * {@code current} is still the position recorded right after the opening, that is the position the stream opened
      * at, taken from {@code openedAt}. Once the subscription has moved, it is the fixed position it moved to. Null
-     * when neither is a checkpoint, such as a change stream opened at the present without an operation time, which has
-     * no position to lose. A dynamic {@code current} is never evaluated again here, since its supplier can be the
-     * caller's code.
+     * when neither is a checkpoint. A dynamic {@code current} is never evaluated again here, since its supplier can be
+     * the caller's code.
      */
     public static @Nullable Checkpoint lostFrom(StartAt current, @Nullable OpenedAt openedAt) {
         if (openedAt != null && current == openedAt.tracked()) {
@@ -826,12 +822,12 @@ public class MongoCommons {
     }
 
     /**
-     * The warning a subscription model logs when {@code reply} has no operation time to record for a change stream
-     * that opens at the present.
+     * The warning a blocking subscription model logs when {@code reply} has no operation time to record for a change
+     * stream that opens at the present.
      */
     public static String noOperationTimeToPinToMessage(Document reply) {
-        return "The reply to " + CURRENT_OPERATION_TIME_COMMAND.toJson() + " carried no " + OPERATION_TIME + ", so the change stream opens at the present without recording where. " +
-                "Until the first event is handled, a pause, resume or restart of the subscription opens at a later present and skips what was written in between. Reply was: " + reply.toJson();
+        return "The reply to " + CURRENT_OPERATION_TIME_COMMAND.toJson() + " carried no " + OPERATION_TIME + ", so the subscription reads the change stream once to record where the present is. " +
+                "When that read returns neither an event nor a resume token, a subscription made at the present is refused and waiting for it to start throws, and a resume at the present or a restart after its history was lost holds it paused. Reply was: " + reply.toJson();
     }
 
     public static Checkpoint calculateCheckpointFromMongoStreamPositionDocument(Document checkpointDocument) {

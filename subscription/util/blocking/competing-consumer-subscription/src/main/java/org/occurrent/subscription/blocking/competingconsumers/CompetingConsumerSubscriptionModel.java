@@ -103,7 +103,13 @@ import static java.util.Objects.requireNonNull;
  * refusal from {@code waitUntilStarted}. Every node whose start is refused gives up the lease this way once, and
  * doesn't compete for the subscription again, so when every node subscribed with a refused start, the subscription runs
  * on no node and its lease stays free. It runs again once {@code subscribe} is called with the same id, on any node,
- * with a start position the wrapped model accepts.
+ * with a start position the wrapped model accepts. They refuse a start at the present the same way when MongoDB gives
+ * neither an operation time nor a change stream position to start from, and this model handles that refusal as above.
+ * When a resume, or a restart from the present after a loss of history, gets no such position, they hold the
+ * subscription paused instead and report it through
+ * {@link StartRefusalReportingSubscriptions.StartRefusalListener#handleStartHeldPaused(String, UnsupportedStartAtException, BooleanSupplier)}.
+ * This node then keeps the subscription and its lease, so no other node runs it until it is resumed on this node, and a
+ * handle that waits for that start throws the refusal.
  * <br>
  * <br>
  * {@link #pauseSubscription(String)} works on a node that has not won the lock, not only on the one delivering events.
@@ -468,7 +474,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // Per competing consumer, from its subscribe until it is forgotten, what its handles throw once the wrapped model
     // refused its start
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, StartRefusal> startRefusals = new ConcurrentHashMap<>();
-    private final StartRefusalListener startRefusalListener = this::startRefused;
+    private final StartRefusalListener startRefusalListener = new StartRefusalListener() {
+        @Override
+        public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+            startRefused(subscriptionId, refusal);
+        }
+
+        @Override
+        public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
+            startHeldPaused(subscriptionId, stillSubscribed);
+        }
+    };
     // A handle waits for a refusal to be acted on only when the wrapped model reports it
     private final boolean wrappedModelReportsStartRefusals;
     // Waited for after a call failed, and doubled after each failure that follows, up to the most. A lease callback
@@ -4727,21 +4743,43 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
     }
 
-    // The competing consumer that has the id here or that a subscribe is making, or null for an id this model doesn't
-    // know, one that doesn't compete, and once this model is shut down
-    private synchronized @Nullable SubscriptionIdAndSubscriberId reportStartRefusal(String subscriptionId, UnsupportedStartAtException refused) {
-        if (shutDown) {
-            return null;
+    // The wrapped model keeps the subscription and its id, so nothing is given back or forgotten, and a handle whose
+    // wrapped handle throws the refusal stops waiting for a report that never comes. The consumer keeps its lease.
+    // stillSubscribed is asked after the read. The wrapped model turns it false before a cancel there returns, before
+    // it tells of a refused start, and before it removes a run whose history was lost. This node frees the id, and a
+    // subscribe of the same id puts a new StartRefusal, only after one of those. True after the read means the
+    // StartRefusal read is the held subscription's and not that of a later subscribe, whose handle would then stop
+    // waiting before its own refusal was acted on. A cancel and a subscribe after the check put a new StartRefusal, and
+    // actedOn() still goes to the one read. After a loss of history the wrapped model doesn't restart after, the answer
+    // is false, and a handle that waits for the held run without a timeout keeps waiting until a cancel or a shutdown
+    // here.
+    private void startHeldPaused(String subscriptionId, BooleanSupplier stillSubscribed) {
+        @Nullable SubscriptionIdAndSubscriberId key = competingConsumerWithId(subscriptionId);
+        @Nullable StartRefusal startRefusal = key == null ? null : startRefusals.get(key);
+        if (startRefusal != null && stillSubscribed.getAsBoolean()) {
+            startRefusal.actedOn();
         }
-        @Nullable BeingMade beingMade = subscriptionsBeingMade.get(subscriptionId);
-        @Nullable SubscriptionIdAndSubscriberId key = beingMade != null ? beingMade.key
-                : findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId)).map(cc -> cc.subscriptionIdAndSubscriberId).orElse(null);
+    }
+
+    private synchronized @Nullable SubscriptionIdAndSubscriberId reportStartRefusal(String subscriptionId, UnsupportedStartAtException refused) {
+        @Nullable SubscriptionIdAndSubscriberId key = competingConsumerWithId(subscriptionId);
         @Nullable StartRefusal startRefusal = key == null ? null : startRefusals.get(key);
         if (startRefusal == null) {
             return null;
         }
         startRefusal.reported.set(refused);
         return key;
+    }
+
+    // The competing consumer that has the id here or that a subscribe is making, or null for an id this model doesn't
+    // know, one that doesn't compete, and once this model is shut down
+    private synchronized @Nullable SubscriptionIdAndSubscriberId competingConsumerWithId(String subscriptionId) {
+        if (shutDown) {
+            return null;
+        }
+        @Nullable BeingMade beingMade = subscriptionsBeingMade.get(subscriptionId);
+        return beingMade != null ? beingMade.key
+                : findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId)).map(cc -> cc.subscriptionIdAndSubscriberId).orElse(null);
     }
 
     private synchronized boolean isBeingMade(SubscriptionIdAndSubscriberId key) {

@@ -97,14 +97,26 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     /**
-     * {@code false}. With {@code restartSubscriptionsOnChangeStreamHistoryLost} turned on, a restart after the change
-     * stream's history was lost opens at the present and skips the events written in between. With it off, two gaps in
-     * the change stream loop, tracked in
-     * <a href="https://github.com/johanhaleby/occurrent/issues/1482">issue 1482</a>, still break commit order.
-     * A subscription that opened at the present without an operation time has no recorded position until a read returns
-     * no event or its first event is handled, so a pause and resume or a restart before then opens at a later present
-     * and skips what was written in between. A pause stops waiting for a running action after a second, and a resume
-     * can then deliver later events while that call still runs.
+     * {@code true} while {@code restartSubscriptionsOnChangeStreamHistoryLost} is off. With it on, a restart after the
+     * change stream's history was lost opens at the present and skips the events written in between, so the answer is
+     * {@code false}.
+     * <p>
+     * A resumed subscription calls its action only once the call from before the pause has returned, however long that
+     * takes, so no two calls for one subscription run at once. The pause itself still returns after a second.
+     * <p>
+     * A subscription started at the present records a position for the present before its change stream opens, so a
+     * pause and resume, or a restart, opens there. That position is MongoDB's operation time, which a replica set and a
+     * sharded cluster send with every reply. On a server that doesn't send it, the subscription reads the change stream
+     * once and records the commit time of the event that read returns, or the resume token of an empty read. When the
+     * read returns neither, the subscription can't start at the present. {@code subscribe(..)} still returns without
+     * waiting for MongoDB, and {@code waitUntilStarted(..)} and {@code start(true)} throw an
+     * {@code UnsupportedStartAtException}. A resume at {@link StartAt#now()} records its own position the same way, when
+     * its change stream opens. A {@code StartAt.dynamic(..)} start does that read at the subscribe too, and when the read
+     * returns neither, the start is refused the same way if its function resolves to the present as the change stream
+     * opens. A resume at the present, or a restart from the present after the history was lost, that gets neither holds
+     * the subscription paused instead, the handle a resume returned throws the {@code UnsupportedStartAtException} from
+     * {@code waitUntilStarted(..)}, and a later resume asks again. A subscription made while this model is stopped opens
+     * at the position recorded at the subscribe, so earlier events count from the subscribe.
      */
     @Override
     public boolean deliversEveryEventInCommitOrder() {
@@ -325,6 +337,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * Pause an individual subscription. The change stream behind it is closed, but the position it has read to is
      * kept, so {@link #resumeSubscription(String)} continues from there and events written while it was paused are
      * delivered rather than skipped.
+     * <p>
+     * An action call that is still running when this method returns holds back a resume of the subscription, which
+     * waits for that call with no deadline before it delivers. An action that pauses and resumes its own subscription
+     * and then waits for a later delivery therefore never returns.
      *
      * @see #resumeSubscription(String)
      */
@@ -347,24 +363,31 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * was paused, and every event another consumer of the same subscription id handled in the meantime, is handed to
      * this handler again on resume. That is deliberate, since wasted work is the cheaper mistake, and it means
      * handlers must be idempotent. For a subscription started at the present, this model asks MongoDB for its
-     * operation time on the executor once {@code subscribe(..)} has registered it, and records the answer as that
-     * subscription's position before its change stream opens. A pause doesn't stop the question, so one paused before
-     * it handled any event, even before MongoDB answered, resumes from that time, and the events written since are
-     * delivered too, as long as the oplog still holds that time. When it no longer does, the resume gets the handling
-     * that {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation
-     * time, nothing is recorded and the resume opens at the present.
+     * operation time on the executor once {@code subscribe(..)} has registered it, or reads the change stream once when
+     * the reply has none, and records the answer as that subscription's position before its change stream opens. A
+     * pause doesn't stop the question, so one paused before it handled any event, even before MongoDB answered, resumes
+     * from that position, and the events written since are delivered too, as long as the oplog still holds it. When it
+     * no longer does, the resume gets the handling that {@code restartSubscriptionsOnChangeStreamHistoryLost}
+     * configures. When the read returns neither an event nor a resume token, the subscription can't start at the
+     * present. {@code subscribe(..)} still returns, and {@code waitUntilStarted(..)} and {@code start(true)} throw an
+     * {@code UnsupportedStartAtException}. A resume at {@link StartAt#now()} through
+     * {@link #resumeSubscription(String, StartAt)} records its own position the same way, when its change stream opens.
      * <p>
-     * A subscription whose {@code RetryStrategy} gave up opening its change stream, or delivering an event, still counts
-     * as running, and pausing it and then resuming it starts it again. The give-up is logged as an error. When the
-     * strategy gives up asking MongoDB for its operation time, the give-up is logged, and it can keep a change stream
-     * from opening the same way. Pausing and resuming the subscription after that starts it again. A subscription whose change stream
-     * history was lost with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off is removed from this
-     * model, so its id can be subscribed again.
+     * A subscription whose {@code RetryStrategy} gave up opening its change stream, or delivering an event, still
+     * counts as running, and pausing it and then resuming it starts it again. The give-up is logged as an error. When
+     * the strategy gives up asking MongoDB for the position at the present, the give-up is logged, and it can keep a
+     * change stream from opening the same way. Pausing and resuming the subscription after that starts it again. A
+     * subscription whose change stream history was lost with {@code restartSubscriptionsOnChangeStreamHistoryLost}
+     * turned off is removed from this model, so its id can be subscribed again.
      * <p>
      * That is what this call does on its own. A {@code DurableSubscriptionModel} wrapping this model calls
      * {@link #resumeSubscription(String, StartAt)} with a stored checkpoint instead whenever one exists, so a
      * subscription reached that way can resume somewhere else entirely, for example the position a competing
      * consumer's other node advanced to while this one held no lease.
+     * <p>
+     * The resumed subscription waits, with no deadline, until an action call from before the pause has returned, and
+     * only then delivers. An action that pauses and resumes its own subscription and then waits for a later delivery
+     * therefore never returns.
      *
      * @see #pauseSubscription(String)
      * @see #resumeSubscription(String, StartAt)
@@ -381,6 +404,17 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * resumes from the position it had read to, as {@link #resumeSubscription(String)} does, since opening the change
      * stream at the present would skip what was written while the subscription was paused. So does a dynamic
      * {@code startAt} each time it resolves to such a checkpoint.
+     * <p>
+     * A {@code startAt} at the present records its position when the resumed change stream opens, from MongoDB's
+     * operation time or from one read of the change stream, as a subscription started at the present does. When that
+     * read returns neither an event nor a resume token, {@code waitUntilStarted(..)} on the handle this call returns
+     * throws an {@code UnsupportedStartAtException}, and the subscription stays in this model, paused. A later
+     * {@link #resumeSubscription(String)} reads the change stream again, and a subscribe with the same id throws a
+     * {@code DuplicateSubscriptionIdException} until {@code cancelSubscription(id)} frees it.
+     * <p>
+     * The resumed subscription waits, with no deadline, until an action call from before the pause has returned, and
+     * only then delivers. An action that pauses and resumes its own subscription and then waits for a later delivery
+     * therefore never returns.
      *
      * @see RepositionableSubscriptions#resumeSubscription(String, StartAt)
      */
@@ -439,17 +473,21 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * <p>
      * The wait for a subscription ends early when it's paused or cancelled, when the model shuts down, or when its
      * change stream won't open at all, because its {@code RetryStrategy} gave up or its change stream history was lost
-     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off.
+     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off. A subscription whose change stream history
+     * was lost as it opened, and which then waits for an action call made before it was paused, counts as started, so
+     * this method returns also when that action call is the one that called it.
      * <p>
-     * A wait throws for a start position the model refuses. When a resume or a wait throws, every other subscription
+     * A wait throws for a start position the model refuses, and for a subscription at the present when MongoDB gives
+     * neither an operation time nor a change stream position. When a resume or a wait throws, every other subscription
      * is still resumed and waited for, and then this method throws the first exception with the others added as
      * suppressed.
      * <p>
      * A subscription made while the model is stopped is paused until this call or a resume starts it. For one given
      * {@link StartAt#now()}, no position, or a {@code StartAt.dynamic(..)} position that resolves to one of those,
-     * {@code subscribe(..)} asks MongoDB for its operation time on the executor and returns without waiting for the
-     * answer. The subscription starts at that time, so its position is fixed when MongoDB answers, shortly after
-     * {@code subscribe(..)} returns, and an event written before then isn't delivered to it. To be sure an event is
+     * {@code subscribe(..)} asks MongoDB for its operation time on the executor, or reads the change stream once when the
+     * reply has none, and returns without waiting for the answer. The subscription starts at that position, so its
+     * position is fixed when MongoDB answers, shortly after {@code subscribe(..)} returns, and an event written before
+     * then isn't delivered to it. To be sure an event is
      * delivered, call this method and wait for the subscription's {@link Subscription#waitUntilStarted()} before
      * writing it. While MongoDB can't be reached, the question is retried with the model's {@code RetryStrategy}.
      */

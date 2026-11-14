@@ -1292,6 +1292,8 @@ public class SpringMongoSubscriptionModelTest {
             CountDownLatch resumedRunMayOpen = new CountDownLatch(1);
             HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
             ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
+            Level previousLevel = modelLogger.getLevel();
+            modelLogger.setLevel(Level.DEBUG);
             modelLogger.addAppender(holdsTheRefusal);
             try {
                 Subscription first = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), state::add);
@@ -1322,10 +1324,12 @@ public class SpringMongoSubscriptionModelTest {
                 await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                         assertThat(state).extracting(CloudEvent::getId).contains(written.eventId()));
                 assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+                assertThat(holdsTheRefusal.errorsThatItWillNotRestart(subscriptionId)).as("errors logged that the subscription is not restarted").isEmpty();
             } finally {
                 holdsTheRefusal.release.countDown();
                 resumedRunMayOpen.countDown();
                 modelLogger.detachAppender(holdsTheRefusal);
+                modelLogger.setLevel(previousLevel);
             }
         }
 
@@ -1337,6 +1341,8 @@ public class SpringMongoSubscriptionModelTest {
             String subscriptionId = UUID.randomUUID().toString();
             HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
             ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
+            Level previousLevel = modelLogger.getLevel();
+            modelLogger.setLevel(Level.DEBUG);
             modelLogger.addAppender(holdsTheRefusal);
             try {
                 Subscription first = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), state::add);
@@ -1362,9 +1368,11 @@ public class SpringMongoSubscriptionModelTest {
                 await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                         assertThat(state).extracting(CloudEvent::getId).contains(written.eventId()));
                 assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+                assertThat(holdsTheRefusal.errorsThatItWillNotRestart(subscriptionId)).as("errors logged that the subscription is not restarted").isEmpty();
             } finally {
                 holdsTheRefusal.release.countDown();
                 modelLogger.detachAppender(holdsTheRefusal);
+                modelLogger.setLevel(previousLevel);
             }
         }
 
@@ -1378,6 +1386,8 @@ public class SpringMongoSubscriptionModelTest {
             Checkpoint checkpoint = GlobalCheckpoint.of(7);
             HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
             ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
+            Level previousLevel = modelLogger.getLevel();
+            modelLogger.setLevel(Level.DEBUG);
             modelLogger.addAppender(holdsTheRefusal);
             try {
                 Subscription first = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(checkpoint)), refused::add);
@@ -1415,6 +1425,7 @@ public class SpringMongoSubscriptionModelTest {
             } finally {
                 holdsTheRefusal.release.countDown();
                 modelLogger.detachAppender(holdsTheRefusal);
+                modelLogger.setLevel(previousLevel);
             }
         }
 
@@ -1426,6 +1437,8 @@ public class SpringMongoSubscriptionModelTest {
             String subscriptionId = UUID.randomUUID().toString();
             HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
             ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
+            Level previousLevel = modelLogger.getLevel();
+            modelLogger.setLevel(Level.DEBUG);
             modelLogger.addAppender(holdsTheRefusal);
             try {
                 Subscription first = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), __ -> {
@@ -1453,9 +1466,11 @@ public class SpringMongoSubscriptionModelTest {
                 mongoEventStore.write("1", 0, serialize(sentinel));
                 await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                         assertThat(later).extracting(CloudEvent::getId).contains(sentinel.eventId()));
+                assertThat(holdsTheRefusal.errorsThatItWillNotRestart(subscriptionId)).as("errors logged that the subscription is not restarted").isEmpty();
             } finally {
                 holdsTheRefusal.release.countDown();
                 modelLogger.detachAppender(holdsTheRefusal);
+                modelLogger.setLevel(previousLevel);
             }
         }
 
@@ -1587,6 +1602,8 @@ public class SpringMongoSubscriptionModelTest {
                     super.pauseSubscription(id);
                 }
             };
+            Level previousLevel = modelLogger.getLevel();
+            modelLogger.setLevel(Level.DEBUG);
             modelLogger.addAppender(holdsTheRefusal);
             try {
                 model.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), __ -> {
@@ -1601,6 +1618,7 @@ public class SpringMongoSubscriptionModelTest {
             } finally {
                 holdsTheRefusal.release.countDown();
                 modelLogger.detachAppender(holdsTheRefusal);
+                modelLogger.setLevel(previousLevel);
                 model.shutdown();
             }
         }
@@ -1674,6 +1692,8 @@ public class SpringMongoSubscriptionModelTest {
                     }
                 }
             };
+            Level previousLevel = modelLogger.getLevel();
+            modelLogger.setLevel(Level.DEBUG);
             modelLogger.addAppender(holdsTheRefusal);
             try {
                 model.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))), __ -> {
@@ -1688,6 +1708,7 @@ public class SpringMongoSubscriptionModelTest {
             } finally {
                 holdsTheRefusal.release.countDown();
                 modelLogger.detachAppender(holdsTheRefusal);
+                modelLogger.setLevel(previousLevel);
                 model.shutdown();
             }
         }
@@ -2507,14 +2528,22 @@ public class SpringMongoSubscriptionModelTest {
         private final AtomicBoolean first = new AtomicBoolean(true);
         private final CountDownLatch held = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
+        private final List<String> errors = new CopyOnWriteArrayList<>();
 
         private HoldsTheFirstRefusal() {
             start();
         }
 
+        List<String> errorsThatItWillNotRestart(String subscriptionId) {
+            return errors.stream().filter(message -> message.contains(subscriptionId) && message.contains("will not restart subscription!")).toList();
+        }
+
         @Override
         protected void append(ILoggingEvent event) {
-            if (event.getLevel() == Level.ERROR && event.getFormattedMessage().startsWith("Cannot open the change stream of subscription") && first.compareAndSet(true, false)) {
+            if (event.getLevel() == Level.ERROR) {
+                errors.add(event.getFormattedMessage());
+            }
+            if (event.getLevel() == Level.DEBUG && event.getFormattedMessage().startsWith("Cannot open the change stream of subscription") && first.compareAndSet(true, false)) {
                 held.countDown();
                 try {
                     release.await(20, SECONDS);
@@ -2537,7 +2566,7 @@ public class SpringMongoSubscriptionModelTest {
 
         @Override
         protected void append(ILoggingEvent event) {
-            if (event.getFormattedMessage().startsWith("Gave up asking MongoDB for its operation time") && first.compareAndSet(true, false)) {
+            if (event.getFormattedMessage().startsWith("Gave up asking MongoDB where the present is") && first.compareAndSet(true, false)) {
                 held.countDown();
                 try {
                     release.await(20, SECONDS);

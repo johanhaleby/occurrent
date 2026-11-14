@@ -72,7 +72,8 @@ public class CompetingConsumerSubscription implements Subscription {
             return getSubscription().map(s -> s.waitUntilStarted(timeout)).orElse(true);
         } catch (UnsupportedStartAtException refusedInTheWrappedModel) {
             // The wrapped handle throws as soon as the wrapped model refused, before the model here has given the lease
-            // back and freed the id, so a subscribe of the id right after the throw could find it still in use
+            // back and freed the id, so a subscribe of the id right after the throw could find it still in use. A wrapped
+            // model that holds the subscription paused instead says so, which ends the wait with nothing given back
             startRefusal.awaitActedOn(timeout, started);
             startRefusal.throwIfRefused();
             throw refusedInTheWrappedModel;
@@ -80,10 +81,11 @@ public class CompetingConsumerSubscription implements Subscription {
     }
 
     // Shared by every handle made for one competing consumer, from its subscribe until the model forgets it. Counted down
-    // once, so after a report the model acted on without forgetting the consumer, a handle whose wrapped handle a later
-    // refusal throws from no longer waits, and can throw before the id is free. That includes a handle a resume returns. A
-    // count per report could not tell which report a handle's refusal is, since the wrapped model can throw before it
-    // reports, and waiting for the wrong one would hold the handle for its whole timeout.
+    // once, so after a report the model acted on without forgetting the consumer, or after the wrapped model held the
+    // subscription paused, a handle whose wrapped handle a later refusal throws from no longer waits, and can throw
+    // before the id is free. That includes a handle a resume returns. A count per report could not tell which report a
+    // handle's refusal is, since the wrapped model can throw before it reports, and waiting for the wrong one would hold
+    // the handle for its whole timeout.
     static final class StartRefusal {
         // Reported by the wrapped model, until the competing consumer model has acted on it
         final AtomicReference<@Nullable UnsupportedStartAtException> reported = new AtomicReference<>();

@@ -87,7 +87,11 @@ public class SpringMongoSubscriptionModelConfig {
      * the reply to {@code ping} has no operation time, the model doesn't restart a subscription whose restart position
      * an added listener stores, as a {@code DurableSubscriptionModel} does for each subscription it stores checkpoints
      * for, and tries the restart again as its {@code RetryStrategy} says. It restarts every other
-     * subscription from the current time all the same.
+     * subscription from the current time all the same, which it then reads from the change stream, and holds the
+     * subscription paused when that read gives neither an event nor a resume token. {@code isPaused(id)} then answers
+     * {@code true}, an error in the log names the subscription, and {@code resumeSubscription(id)} reads the change
+     * stream again. A subscription that starts at the present is refused and removed when that read gives no position,
+     * and waiting for it to start throws an {@code UnsupportedStartAtException}.
      *
      * @param restartSubscriptionsOnChangeStreamHistoryLost Whether or not to automatically restart a subscription, whose change stream history is lost.
      * @return A new instance of {@code SpringSubscriptionModelConfig}
