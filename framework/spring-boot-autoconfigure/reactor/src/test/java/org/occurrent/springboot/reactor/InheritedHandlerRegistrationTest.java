@@ -56,6 +56,7 @@ import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.springframework.aop.TargetSource;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.aop.framework.ProxyFactoryBean;
+import org.springframework.aop.target.SingletonTargetSource;
 import org.springframework.aop.target.HotSwappableTargetSource;
 import org.springframework.aop.target.LazyInitTargetSource;
 import org.springframework.beans.factory.ObjectFactory;
@@ -417,6 +418,65 @@ class InheritedHandlerRegistrationTest {
                 .map(invocation -> invocation.getRawArguments()[1])
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("No subscription was made under id " + id));
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // Handlers of one signature that come from unrelated declaring classes, and a generic default handler behind a proxy
+    // ------------------------------------------------------------------------------------------------------
+
+    @Test
+    void a_private_handler_of_a_superclass_and_an_interface_default_handler_of_the_same_signature_are_two_handlers() {
+        runner.withBean(PrivateAndDefaultHandlerBean.class, PrivateAndDefaultHandlerBean::new).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(subscribedIds(context.getBean(Subscriptions.class))).containsExactlyInAnyOrder("private-superclass-handler", "interface-default-handler");
+        });
+    }
+
+    abstract static class PrivateSuperclassHandler {
+        @Subscription(id = "private-superclass-handler", startupMode = StartupMode.BACKGROUND)
+        @SuppressWarnings("unused")
+        private Mono<Void> on(TestEvent event) {
+            return Mono.empty();
+        }
+    }
+
+    interface DefaultHandler {
+        @Subscription(id = "interface-default-handler", startupMode = StartupMode.BACKGROUND)
+        default Mono<Void> on(TestEvent event) {
+            return Mono.empty();
+        }
+    }
+
+    static class PrivateAndDefaultHandlerBean extends PrivateSuperclassHandler implements DefaultHandler {
+    }
+
+    @Test
+    void a_generic_interface_default_handler_behind_a_jdk_proxy_over_a_fixed_target_subscribes_to_the_type_the_class_binds_only() {
+        runner.withBean("placedHandler", PlacedDefaultHandler.class, () -> jdkProxyOverFixedTarget(new PlacedHandlerBean(), PlacedDefaultHandler.class)).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(Proxy.isProxyClass(context.getBean("placedHandler").getClass())).describedAs("the bean is a JDK proxy").isTrue();
+            assertThat(argumentOf(context.getBean("subscriptions"), "subscribe", "placed-default-handler"))
+                    .isEqualTo(AgnosticSubscriptionFilter.filter(Filter.type("Placed")));
+        });
+    }
+
+    interface PlacedDefaultHandler<E extends OrderEvent> {
+        @Subscription(id = "placed-default-handler", startupMode = StartupMode.BACKGROUND)
+        default Mono<Void> on(E event) {
+            return Mono.empty();
+        }
+    }
+
+    static class PlacedHandlerBean implements PlacedDefaultHandler<Placed> {
+    }
+
+    private static <I> I jdkProxyOverFixedTarget(Object target, Class<I> proxiedInterface) {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setTargetSource(new SingletonTargetSource(target));
+        proxyFactory.setInterfaces(proxiedInterface);
+        return proxiedInterface.cast(proxyFactory.getProxy());
     }
 
     sealed interface OrderEvent permits Placed, Paid {

@@ -121,7 +121,7 @@ class SubscriptionAnnotationRegistrarTest {
 
     private static HandlerMethod handlerOf(Class<?> scanned, String name) throws Exception {
         Method method = scanned.getDeclaredMethod(name, TestEvent.class);
-        return new HandlerMethod(method);
+        return new HandlerMethod(method, scanned);
     }
 
     static class SubscriptionBesideDcbSubscriber {

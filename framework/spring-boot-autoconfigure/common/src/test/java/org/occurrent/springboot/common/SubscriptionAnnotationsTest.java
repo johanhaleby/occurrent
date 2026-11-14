@@ -1009,8 +1009,8 @@ class SubscriptionAnnotationsTest {
     void handlerMethod_leaves_the_declaring_class_out_of_the_signature_of_an_inherited_public_or_protected_method() throws Exception {
         Method publicMethodDeclaration = CrossPackageMethods.class.getDeclaredMethod("publicMethod");
         Method protectedMethodDeclaration = CrossPackageMethods.class.getDeclaredMethod("protectedMethod");
-        HandlerMethod publicMethod = new HandlerMethod(publicMethodDeclaration);
-        HandlerMethod protectedMethod = new HandlerMethod(protectedMethodDeclaration);
+        HandlerMethod publicMethod = new HandlerMethod(publicMethodDeclaration, CrossPackageMethods.class);
+        HandlerMethod protectedMethod = new HandlerMethod(protectedMethodDeclaration, CrossPackageMethods.class);
 
         assertThat(publicMethod.signature()).isEqualTo("publicMethod[]").doesNotContain(CrossPackageMethods.class.getName());
         assertThat(protectedMethod.signature()).isEqualTo("protectedMethod[]").doesNotContain(CrossPackageMethods.class.getName());
@@ -1024,9 +1024,9 @@ class SubscriptionAnnotationsTest {
 
         assertThat(scannedForLeaf).containsExactly(handler);
         assertThat(scannedForA).containsExactly(handler);
-        assertThat(new HandlerMethod(scannedForLeaf.iterator().next()).signature())
+        assertThat(new HandlerMethod(scannedForLeaf.iterator().next(), LeafOfPrivate.class).signature())
                 .describedAs("an unannotated method of the same signature below the handler is not a handler, so the scan of the subclass keys it as the scan of A does")
-                .isEqualTo(new HandlerMethod(scannedForA.iterator().next()).signature())
+                .isEqualTo(new HandlerMethod(scannedForA.iterator().next(), A.class).signature())
                 .doesNotContain(A.class.getName());
     }
 
@@ -1037,11 +1037,11 @@ class SubscriptionAnnotationsTest {
         Set<Method> scannedForLeaf = HandlerScan.handlerMethods(LeafOfAnnotated.class, List.of(Subscription.class));
 
         assertThat(scannedForLeaf).hasSize(2);
-        assertThat(new HandlerMethod(handler).signature()).isEqualTo(new HandlerMethod(scannedForA.iterator().next()).signature());
+        assertThat(new HandlerMethod(handler, A.class).signature()).isEqualTo(new HandlerMethod(scannedForA.iterator().next(), A.class).signature());
         assertThat(scannedForLeaf)
                 .describedAs("both handlers of the signature are listed, and share the signature a registry keys them by")
-                .extracting(method -> new HandlerMethod(method).signature())
-                .containsOnly(new HandlerMethod(handler).signature());
+                .extracting(method -> new HandlerMethod(method, LeafOfAnnotated.class).signature())
+                .containsOnly(new HandlerMethod(handler, A.class).signature());
     }
 
     static class UnrelatedPrivateHandler {
@@ -1054,7 +1054,7 @@ class SubscriptionAnnotationsTest {
     private static HandlerMethod handlerOf(Class<?> type, Class<?> declaring) {
         Set<Method> scanned = HandlerScan.handlerMethods(type, MARKERS);
         Method method = scanned.stream().filter(candidate -> candidate.getDeclaringClass().equals(declaring)).findFirst().orElseThrow();
-        return new HandlerMethod(method);
+        return new HandlerMethod(method, type);
     }
 
     @Test
@@ -1116,6 +1116,63 @@ class SubscriptionAnnotationsTest {
 
         assertThat(registered.isRegistered("bean", base)).isTrue();
         assertThat(registered.isRegistered("bean", subclass)).isFalse();
+    }
+
+    abstract static class PrivateSuperclassOnString {
+        @Marked
+        @SuppressWarnings("unused")
+        private void on(String event) {
+        }
+    }
+
+    interface DefaultOnString {
+        @Marked
+        default void on(String event) {
+        }
+    }
+
+    static class PrivateAndDefaultBean extends PrivateSuperclassOnString implements DefaultOnString {
+    }
+
+    @Test
+    void registeredHandlers_registers_a_private_method_of_a_superclass_and_an_interface_default_method_of_its_signature_that_one_class_inherits() {
+        RegisteredHandlers registered = new RegisteredHandlers();
+        HandlerMethod privateOnSuperclass = handlerOf(PrivateAndDefaultBean.class, PrivateSuperclassOnString.class);
+        HandlerMethod defaultMethod = handlerOf(PrivateAndDefaultBean.class, DefaultOnString.class);
+
+        assertThat(registered.markRegistered("bean", privateOnSuperclass)).isTrue();
+        assertThat(registered.isRegistered("bean", defaultMethod)).describedAs("the instance runs the private method for one and the default method for the other").isFalse();
+        assertThat(registered.markRegistered("bean", defaultMethod)).isTrue();
+    }
+
+    @Test
+    void registeredHandlers_keeps_the_handlers_of_a_class_and_its_subclass_and_skips_an_unrelated_class_that_registers_between_them() {
+        RegisteredHandlers registered = new RegisteredHandlers();
+        HandlerMethod superclass = handlerOf(PrivateHandlerBase.class, PrivateHandlerBase.class);
+        HandlerMethod unrelated = handlerOf(UnrelatedPrivateHandler.class, UnrelatedPrivateHandler.class);
+        HandlerMethod subclass = handlerOf(PrivateHandlerSubclass.class, PrivateHandlerSubclass.class);
+
+        List<Boolean> registeredInOrder = List.of(
+                registered.markRegistered("bean", superclass),
+                registered.markRegistered("bean", unrelated),
+                registered.markRegistered("bean", subclass));
+
+        assertThat(registeredInOrder).describedAs("the unrelated class comes second and has the signature of the first hierarchy").containsExactly(true, false, true);
+    }
+
+    @Test
+    void registeredHandlers_keeps_only_the_handler_of_an_unrelated_class_that_registers_before_a_class_and_its_subclass() {
+        RegisteredHandlers registered = new RegisteredHandlers();
+        HandlerMethod unrelated = handlerOf(UnrelatedPrivateHandler.class, UnrelatedPrivateHandler.class);
+        HandlerMethod superclass = handlerOf(PrivateHandlerBase.class, PrivateHandlerBase.class);
+        HandlerMethod subclass = handlerOf(PrivateHandlerSubclass.class, PrivateHandlerSubclass.class);
+
+        List<Boolean> registeredInOrder = List.of(
+                registered.markRegistered("bean", unrelated),
+                registered.markRegistered("bean", superclass),
+                registered.markRegistered("bean", subclass));
+
+        assertThat(registeredInOrder).describedAs("the first hierarchy to register keeps the signature").containsExactly(true, false, false);
     }
 
     static class PrivateOnA {

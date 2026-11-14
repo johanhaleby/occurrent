@@ -94,8 +94,10 @@ class LateRegistrationConcurrencyContractTest {
     @Test
     void concurrent_registrations_of_one_handler_register_it_once() throws Exception {
         RegisteredHandlers registeredHandlers = (RegisteredHandlers) valueOf(new OccurrentReactiveAnnotationBeanPostProcessor(), "registeredHandlers");
-        Method method = RegisteringHandler.class.getDeclaredMethod("on", String.class);
-        HandlerMethod handler = new HandlerMethod(method);
+        HandlerMethod[] sameHandler = {
+                new HandlerMethod(RegisteringHandler.class.getDeclaredMethod("on", String.class), RegisteringHandler.class),
+                new HandlerMethod(OverridingRegisteringHandler.class.getDeclaredMethod("on", String.class), OverridingRegisteringHandler.class)
+        };
         int threads = 16;
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         try {
@@ -104,6 +106,7 @@ class LateRegistrationConcurrencyContractTest {
                 CyclicBarrier together = new CyclicBarrier(threads);
                 List<Future<Boolean>> registrations = new ArrayList<>();
                 for (int thread = 0; thread < threads; thread++) {
+                    HandlerMethod handler = sameHandler[thread % sameHandler.length];
                     registrations.add(pool.submit(() -> {
                         together.await();
                         return registeredHandlers.markRegistered(beanName, handler);
@@ -115,7 +118,9 @@ class LateRegistrationConcurrencyContractTest {
                 }
 
                 assertThat(registered).describedAs("threads told they registered the handler of %s", beanName).isEqualTo(1);
-                assertThat(registeredHandlers.isRegistered(beanName, handler)).isTrue();
+                for (HandlerMethod handler : sameHandler) {
+                    assertThat(registeredHandlers.isRegistered(beanName, handler)).isTrue();
+                }
             }
         } finally {
             pool.shutdownNow();
@@ -124,6 +129,12 @@ class LateRegistrationConcurrencyContractTest {
 
     static class RegisteringHandler {
         @SuppressWarnings("unused")
+        void on(String event) {
+        }
+    }
+
+    static class OverridingRegisteringHandler extends RegisteringHandler {
+        @Override
         void on(String event) {
         }
     }

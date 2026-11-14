@@ -21,13 +21,14 @@ import java.lang.reflect.Method;
 import java.util.Arrays;
 
 /**
- * A handler method a scan found, with the signature {@link RegisteredHandlers} keys it by. The signature is the method
- * name and parameter types, as in 0.34.0, so every scan of the method gives it the same signature. Internal to the
- * Spring Boot starters, not an API.
+ * A handler method a scan found, with the class the scan read it from and the signature {@link RegisteredHandlers}
+ * keys it by. The signature is the method name and parameter types, as in 0.34.0, so every scan of the method gives it
+ * the same signature. Internal to the Spring Boot starters, not an API.
  *
- * @param method the method {@link HandlerScan#handlerMethods} returned
+ * @param method         the method {@link HandlerScan#handlerMethods} returned
+ * @param implementation the class the scan read, see {@link HandlerScan#implementationClassOf}
  */
-public record HandlerMethod(Method method) {
+public record HandlerMethod(Method method, Class<?> implementation) {
 
     /**
      * @return the part of the registration key that identifies the handler within its bean

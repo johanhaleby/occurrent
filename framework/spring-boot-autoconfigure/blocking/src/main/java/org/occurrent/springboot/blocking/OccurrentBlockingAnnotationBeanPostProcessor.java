@@ -339,7 +339,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
             Set<Method> handlerMethods = HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS);
             for (Method method : handlerMethods) {
-                HandlerMethod handler = new HandlerMethod(method);
+                HandlerMethod handler = new HandlerMethod(method, type);
                 if (registeredHandlers.isRegistered(beanName, handler)) {
                     continue;
                 }

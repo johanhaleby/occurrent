@@ -468,24 +468,21 @@ public final class HandlerScan {
         return false;
     }
 
-    // Whether two methods of one name and parameter types, from scans of instances of one bean, are one handler. They
-    // are when one overrides the other, or when their classes are unrelated, since a bean whose instances come from
-    // either class has one handler of that signature, as in 0.34.0. A private method and a method of the same
-    // signature that its subclass declares don't override each other, so they are two handlers. The methods of one
-    // class with one signature are that class's method and the bridges the compiler adds for it
-    static boolean isSameHandler(Method a, Method b) {
-        Class<?> aClass = a.getDeclaringClass();
-        Class<?> bClass = b.getDeclaringClass();
-        if (aClass == bClass) {
+    // Whether two handlers of one name and parameter types, from scans of instances of one bean, are one handler. When
+    // the two scans read one class, or one class extends the other, they are one handler when an instance of the class
+    // further down runs one method for both. So a private method and a method of the same signature its subclass
+    // declares are two handlers, and so are a private method of a superclass and an interface default method. A bean
+    // whose instances come from unrelated classes has one handler of the signature, as in 0.34.0
+    static boolean isSameHandler(HandlerMethod a, HandlerMethod b) {
+        Class<?> below;
+        if (a.implementation().isAssignableFrom(b.implementation())) {
+            below = b.implementation();
+        } else if (b.implementation().isAssignableFrom(a.implementation())) {
+            below = a.implementation();
+        } else {
             return true;
         }
-        if (bClass.isAssignableFrom(aClass)) {
-            return overrides(a, b);
-        }
-        if (aClass.isAssignableFrom(bClass)) {
-            return overrides(b, a);
-        }
-        return true;
+        return methodTheJvmRuns(a.method(), below).equals(methodTheJvmRuns(b.method(), below));
     }
 
     // Whether type or a superclass of type below method's declaring class declares an instance method of method's
