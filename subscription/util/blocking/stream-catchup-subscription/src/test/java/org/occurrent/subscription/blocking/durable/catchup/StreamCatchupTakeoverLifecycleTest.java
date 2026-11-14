@@ -859,7 +859,7 @@ class StreamCatchupTakeoverLifecycleTest {
 
     private CatchupCannotResumeException heldTakeoverReplayWhoseRefusalWasReported() {
         heldTakeoverReplayWithACatchupPositionStored();
-        assertThat(heldPausedReports).as("refusals the held replay reported").hasSize(1);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(heldPausedReports).as("refusals the held replay reported").hasSize(1));
         CatchupCannotResumeException reported = heldPausedReports.get(0);
         assertThat(catchup.isHeldPausedFor(ID, reported)).as("held paused for the refusal reported").isTrue();
         return reported;
