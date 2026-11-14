@@ -1386,7 +1386,7 @@ public final class ChangeStreamSubscriptions {
         // The run a resume replaced to create this run, until this run has waited for it and every run before it to
         // stop delivering
         private volatile @Nullable InternalSubscription previous;
-        // True while waitForThePreviousRuns runs with a run to wait for
+        // True while waitForThePreviousRuns waits for a call that was still running when it looked
         private volatile boolean waiting;
 
         private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, FirstStart firstStart,
@@ -1427,11 +1427,11 @@ public final class ChangeStreamSubscriptions {
         boolean waitForThePreviousRuns(String subscriptionId) {
             // Set when the wait first finds a call still running, so the wait is logged once
             @Nullable Long waitingSince = null;
-            waiting = previous != null;
             try {
                 for (InternalSubscription run = previous; run != null; run = run.previous) {
                     if (waitingSince == null && run.isDelivering()) {
                         waitingSince = System.nanoTime();
+                        waiting = true;
                         log.warn("Subscription {} waits for an action call of a run it replaced to return before it goes on. The call hasn't returned since the subscription was paused. It waits with no deadline, and a pause or a cancel of the subscription ends the wait.", subscriptionId);
                     }
                     if (!run.awaitNotDeliveringUnlessClosed(this)) {
