@@ -28,6 +28,7 @@ import com.mongodb.event.CommandStartedEvent;
 import io.cloudevents.CloudEvent;
 import org.bson.BsonDocument;
 import org.bson.Document;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -88,6 +89,7 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
     private static final String STUDENT_S1_KEY = DcbMarkerVersionsSupport.tagKey(tag(STUDENT_S1));
 
     private static final int WTIMEOUT_MS = 12_345;
+    private static final WriteConcern CONFIGURED_WRITE_CONCERN = WriteConcern.W1.withWTimeout(WTIMEOUT_MS, MILLISECONDS).withJournal(true);
 
     private static final List<BsonDocument> COMMANDS = new CopyOnWriteArrayList<>();
 
@@ -289,7 +291,26 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
         assertThat(inTransaction.get(0).getDocument("readConcern").getString("level").getValue()).as("the first command of the transaction").isEqualTo("snapshot");
     }
 
+    @Test
+    void keeps_the_configured_read_and_write_concern_for_an_unconditional_append_because_it_reads_nothing_at_one_point_in_time() {
+        TransactionOptions configured = TransactionOptions.builder().readConcern(ReadConcern.MAJORITY).writeConcern(CONFIGURED_WRITE_CONCERN).build();
+
+        Recorded recorded = recordedAppend(configured, false);
+        List<BsonDocument> commands = recorded.commands();
+
+        BsonDocument first = commands.stream().filter(command -> command.containsKey("autocommit")).findFirst().orElseThrow();
+        assertThat(first.getDocument("readConcern").getString("level").getValue()).as("the first command of the transaction of an append without a condition").isEqualTo("majority");
+        assertThat(single(commands, "commitTransaction").getDocument("writeConcern"))
+                .as("the commitTransaction of an append without a condition, which isn't raised to majority")
+                .isEqualTo(BsonDocument.parse("{\"w\": 1, \"wtimeout\": " + WTIMEOUT_MS + ", \"j\": true}"));
+        assertThat(recorded.eventIds()).containsExactly("sold");
+    }
+
     private Recorded recordedConditionalAppendWithConfiguredWriteConcern() {
+        return recordedAppend(null, true);
+    }
+
+    private Recorded recordedAppend(@Nullable TransactionOptions configured, boolean conditional) {
         List<BsonDocument> recorded = new CopyOnWriteArrayList<>();
         CommandListener recorder = new CommandListener() {
             @Override
@@ -303,13 +324,17 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
             String recordingDatabase = cluster.createDatabase(TwoShardMongoCluster.SECOND_SHARD);
             SimpleReactiveMongoDatabaseFactory factory = new SimpleReactiveMongoDatabaseFactory(recordingClient, recordingDatabase);
             ReactorMongoEventStore store = new ReactorMongoEventStore(new ReactiveMongoTemplate(factory),
-                    configuration().transactionConfig(new CommitRetryingReactiveMongoTransactionManager(factory)).build());
+                    configuration().transactionConfig(new CommitRetryingReactiveMongoTransactionManager(factory, configured)).build());
             cluster.shardCheckpointCollection(recordingDatabase, "events_dcb_checkpoints");
             DcbConsistencyToken token = store.read(TICKETS_OF_K1).block().consistencyToken();
             store.append(List.of(taggedEventWithId("renamed", CONCERT_RENAMED, CONCERT_K1))).block();
             recorded.clear();
 
-            store.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)).block();
+            if (conditional) {
+                store.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)).block();
+            } else {
+                store.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1))).block();
+            }
 
             return new Recorded(new ArrayList<>(recorded), store.read(TICKETS_OF_K1).block().events().stream().map(CloudEvent::getId).toList());
         }

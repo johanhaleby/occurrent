@@ -16,13 +16,18 @@
 
 package org.occurrent.eventstore.mongodb.nativedriver;
 
+import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
 import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.event.CommandListener;
+import com.mongodb.event.CommandStartedEvent;
 import io.cloudevents.CloudEvent;
+import org.bson.BsonDocument;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -41,15 +46,18 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.TwoShardMongoCluster;
 import org.occurrent.testsupport.mongodb.TwoShardMongoCluster.Hold;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
@@ -76,6 +84,10 @@ class MongoEventStoreDcbTwoShardClusterTest {
     private static final DcbCriteria ENROLLMENTS_OF_S1_IN_C1 = DcbCriteria.type(ENROLLED).tags(tag(COURSE_C1), tag(STUDENT_S1));
     private static final String COURSE_C1_KEY = DcbMarkerVersionsSupport.tagKey(tag(COURSE_C1));
     private static final String STUDENT_S1_KEY = DcbMarkerVersionsSupport.tagKey(tag(STUDENT_S1));
+
+    private static final int WTIMEOUT_MS = 12_345;
+    private static final int MAX_COMMIT_TIME_MS = 7_000;
+    private static final WriteConcern CONFIGURED_WRITE_CONCERN = WriteConcern.W1.withWTimeout(WTIMEOUT_MS, MILLISECONDS).withJournal(true);
 
     private static TwoShardMongoCluster cluster;
     private static MongoClient client;
@@ -242,6 +254,73 @@ class MongoEventStoreDcbTwoShardClusterTest {
 
         assertThat(thrown).as("The caller's transaction reads every shard at one point in time, so the store asks the events above the marker that moved, and none matches").isNull();
         assertThat(eventStore.read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("sold");
+    }
+
+    @Test
+    void commits_the_stores_own_conditional_append_with_the_wtimeout_and_journal_flag_of_the_client_and_the_max_commit_time_of_the_transaction_options() {
+        TransactionOptions options = TransactionOptions.builder().maxCommitTime((long) MAX_COMMIT_TIME_MS, MILLISECONDS).build();
+
+        List<BsonDocument> commands = commandsOfAnAppend(options, WriteConcern.ACKNOWLEDGED.withWTimeout(WTIMEOUT_MS, MILLISECONDS).withJournal(true), true);
+
+        BsonDocument commit = single(commands, "commitTransaction");
+        assertThat(commit.getDocument("writeConcern"))
+                .as("the commitTransaction of the append, whose write concern the client configured with a wtimeout and the journal flag")
+                .isEqualTo(BsonDocument.parse("{\"w\": \"majority\", \"wtimeout\": " + WTIMEOUT_MS + ", \"j\": true}"));
+        assertThat(commit.get("maxTimeMS")).as("the max commit time of the store's transaction options").isNotNull();
+        assertThat(commit.get("maxTimeMS").asNumber().longValue()).as("the max commit time of the store's transaction options").isEqualTo(MAX_COMMIT_TIME_MS);
+    }
+
+    @Test
+    void keeps_the_configured_read_and_write_concern_for_an_unconditional_append_because_it_reads_nothing_at_one_point_in_time() {
+        TransactionOptions options = TransactionOptions.builder().readConcern(ReadConcern.MAJORITY).writeConcern(CONFIGURED_WRITE_CONCERN).build();
+
+        List<BsonDocument> commands = commandsOfAnAppend(options, WriteConcern.ACKNOWLEDGED, false);
+
+        BsonDocument first = commands.stream().filter(command -> command.containsKey("autocommit")).findFirst().orElseThrow();
+        assertThat(first.getDocument("readConcern").getString("level").getValue()).as("the first command of the transaction of an append without a condition").isEqualTo("majority");
+        assertThat(single(commands, "commitTransaction").getDocument("writeConcern"))
+                .as("the commitTransaction of an append without a condition, which isn't raised to majority")
+                .isEqualTo(BsonDocument.parse("{\"w\": 1, \"wtimeout\": " + WTIMEOUT_MS + ", \"j\": true}"));
+    }
+
+    // The commands of an append on a store of its own, after a first event moved the marker the conditional append's token holds
+    private static List<BsonDocument> commandsOfAnAppend(TransactionOptions options, WriteConcern clientWriteConcern, boolean conditional) {
+        List<BsonDocument> recorded = new CopyOnWriteArrayList<>();
+        CommandListener recorder = new CommandListener() {
+            @Override
+            public void commandStarted(CommandStartedEvent event) {
+                recorded.add(event.getCommand().clone());
+            }
+        };
+        MongoClientSettings settings = MongoClientSettings.builder().applyConnectionString(new ConnectionString(cluster.getConnectionString()))
+                .writeConcern(clientWriteConcern).addCommandListener(recorder).build();
+        try (MongoClient recordingClient = MongoClients.create(settings)) {
+            String recordingDatabase = cluster.createDatabase(TwoShardMongoCluster.SECOND_SHARD);
+            MongoEventStore store = new MongoEventStore(recordingClient, recordingDatabase, "events", new EventStoreConfig.Builder()
+                    .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                    .transactionOptions(options)
+                    .eventStoreCapabilities(STREAM, DCB)
+                    .build());
+            cluster.shardCheckpointCollection(recordingDatabase, "events_dcb_checkpoints");
+            DcbConsistencyToken token = store.read(TICKETS_OF_K1).consistencyToken();
+            store.append(List.of(taggedEventWithId("renamed", CONCERT_RENAMED, CONCERT_K1)));
+            recorded.clear();
+
+            if (conditional) {
+                store.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token));
+            } else {
+                store.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)));
+            }
+
+            assertThat(store.read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("sold");
+            return new ArrayList<>(recorded);
+        }
+    }
+
+    private static BsonDocument single(List<BsonDocument> commands, String name) {
+        List<BsonDocument> matching = commands.stream().filter(command -> name.equals(command.getFirstKey())).toList();
+        assertThat(matching).as("the " + name + " commands of the append").hasSize(1);
+        return matching.get(0);
     }
 
     // The first shard committed its half of the transaction once the marker is there, while the second shard holds its own
