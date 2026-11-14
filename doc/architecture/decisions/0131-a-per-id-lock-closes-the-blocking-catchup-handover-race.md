@@ -4,7 +4,8 @@ Date: 2026-08-17
 
 ## Status
 
-Accepted. Resolves #827.
+Accepted. Resolves #827. Amended by [ADR 177](0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md), under which handover locks are counted and
+removed like claims, so the registry described below no longer grows for the life of a model.
 
 ## Context
 
