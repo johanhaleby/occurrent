@@ -71,16 +71,18 @@ method as the one the bean's class actually runs:
   superclass method's annotation, it's refused at startup like the package-private case above. When it repeats the
   annotation, both methods are handlers.
 - When a method of a superclass or interface names a class missing at runtime, such as a type from an optional
-  dependency, Spring can't read the hierarchy. The scan then reads the class file of each superclass and interface
-  whose methods can't be read, without loading it. When one declares a handler, startup fails with an
-  `IllegalStateException` naming the class, the handler and the missing class, since that handler would never run.
+  dependency, Spring can't read the hierarchy, and the scan reads only the methods the bean's class declares, as 0.34.0
+  did. A handler any superclass or interface declares would then never run, so the scan looks for one. It reads the
+  class file of each superclass and interface whose methods can't be read, without loading it, and the methods of each
+  one that can be read. When one declares a handler, startup fails with an `IllegalStateException` naming the handler
+  and the missing class.
   Startup doesn't fail when the bean's class declares a method that runs the handler, which is an override with a
   handler annotation, or the bridge javac adds to a public class for a public handler it inherits from a superclass
   that isn't public. The scan registers that bridge as the handler, as 0.34.0 did, and the code after the scan uses
-  the bridge itself where it can't read the method the bridge calls. Startup fails the same way when the class file can't be read either, since the scan can't rule out a handler there.
-  When none declares a handler, the scan reads only the methods the bean's class declares, as 0.34.0 did, and logs at
-  debug level that it skips the inherited ones. A method the bean's class declares itself that
-  names a missing class fails startup with `NoClassDefFoundError`, as in 0.34.0.
+  the bridge itself where it can't read the method the bridge calls. Startup fails the same way when a class file
+  can't be read either, since the scan can't rule out a handler there. When none declares a handler, the scan logs at
+  debug level that it skips the inherited methods. A method the bean's class declares itself that names a missing class
+  fails startup with `NoClassDefFoundError`, as in 0.34.0.
 
 A handler's event type and a factory's state type are read against the bean's class with Spring's `ResolvableType`.
 So `on(E event)` on `Base<E>` subscribes to `Placed` on a class that extends `Base<Placed>`. When the class doesn't give

@@ -335,12 +335,13 @@ public final class HandlerScan {
      * @param type            the concrete class the scan reads
      * @param annotationTypes the handler annotations to look for, searched with {@link SearchStrategy#TYPE_HIERARCHY}
      * @return the matching methods, empty if there are none. When a method of a superclass or interface of
-     * {@code type} names a class missing at runtime and the class file of that superclass or interface has no handler
-     * annotation, only the methods {@code type} declares are matched, which is logged at debug level
+     * {@code type} names a class missing at runtime and no superclass or interface of {@code type} declares a handler,
+     * only the methods {@code type} declares are matched, which is logged at debug level
      * @throws NoClassDefFoundError  when a method {@code type} declares names a class missing at runtime, as in 0.34.0
      * @throws IllegalStateException when a method has an annotation Spring reads from a method it does not override,
-     *                               or when a superclass or interface whose methods name a class missing at runtime
-     *                               declares a handler, or has a class file that can't be read
+     *                               or when a method of a superclass or interface names a class missing at runtime and
+     *                               a superclass or interface declares a handler no method {@code type} declares runs,
+     *                               or has a class file that can't be read
      * @throws IllegalArgumentException when {@code type} is a JDK proxy and two of its interfaces declare a method of
      *                                  the same name and parameter types with different handler annotations
      */
@@ -404,10 +405,10 @@ public final class HandlerScan {
                 throw e;
             }
             // When a superclass or interface method names a class missing at runtime, the scan reads only the methods type
-            // declares itself, as 0.34.0 did, and fails when one of those classes declares a handler none of them runs
+            // declares itself, as 0.34.0 did, and fails when a superclass or interface declares a handler none of them runs
             log.debug("Reading only the methods {} declares in the search for Occurrent handler annotations, since its superclasses and interfaces can't be read", type.getName(), e);
             handlers = declaredHandlerMethods(type, handlerLookup, annotationTypes);
-            refuseHandlersOfUnreadableClasses(type, annotationTypes, handlers);
+            refuseHandlersTheFallbackDrops(type, annotationTypes, handlers, e instanceof LinkageError linkageError ? linkageError : (LinkageError) e.getCause());
         }
         return java.lang.reflect.Proxy.isProxyClass(type) ? firstOfEachSignature(type, handlers, annotationTypes) : handlers;
     }
@@ -438,42 +439,69 @@ public final class HandlerScan {
         }
     }
 
-    // A handler declared by a superclass or interface whose methods can't be read would never register, so the class
-    // file of each such class is read without loading it, and a handler annotation found there fails the scan, unless
-    // a method type declares and the scan returns runs that handler
-    private static void refuseHandlersOfUnreadableClasses(Class<?> type, List<Class<? extends Annotation>> annotationTypes, Set<Method> handlers) {
+    // A handler declared by a superclass or interface would never register once the scan reads only the methods type
+    // declares, so a handler annotation on one fails the scan, unless a method type declares and the scan returns runs
+    // that handler. The class file of a class whose methods can't be read is read without loading it. A synthetic
+    // method of a class that can be read is left out, since a bridge there runs a method the scan checks on its own
+    private static void refuseHandlersTheFallbackDrops(Class<?> type, List<Class<? extends Annotation>> annotationTypes, Set<Method> handlers, LinkageError readFailure) {
         for (Class<?> candidate : superclassesAndInterfacesOf(type)) {
-            LinkageError unreadable;
+            Method[] declaredMethods;
             try {
-                candidate.getDeclaredMethods();
-                continue;
+                declaredMethods = candidate.getDeclaredMethods();
             } catch (LinkageError e) {
-                unreadable = e;
-            }
-            String missing = unreadable instanceof NoClassDefFoundError && unreadable.getMessage() != null ? unreadable.getMessage().replace('/', '.') : unreadable.toString();
-            Set<ClassFileMethod> annotated;
-            try {
-                annotated = annotatedMethodsInClassFile(candidate, annotationTypes);
-            } catch (IOException | IllegalArgumentException e) {
-                IllegalStateException failure = new IllegalStateException(("The methods of %s can't be read, since %s is missing at runtime, and neither can its class file, so the scan can't tell "
-                        + "whether it declares an Occurrent handler. Put %s on the classpath.").formatted(candidate.getName(), missing, missing), unreadable);
-                failure.addSuppressed(e);
-                throw failure;
+                refuseHandlersOfUnreadableClass(type, candidate, annotationTypes, handlers, e);
+                continue;
             }
             Set<String> neverRegistered = new LinkedHashSet<>();
-            for (ClassFileMethod method : annotated) {
-                // handlerMethods doesn't return a static method an interface declares
-                if (candidate.isInterface() && method.isStatic()) {
+            for (Method method : declaredMethods) {
+                if (method.isSynthetic() || candidate.isInterface() && Modifier.isStatic(method.getModifiers())
+                        || annotationTypes.stream().noneMatch(MergedAnnotations.from(method)::isPresent)) {
                     continue;
                 }
-                if (!runByAHandlerTypeDeclares(type, candidate, method, handlers)) {
-                    neverRegistered.add(candidate.getName() + "#" + method);
+                ClassFileMethod handler = new ClassFileMethod(method.getName(), parametersOf(org.springframework.asm.Type.getMethodDescriptor(method)), method.getModifiers());
+                if (!runByAHandlerTypeDeclares(type, candidate, handler, handlers)) {
+                    neverRegistered.add(candidate.getName() + "#" + handler);
                 }
             }
             if (!neverRegistered.isEmpty()) {
-                throw new IllegalStateException(("The methods of %s can't be read, since %s is missing at runtime, so its Occurrent handler %s would never register. "
-                        + "Put %s on the classpath.").formatted(candidate.getName(), missing, String.join(" and ", neverRegistered), missing), unreadable);
+                String missing = missingClassOf(readFailure);
+                throw new IllegalStateException(("The Occurrent handler %s would never register, since %s is missing at runtime, so the scan reads only the methods %s declares. "
+                        + "Put %s on the classpath.").formatted(String.join(" and ", neverRegistered), missing, type.getName(), missing), readFailure);
             }
+        }
+    }
+
+    private static String missingClassOf(LinkageError readFailure) {
+        return readFailure instanceof NoClassDefFoundError && readFailure.getMessage() != null ? readFailure.getMessage().replace('/', '.') : readFailure.toString();
+    }
+
+    // A handler declared by a superclass or interface whose methods can't be read would never register, so its class
+    // file is read without loading it, and a handler annotation found there fails the scan, unless a method type
+    // declares and the scan returns runs that handler
+    private static void refuseHandlersOfUnreadableClass(Class<?> type, Class<?> candidate, List<Class<? extends Annotation>> annotationTypes, Set<Method> handlers, LinkageError unreadable) {
+        String missing = missingClassOf(unreadable);
+        Set<ClassFileMethod> annotated;
+        try {
+            annotated = annotatedMethodsInClassFile(candidate, annotationTypes);
+        } catch (IOException | IllegalArgumentException e) {
+            IllegalStateException failure = new IllegalStateException(("The methods of %s can't be read, since %s is missing at runtime, and neither can its class file, so the scan can't tell "
+                    + "whether it declares an Occurrent handler. Put %s on the classpath.").formatted(candidate.getName(), missing, missing), unreadable);
+            failure.addSuppressed(e);
+            throw failure;
+        }
+        Set<String> neverRegistered = new LinkedHashSet<>();
+        for (ClassFileMethod method : annotated) {
+            // handlerMethods doesn't return a static method an interface declares
+            if (candidate.isInterface() && method.isStatic()) {
+                continue;
+            }
+            if (!runByAHandlerTypeDeclares(type, candidate, method, handlers)) {
+                neverRegistered.add(candidate.getName() + "#" + method);
+            }
+        }
+        if (!neverRegistered.isEmpty()) {
+            throw new IllegalStateException(("The methods of %s can't be read, since %s is missing at runtime, so its Occurrent handler %s would never register. "
+                    + "Put %s on the classpath.").formatted(candidate.getName(), missing, String.join(" and ", neverRegistered), missing), unreadable);
         }
     }
 
@@ -550,7 +578,7 @@ public final class HandlerScan {
         }
         for (Method declared : type.getDeclaredMethods()) {
             if (declared.getName().equals(method.name()) && parametersOf(org.springframework.asm.Type.getMethodDescriptor(declared)).equals(method.parameters())
-                    && (handlers.contains(declared) || handlers.stream().anyMatch(handler -> bridges(declared, handler)))) {
+                    && (handlers.contains(declared) || handlers.contains(bridgedMethod(declared)) || handlers.stream().anyMatch(handler -> bridges(declared, handler)))) {
                 return true;
             }
         }

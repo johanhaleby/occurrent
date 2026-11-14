@@ -282,6 +282,21 @@ class UnreadableHierarchyRegistrationTest {
                 .hasMessageContaining("Put " + missing + " on the classpath.");
     }
 
+    @Test
+    void an_eager_bean_fails_the_context_naming_the_handler_of_a_readable_superclass_when_a_class_above_it_declares_a_method_naming_a_missing_class() throws Exception {
+        Class<?> product = new LoaderWithoutAbsentType().loadClass(ExtendsReadableHandlerClassAboveUnreadableSuperclass.class.getName());
+        String missing = AbsentType.class.getName();
+
+        runner.withBean("products", ProductFactoryBean.class, () -> new ProductFactoryBean(product, new AtomicInteger(), true)).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(refusalIn(context.getStartupFailure()))
+                    .hasMessageContaining("The Occurrent handler " + ReadableHandlerClassAboveUnreadableSuperclass.class.getName() + "#on(" + TestEvent.class.getName() + ") would never register")
+                    .hasMessageContaining("since " + missing + " is missing at runtime")
+                    .hasMessageContaining("so the scan reads only the methods " + product.getName() + " declares")
+                    .hasMessageContaining("Put " + missing + " on the classpath.");
+        });
+    }
+
     private static void assertStartupRefusedForUnreadableClassFile(AssertableApplicationContext context, Class<?> unreadable) {
         String missing = AbsentType.class.getName();
 
@@ -294,7 +309,7 @@ class UnreadableHierarchyRegistrationTest {
 
     private static Throwable refusalIn(Throwable failure) {
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-            if (cause instanceof IllegalStateException && cause.getMessage() != null && cause.getMessage().startsWith("The methods of ")) {
+            if (cause instanceof IllegalStateException && cause.getMessage() != null && (cause.getMessage().startsWith("The methods of ") || cause.getMessage().startsWith("The Occurrent handler "))) {
                 return cause;
             }
         }
@@ -467,11 +482,23 @@ class UnreadableHierarchyRegistrationTest {
         @Subscription(id = "generic-handler", startupMode = StartupMode.BACKGROUND)
         @Override
         public Mono<Void> on(TestEvent event) {
-        return Mono.empty();
+            return Mono.empty();
         }
     }
 
+    // The superclass that can't be read declares no handler, so only the handler of this class fails the scan
+    public static class ReadableHandlerClassAboveUnreadableSuperclass extends UnreadableSuperclassWithoutHandler {
+        @Subscription(id = "readable-superclass-handler", startupMode = StartupMode.BACKGROUND)
+        public Mono<Void> on(TestEvent event) {
+            return Mono.empty();
+        }
+    }
+
+    public static class ExtendsReadableHandlerClassAboveUnreadableSuperclass extends ReadableHandlerClassAboveUnreadableSuperclass {
+    }
+
     private static final List<Class<?>> FIXTURES = List.of(UnreadableSuperclass.class, ChildOfUnreadableSuperclass.class,
+            ReadableHandlerClassAboveUnreadableSuperclass.class, ExtendsReadableHandlerClassAboveUnreadableSuperclass.class,
             UnreadableInterface.class, ChildOfUnreadableInterface.class,
             DeclaresHandlerAndExtendsUnreadableSuperclass.class, DeclaresHandlerAndImplementsUnreadableInterface.class,
             UnreadableGenericInterface.class, DeclaresBridgedHandlerAndImplementsUnreadableInterface.class,
