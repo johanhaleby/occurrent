@@ -22,15 +22,16 @@ import org.occurrent.springboot.common.SubscriptionAnnotations;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
+import java.util.Set;
 
 /**
  * A handler method a scan found, with the signature {@link RegisteredHandlers} keys it by. The signature is the method
  * name and parameter types, so two classes a non-singleton bean's factory returns, each declaring its own handler of
  * one signature, register that handler once. The declaring class is added for a private or package-private method
- * a superclass of the scanned class declares when the scanned class, or a class between the two, declares a method of
- * the same signature. That method doesn't override it, so the two register as separate handlers. Without such a
- * method, a class that inherits the handler keys it the way a scan of its declaring class does. Internal to the Spring
- * Boot starters, not an API.
+ * when the scan also returned a handler of the same signature that a subclass of its declaring class declares. That
+ * handler doesn't override it, so the two register as separate handlers. A method of the same signature that isn't a
+ * handler adds nothing, so a class that inherits the handler keys it the way a scan of its declaring class does.
+ * Internal to the Spring Boot starters, not an API.
  *
  * @param method    the method {@link SubscriptionAnnotations#handlerMethods} returned
  * @param signature the part of the registration key that identifies the handler within its bean
@@ -38,30 +39,28 @@ import java.util.Arrays;
 public record HandlerMethod(Method method, String signature) {
 
     /**
-     * @param scannedClass the class the scan read, the one passed to {@link SubscriptionAnnotations#handlerMethods}
-     * @param method       a method that scan returned
+     * @param handlers every method the scan returned, from {@link SubscriptionAnnotations#handlerMethods}
+     * @param method   one of {@code handlers}
      * @return {@code method} with its signature
      */
-    public static HandlerMethod in(Class<?> scannedClass, Method method) {
-        String owner = isShadowedIn(scannedClass, method) ? method.getDeclaringClass().getName() + '#' : "";
+    public static HandlerMethod in(Set<Method> handlers, Method method) {
+        String owner = isShadowedIn(handlers, method) ? method.getDeclaringClass().getName() + '#' : "";
         return new HandlerMethod(method, owner + method.getName() + Arrays.toString(method.getParameterTypes()));
     }
 
     // A private or package-private method a varying-class prototype's B inherits from A keys the way A's scan keyed
-    // it, so B skips the handler A registered. Only a method of the same signature on B, or on a class between B and
-    // A, which doesn't override it, needs the owner to tell the two handlers apart
-    private static boolean isShadowedIn(Class<?> scannedClass, Method method) {
+    // it, so B skips the handler A registered. Only a handler of the same signature declared below A, which doesn't
+    // override it, needs the owner to tell the two handlers apart
+    private static boolean isShadowedIn(Set<Method> handlers, Method method) {
         int modifiers = method.getModifiers();
         Class<?> declaringClass = method.getDeclaringClass();
-        if (Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers) || declaringClass.isInterface() || !declaringClass.isAssignableFrom(scannedClass)) {
+        if (Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers) || declaringClass.isInterface()) {
             return false;
         }
-        for (Class<?> candidateClass = scannedClass; candidateClass != declaringClass; candidateClass = candidateClass.getSuperclass()) {
-            try {
-                candidateClass.getDeclaredMethod(method.getName(), method.getParameterTypes());
+        for (Method handler : handlers) {
+            if (handler.getDeclaringClass() != declaringClass && declaringClass.isAssignableFrom(handler.getDeclaringClass())
+                    && handler.getName().equals(method.getName()) && Arrays.equals(handler.getParameterTypes(), method.getParameterTypes())) {
                 return true;
-            } catch (NoSuchMethodException e) {
-                // no method of that signature on this class
             }
         }
         return false;

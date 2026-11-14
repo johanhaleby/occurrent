@@ -2155,8 +2155,9 @@ Applications on either starter with one of these:
   another package, between it and the bean's class, declares a public or protected method with the same name and
   parameters, since the proxy runs that method instead. A handler method the bean's class declares already got the
   same refusal, except the two package-private cases, which can't happen there.
-- An inherited `@Projection`, `@Snapshot` or `@Saga` factory method of one of those kinds fails at startup with an
-  `IllegalStateException` when the bean is behind a CGLIB proxy whose target can't be unwrapped, for example a proxy
+- An inherited `@Projection`, `@Snapshot` or `@Saga` factory method that is private, final, or package-private in
+  one of the two cases above fails at startup with an `IllegalStateException` when the bean is behind a CGLIB proxy
+  whose target can't be unwrapped, for example a proxy
   built with a custom `TargetSource` whose `isStatic()` returns `false`. A factory method the bean's class declares
   runs there as before, and a static factory method always runs, since it reads no bean.
 - In Kotlin a superclass method is final unless it is marked `open`, and the `kotlin-spring` plugin opens a class only

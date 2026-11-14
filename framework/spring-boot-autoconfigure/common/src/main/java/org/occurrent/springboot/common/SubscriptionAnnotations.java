@@ -372,7 +372,7 @@ public final class SubscriptionAnnotations {
                 }
                 Method runInstead = methodACglibProxyRunsInsteadOf(method, targetUserClass);
                 if (runInstead != null) {
-                    throw new IllegalStateException("%s factory %s#%s cannot run because it is package-private and %s declares a method of the same name and parameter types without overriding it, so the CGLIB proxy around the bean runs that method instead. Rename one of the two methods.".formatted(annotationName, declaringClass.getName(), method.getName(), runInstead.getDeclaringClass().getName()));
+                    throw new IllegalStateException("%s factory %s#%s cannot run because it is package-private and declared in %s, and %s declares a method of the same name and parameter types without overriding it, so the CGLIB proxy around the bean runs that method instead. Rename one of the two methods.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName(), runInstead.getDeclaringClass().getName()));
                 }
             }
         }
@@ -650,12 +650,13 @@ public final class SubscriptionAnnotations {
         // MethodIntrospector reads a package-private method through ClassUtils.getMostSpecificMethod, which takes the
         // first method of the same signature up from type when type is in the method's package, even a method of
         // another package that doesn't override it. The method MethodIntrospector never inspects is still the one the
-        // JVM runs, so every package-private method of the hierarchy is inspected here as well
+        // JVM runs, so each package-private method that ClassUtils.getMostSpecificMethod replaces is inspected here
         for (Class<?> candidateClass = type; candidateClass != null && candidateClass != Object.class; candidateClass = candidateClass.getSuperclass()) {
             for (Method method : candidateClass.getDeclaredMethods()) {
                 int modifiers = method.getModifiers();
                 boolean packagePrivate = !Modifier.isPublic(modifiers) && !Modifier.isProtected(modifiers) && !Modifier.isPrivate(modifiers);
-                if (packagePrivate && !method.isSynthetic() && !handlers.contains(method) && Boolean.TRUE.equals(handlerLookup.inspect(method))) {
+                if (packagePrivate && !method.isSynthetic() && ClassUtils.getMostSpecificMethod(method, type) != method
+                        && !handlers.contains(method) && Boolean.TRUE.equals(handlerLookup.inspect(method))) {
                     handlers.add(method);
                 }
             }

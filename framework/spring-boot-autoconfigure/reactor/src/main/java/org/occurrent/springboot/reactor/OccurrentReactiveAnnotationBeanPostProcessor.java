@@ -354,8 +354,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
                 continue;
             }
-            for (Method method : SubscriptionAnnotations.handlerMethods(type, subscribableExists ? HANDLER_ANNOTATIONS : SUBSCRIPTION_ANNOTATIONS)) {
-                HandlerMethod handler = HandlerMethod.in(type, method);
+            Set<Method> handlerMethods = SubscriptionAnnotations.handlerMethods(type, subscribableExists ? HANDLER_ANNOTATIONS : SUBSCRIPTION_ANNOTATIONS);
+            for (Method method : handlerMethods) {
+                HandlerMethod handler = HandlerMethod.in(handlerMethods, method);
                 if (registeredHandlers.isRegistered(beanName, handler)) {
                     continue;
                 }

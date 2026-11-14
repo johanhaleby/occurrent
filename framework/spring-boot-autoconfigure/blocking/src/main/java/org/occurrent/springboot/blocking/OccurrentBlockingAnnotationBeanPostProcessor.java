@@ -334,8 +334,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
                 continue;
             }
-            for (Method method : SubscriptionAnnotations.handlerMethods(type, HANDLER_ANNOTATIONS)) {
-                HandlerMethod handler = HandlerMethod.in(type, method);
+            Set<Method> handlerMethods = SubscriptionAnnotations.handlerMethods(type, HANDLER_ANNOTATIONS);
+            for (Method method : handlerMethods) {
+                HandlerMethod handler = HandlerMethod.in(handlerMethods, method);
                 if (registeredHandlers.isRegistered(beanName, handler)) {
                     continue;
                 }
