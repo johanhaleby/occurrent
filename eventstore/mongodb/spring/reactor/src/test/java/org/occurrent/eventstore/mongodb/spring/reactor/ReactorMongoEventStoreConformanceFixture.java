@@ -17,6 +17,9 @@
 package org.occurrent.eventstore.mongodb.spring.reactor;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
+import com.mongodb.TransactionOptions;
+import com.mongodb.event.CommandListener;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import org.occurrent.eventstore.api.EventStoreCapability;
@@ -29,6 +32,7 @@ import org.occurrent.tck.latecommit.AppendHold;
 import org.occurrent.tck.latecommit.HeldAppend;
 import org.occurrent.tck.latecommit.LateCommits;
 import org.occurrent.testsupport.mongodb.HoldingTransactionalOperator;
+import org.springframework.data.mongodb.ReactiveMongoDatabaseFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
@@ -36,6 +40,7 @@ import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Mono;
 
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -62,21 +67,28 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
     }
 
     ReactorMongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation) {
-        this(connectionString, timeRepresentation, false);
+        this(connectionString, timeRepresentation, false, List.of(), null);
     }
 
     static ReactorMongoEventStoreConformanceFixture spreadingTypeMarkerWrites(ConnectionString connectionString) {
-        return new ReactorMongoEventStoreConformanceFixture(connectionString, RFC_3339_STRING, true);
+        return new ReactorMongoEventStoreConformanceFixture(connectionString, RFC_3339_STRING, true, List.of(), null);
     }
 
-    private ReactorMongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation, boolean spreadTypeMarkerWrites) {
+    static ReactorMongoEventStoreConformanceFixture listeningToCommands(ConnectionString connectionString, CommandListener commandListener, TransactionOptions transactionOptions) {
+        return new ReactorMongoEventStoreConformanceFixture(connectionString, RFC_3339_STRING, false, List.of(commandListener), transactionOptions);
+    }
+
+    private ReactorMongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation, boolean spreadTypeMarkerWrites, List<CommandListener> commandListeners, TransactionOptions transactionOptions) {
         this.timeRepresentation = timeRepresentation;
         this.spreadTypeMarkerWrites = spreadTypeMarkerWrites;
-        this.mongoClient = MongoClients.create(connectionString);
+        MongoClientSettings.Builder settings = MongoClientSettings.builder().applyConnectionString(connectionString);
+        commandListeners.forEach(settings::addCommandListener);
+        this.mongoClient = MongoClients.create(settings.build());
         String database = requireNonNull(connectionString.getDatabase());
         this.collection = connectionString.getCollection();
-        this.mongoTemplate = new ReactiveMongoTemplate(mongoClient, database);
-        this.transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, database));
+        ReactiveMongoDatabaseFactory databaseFactory = new SimpleReactiveMongoDatabaseFactory(mongoClient, database);
+        this.mongoTemplate = new ReactiveMongoTemplate(databaseFactory);
+        this.transactionManager = new ReactiveMongoTransactionManager(databaseFactory, transactionOptions);
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(connectionString.getCollection())
                 .transactionConfig(transactionManager)
