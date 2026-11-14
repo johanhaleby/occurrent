@@ -43,6 +43,7 @@ import org.occurrent.springboot.blocking.shadowed.a.A;
 import org.occurrent.springboot.blocking.shadowed.a.LeafOfAnnotated;
 import org.occurrent.springboot.blocking.shadowed.a.LeafOfPrivate;
 import org.occurrent.springboot.blocking.shadowed.b.MidAnnotated;
+import org.occurrent.springboot.blocking.shadowed.b.MidPrivate;
 import org.occurrent.springboot.blocking.shadowing.CrossPackageRepeatingShadowing;
 import org.occurrent.springboot.blocking.shadowing.CrossPackageShadowing;
 import org.occurrent.springboot.blocking.other.CrossPackagePackagePrivateHandler;
@@ -1354,6 +1355,40 @@ class InheritedHandlerRegistrationTest {
         PrivateInheritingVaryingB(List<String> bodies) {
             super(bodies);
         }
+    }
+
+    @Test
+    void a_prototype_returning_a_subclass_that_declares_an_unannotated_private_method_of_the_inherited_private_handlers_signature_is_skipped() {
+        assertSecondInstanceIsSkipped(PrivateVaryingA::new, PrivateShadowingVaryingB::new);
+    }
+
+    static class PrivateShadowingVaryingB extends PrivateVaryingA {
+        PrivateShadowingVaryingB(List<String> bodies) {
+            super(bodies);
+        }
+
+        @SuppressWarnings("unused")
+        private void on(TestEvent event) {
+        }
+    }
+
+    @Test
+    void a_prototype_returning_a_subclass_that_declares_an_unannotated_private_method_of_the_inherited_package_private_handlers_signature_is_skipped() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        runner.withBean("varying", Object.class, () -> created.getAndIncrement() == 0 ? new A(bodies) : new MidPrivate(bodies),
+                beanDefinition -> beanDefinition.setScope("prototype")).run(context -> {
+            assertThat(context).hasNotFailed();
+            context.getBean("varying");
+
+            assertThatCode(() -> context.getBean("varying")).doesNotThrowAnyException();
+
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            assertThat(created).describedAs("both instances were built").hasValue(2);
+            assertThat(subscribedIds(subscriptions)).containsExactly("a-handler");
+            anyHandlerFor(subscriptions, "a-handler").invoke(null, new CrossPackageEvent());
+            assertThat(bodies).describedAs("the handler stays on the instance that registered it").containsExactly("a-body");
+        });
     }
 
     static class PackagePrivateVaryingA implements VaryingMarker {

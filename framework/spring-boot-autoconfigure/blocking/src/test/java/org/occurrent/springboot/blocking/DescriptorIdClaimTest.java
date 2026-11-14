@@ -115,7 +115,8 @@ class DescriptorIdClaimTest {
             Method method = OccurrentBlockingAnnotationBeanPostProcessor.class.getDeclaredMethod(
                     "registerDescriptor", String.class, HandlerMethod.class, String.class, String.class, Runnable.class);
             method.setAccessible(true);
-            HandlerMethod anyHandler = HandlerMethod.in(DescriptorIdClaimTest.class, DescriptorIdClaimTest.class.getDeclaredMethod("canHold", Class.class, Class.class));
+            Method anyMethod = DescriptorIdClaimTest.class.getDeclaredMethod("canHold", Class.class, Class.class);
+            HandlerMethod anyHandler = HandlerMethod.in(Set.of(anyMethod), anyMethod);
             method.invoke(coordinator, beanName, anyHandler, id,
                     "Duplicate subscription/projection id '%s', each id must be unique because it is the durable checkpoint key.".formatted(id),
                     registration);

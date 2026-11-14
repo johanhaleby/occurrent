@@ -24,6 +24,7 @@ import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
@@ -85,7 +86,8 @@ class LateRegistrationConcurrencyContractTest {
     @Test
     void concurrent_registrations_of_one_handler_register_it_once() throws Exception {
         RegisteredHandlers registeredHandlers = (RegisteredHandlers) valueOf(new OccurrentBlockingAnnotationBeanPostProcessor(), "registeredHandlers");
-        HandlerMethod handler = HandlerMethod.in(RegisteringHandler.class, RegisteringHandler.class.getDeclaredMethod("on", String.class));
+        Method method = RegisteringHandler.class.getDeclaredMethod("on", String.class);
+        HandlerMethod handler = HandlerMethod.in(Set.of(method), method);
         int threads = 16;
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         try {

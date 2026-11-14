@@ -988,12 +988,13 @@ class SubscriptionAnnotationsTest {
         Class<?> scanned = SubscriptionAnnotations.implementationClassOf(proxy);
         assertThat(scanned).describedAs("the class the target source names").isEqualTo(GenericHandlerBean.class);
 
-        Method fromTheProxy = SubscriptionAnnotations.handlerMethods(scanned, MARKERS).iterator().next();
+        Set<Method> handlers = SubscriptionAnnotations.handlerMethods(scanned, MARKERS);
+        Method fromTheProxy = handlers.iterator().next();
         Method interfaceMethod = GenericHandler.class.getDeclaredMethod("on", Object.class);
 
-        assertThat(HandlerMethod.in(scanned, interfaceMethod).signature())
+        assertThat(HandlerMethod.in(handlers, interfaceMethod).signature())
                 .describedAs("the interface method keys differently from the class method, so a scan that read it would register a second handler")
-                .isNotEqualTo(HandlerMethod.in(scanned, fromTheProxy).signature());
+                .isNotEqualTo(HandlerMethod.in(handlers, fromTheProxy).signature());
     }
 
     @Test
@@ -1001,24 +1002,56 @@ class SubscriptionAnnotationsTest {
         Set<Method> scanned = SubscriptionAnnotations.handlerMethods(PrivateHandlerSubclass.class, MARKERS);
 
         assertThat(scanned).hasSize(2);
-        assertThat(scanned.stream().map(method -> HandlerMethod.in(PrivateHandlerSubclass.class, method).signature()).distinct()).hasSize(2);
+        assertThat(scanned.stream().map(method -> HandlerMethod.in(scanned, method).signature()).distinct()).hasSize(2);
     }
 
     @Test
     void handlerMethod_gives_a_cross_package_package_private_method_and_its_subclasss_method_distinct_signatures() throws Exception {
-        HandlerMethod base = HandlerMethod.in(PackagePrivateSubclassOfOtherPackage.class, crossPackagePackagePrivate());
-        HandlerMethod subclass = HandlerMethod.in(PackagePrivateSubclassOfOtherPackage.class, PackagePrivateSubclassOfOtherPackage.class.getDeclaredMethod("packagePrivate"));
+        Method baseMethod = crossPackagePackagePrivate();
+        Method subclassMethod = PackagePrivateSubclassOfOtherPackage.class.getDeclaredMethod("packagePrivate");
+        Set<Method> handlers = Set.of(baseMethod, subclassMethod);
+        HandlerMethod base = HandlerMethod.in(handlers, baseMethod);
+        HandlerMethod subclass = HandlerMethod.in(handlers, subclassMethod);
 
         assertThat(base.signature()).isNotEqualTo(subclass.signature());
     }
 
     @Test
     void handlerMethod_leaves_the_declaring_class_out_of_the_signature_of_an_inherited_public_or_protected_method() throws Exception {
-        HandlerMethod publicMethod = HandlerMethod.in(InheritsCrossPackageMethods.class, CrossPackageMethods.class.getDeclaredMethod("publicMethod"));
-        HandlerMethod protectedMethod = HandlerMethod.in(InheritsCrossPackageMethods.class, CrossPackageMethods.class.getDeclaredMethod("protectedMethod"));
+        Method publicMethodDeclaration = CrossPackageMethods.class.getDeclaredMethod("publicMethod");
+        Method protectedMethodDeclaration = CrossPackageMethods.class.getDeclaredMethod("protectedMethod");
+        Set<Method> handlers = Set.of(publicMethodDeclaration, protectedMethodDeclaration);
+        HandlerMethod publicMethod = HandlerMethod.in(handlers, publicMethodDeclaration);
+        HandlerMethod protectedMethod = HandlerMethod.in(handlers, protectedMethodDeclaration);
 
         assertThat(publicMethod.signature()).isEqualTo("publicMethod[]").doesNotContain(CrossPackageMethods.class.getName());
         assertThat(protectedMethod.signature()).isEqualTo("protectedMethod[]").doesNotContain(CrossPackageMethods.class.getName());
+    }
+
+    @Test
+    void handlerMethod_keys_a_package_private_handler_the_same_when_a_subclass_in_another_package_declares_an_unannotated_private_method_of_its_signature() throws Exception {
+        Method handler = A.class.getDeclaredMethod("on", String.class);
+        Set<Method> scannedForA = SubscriptionAnnotations.handlerMethods(A.class, List.of(Subscription.class));
+        Set<Method> scannedForLeaf = SubscriptionAnnotations.handlerMethods(LeafOfPrivate.class, List.of(Subscription.class));
+
+        assertThat(scannedForLeaf).containsExactly(handler);
+        assertThat(HandlerMethod.in(scannedForLeaf, handler).signature())
+                .describedAs("an unannotated method of the same signature below the handler is not a handler, so it adds no owner")
+                .isEqualTo(HandlerMethod.in(scannedForA, handler).signature())
+                .doesNotContain(A.class.getName());
+    }
+
+    @Test
+    void handlerMethod_keys_a_package_private_handler_differently_when_a_subclass_in_another_package_declares_an_annotated_method_of_its_signature() throws Exception {
+        Method handler = A.class.getDeclaredMethod("on", String.class);
+        Set<Method> scannedForA = SubscriptionAnnotations.handlerMethods(A.class, List.of(Subscription.class));
+        Set<Method> scannedForLeaf = SubscriptionAnnotations.handlerMethods(LeafOfAnnotated.class, List.of(Subscription.class));
+
+        assertThat(scannedForLeaf).hasSize(2);
+        assertThat(HandlerMethod.in(scannedForLeaf, handler).signature())
+                .describedAs("an annotated method of the same signature below the handler is a second handler, so the owner tells the two apart")
+                .isNotEqualTo(HandlerMethod.in(scannedForA, handler).signature())
+                .startsWith(A.class.getName() + "#");
     }
 
     // ------------------------------------------------------------------------------------------------------
@@ -1297,7 +1330,8 @@ class SubscriptionAnnotationsTest {
 
         assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, PackagePrivateFactoryBase.class.getDeclaredMethod("factory")))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("@Projection factory " + PackagePrivateFactoryBase.class.getName() + "#factory")
+                .hasMessageContaining("@Projection factory " + proxy.getClass().getName() + "#factory")
+                .hasMessageContaining("cannot run because it is package-private and declared in " + PackagePrivateFactoryBase.class.getName() + ", and " + PublicFactoryThatDoesNotOverride.class.getName())
                 .hasMessageContaining(PublicFactoryThatDoesNotOverride.class.getName() + " declares a method of the same name and parameter types without overriding it");
     }
 

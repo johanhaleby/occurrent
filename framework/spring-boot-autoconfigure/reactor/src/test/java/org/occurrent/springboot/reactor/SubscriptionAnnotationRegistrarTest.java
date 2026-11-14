@@ -31,6 +31,7 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.springframework.context.ApplicationContext;
 
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -123,7 +124,8 @@ class SubscriptionAnnotationRegistrarTest {
     }
 
     private static HandlerMethod handlerOf(Class<?> scanned, String name) throws Exception {
-        return HandlerMethod.in(scanned, scanned.getDeclaredMethod(name, TestEvent.class));
+        Method method = scanned.getDeclaredMethod(name, TestEvent.class);
+        return HandlerMethod.in(Set.of(method), method);
     }
 
     static class TwoValidSubscriber {
