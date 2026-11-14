@@ -420,12 +420,13 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     void a_takeover_replay_a_stop_and_a_start_replaced_that_fails_with_a_lost_live_start_afterwards_leaves_the_subscription_resumable_and_delivering() throws InterruptedException {
         // Given a takeover replay whose read fails with a lost live start after its first event, whose action stops and starts the model
         LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
-        AtomicInteger reads = new AtomicInteger();
+        AtomicBoolean takeoverBegins = new AtomicBoolean();
+        AtomicBoolean takeoverReads = new AtomicBoolean();
         UnscopedPositionOrderedReader failsTheTakeoverReplayRead = new UnscopedPositionOrderedReader() {
             @Override
             public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
                 Flux<CloudEvent> read = reader.readInPositionOrder(filter, range);
-                return reads.incrementAndGet() == 2
+                return takeoverBegins.compareAndSet(true, false) && takeoverReads.compareAndSet(false, true)
                         ? read.take(1).concatWith(Flux.error(() -> HistoryLossMessages.liveStartLost("The live start was lost.", GlobalCheckpoint.of(3), false)))
                         : read;
             }
@@ -444,7 +445,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         AtomicBoolean replaced = new AtomicBoolean();
         try (LoggedByTheCatchup logged = new LoggedByTheCatchup()) {
             Subscription subscription = catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
-                if (reads.get() == 2 && replaced.compareAndSet(false, true)) {
+                if (takeoverReads.get() && replaced.compareAndSet(false, true)) {
                     catchup.stop();
                     catchup.start(true);
                 }
@@ -454,6 +455,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
             reader.head = 4;
 
             // When the takeover replay is replaced and then fails
+            takeoverBegins.set(true);
             wrapped.opensAndLosesTheLiveStart();
             org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(logged.warnings()).as("warnings logged")
                     .anyMatch(message -> message.contains("ran a newer replay, which keeps running")));
