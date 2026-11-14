@@ -17,8 +17,6 @@
 
 package org.occurrent.springboot.common.internal;
 
-import org.occurrent.springboot.common.SubscriptionAnnotations;
-
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
@@ -33,13 +31,13 @@ import java.util.Set;
  * handler adds nothing, so a class that inherits the handler keys it the way a scan of its declaring class does.
  * Internal to the Spring Boot starters, not an API.
  *
- * @param method    the method {@link SubscriptionAnnotations#handlerMethods} returned
+ * @param method    the method {@link HandlerScan#handlerMethods} returned
  * @param signature the part of the registration key that identifies the handler within its bean
  */
 public record HandlerMethod(Method method, String signature) {
 
     /**
-     * @param handlers every method the scan returned, from {@link SubscriptionAnnotations#handlerMethods}
+     * @param handlers every method the scan returned, from {@link HandlerScan#handlerMethods}
      * @param method   one of {@code handlers}
      * @return {@code method} with its signature
      */

@@ -42,6 +42,7 @@ import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
@@ -110,14 +111,14 @@ class SnapshotAnnotationRegistrar {
             throw new IllegalArgumentException("@Snapshot '%s' everyNEvents must be at least 1, but was %d.".formatted(id, everyNEvents));
         }
         if (descriptor instanceof DcbSnapshotView<?, ?> rawDcb) {
-            processDcbSnapshot(id, annotation, synchronous, converter, (DcbSnapshotView<S, E>) rawDcb, this.<S>resolveReactiveSnapshotStore(annotation, method, SubscriptionAnnotations.implementationClassOf(bean), id), everyNEvents, mayBlock, subscribeCall);
+            processDcbSnapshot(id, annotation, synchronous, converter, (DcbSnapshotView<S, E>) rawDcb, this.<S>resolveReactiveSnapshotStore(annotation, method, HandlerScan.implementationClassOf(bean), id), everyNEvents, mayBlock, subscribeCall);
             return;
         }
         if (!(descriptor instanceof SnapshotView<?, ?>)) {
             throw new IllegalArgumentException("@Snapshot '%s' method %s#%s must return a SnapshotView or DcbSnapshotView, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor.getClass().getName()));
         }
         SnapshotView<S, E> snapshotView = (SnapshotView<S, E>) descriptor;
-        ReactiveSnapshotStore<S> store = resolveReactiveSnapshotStore(annotation, method, SubscriptionAnnotations.implementationClassOf(bean), id);
+        ReactiveSnapshotStore<S> store = resolveReactiveSnapshotStore(annotation, method, HandlerScan.implementationClassOf(bean), id);
         int schemaVersion = snapshotView.schemaVersion();
         View<S, E> view = snapshotView.view();
         Filter eventFilter = snapshotFilterFor(converter, snapshotView);
@@ -372,7 +373,7 @@ class SnapshotAnnotationRegistrar {
 
 
     private static Class<?> reflectSnapshotStateType(Method factoryMethod, Class<?> implementation, String id) {
-        Class<?> stateType = SubscriptionAnnotations.returnTypeArgument(factoryMethod, implementation, 0);
+        Class<?> stateType = HandlerScan.returnTypeArgument(factoryMethod, implementation, 0);
         if (stateType != null) {
             return stateType;
         }

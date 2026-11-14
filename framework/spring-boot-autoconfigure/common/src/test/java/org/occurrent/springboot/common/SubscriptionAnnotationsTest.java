@@ -25,6 +25,7 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.springboot.common.internal.HandlerMethod;
+import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.springboot.common.between.PublicFactoryThatDoesNotOverride;
 import org.occurrent.springboot.common.between.PublicMethodThatDoesNotOverride;
 import org.occurrent.springboot.common.bridged.PublicLeafWithBridges;
@@ -309,36 +310,36 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void handlerMethods_finds_a_method_the_class_inherits_from_a_superclass() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(InheritsHandler.class, MARKERS))
+        assertThat(HandlerScan.handlerMethods(InheritsHandler.class, MARKERS))
                 .containsExactly(AnnotatedBase.class.getDeclaredMethod("handle", String.class));
     }
 
     @Test
     void handlerMethods_finds_an_interface_default_method() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(GetsDefaultHandler.class, MARKERS))
+        assertThat(HandlerScan.handlerMethods(GetsDefaultHandler.class, MARKERS))
                 .containsExactly(DefaultHandler.class.getDeclaredMethod("handle", String.class));
     }
 
     @Test
     void handlerMethods_leaves_out_a_method_without_any_of_the_annotations() {
-        assertThat(SubscriptionAnnotations.handlerMethods(InheritsHandler.class, List.of(OtherMarked.class))).isEmpty();
+        assertThat(HandlerScan.handlerMethods(InheritsHandler.class, List.of(OtherMarked.class))).isEmpty();
     }
 
     @Test
     void handlerMethods_gives_an_override_that_drops_the_annotation_once_as_the_override() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(OverridesWithoutAnnotation.class, MARKERS))
+        assertThat(HandlerScan.handlerMethods(OverridesWithoutAnnotation.class, MARKERS))
                 .containsExactly(OverridesWithoutAnnotation.class.getDeclaredMethod("handle", String.class));
     }
 
     @Test
     void handlerMethods_gives_an_override_of_an_interface_default_method_once_as_the_override() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(OverridesDefaultWithoutAnnotation.class, MARKERS))
+        assertThat(HandlerScan.handlerMethods(OverridesDefaultWithoutAnnotation.class, MARKERS))
                 .containsExactly(OverridesDefaultWithoutAnnotation.class.getDeclaredMethod("handle", String.class));
     }
 
     @Test
     void handlerMethods_leaves_out_the_bridge_method_of_a_generic_override() {
-        assertThat(SubscriptionAnnotations.handlerMethods(ConcreteOfGeneric.class, MARKERS))
+        assertThat(HandlerScan.handlerMethods(ConcreteOfGeneric.class, MARKERS))
                 .singleElement()
                 .satisfies(method -> {
                     assertThat(method.isBridge()).isFalse();
@@ -349,14 +350,14 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void handlerMethods_leaves_out_the_bridge_method_when_the_generic_override_re_declares_an_annotation() {
-        assertThat(SubscriptionAnnotations.handlerMethods(ReDeclaresOnGeneric.class, MARKERS))
+        assertThat(HandlerScan.handlerMethods(ReDeclaresOnGeneric.class, MARKERS))
                 .singleElement()
                 .satisfies(method -> assertThat(method.isBridge()).isFalse());
     }
 
     @Test
     void handlerMethods_keeps_two_private_methods_of_one_signature_on_a_class_and_its_superclass_apart() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(PrivateSub.class, MARKERS))
+        assertThat(HandlerScan.handlerMethods(PrivateSub.class, MARKERS))
                 .containsExactlyInAnyOrder(PrivateBase.class.getDeclaredMethod("handle", String.class), PrivateSub.class.getDeclaredMethod("handle", String.class));
     }
 
@@ -985,10 +986,10 @@ class SubscriptionAnnotationsTest {
         proxyFactory.setInterfaces(GenericHandler.class);
         proxyFactory.setProxyTargetClass(false);
         Object proxy = proxyFactory.getProxy();
-        Class<?> scanned = SubscriptionAnnotations.implementationClassOf(proxy);
+        Class<?> scanned = HandlerScan.implementationClassOf(proxy);
         assertThat(scanned).describedAs("the class the target source names").isEqualTo(GenericHandlerBean.class);
 
-        Set<Method> handlers = SubscriptionAnnotations.handlerMethods(scanned, MARKERS);
+        Set<Method> handlers = HandlerScan.handlerMethods(scanned, MARKERS);
         Method fromTheProxy = handlers.iterator().next();
         Method interfaceMethod = GenericHandler.class.getDeclaredMethod("on", Object.class);
 
@@ -999,7 +1000,7 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void handlerMethod_gives_a_private_method_and_the_private_method_of_its_subclass_distinct_signatures() {
-        Set<Method> scanned = SubscriptionAnnotations.handlerMethods(PrivateHandlerSubclass.class, MARKERS);
+        Set<Method> scanned = HandlerScan.handlerMethods(PrivateHandlerSubclass.class, MARKERS);
 
         assertThat(scanned).hasSize(2);
         assertThat(scanned.stream().map(method -> HandlerMethod.in(scanned, method).signature()).distinct()).hasSize(2);
@@ -1031,8 +1032,8 @@ class SubscriptionAnnotationsTest {
     @Test
     void handlerMethod_keys_a_package_private_handler_the_same_when_a_subclass_in_another_package_declares_an_unannotated_private_method_of_its_signature() throws Exception {
         Method handler = A.class.getDeclaredMethod("on", String.class);
-        Set<Method> scannedForA = SubscriptionAnnotations.handlerMethods(A.class, List.of(Subscription.class));
-        Set<Method> scannedForLeaf = SubscriptionAnnotations.handlerMethods(LeafOfPrivate.class, List.of(Subscription.class));
+        Set<Method> scannedForA = HandlerScan.handlerMethods(A.class, List.of(Subscription.class));
+        Set<Method> scannedForLeaf = HandlerScan.handlerMethods(LeafOfPrivate.class, List.of(Subscription.class));
 
         assertThat(scannedForLeaf).containsExactly(handler);
         assertThat(HandlerMethod.in(scannedForLeaf, handler).signature())
@@ -1044,8 +1045,8 @@ class SubscriptionAnnotationsTest {
     @Test
     void handlerMethod_keys_a_package_private_handler_differently_when_a_subclass_in_another_package_declares_an_annotated_method_of_its_signature() throws Exception {
         Method handler = A.class.getDeclaredMethod("on", String.class);
-        Set<Method> scannedForA = SubscriptionAnnotations.handlerMethods(A.class, List.of(Subscription.class));
-        Set<Method> scannedForLeaf = SubscriptionAnnotations.handlerMethods(LeafOfAnnotated.class, List.of(Subscription.class));
+        Set<Method> scannedForA = HandlerScan.handlerMethods(A.class, List.of(Subscription.class));
+        Set<Method> scannedForLeaf = HandlerScan.handlerMethods(LeafOfAnnotated.class, List.of(Subscription.class));
 
         assertThat(scannedForLeaf).hasSize(2);
         assertThat(HandlerMethod.in(scannedForLeaf, handler).signature())
@@ -1076,7 +1077,7 @@ class SubscriptionAnnotationsTest {
         String shadowing = ShadowsPackagePrivateHandler.class.getName() + "#on(String)";
         String shadowed = CrossPackageSubscriptionBase.class.getName() + "#on(String)";
 
-        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(ShadowsPackagePrivateHandler.class, List.of(Subscription.class)))
+        assertThatThrownBy(() -> HandlerScan.handlerMethods(ShadowsPackagePrivateHandler.class, List.of(Subscription.class)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Method " + shadowing + " does not override " + shadowed)
                 .hasMessageContaining("@Subscription with id \"h\"")
@@ -1089,7 +1090,7 @@ class SubscriptionAnnotationsTest {
         String shadowing = ShadowsPackagePrivateHandler.class.getName() + "#on(String)";
         String shadowed = CrossPackageSubscriptionBase.class.getName() + "#on(String)";
 
-        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(ShadowsPackagePrivateHandler.class, List.of(Subscription.class)))
+        assertThatThrownBy(() -> HandlerScan.handlerMethods(ShadowsPackagePrivateHandler.class, List.of(Subscription.class)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Make both ")
                 .hasMessageContaining(shadowed + " and " + shadowing + " protected or public");
@@ -1106,7 +1107,7 @@ class SubscriptionAnnotationsTest {
         String shadowing = StaticMethodShadowsPackagePrivateHandler.class.getName() + "#on(String)";
         String shadowed = CrossPackageSubscriptionBase.class.getName() + "#on(String)";
 
-        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(StaticMethodShadowsPackagePrivateHandler.class, List.of(Subscription.class)))
+        assertThatThrownBy(() -> HandlerScan.handlerMethods(StaticMethodShadowsPackagePrivateHandler.class, List.of(Subscription.class)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Method " + shadowing + " is static, so it does not override " + shadowed)
                 .hasMessageContaining("@Subscription with id \"h\"")
@@ -1170,7 +1171,7 @@ class SubscriptionAnnotationsTest {
     }
 
     private static Method bridgeTheScanReadsFrom(Class<?> type) {
-        Set<Method> handlers = SubscriptionAnnotations.handlerMethods(type, List.of(Subscription.class));
+        Set<Method> handlers = HandlerScan.handlerMethods(type, List.of(Subscription.class));
         assertThat(handlers).singleElement().satisfies(handler -> {
             assertThat(handler.isBridge()).isTrue();
             assertThat(handler.getDeclaringClass()).isEqualTo(PublicLeafWithBridges.class);
@@ -1234,7 +1235,7 @@ class SubscriptionAnnotationsTest {
     void handlerMethods_returns_the_interface_method_for_a_jdk_proxy_class() throws Exception {
         Class<?> proxyClass = Proxy.newProxyInstance(ProxiedHandler.class.getClassLoader(), new Class<?>[]{ProxiedHandler.class}, (proxy, method, args) -> null).getClass();
 
-        assertThat(SubscriptionAnnotations.handlerMethods(proxyClass, List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(proxyClass, List.of(Subscription.class)))
                 .containsExactly(ProxiedHandler.class.getDeclaredMethod("on", String.class));
     }
 
@@ -1255,31 +1256,31 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void handlerMethods_returns_the_package_private_override_once_for_a_class_in_another_package_that_declares_nothing() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(SubOfPackagePrivateOverridingMid.class, List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(SubOfPackagePrivateOverridingMid.class, List.of(Subscription.class)))
                 .containsExactly(PackagePrivateOverridingMid.class.getDeclaredMethod("on", String.class));
     }
 
     @Test
     void handlerMethods_returns_the_public_override_of_a_package_private_handler_once_for_a_class_in_another_package_that_overrides_it_again() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(OverridesWidenedMid.class, List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(OverridesWidenedMid.class, List.of(Subscription.class)))
                 .containsExactly(OverridesWidenedMid.class.getDeclaredMethod("on", String.class));
     }
 
     @Test
     void handlerMethods_returns_the_last_override_of_a_chain_that_starts_with_a_package_private_handler_and_widens_to_public() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(OverridesWidenedMidOfPackagePrivateMid.class, List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(OverridesWidenedMidOfPackagePrivateMid.class, List.of(Subscription.class)))
                 .containsExactly(OverridesWidenedMidOfPackagePrivateMid.class.getDeclaredMethod("on", String.class));
     }
 
     @Test
     void handlerMethods_returns_the_widened_override_of_a_chain_for_a_class_in_another_package_that_declares_nothing() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(InheritsWidenedMidOfPackagePrivateMid.class, List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(InheritsWidenedMidOfPackagePrivateMid.class, List.of(Subscription.class)))
                 .containsExactly(PublicOverridingOfPackagePrivateMid.class.getDeclaredMethod("on", String.class));
     }
 
     @Test
     void handlerMethods_returns_only_the_override_in_the_handlers_package_of_a_class_that_extends_a_method_that_does_not_override_the_handler() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(OverridesHandlerBelowAMethodThatDoesNot.class, List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(OverridesHandlerBelowAMethodThatDoesNot.class, List.of(Subscription.class)))
                 .containsExactly(OverridesHandlerBelowAMethodThatDoesNot.class.getDeclaredMethod("on", String.class));
     }
 
@@ -1288,7 +1289,7 @@ class SubscriptionAnnotationsTest {
         String shadowing = PublicMethodThatDoesNotOverride.class.getName() + "#on(String)";
         String shadowed = PackagePrivateHandlerBase.class.getName() + "#on(String)";
 
-        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(SubclassInDeclaringPackage.class, List.of(Subscription.class)))
+        assertThatThrownBy(() -> HandlerScan.handlerMethods(SubclassInDeclaringPackage.class, List.of(Subscription.class)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(shadowing)
                 .hasMessageContaining(shadowed)
@@ -1297,13 +1298,13 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void handlerMethods_returns_a_package_private_handler_below_a_private_method_of_the_same_signature_in_another_package() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(LeafOfPrivate.class, List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(LeafOfPrivate.class, List.of(Subscription.class)))
                 .containsExactly(A.class.getDeclaredMethod("on", String.class));
     }
 
     @Test
     void handlerMethods_returns_both_a_package_private_handler_and_the_annotated_method_of_the_same_signature_above_it_in_another_package() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(LeafOfAnnotated.class, List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(LeafOfAnnotated.class, List.of(Subscription.class)))
                 .containsExactlyInAnyOrder(
                         A.class.getDeclaredMethod("on", String.class),
                         MidAnnotated.class.getDeclaredMethod("on", String.class));
@@ -1313,7 +1314,7 @@ class SubscriptionAnnotationsTest {
     void methodACglibProxyRunsInsteadOf_gives_the_public_method_of_another_package_that_sits_below_the_package_private_handler() throws Exception {
         Method handler = A.class.getDeclaredMethod("on", String.class);
 
-        assertThat(SubscriptionAnnotations.methodACglibProxyRunsInsteadOf(handler, LeafOfAnnotated.class))
+        assertThat(HandlerScan.methodACglibProxyRunsInsteadOf(handler, LeafOfAnnotated.class))
                 .isEqualTo(MidAnnotated.class.getDeclaredMethod("on", String.class));
     }
 
@@ -1321,7 +1322,7 @@ class SubscriptionAnnotationsTest {
     void methodACglibProxyRunsInsteadOf_gives_null_when_the_method_below_the_package_private_handler_is_private() throws Exception {
         Method handler = A.class.getDeclaredMethod("on", String.class);
 
-        assertThat(SubscriptionAnnotations.methodACglibProxyRunsInsteadOf(handler, LeafOfPrivate.class)).isNull();
+        assertThat(HandlerScan.methodACglibProxyRunsInsteadOf(handler, LeafOfPrivate.class)).isNull();
     }
 
     @Test
@@ -1337,7 +1338,7 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void handlerMethods_accepts_a_method_that_repeats_the_annotation_of_a_package_private_handler_in_another_package() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(RepeatsAnnotationOnShadowingMethod.class, List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(RepeatsAnnotationOnShadowingMethod.class, List.of(Subscription.class)))
                 .containsExactlyInAnyOrder(
                         RepeatsAnnotationOnShadowingMethod.class.getDeclaredMethod("on", String.class),
                         CrossPackageSubscriptionBase.class.getDeclaredMethod("on", String.class));
@@ -1354,12 +1355,12 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void isPackagePrivateOutsidePackageOf_is_true_for_a_package_private_method_declared_in_another_package() throws Exception {
-        assertThat(SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(crossPackagePackagePrivate(), InheritsCrossPackageMethods.class)).isTrue();
+        assertThat(HandlerScan.isPackagePrivateOutsidePackageOf(crossPackagePackagePrivate(), InheritsCrossPackageMethods.class)).isTrue();
     }
 
     @Test
     void isPackagePrivateOutsidePackageOf_is_false_for_a_package_private_method_declared_in_the_same_package() throws Exception {
-        assertThat(SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(SamePackageMethods.class.getDeclaredMethod("packagePrivate"), SamePackageMethods.class)).isFalse();
+        assertThat(HandlerScan.isPackagePrivateOutsidePackageOf(SamePackageMethods.class.getDeclaredMethod("packagePrivate"), SamePackageMethods.class)).isFalse();
     }
 
     static class PackagePrivateInALoader {
@@ -1397,18 +1398,18 @@ class SubscriptionAnnotationsTest {
         Class<?> inAnotherLoader = new DefinesPackagePrivateInALoaderItself().loadClass(PackagePrivateInALoader.class.getName());
 
         assertThat(inAnotherLoader.getPackageName()).isEqualTo(SamePackageMethods.class.getPackageName());
-        assertThat(SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(PackagePrivateInALoader.class.getDeclaredMethod("packagePrivate"), inAnotherLoader)).isTrue();
+        assertThat(HandlerScan.isPackagePrivateOutsidePackageOf(PackagePrivateInALoader.class.getDeclaredMethod("packagePrivate"), inAnotherLoader)).isTrue();
     }
 
     @Test
     void isPackagePrivateOutsidePackageOf_is_false_for_a_package_private_method_declared_in_the_same_package_name_in_the_same_class_loader() throws Exception {
-        assertThat(SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(PackagePrivateInALoader.class.getDeclaredMethod("packagePrivate"), SamePackageMethods.class)).isFalse();
+        assertThat(HandlerScan.isPackagePrivateOutsidePackageOf(PackagePrivateInALoader.class.getDeclaredMethod("packagePrivate"), SamePackageMethods.class)).isFalse();
     }
 
     @Test
     void isPackagePrivateOutsidePackageOf_is_false_for_a_public_protected_or_private_method_declared_in_another_package() throws Exception {
         for (String name : List.of("publicMethod", "protectedMethod", "privateMethod")) {
-            assertThat(SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(CrossPackageMethods.class.getDeclaredMethod(name), InheritsCrossPackageMethods.class))
+            assertThat(HandlerScan.isPackagePrivateOutsidePackageOf(CrossPackageMethods.class.getDeclaredMethod(name), InheritsCrossPackageMethods.class))
                     .describedAs(name).isFalse();
         }
     }
@@ -1499,57 +1500,57 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void returnTypeArgument_resolves_a_type_variable_the_implementation_binds() throws Exception {
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), BindsMyView.class, 0)).isEqualTo(MyView.class);
+        assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), BindsMyView.class, 0)).isEqualTo(MyView.class);
     }
 
     @Test
     void returnTypeArgument_reads_the_requested_index() throws Exception {
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateSecond"), BindsMyView.class, 1)).isEqualTo(MyView.class);
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateSecond"), BindsMyView.class, 0)).isEqualTo(String.class);
+        assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateSecond"), BindsMyView.class, 1)).isEqualTo(MyView.class);
+        assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateSecond"), BindsMyView.class, 0)).isEqualTo(String.class);
     }
 
     @Test
     void returnTypeArgument_follows_a_binding_through_an_intermediate_generic_class() throws Exception {
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), LeafOfMidLevel.class, 0)).isEqualTo(OtherView.class);
+        assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), LeafOfMidLevel.class, 0)).isEqualTo(OtherView.class);
     }
 
     @Test
     void returnTypeArgument_resolves_a_type_variable_of_a_generic_interface_the_implementation_binds() throws Exception {
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryInterface.class, "stateFirst"), InheritsInterfaceFactory.class, 0)).isEqualTo(MyView.class);
+        assertThat(HandlerScan.returnTypeArgument(method(FactoryInterface.class, "stateFirst"), InheritsInterfaceFactory.class, 0)).isEqualTo(MyView.class);
     }
 
     @Test
     void returnTypeArgument_is_null_when_the_implementation_extends_the_generic_class_raw() throws Exception {
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), RawSubclass.class, 0)).isNull();
+        assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), RawSubclass.class, 0)).isNull();
     }
 
     @Test
     void returnTypeArgument_is_null_when_the_implementation_leaves_the_type_variable_unbound() throws Exception {
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), StillGeneric.class, 0)).isNull();
+        assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), StillGeneric.class, 0)).isNull();
     }
 
     @Test
     void returnTypeArgument_is_null_when_the_implementation_is_the_generic_class_itself() throws Exception {
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), FactoryBaseOfS.class, 0)).isNull();
+        assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), FactoryBaseOfS.class, 0)).isNull();
     }
 
     @Test
     void returnTypeArgument_is_null_for_a_type_variable_the_method_itself_declares() throws Exception {
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "methodLevelVariable"), ShapesOfReturnTypes.class, 0)).isNull();
+        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "methodLevelVariable"), ShapesOfReturnTypes.class, 0)).isNull();
     }
 
     @Test
     void returnTypeArgument_is_null_for_a_wildcard_a_raw_return_type_a_non_generic_return_type_and_an_index_past_the_arguments() throws Exception {
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "wildcard"), ShapesOfReturnTypes.class, 0)).isNull();
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "raw"), ShapesOfReturnTypes.class, 0)).isNull();
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "notParameterized"), ShapesOfReturnTypes.class, 0)).isNull();
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "concrete"), ShapesOfReturnTypes.class, 2)).isNull();
+        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "wildcard"), ShapesOfReturnTypes.class, 0)).isNull();
+        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "raw"), ShapesOfReturnTypes.class, 0)).isNull();
+        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "notParameterized"), ShapesOfReturnTypes.class, 0)).isNull();
+        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "concrete"), ShapesOfReturnTypes.class, 2)).isNull();
     }
 
     @Test
     void returnTypeArgument_returns_a_concrete_class_and_the_raw_class_of_a_parameterized_argument() throws Exception {
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "concrete"), ShapesOfReturnTypes.class, 0)).isEqualTo(MyView.class);
-        assertThat(SubscriptionAnnotations.returnTypeArgument(method(ShapesOfReturnTypes.class, "parameterized"), ShapesOfReturnTypes.class, 0)).isEqualTo(List.class);
+        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "concrete"), ShapesOfReturnTypes.class, 0)).isEqualTo(MyView.class);
+        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "parameterized"), ShapesOfReturnTypes.class, 0)).isEqualTo(List.class);
     }
 
     // ------------------------------------------------------------------------------------------------------
@@ -1591,7 +1592,7 @@ class SubscriptionAnnotationsTest {
 
     private static Class<?> eventTypeRead(Class<?> declaring, Class<?> implementation) {
         Method on = java.util.Arrays.stream(declaring.getDeclaredMethods()).filter(candidate -> candidate.getName().equals("on")).findFirst().orElseThrow();
-        return SubscriptionAnnotations.eventTypeOf(SubscriptionAnnotations.analyzeParameters(on, implementation, EventMetadata.class::equals, true));
+        return SubscriptionAnnotations.eventTypeOf(HandlerScan.analyzeParameters(on, implementation, EventMetadata.class::equals, true));
     }
 
     @Test
@@ -1637,12 +1638,12 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void handlerMethods_leaves_out_a_static_method_an_interface_declares() {
-        assertThat(SubscriptionAnnotations.handlerMethods(ImplementsStaticHandlerInterface.class, MARKERS)).isEmpty();
+        assertThat(HandlerScan.handlerMethods(ImplementsStaticHandlerInterface.class, MARKERS)).isEmpty();
     }
 
     @Test
     void handlerMethods_returns_a_static_method_a_superclass_declares_so_the_registrar_can_refuse_it() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(InheritsStaticHandler.class, MARKERS))
+        assertThat(HandlerScan.handlerMethods(InheritsStaticHandler.class, MARKERS))
                 .containsExactly(StaticHandlerBase.class.getDeclaredMethod("handle", String.class));
     }
 
@@ -1662,13 +1663,13 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void handlerMethods_gives_the_sub_interface_method_for_a_jdk_proxy_built_over_a_sub_interface_that_redeclares_the_handler() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(ProxiedRedeclaringHandler.class), List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(jdkProxyClassOver(ProxiedRedeclaringHandler.class), List.of(Subscription.class)))
                 .containsExactly(ProxiedRedeclaringHandler.class.getDeclaredMethod("on", String.class));
     }
 
     @Test
     void handlerMethods_gives_one_method_for_a_jdk_proxy_listing_both_an_interface_and_its_redeclaring_sub_interface() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(ProxiedBaseHandler.class, ProxiedRedeclaringHandler.class), List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(jdkProxyClassOver(ProxiedBaseHandler.class, ProxiedRedeclaringHandler.class), List.of(Subscription.class)))
                 .containsExactly(ProxiedBaseHandler.class.getDeclaredMethod("on", String.class));
     }
 
@@ -1679,7 +1680,7 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void handlerMethods_gives_one_method_for_a_jdk_proxy_listing_an_unrelated_interface_before_a_sub_interface_redeclaring_the_handler_of_another() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(UnrelatedProxiedHandler.class, ProxiedRedeclaringHandler.class), List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(jdkProxyClassOver(UnrelatedProxiedHandler.class, ProxiedRedeclaringHandler.class), List.of(Subscription.class)))
                 .containsExactly(UnrelatedProxiedHandler.class.getDeclaredMethod("on", String.class));
     }
 
@@ -1701,13 +1702,13 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void handlerMethods_gives_the_annotated_method_for_a_jdk_proxy_listing_an_unannotated_interface_before_an_annotated_one_declaring_the_same_signature() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(ProxiedPlainOn.class, UnrelatedProxiedHandler.class), List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(jdkProxyClassOver(ProxiedPlainOn.class, UnrelatedProxiedHandler.class), List.of(Subscription.class)))
                 .containsExactly(UnrelatedProxiedHandler.class.getDeclaredMethod("on", String.class));
     }
 
     @Test
     void handlerMethods_gives_one_method_for_a_jdk_proxy_listing_two_sub_interfaces_that_each_redeclare_the_same_handler() throws Exception {
-        assertThat(SubscriptionAnnotations.handlerMethods(jdkProxyClassOver(ProxiedRedeclaringHandlerWithOwnId.class, ProxiedSiblingRedeclaringHandlerWithOwnId.class), List.of(Subscription.class)))
+        assertThat(HandlerScan.handlerMethods(jdkProxyClassOver(ProxiedRedeclaringHandlerWithOwnId.class, ProxiedSiblingRedeclaringHandlerWithOwnId.class), List.of(Subscription.class)))
                 .containsExactly(ProxiedRedeclaringHandlerWithOwnId.class.getDeclaredMethod("on", String.class));
     }
 
@@ -1725,7 +1726,7 @@ class SubscriptionAnnotationsTest {
     void handlerMethods_refuses_a_jdk_proxy_listing_a_subscription_interface_before_a_synchronous_subscription_interface_declaring_the_same_signature() {
         Class<?> proxyClass = jdkProxyClassOver(ProxiedAsynchronousOn.class, ProxiedSynchronousOn.class);
 
-        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(proxyClass, List.of(Subscription.class, SynchronousSubscription.class)))
+        assertThatThrownBy(() -> HandlerScan.handlerMethods(proxyClass, List.of(Subscription.class, SynchronousSubscription.class)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("same name and parameter types")
                 .hasMessageContaining("@Subscription")
@@ -1736,7 +1737,7 @@ class SubscriptionAnnotationsTest {
     void handlerMethods_refuses_a_jdk_proxy_listing_a_synchronous_subscription_interface_before_a_subscription_interface_declaring_the_same_signature() {
         Class<?> proxyClass = jdkProxyClassOver(ProxiedSynchronousOn.class, ProxiedAsynchronousOn.class);
 
-        assertThatThrownBy(() -> SubscriptionAnnotations.handlerMethods(proxyClass, List.of(Subscription.class, SynchronousSubscription.class)))
+        assertThatThrownBy(() -> HandlerScan.handlerMethods(proxyClass, List.of(Subscription.class, SynchronousSubscription.class)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("same name and parameter types")
                 .hasMessageContaining("@Subscription")

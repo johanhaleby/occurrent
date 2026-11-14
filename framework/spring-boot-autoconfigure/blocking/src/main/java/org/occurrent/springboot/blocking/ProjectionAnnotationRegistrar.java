@@ -47,6 +47,7 @@ import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
@@ -602,7 +603,7 @@ class ProjectionAnnotationRegistrar {
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
         Object descriptor = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", bean, method);
-        Class<?> implementation = SubscriptionAnnotations.implementationClassOf(bean);
+        Class<?> implementation = HandlerScan.implementationClassOf(bean);
 
         if (annotation.source() == org.occurrent.annotation.Source.PUSH) {
             // The feed bean's type decides the flavor: a PushSubscriptionModel feeds CloudEvents, a DomainEventFeed
@@ -988,7 +989,7 @@ class ProjectionAnnotationRegistrar {
     }
 
     private static Class<?> reflectStateType(Method factoryMethod, Class<?> implementation, String id) {
-        Class<?> stateType = SubscriptionAnnotations.returnTypeArgument(factoryMethod, implementation, 0);
+        Class<?> stateType = HandlerScan.returnTypeArgument(factoryMethod, implementation, 0);
         if (stateType != null) {
             return stateType;
         }

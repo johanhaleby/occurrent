@@ -34,6 +34,7 @@ import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CancellableSubscriptions;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
@@ -140,7 +141,7 @@ class SagaAnnotationRegistrar {
         // supplies its own asynchronous model without marking it @Primary (see AsynchronousSubscribables, and #541).
         Subscribable subscribable = push ? pushFeed(annotation, id)
                 : AsynchronousSubscribables.resolve(applicationContext, Subscribable.class, RegisteringSubscribable.class);
-        SagaStateStore<S> stateStore = resolveSagaStateStore(annotation, method, SubscriptionAnnotations.implementationClassOf(bean), id);
+        SagaStateStore<S> stateStore = resolveSagaStateStore(annotation, method, HandlerScan.implementationClassOf(bean), id);
         CommandDispatcher<C> commandDispatcher = resolveCommandDispatcher(annotation, id);
         // A push model ignores StartAt, and a replay in front of it always starts at the beginning, so there is no
         // start position to compute. rejectStartPositionAttributes has already refused the four that would imply one.
@@ -651,7 +652,7 @@ class SagaAnnotationRegistrar {
 
     // The saga state type is the second type argument of the factory return type Saga<E, S, C>.
     private static Class<?> reflectSagaStateType(Method factoryMethod, Class<?> implementation, String id) {
-        Class<?> stateType = SubscriptionAnnotations.returnTypeArgument(factoryMethod, implementation, 1);
+        Class<?> stateType = HandlerScan.returnTypeArgument(factoryMethod, implementation, 1);
         if (stateType != null) {
             return stateType;
         }

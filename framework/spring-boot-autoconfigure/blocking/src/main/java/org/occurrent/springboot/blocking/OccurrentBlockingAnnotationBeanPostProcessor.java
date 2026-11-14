@@ -25,6 +25,7 @@ import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerMethod;
+import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
@@ -202,7 +203,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     private static Class<?> userClassOf(Object bean) {
-        return SubscriptionAnnotations.implementationClassOf(bean);
+        return HandlerScan.implementationClassOf(bean);
     }
 
     // @Projection factory methods, and @Subscription, @StreamSubscription, @DcbSubscription and
@@ -311,7 +312,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         for (String beanName : beanNames) {
             // A scoped proxy and its target are two definitions of one bean, so its handlers register once, under the
             // target's name
-            if (SubscriptionAnnotations.isScopedProxy(((ConfigurableApplicationContext) applicationContext).getBeanFactory(), beanName)) {
+            if (HandlerScan.isScopedProxy(((ConfigurableApplicationContext) applicationContext).getBeanFactory(), beanName)) {
                 continue;
             }
             ScanType scanType;
@@ -334,7 +335,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
                 continue;
             }
-            Set<Method> handlerMethods = SubscriptionAnnotations.handlerMethods(type, HANDLER_ANNOTATIONS);
+            Set<Method> handlerMethods = HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS);
             for (Method method : handlerMethods) {
                 HandlerMethod handler = HandlerMethod.in(handlerMethods, method);
                 if (registeredHandlers.isRegistered(beanName, handler)) {
@@ -448,7 +449,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // since a subclass the container builds may override the method the prediction refuses
     private static boolean declaresAnyOccurrentAnnotation(Class<?> type) {
         try {
-            return !SubscriptionAnnotations.handlerMethods(type, HANDLER_ANNOTATIONS).isEmpty();
+            return !HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS).isEmpty();
         } catch (IllegalStateException | IllegalArgumentException e) {
             return true;
         }

@@ -17,15 +17,13 @@
 
 package org.occurrent.springboot.common.internal;
 
-import org.occurrent.springboot.common.SubscriptionAnnotations;
-
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The handlers an annotation post-processor has registered, so a later scan of the same bean skips them. A handler is
  * keyed by its bean name and its {@link HandlerMethod#signature()}. Every scan reads
- * {@link SubscriptionAnnotations#implementationClassOf}, which for a proxy is the class its target source names, so a
+ * {@link HandlerScan#implementationClassOf}, which for a proxy is the class its target source names, so a
  * later instance behind a proxy whose target source names the bean's class keys its handlers the way a scan of the
  * plain instance did. A JDK proxy whose target source names no class is scanned as the proxy's own class, where a
  * generic interface handler has the erased parameter type, so that handler gets another signature than the class

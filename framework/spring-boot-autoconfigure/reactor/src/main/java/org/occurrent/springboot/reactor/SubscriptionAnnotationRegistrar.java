@@ -34,6 +34,7 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerMethod;
+import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
@@ -116,7 +117,7 @@ class SubscriptionAnnotationRegistrar {
         requireImplementationOf(method, bean);
         Method invocableMethod;
         try {
-            invocableMethod = SubscriptionAnnotations.invocableMethodOn(bean, method);
+            invocableMethod = HandlerScan.invocableMethodOn(bean, method);
         } catch (IllegalStateException e) {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The proxy does not implement it. Either the method is private, so a CGLIB proxy cannot override it, or the bean is a JDK interface proxy implementing none of the interfaces the method is declared on. Make the method non-private, expose it on an interface, or set spring.aop.proxy-target-class=true so a CGLIB proxy is used instead.");
@@ -137,13 +138,13 @@ class SubscriptionAnnotationRegistrar {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The method is final, so a CGLIB proxy in the chain cannot override it. Remove final from the method.");
         }
-        Class<?> implementation = SubscriptionAnnotations.implementationClassOf(bean);
-        if (SubscriptionAnnotations.isPackagePrivateOutsidePackageOf(method, implementation)) {
+        Class<?> implementation = HandlerScan.implementationClassOf(bean);
+        if (HandlerScan.isPackagePrivateOutsidePackageOf(method, implementation)) {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The method is package-private and declared in package %s, so a CGLIB proxy in the chain, which subclasses %s in package %s, cannot override it. Make the method public or protected.".formatted(
                             method.getDeclaringClass().getPackageName(), implementation.getName(), implementation.getPackageName()));
         }
-        Method runInstead = SubscriptionAnnotations.methodACglibProxyRunsInsteadOf(method, implementation);
+        Method runInstead = HandlerScan.methodACglibProxyRunsInsteadOf(method, implementation);
         if (runInstead != null) {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The method is package-private and %s declares %s of the same name and parameter types without overriding it, so a CGLIB proxy in the chain, which subclasses %s, runs that method instead. Rename one of the two methods.".formatted(
@@ -190,7 +191,7 @@ class SubscriptionAnnotationRegistrar {
             requireImplementationOf(declaredMethod, target);
             Method method;
             try {
-                method = SubscriptionAnnotations.invocableMethodOn(target, declaredMethod);
+                method = HandlerScan.invocableMethodOn(target, declaredMethod);
             } catch (IllegalStateException e) {
                 throw new SubscriptionHandlerNotInvocableException(declaredMethod,
                         "The proxy does not implement it. Either the method is private, so a CGLIB proxy cannot override it, or the bean is a JDK interface proxy implementing none of the interfaces the method is declared on. Make the method non-private, expose it on an interface, or set spring.aop.proxy-target-class=true so a CGLIB proxy is used instead.");
@@ -452,7 +453,7 @@ class SubscriptionAnnotationRegistrar {
         final List<SubscriptionAnnotations.HandlerParameter> parameters;
         if (method.getParameterCount() >= 1) {
             CloudEventConverter<E> cloudEventConverter = applicationContext.getBean(CloudEventConverter.class);
-            parameters = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations.implementationClassOf(bean), SubscriptionAnnotations::isDcbMetadataParameter, false);
+            parameters = HandlerScan.analyzeParameters(method, HandlerScan.implementationClassOf(bean), SubscriptionAnnotations::isDcbMetadataParameter, false);
             Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameters);
             List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, annotation.eventTypes(), "@DcbSubscription");
             List<String> cloudEventTypes = domainEventTypesToSubscribeTo.stream().map(cloudEventConverter::getCloudEventType).toList();

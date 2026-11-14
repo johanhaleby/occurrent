@@ -42,6 +42,7 @@ import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
@@ -96,7 +97,7 @@ class SnapshotAnnotationRegistrar {
         if (everyNEvents < 1) {
             throw new IllegalArgumentException("@Snapshot '%s' everyNEvents must be at least 1, but was %d.".formatted(id, everyNEvents));
         }
-        SnapshotStore<S> store = resolveSnapshotStore(annotation, method, SubscriptionAnnotations.implementationClassOf(bean), id);
+        SnapshotStore<S> store = resolveSnapshotStore(annotation, method, HandlerScan.implementationClassOf(bean), id);
 
         if (descriptor instanceof DcbSnapshotView<?, ?> rawDcb) {
             processDcbSnapshot(id, annotation, synchronous, converter, (DcbSnapshotView<S, E>) rawDcb, store, everyNEvents);
@@ -289,7 +290,7 @@ class SnapshotAnnotationRegistrar {
     }
 
     private static Class<?> reflectSnapshotStateType(Method factoryMethod, Class<?> implementation, String id) {
-        Class<?> stateType = SubscriptionAnnotations.returnTypeArgument(factoryMethod, implementation, 0);
+        Class<?> stateType = HandlerScan.returnTypeArgument(factoryMethod, implementation, 0);
         if (stateType != null) {
             return stateType;
         }
