@@ -825,13 +825,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * is stored as given.</li>
      * <li>A checkpoint this model replays from with a live start, or one at the beginning, is stored as given.</li>
      * <li>A time after the beginning that this model replays from without a live start is stored with the present
-     * position as its live start.</li>
+     * position as its live start. A DCB catch-up doesn't replay from a time, so it stores a time only by the first
+     * rule.</li>
      * <li>A start from now stores the present position by the first rule, and the live delegate then resumes the
      * subscription from that position.</li>
      * </ul>
      * The present position is read the way a paragraph below describes for a subscription held before it reached the
      * live delegate. When no position is answered then, this throws {@link IllegalStateException} and changes nothing.
-     * A DCB catch-up replays only from a position, so it stores a time only by the first rule.
      * A global position above 0 without a live start, a checkpoint the live delegate doesn't restart at and any other
      * start store nothing, and the position stored before stays. A dynamic {@code startAt} is asked once for this
      * model, and the live delegate resumes the subscription at the position it answered. When it answers nothing for
@@ -1013,12 +1013,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }).orElse(null);
     }
 
-    // The position to store for a resume at given so a restart starts where the resume does, or null when none does.
-    // A position the live delegate doesn't restart at, and a global position above 0 without a live start, which a
+    // The position to store for a resume at given so a restart starts where the resume does, or null when none does. A
+    // position the live delegate doesn't restart at, and a global position above 0 without a live start, which a
     // catch-up refuses to start after, are not stored, as in DurableSubscriptionModel. A time after the beginning that
     // this model replays from without a live start gets the present position as its live start, since a restart refuses
-    // a stored time without one. A checkpoint this model doesn't replay from, such as a time on a DCB catch-up, is stored only when the live
-    // delegate restarts at it.
+    // a stored time without one. A checkpoint this model doesn't replay from, such as a time on a DCB catch-up, is
+    // stored only when the live delegate restarts at it.
     private @Nullable Checkpoint restartPosition(String subscriptionId, Checkpoint given, RepositionableSubscriptions liveDelegate) {
         if (!replaysFrom(given)) {
             return liveDelegate.restartsAt(given) ? given : null;
