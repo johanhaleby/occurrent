@@ -94,7 +94,8 @@ own bean. A `SagaRunner` built without one still records skipped inputs, and `re
 `EventStoreQueries`.
 
 Release returns what it did. The instance is released and `ACTIVE`, or it is still releasing because an input failed
-again, or it isn't quarantined, or no instance has that id. The refusals in point 4 throw instead.
+again, or it is quarantined again because a recorded input's event is missing from the store, or it isn't
+quarantined, or no instance has that id. The refusals in point 4 throw instead.
 
 ### 4. What release refuses
 
@@ -124,7 +125,11 @@ When the budget runs out, the instance is quarantined again. The input that fail
 and is removed from the list in that write, `releasedAt` is cleared, and the entries after it stay in the list in
 order. A later release replays the failed input first and then those entries.
 
-An input whose event no longer exists in the store is logged at `ERROR`, dropped from the list, and the replay goes on.
+When release reads an input and its event no longer exists in the store, the instance is quarantined again with that
+input as the failure record's input, the same way as when an input's budget runs out. The input moves from the list to
+the failure record, so nothing is lost. To go on, restore the event in the store and release the instance again, or take
+one of the two ways out in point 4. When the read itself fails, the release throws and the instance stays releasing. On
+a store that answers the poller's query, the poller tries again on its next poll.
 
 ### 6. Timers stay held until the instance is ACTIVE
 
@@ -179,6 +184,8 @@ continues it after an upgrade again.
   for each until the list is full.
 - An instance that receives more than the record limit while quarantined can't be released, and the operator is back to
   a subscription restart or a delete. A longer quarantine needs a higher limit.
+- An instance whose recorded input refers to an event that was deleted from the store stays quarantined until the
+  event is restored, the saga's subscription is restarted, or the instance is deleted.
 - A rolling upgrade from 0.34.0 that follows the upgrade guide takes two deploys, one with quarantine off and one that
   turns it on.
 - An application that never configured quarantine starts quarantining on upgrade. The changelog and the upgrade guide
@@ -200,6 +207,9 @@ continues it after an upgrade again.
 - **A second, temporary subscription per release**, starting at K's position and feeding only the instance. The
   competing-consumer model would give it its own lease, but deciding when the instance may go `ACTIVE` and the temporary
   subscription may stop is the same handover problem between two subscriptions.
+- **Log an input whose event is missing and drop it from the list.** That loses the input. A wrong `EventStoreQueries`,
+  one pointed at another database for example, would find no event for any entry, drop them all, and set the instance
+  `ACTIVE` without any of the inputs it skipped.
 - **A new `SagaStatus.RELEASING`.** 0.34.0 decodes the status with `SagaStatus.valueOf`, so a 0.34.0 node would throw on
   every delivery for a releasing instance during a rolling upgrade, and every exhaustive `switch` over `SagaStatus`
   would stop compiling again.
