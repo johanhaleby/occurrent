@@ -756,7 +756,7 @@ What the failing event holds up in the meantime is decided by whatever feeds the
 0.34.0 adds quarantine, and it is off by default, so a saga you upgrade keeps the 0.33.0 behaviour until you turn it
 on. Nothing in 0.34.0 brings a quarantined instance back, and `SagaStateStore.delete(sagaId)` is the only way out of
 quarantine. That deletes the instance's state. Turn quarantine on when abandoning one instance is better for you than
-having its failing event hold up the subscription. Five minutes is a reasonable budget.
+having its failing event keep failing with nothing bounding it. Five minutes is a reasonable budget.
 
 ```java
 SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5));
@@ -809,7 +809,7 @@ once you have decided not to recover it. [The quarantined saga runbook](../runbo
 the whole sequence, including the log lines that announce a quarantine and what deleting an instance costs against a
 redelivery.
 
-Two of the conditions on `SagaStatus.QUARANTINED` need explaining before you rely on quarantine.
+Three of the conditions on `SagaStatus.QUARANTINED` need explaining before you rely on quarantine.
 
 **Quarantine is available only where the subscription model can say that acknowledging the failing event is not what would destroy the last copy of it,**
 which it declares by implementing `HistoryRetainingSubscriptions`. `NativeMongoSubscriptionModel` and

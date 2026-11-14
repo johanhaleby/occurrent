@@ -69,10 +69,11 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * The behaviour <a href="https://github.com/johanhaleby/occurrent/issues/818">#818</a> asked for: one event a saga
- * cannot get through must not keep failing with nothing bounding it. That covers an event
- * one instance cannot handle. An event the saga cannot even work out an instance for is the exception, and it keeps
- * the saga waiting rather than be lost, see <a href="https://github.com/johanhaleby/occurrent/issues/1042">#1042</a>.
+ * <a href="https://github.com/johanhaleby/occurrent/issues/818">#818</a> asked for the instance an event keeps failing
+ * on to be quarantined, so the subscription's checkpoint can move past it. One event a saga cannot get through must not
+ * keep failing with nothing bounding it. That covers an event one instance cannot handle. An event the saga cannot even
+ * work out an instance for is the exception, and it keeps the saga waiting rather than be lost, see
+ * <a href="https://github.com/johanhaleby/occurrent/issues/1042">#1042</a>.
  */
 @DisplayName("A saga delivery that keeps failing")
 @DisplayNameGeneration(ReplaceUnderscores.class)
