@@ -49,6 +49,7 @@ class BlockingHandoverLifecycleTest {
     void the_marker_is_written_only_for_a_catch_up_nothing_cancelled(@ForAll("withoutFailures") Script script) {
         Trace trace = BlockingHandoverRunner.run(script);
         assertThat(BlockingHandoverSpec.markerViolations(trace)).as(script + " " + trace).isEmpty();
+        assertThat(trace.notes()).as(script + " " + trace).isEmpty();
     }
 
     @Property(tries = 500)
@@ -62,19 +63,20 @@ class BlockingHandoverLifecycleTest {
     void a_cancel_at_the_drain_writes_no_marker() {
         Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(CATCH_UP, STEP, STEP, STEP, CANCEL)));
         assertThat(BlockingHandoverSpec.markerViolations(trace)).isEmpty();
+        assertThat(trace.notes()).isEmpty();
     }
 
     @Example
     void a_failure_outside_the_catch_up_of_a_reported_payload_does_not_excuse_losing_it() {
         BlockingHandoverSpec.Offer lost = new BlockingHandoverSpec.Offer("p0", "acceptReportingDelivery", "reported:true", false);
-        Trace trace = new Trace(BlockingHandoverRunner.HISTORY, List.of(), List.of(lost), List.of(), List.of(), List.of());
+        Trace trace = new Trace(BlockingHandoverRunner.HISTORY, List.of(), List.of(lost), List.of(), List.of(), List.of(), List.of());
         assertThat(BlockingHandoverSpec.deliveryViolations(trace)).hasSize(1).first().asString().contains("p0").contains("never delivered");
     }
 
     @Example
     void a_failure_fired_after_the_offer_in_the_catch_up_that_owns_it_excuses_losing_a_reported_payload() {
         BlockingHandoverSpec.Offer lost = new BlockingHandoverSpec.Offer("p0", "acceptReportingDelivery", "reported:true", true);
-        Trace trace = new Trace(BlockingHandoverRunner.HISTORY, List.of(), List.of(lost), List.of(), List.of(), List.of());
+        Trace trace = new Trace(BlockingHandoverRunner.HISTORY, List.of(), List.of(lost), List.of(), List.of(), List.of(), List.of());
         assertThat(BlockingHandoverSpec.deliveryViolations(trace)).isEmpty();
     }
 
