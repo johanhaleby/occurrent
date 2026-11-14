@@ -837,6 +837,17 @@ class SpringMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
+    void writes_more_than_one_stripe_of_a_type_when_tagged_conditional_appends_spread_their_type_marker_write() {
+        SpringMongoEventStore spreading = storeOver(config -> config.spreadTypeMarkerWrites(true));
+        for (int i = 0; i < 64; i++) {
+            DcbCriteria criteria = DcbCriteria.tags(Tag.parse("seat:" + i));
+            spreading.append(List.of(taggedEvent("e" + i, DEPOSITED, "seat:" + i)), failIfEventsMatch(criteria, spreading.read(criteria).consistencyToken()));
+        }
+
+        assertThat(existingStripes(DEPOSITED)).hasSizeGreaterThan(1);
+    }
+
+    @Test
     void increments_every_stripe_of_a_type_for_a_type_only_conditional_append_when_type_marker_writes_are_not_spread() {
         typeOnlyConditionalAppendIncrementsEveryStripe(eventStore);
     }
