@@ -365,6 +365,41 @@ class SpringMongoEventStoreDcbTwoShardClusterTest {
     }
 
     @Test
+    void refuses_an_append_that_would_pass_when_the_commit_of_the_snapshot_transaction_fails() {
+        DcbConsistencyToken token = eventStore.read(TICKETS_OF_K1).consistencyToken();
+        eventStore.append(List.of(taggedEventWithId("renamed", CONCERT_RENAMED, CONCERT_K1)));
+
+        Throwable thrown;
+        try (Hold ignored = cluster.failNextCommitOnSecondShard()) {
+            thrown = catchThrowable(() -> eventStore.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)));
+        }
+
+        assertThat(thrown)
+                .as("Nothing matching was appended, so the append passes unless the snapshot transaction fails. The first commit after the fail point is the snapshot transaction's")
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        assertThat(eventStore.read(TICKETS_OF_K1).events()).as("the append's event wasn't stored").isEmpty();
+    }
+
+    @Test
+    void refuses_the_second_of_two_conditional_appends_in_a_callers_transaction_when_the_first_one_moved_their_shared_marker() {
+        eventStore.append(List.of(taggedEventWithId("seed", TICKET_SOLD, CONCERT_K1)));
+        DcbConsistencyToken token = eventStore.read(TICKETS_OF_K1).consistencyToken();
+        Throwable[] second = new Throwable[1];
+
+        new TransactionTemplate(new MongoTransactionManager(databaseFactory)).executeWithoutResult(status -> {
+            eventStore.append(List.of(taggedEventWithId("first", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token));
+            second[0] = catchThrowable(() -> eventStore.append(List.of(taggedEventWithId("second", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)));
+            status.setRollbackOnly();
+        });
+
+        assertThat(second[0])
+                .as("The second append reads the marker at the first one's uncommitted increment, so it moved, while the store's own snapshot shows the version the token saw. "
+                        + "The first event matches the criteria and isn't committed, so the snapshot can't find it, and the store refuses an append whose snapshot is behind its own read")
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        assertThat(eventStore.read(TICKETS_OF_K1).events()).as("neither of the caller's events was stored").extracting(CloudEvent::getId).containsExactly("seed");
+    }
+
+    @Test
     void commits_the_stores_own_conditional_append_with_the_configured_write_concern_through_a_mongos() {
         Recorded recorded = recordedConditionalAppendWithConfiguredConcerns();
 

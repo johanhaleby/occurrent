@@ -141,6 +141,21 @@ public final class TwoShardMongoCluster implements AutoCloseable {
         setCommitFailPoint("off");
     }
 
+    /**
+     * Makes the next commit that reaches the second shard fail with an error the driver doesn't retry, which a mongos
+     * passes on to the client. The fail point stays set until a commit reaches the second shard or the returned
+     * {@link Hold} is closed, so use it in a try-with-resources.
+     */
+    public Hold failNextCommitOnSecondShard() {
+        setCommitFailure("{times: 1}");
+        return () -> setCommitFailure("'off'");
+    }
+
+    private void setCommitFailure(String mode) {
+        mongosh(SECOND_SHARD_PORT, "ok(db.adminCommand({configureFailPoint: 'failCommand', mode: " + mode
+                + ", data: {failCommands: ['commitTransaction'], errorCode: 2, failInternalCommands: true}}));");
+    }
+
     private void setCommitFailPoint(String mode) {
         mongosh(SECOND_SHARD_PORT, "ok(db.adminCommand({configureFailPoint: '" + COMMIT_FAIL_POINT + "', mode: '" + mode + "'}));");
     }

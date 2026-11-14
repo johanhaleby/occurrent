@@ -102,8 +102,9 @@ version.
 - Through a mongos, the three cases of #1476 pass in the store's own transaction, in a `TransactionExecutor`'s and in a
   caller's, whatever read concern and write concern those run at.
 - A test on two shards for each store checks the three cases of #1476, a torn token built by hand, a token read while
-  a matching event had committed on one shard and not the other, and an append in the store's own transaction, in a
-  `TransactionExecutor`'s and in a caller's. A unit test checks the comparison.
+  a matching event had committed on one shard and not the other, an append in the store's own transaction, in a
+  `TransactionExecutor`'s and in a caller's, a snapshot transaction that fails, and two conditional appends in one
+  caller's transaction. A unit test checks the comparison.
 - A conditional append through a mongos that has to query the events costs a second session and a read-only
   transaction, whose commit waits for `majority` for at most `markerVersionsCommitTimeout`. An append whose markers
   didn't move, or rule out every item, doesn't start it.
@@ -111,10 +112,14 @@ version.
   write concern name included.
 - The check refuses with no matching event when the snapshot shows a marker under another epoch or at a lower version
   than the append's transaction read, or when the snapshot transaction can't start, read or commit. That throws
-  `DcbAppendConditionNotFulfilledException` for an append that could have passed, and lets nothing through.
-- Two conditional appends in one transaction are one such case, when they share a marker key and the second one's
-  markers moved. The second reads that marker at the first one's increment, which isn't committed, so the snapshot
-  shows a lower version and the second append is refused. No test covers it.
+  `DcbAppendConditionNotFulfilledException` for an append that could have passed, and lets nothing through. The store
+  logs the first failure of each kind of the snapshot transaction as a warning, and later ones at debug level.
+- Two conditional appends in one transaction that share a marker key behave this way when the second one's markers
+  moved. The second reads that marker at the first one's increment, which isn't committed, so the snapshot shows a lower
+  version and the second append is refused. When the first append matches the second one's criteria, that refusal is
+  the one the condition asks for. The snapshot can't see the uncommitted event, so the comparison is what refuses the
+  second append, and the test with two appends in one caller's transaction checks it. When the first append doesn't
+  match them, the refusal is one with no matching event.
 - The type marker stripes of [ADR 162](0162-a-dcb-type-marker-is-split-into-stripes.md) change only the keys of an item
   without tags, which already select on every moved key in every scope. This ADR changes step 3 only for items with
   tags, whose keys the stripes don't touch. I checked this by reading the stripes change in

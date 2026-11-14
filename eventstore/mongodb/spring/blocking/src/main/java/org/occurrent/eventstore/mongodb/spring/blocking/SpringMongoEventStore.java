@@ -974,8 +974,17 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             snapshotSession.commitTransaction();
             return conflict;
         } catch (RuntimeException e) {
-            return true;
+            return appendCheckFailed(e);
         }
+    }
+
+    private boolean appendCheckFailed(RuntimeException cause) {
+        if (markerVersionsReadFailures.recordAndCheckFirst(MarkerVersionsReadFailures.APPEND_CHECK, cause)) {
+            log.warn(MarkerVersionsReadFailures.appendCheckMessage(cause), cause);
+        } else if (log.isDebugEnabled()) {
+            log.debug(MarkerVersionsReadFailures.appendCheckMessage(cause), cause);
+        }
+        return true;
     }
 
     private Map<String, Document> enforceAppendCondition(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition, int stripe) {

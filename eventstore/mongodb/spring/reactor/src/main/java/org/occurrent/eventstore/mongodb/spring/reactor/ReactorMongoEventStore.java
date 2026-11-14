@@ -744,6 +744,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                         mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build()),
                         snapshotSession -> Mono.defer(() -> {
                             snapshotSession.startTransaction(markerVersionsTransactionOptions);
+                            // Spring Data 5.1 returns a ReactiveMongoTemplate from withSession, and every step below
+                            // emits a value, so neither this fallback nor defaultIfEmpty runs there and no test reaches
+                            // them. They refuse if a later version changes that.
                             if (!(mongoTemplate.withSession(snapshotSession) instanceof ReactiveMongoTemplate sessionTemplate)) {
                                 return Mono.just(true);
                             }
@@ -758,8 +761,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                         snapshotSession -> Mono.fromRunnable(snapshotSession::close),
                         (snapshotSession, error) -> Mono.fromRunnable(snapshotSession::close),
                         snapshotSession -> Mono.fromRunnable(snapshotSession::close))
-                .onErrorResume(RuntimeException.class, e -> Mono.just(true))
+                .onErrorResume(RuntimeException.class, e -> Mono.just(appendCheckFailed(e)))
                 .defaultIfEmpty(true);
+    }
+
+    private boolean appendCheckFailed(RuntimeException cause) {
+        if (markerVersionsReadFailures.recordAndCheckFirst(MarkerVersionsReadFailures.APPEND_CHECK, cause)) {
+            LOGGER.warn(MarkerVersionsReadFailures.appendCheckMessage(cause), cause);
+        } else if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug(MarkerVersionsReadFailures.appendCheckMessage(cause), cause);
+        }
+        return true;
     }
 
     private Mono<Map<String, Document>> enforceAppendCondition(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition, int stripe) {
