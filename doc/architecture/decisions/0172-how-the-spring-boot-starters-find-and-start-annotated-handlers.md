@@ -182,7 +182,10 @@ I rejected three smaller changes:
   final, or package-private in another package than the bean's class, since the proxy can't override it. It is refused
   there too when it is package-private and a class in another package, between it and the bean's class, declares a
   public or protected method with the same name and parameters, since the proxy overrides that method and runs it
-  instead. A method the bean's class declares already gets the same refusal when it is static, private or final. An
+  instead. Behind a JDK interface proxy, one that is private or package-private fails startup the same way, since
+  the proxy runs only methods of its interfaces. When one of them declares a method with the same name and
+  parameters, the bean's class implements that method with another body, which the proxy would otherwise run under
+  the handler's id. A method the bean's class declares already gets the same refusal when it is static, private or final. An
   inherited factory method of those four kinds is refused only when the CGLIB proxy's target can't be unwrapped, since the factory otherwise
   runs on the unwrapped bean. A factory method the bean's class declares keeps running on such a proxy, as it did
   before, so no factory that worked in 0.34.0 starts failing.
@@ -199,7 +202,9 @@ I rejected three smaller changes:
 - A handler declared with a type variable on a generic interface of a JDK proxy that can't be unwrapped subscribes to
   the type the proxy's interfaces give the variable, where 0.34.0 subscribed it to the bound. Only a proxy that
   implements the generic interface itself still gets the bound. When its `eventTypes` lists a type that isn't the one
-  the interfaces give the variable or a subtype of it, startup now fails with an `IllegalStateException`.
+  the interfaces give the variable or a subtype of it, startup now fails with an `IllegalStateException`. A factory
+  method of that kind found no state type in 0.34.0 either, so it keeps the store it named or the one bean of the
+  store type it got, and where it failed, it now gets the zero-config store for the type the interfaces bind.
 - A static method that hides an annotated static superclass method ran under that method's annotation in 0.34.0. Now
   the application fails at startup when the hiding method has no annotation of its own, and registers both when it
   repeats the annotation. A hidden static subscription handler, refused before too, now fails with the scan's

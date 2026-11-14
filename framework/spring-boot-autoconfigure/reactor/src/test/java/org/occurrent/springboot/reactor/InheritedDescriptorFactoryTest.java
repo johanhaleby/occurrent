@@ -157,6 +157,63 @@ class InheritedDescriptorFactoryTest {
                 });
     }
 
+    @Test
+    void a_snapshot_factory_declared_with_a_type_variable_behind_a_jdk_proxy_over_a_target_source_that_is_not_fixed_gives_the_default_store_the_state_type_the_proxys_interface_binds() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(SnapshotCollaboratorsConfiguration.class)
+                .withBean(RecordingSnapshotStoreProvider.class, () -> new RecordingSnapshotStoreProvider(new CopyOnWriteArrayList<>()))
+                .withBean("snapshotFactory", PlacedSnapshotFactory.class, () -> jdkProxyOverNonFixedTarget(new PlacedSnapshotFactoryBean(), PlacedSnapshotFactory.class))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(Proxy.isProxyClass(context.getBean("snapshotFactory").getClass())).describedAs("the bean is a JDK proxy").isTrue();
+                    assertThat(context.getBean(RecordingSnapshotStoreProvider.class).stateTypes()).containsExactly(ViewState.class);
+                });
+    }
+
+    interface GenericSnapshotFactoryInterface<S> {
+        @Snapshot(id = "proxy-generic-snapshot", startAt = StartPosition.NOW)
+        SnapshotView<S, TestEvent> snapshot();
+    }
+
+    interface PlacedSnapshotFactory extends GenericSnapshotFactoryInterface<ViewState> {
+    }
+
+    static class PlacedSnapshotFactoryBean implements PlacedSnapshotFactory {
+        @Override
+        public SnapshotView<ViewState, TestEvent> snapshot() {
+            return SnapshotView.<ViewState, TestEvent>builder(new ViewState())
+                    .on(TestEvent.class, (state, event) -> state)
+                    .build();
+        }
+    }
+
+    private static <I> I jdkProxyOverNonFixedTarget(Object target, Class<I> proxiedInterface) {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setInterfaces(proxiedInterface);
+        proxyFactory.setTargetSource(new TargetSource() {
+            @Override
+            public Class<?> getTargetClass() {
+                return null;
+            }
+
+            @Override
+            public boolean isStatic() {
+                return false;
+            }
+
+            @Override
+            public Object getTarget() {
+                return target;
+            }
+
+            @Override
+            public void releaseTarget(Object released) {
+            }
+        });
+        return proxiedInterface.cast(proxyFactory.getProxy());
+    }
+
     record ViewState() {
     }
 

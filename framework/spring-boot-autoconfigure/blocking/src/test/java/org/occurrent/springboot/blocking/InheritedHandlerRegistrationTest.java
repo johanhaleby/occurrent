@@ -475,6 +475,51 @@ class InheritedHandlerRegistrationTest {
         return proxiedInterface.cast(proxyFactory.getProxy());
     }
 
+    @Test
+    void a_private_superclass_handler_behind_a_jdk_proxy_over_a_fixed_target_is_refused_although_an_interface_default_has_its_signature() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", UnannotatedDefaultHandler.class, () -> jdkProxyOverFixedTarget(new PrivateHandlerBeanBesideDefault(bodies), UnannotatedDefaultHandler.class)).run(context -> {
+            assertThat(context).describedAs("the context started although the proxy cannot run the private handler").hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
+                    .hasMessageContaining("PrivateHandlerBase.on");
+            assertThat(bodies).isEmpty();
+        });
+    }
+
+    abstract static class PrivateHandlerBase {
+        protected final List<String> bodies;
+
+        PrivateHandlerBase(List<String> bodies) {
+            this.bodies = bodies;
+        }
+
+        @Subscription(id = "private-handler-behind-proxy")
+        @SuppressWarnings("unused")
+        private void on(TestEvent event) {
+            bodies.add("private-body");
+        }
+    }
+
+    interface UnannotatedDefaultHandler {
+        List<String> bodies();
+
+        default void on(TestEvent event) {
+            bodies().add("default-body");
+        }
+    }
+
+    static class PrivateHandlerBeanBesideDefault extends PrivateHandlerBase implements UnannotatedDefaultHandler {
+        PrivateHandlerBeanBesideDefault(List<String> bodies) {
+            super(bodies);
+        }
+
+        @Override
+        public List<String> bodies() {
+            return bodies;
+        }
+    }
+
     sealed interface OrderEvent permits Placed, Paid {
     }
 
@@ -2215,6 +2260,56 @@ class InheritedHandlerRegistrationTest {
         @Bean
         ProxyGenericBinding genericProxy(Invocations invocations) {
             return (ProxyGenericBinding) noTargetClassProxy(ProxyGenericBinding.class, new ProxyGenericTarget(invocations));
+        }
+    }
+
+    @Test
+    void a_generic_interface_handler_subscribes_to_the_bound_for_a_jdk_proxy_that_implements_the_generic_interface_itself() {
+        runner.withUserConfiguration(NoTargetClassBoundedProxyConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(argumentOf(context.getBean(Subscriptions.class), "subscribe", "proxy-bounded"))
+                    .isEqualTo(AgnosticSubscriptionFilter.filter(new Filter.CompositionFilter(Filter.CompositionOperator.OR, List.of(Filter.type("OrderEvent"), Filter.type("Placed"), Filter.type("Paid")))));
+        });
+    }
+
+    @Test
+    void a_generic_interface_handler_subscribes_to_the_type_a_sub_interface_binds_for_a_jdk_proxy_that_implements_the_sub_interface() {
+        runner.withUserConfiguration(NoTargetClassPlacedProxyConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(argumentOf(context.getBean(Subscriptions.class), "subscribe", "proxy-bounded"))
+                    .isEqualTo(AgnosticSubscriptionFilter.filter(Filter.type("Placed")));
+        });
+    }
+
+    interface ProxyBoundedHandler<E extends OrderEvent> {
+        @Subscription(id = "proxy-bounded")
+        void on(E event);
+    }
+
+    interface ProxyPlacedHandler extends ProxyBoundedHandler<Placed> {
+    }
+
+    static class ProxyBoundedTarget implements ProxyPlacedHandler {
+        @Override
+        public void on(Placed event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class NoTargetClassBoundedProxyConfiguration {
+        @Bean
+        ProxyBoundedHandler<?> boundedProxy() {
+            return (ProxyBoundedHandler<?>) noTargetClassProxy(ProxyBoundedHandler.class, new ProxyBoundedTarget());
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class NoTargetClassPlacedProxyConfiguration {
+        @Bean
+        ProxyPlacedHandler placedProxy() {
+            return (ProxyPlacedHandler) noTargetClassProxy(ProxyPlacedHandler.class, new ProxyBoundedTarget());
         }
     }
 

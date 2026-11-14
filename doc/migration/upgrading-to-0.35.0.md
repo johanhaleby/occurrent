@@ -2184,7 +2184,9 @@ Applications on either starter with one of these:
   subscribes to `Placed` only, under the same id. A proxy that implements `Handler` itself still subscribes to
   `OrderEvent`. When the annotation's `eventTypes` lists a type that isn't `Placed` or a subtype of it, such as
   another subtype of `OrderEvent`, the application now fails at startup with an `IllegalStateException`. A factory
-  method of that kind reads its state type through the same binding.
+  method of that kind found no state type either, so it failed at startup unless it named its store or the
+  application had one bean of the store type. It keeps that store, and where it failed, it now gets the zero-config
+  store for the type the interfaces bind.
 - Two beans that run one annotated method register two handlers with the same id, so the application fails at
   startup with `DuplicateSubscriptionIdException`. That holds when both inherit it, and when one of them is a bean of
   the class that declares it. The id is the key the subscription's checkpoint is stored under,
@@ -2199,7 +2201,10 @@ Applications on either starter with one of these:
   the bean's class, since the proxy can't override it. It also fails there when it is package-private and a class in
   another package, between it and the bean's class, declares a public or protected method with the same name and
   parameters, since the proxy runs that method instead. A handler method the bean's class declares already got the
-  same refusal, except the two package-private cases, which can't happen there.
+  same refusal, except the two package-private cases, which can't happen there. Behind a JDK interface proxy, an
+  inherited subscription handler that is private or package-private fails at startup the same way, since the proxy
+  runs only methods of its interfaces. That holds when one of them declares a method with the same name and
+  parameters too, since the bean's class implements that method with another body.
 - An inherited `@Projection`, `@Snapshot` or `@Saga` factory method that is private, final, or package-private in
   one of the two cases above fails at startup with an `IllegalStateException` when the bean is behind a CGLIB proxy
   whose target can't be unwrapped, for example a proxy
@@ -2248,7 +2253,9 @@ methods. For each one a bean inherits without overriding it:
   method is private, final, or package-private in another package, make it public or protected and not final. In
   Kotlin, mark it `open`. If it's package-private and the proxy runs a public or protected method of the same name and
   parameters from a class in another package, rename one of the two methods. For a `@Projection`, `@Snapshot` or
-  `@Saga` factory method, this is needed only when the proxy's target can't be unwrapped.
+  `@Saga` factory method, this is needed only when the proxy's target can't be unwrapped. If the bean is behind a
+  JDK interface proxy and the handler is private or package-private, make it public and declare it on an interface
+  the proxy implements.
 - If it's package-private and a subclass in another package declares a method with the same name and parameters and
   no handler annotation of its own, the application fails at startup. To keep the subclass's method as the handler,
   which is what ran before, make both methods protected or public, so the subclass's method overrides the superclass
@@ -2264,7 +2271,7 @@ methods. For each one a bean inherits without overriding it:
 - If it's a handler of either kind above declared with a type variable, check that the type the bean's class, or the
   proxy's interfaces, give the variable is the one it should get, since events of the bound's other types stop
   reaching it. Remove from its `eventTypes` the types that aren't that type or a subtype of it, or the application
-  fails at startup. A factory method of the bridge kind keeps the store it named, or the one bean of the store type it
+  fails at startup. A factory method of either kind keeps the store it named, or the one bean of the store type it
   got.
 - If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
   A bean of the class that declares it keeps the original id. If the method is private, or package-private and

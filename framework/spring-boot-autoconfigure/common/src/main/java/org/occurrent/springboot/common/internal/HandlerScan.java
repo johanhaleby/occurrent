@@ -181,7 +181,9 @@ public final class HandlerScan {
      * behind it, so when the scanned method overrides a generic interface method, such as {@code on(Placed)} for
      * {@code on(E)}, no interface declares the scanned signature and the selection fails. The interface method that
      * the class behind the proxy implements with {@code method} is returned instead, so the call still goes through
-     * the proxy and its advice.
+     * the proxy and its advice. When the selection is an interface method of the same signature that {@code method}
+     * doesn't implement, such as a default method beside a private handler of a superclass, invoking it would run
+     * another body under the handler's id, so it is refused.
      *
      * @param bean   the (possibly proxied) object the method is about to be invoked on
      * @param method the method the scan read
@@ -189,8 +191,9 @@ public final class HandlerScan {
      * @throws IllegalStateException when {@code bean} has no method that runs {@code method}
      */
     public static Method invocableMethodOn(Object bean, Method method) {
+        Method selected;
         try {
-            return AopUtils.selectInvocableMethod(method, bean.getClass());
+            selected = AopUtils.selectInvocableMethod(method, bean.getClass());
         } catch (IllegalStateException e) {
             Method interfaceMethod = proxyInterfaceMethodRunning(bean, method);
             if (interfaceMethod == null) {
@@ -198,6 +201,21 @@ public final class HandlerScan {
             }
             return interfaceMethod;
         }
+        if (!selected.equals(method) && !selectionRuns(bean, selected, method)) {
+            throw new IllegalStateException("Invoking %s on %s runs %s instead".formatted(method, bean.getClass().getName(), selected));
+        }
+        return selected;
+    }
+
+    // selectInvocableMethod falls back to a method of the same signature on the proxy's interfaces, which runs method
+    // only when method implements it. An interface method is public, so a private or package-private method never
+    // does. The class behind a proxy that isn't unwrapped can't be read, so there only the modifiers decide
+    private static boolean selectionRuns(Object bean, Method selected, Method method) {
+        if (!Modifier.isPublic(method.getModifiers())) {
+            return false;
+        }
+        Class<?> implementation = implementationClassOf(bean);
+        return java.lang.reflect.Proxy.isProxyClass(implementation) || AopUtils.getMostSpecificMethod(selected, implementation).equals(method);
     }
 
     private static @Nullable Method proxyInterfaceMethodRunning(Object bean, Method method) {
