@@ -36,6 +36,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -50,11 +51,13 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.helpers.MessageFormatter;
 
 import java.net.URI;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -233,6 +236,23 @@ class DcbCatchupHistoryLossOwnershipTest {
                 () -> assertThat(liveModel.restartedFromNow).as("restarts from now").isEmpty(),
                 () -> assertThat(errorsLogged()).as("errors logged, only the one for the loss").hasSize(1)
         );
+    }
+
+    @Test
+    void a_resume_at_a_time_after_the_beginning_does_not_store_a_marked_time_over_the_stored_dcb_position_so_a_later_resume_does_not_throw() {
+        // Given
+        catchup.subscribe(ID, StartAt.now(), action());
+        catchup.pauseSubscription(ID);
+        storage.save(ID, GlobalCheckpoint.of(5));
+        Checkpoint timeAfterTheBeginning = TimeBasedCheckpoint.from(OffsetDateTime.parse("2026-10-01T12:00:00Z"));
+
+        // When
+        catchup.resumeSubscription(ID, StartAt.checkpoint(timeAfterTheBeginning));
+
+        // Then
+        assertThat(CatchupCheckpoints.isMarkedTime(storage.read(ID))).as("the stored position is a marked time").isFalse();
+        catchup.pauseSubscription(ID);
+        assertThatCode(() -> catchup.resumeSubscription(ID)).as("a plain resume after a pause").doesNotThrowAnyException();
     }
 
     @Test

@@ -304,6 +304,13 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         return returnIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class, CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).map(EveryN::forOneSubscription).orElse(__ -> false);
     }
 
+    // A start at a time goes to the live delegate, so a positioned resume at a time stores it only when the live delegate
+    // restarts at it, and never as a time this model would refuse to replay from
+    @Override
+    protected boolean replaysFrom(Checkpoint given) {
+        return GlobalCheckpoint.isGlobalCheckpoint(given) && !CatchupCheckpoints.isMarkedTime(given);
+    }
+
     // firstStartAt is already resolved (non-dynamic) by the time this runs, so the context class used to call get()
     // again is a no-op; generateSubscriptionModelContext() is used anyway for consistency with the other call sites.
     private boolean isDcbCatchupPosition(String subscriptionId, StartAt startAt) {
