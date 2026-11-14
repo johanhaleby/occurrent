@@ -193,8 +193,10 @@ class StreamCatchupResumeRacesALostLiveStartTest {
     }
 
     @Test
-    void tells_the_next_start_refusal_listener_that_the_subscription_is_held_paused_when_the_one_before_it_throws() throws InterruptedException {
+    void tells_the_next_start_refusal_listener_that_the_subscription_is_held_paused_when_the_one_before_it_throws() {
         // Given a first start refusal listener that throws when told a subscription is held paused, and a second one
+        AtomicInteger throwingListenerCalls = new AtomicInteger();
+        AtomicInteger reportsBeforeTheThrowingListenerWasCalled = new AtomicInteger(-1);
         catchup.removeStartRefusalListener(reports);
         catchup.addStartRefusalListener(new StartRefusalListener() {
             @Override
@@ -203,24 +205,23 @@ class StreamCatchupResumeRacesALostLiveStartTest {
 
             @Override
             public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+                throwingListenerCalls.incrementAndGet();
+                reportsBeforeTheThrowingListenerWasCalled.set(reports.heldPaused.size());
                 throw new IllegalStateException("The listener failed.");
             }
         });
         catchup.addStartRefusalListener(reports);
 
         // When the catch-up holds the subscription paused for a lost live start
-        Subscription subscribed = catchup.subscribe(ID, StartAt.checkpoint(STORED), actionThatLosesTheLiveStartAndIsHeld());
-        assertThat(reached(replayHeldInTheHistoryRead)).as("the replay reached its history read").isTrue();
-        releaseTheReplay.countDown();
+        Subscription subscribed = catchup.subscribe(ID, StartAt.checkpoint(STORED), cloudEvent -> liveModel.withoutHistoryBack(LIVE_START));
         Throwable thrownWaitingForTheReplay = catchThrowable(() -> subscribed.waitUntilStarted(WAIT));
-        long deadline = System.nanoTime() + WAIT.toNanos();
-        while (reports.heldPaused.isEmpty() && System.nanoTime() < deadline) {
-            Thread.sleep(10);
-        }
 
-        // Then the second listener is told, with the refusal the start failed with
+        // Then the second listener is told, with the refusal the start failed with, after the first one was called
         assertThat(thrownWaitingForTheReplay).as("thrown waiting for the replay").isInstanceOf(CatchupCannotResumeException.class);
-        assertThat(reports.heldPaused).as("held paused reports").containsExactly(new Report(ID, (CatchupCannotResumeException) thrownWaitingForTheReplay));
+        await().atMost(WAIT).untilAsserted(() -> assertThat(reports.heldPaused).as("held paused reports")
+                .containsExactly(new Report(ID, (CatchupCannotResumeException) thrownWaitingForTheReplay)));
+        assertThat(throwingListenerCalls).as("calls of the throwing listener").hasValue(1);
+        assertThat(reportsBeforeTheThrowingListenerWasCalled).as("reports made when the throwing listener was called").hasValue(0);
     }
 
     private void assertHeldPausedForTheLostLiveStart(Throwable thrownWaitingForTheReplay, Throwable thrownWaitingForTheResumeThatCameDuringIt) {
