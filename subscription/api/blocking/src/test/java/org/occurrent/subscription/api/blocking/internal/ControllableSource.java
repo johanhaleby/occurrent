@@ -46,6 +46,10 @@ final class ControllableSource implements BlockingHandover.Source<String> {
         this.clock = clock;
     }
 
+    void failureFired() {
+        failuresFiredAt.add(clock.incrementAndGet());
+    }
+
     void step() {
         toReplay.release();
     }
@@ -64,7 +68,7 @@ final class ControllableSource implements BlockingHandover.Source<String> {
             toReplay.acquire();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            failuresFiredAt.add(clock.incrementAndGet());
+            failureFired();
             throw new IllegalStateException("interrupted at a gate", e);
         }
     }
@@ -118,7 +122,7 @@ final class ControllableSource implements BlockingHandover.Source<String> {
     public void alreadyDeliveredByReplay(String payload) {
         if (failCallback) {
             if (Thread.currentThread() == catchUpThread) {
-                failuresFiredAt.add(clock.incrementAndGet());
+                failureFired();
             }
             throw new IllegalStateException("recording callback failed for " + payload);
         }

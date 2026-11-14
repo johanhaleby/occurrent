@@ -12,9 +12,9 @@ final class BlockingHandoverSpec {
 
     /**
      * An answer to a payload offered through one of the accept calls, null while it has none. failureFiredAfterInItsCatchUp
-     * is true when an injected failure fired, after the offer was answered, in the replay or drain of the catch-up that
-     * owns the payload: the one open at the offer, or the next to run. It is the only failure that can explain a
-     * reported payload being lost.
+     * is true when an injected failure fired, after the offer was answered, in a catch-up that ended after it, up to
+     * and including the first of those that did not return false. It is the only failure that can explain a reported
+     * payload being lost.
      */
     record Offer(String payload, String call, String answer, boolean failureFiredAfterInItsCatchUp) {
     }

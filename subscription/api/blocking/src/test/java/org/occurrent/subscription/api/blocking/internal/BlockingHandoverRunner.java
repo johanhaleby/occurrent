@@ -5,6 +5,7 @@ import org.occurrent.subscription.api.blocking.internal.BlockingHandoverSpec.Off
 import org.occurrent.subscription.api.blocking.internal.BlockingHandoverSpec.Trace;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -34,11 +35,9 @@ final class BlockingHandoverRunner {
     }
 
     /**
-     * offeredAt is when the offer was answered. The buffer outlives a stopped catch-up (BlockingHandover.Source#replayAbandoned),
-     * so the payload belongs to the first catch-up, in start order, that ends after that moment without having
-     * returned false (a stop): the replay open at the offer unless it is stopped, otherwise the next one to run, the
-     * finish() catch-up included. A reported payload lost to a failure is excused only by a failure that fired in that catch-up after
-     * offeredAt, found by where it fired and not by where its action sits in the script.
+     * offeredAt is when the offer was answered. A reported payload that is lost is excused by a failure that fired
+     * after it in a catch-up that ended after it, up to and including the first of those, in start order, that did
+     * not return false. A stopped catch-up leaves the buffer to the next one, but the stop path can drain it too.
      */
     private record Helper(Thread thread, String payload, String call, AtomicReference<String> answer, AtomicLong offeredAt) {
     }
@@ -53,13 +52,9 @@ final class BlockingHandoverRunner {
         List<String> markerFindings = new CopyOnWriteArrayList<>();
         AtomicLong clock = new AtomicLong();
         List<ControllableSource> catchUps = new CopyOnWriteArrayList<>();
-        ThreadLocal<ControllableSource> catchUpOfThread = new ThreadLocal<>();
         BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
             if (failNextFold.getAndSet(false)) {
-                ControllableSource inCatchUp = catchUpOfThread.get();
-                if (inCatchUp != null) {
-                    inCatchUp.failuresFiredAt.add(clock.incrementAndGet());
-                }
+                catchUps.stream().filter(source -> source.catchUpThread == Thread.currentThread()).forEach(ControllableSource::failureFired);
                 throw new IllegalStateException("fold failed for " + payload);
             }
             delivered.add(payload);
@@ -84,7 +79,7 @@ final class BlockingHandoverRunner {
                         source.failCallback = failCallback;
                         AtomicReference<String> result = new AtomicReference<>();
                         Thread thread = Thread.ofPlatform().name("handover-replay").unstarted(() -> {
-                            result.set(runCatchUp(handover, source, catchUpOfThread));
+                            result.set(runCatchUp(handover, source));
                         });
                         catchUps.add(source);
                         replays.add(new Replay(source, thread, result));
@@ -137,14 +132,13 @@ final class BlockingHandoverRunner {
             }
         }
         List<String> replayed = new ArrayList<>();
-        finish(replays, helpers, handover, marker, notes, markerFindings, replayed, clock, catchUps, catchUpOfThread);
+        finish(replays, helpers, handover, marker, notes, markerFindings, replayed, clock, catchUps);
         List<Offer> offers = helpers.stream().map(helper -> new Offer(helper.payload(), helper.call(), helper.answer().get(), failureFiredAfter(helper.offeredAt().get(), catchUps))).toList();
         return new Trace(HISTORY, List.copyOf(delivered), offers, List.copyOf(markerFindings), List.copyOf(notes), replayed);
     }
 
-    private static String runCatchUp(BlockingHandover<String, String> handover, ControllableSource source, ThreadLocal<ControllableSource> catchUpOfThread) {
+    private static String runCatchUp(BlockingHandover<String, String> handover, ControllableSource source) {
         source.catchUpThread = Thread.currentThread();
-        catchUpOfThread.set(source);
         source.startedAt = source.clock.incrementAndGet();
         try {
             source.outcome = String.valueOf(handover.catchUp(source));
@@ -152,18 +146,24 @@ final class BlockingHandoverRunner {
             source.outcome = "threw " + t.getClass().getSimpleName();
         } finally {
             source.endedAt = source.clock.incrementAndGet();
-            catchUpOfThread.remove();
         }
         return source.outcome;
     }
 
     private static boolean failureFiredAfter(long offeredAt, List<ControllableSource> catchUps) {
-        return catchUps.stream()
-                .sorted(java.util.Comparator.comparingLong(source -> source.startedAt))
-                .filter(source -> source.endedAt > offeredAt && !"false".equals(source.outcome))
-                .findFirst()
-                .map(owner -> owner.failuresFiredAt.stream().anyMatch(firedAt -> firedAt > offeredAt))
-                .orElse(false);
+        List<ControllableSource> endedAfter = catchUps.stream()
+                .filter(source -> source.endedAt > offeredAt)
+                .sorted(Comparator.comparingLong(source -> source.startedAt))
+                .toList();
+        for (ControllableSource source : endedAfter) {
+            if (source.failuresFiredAt.stream().anyMatch(firedAt -> firedAt > offeredAt)) {
+                return true;
+            }
+            if (!"false".equals(source.outcome)) {
+                return false;
+            }
+        }
+        return false;
     }
 
     private static String offer(BlockingHandover<String, String> handover, String call, String payload) {
@@ -204,7 +204,7 @@ final class BlockingHandoverRunner {
         }
     }
 
-    private static void finish(List<Replay> replays, List<Helper> helpers, BlockingHandover<String, String> handover, AtomicBoolean marker, List<String> notes, List<String> markerFindings, List<String> replayed, AtomicLong clock, List<ControllableSource> catchUps, ThreadLocal<ControllableSource> catchUpOfThread) {
+    private static void finish(List<Replay> replays, List<Helper> helpers, BlockingHandover<String, String> handover, AtomicBoolean marker, List<String> notes, List<String> markerFindings, List<String> replayed, AtomicLong clock, List<ControllableSource> catchUps) {
         for (Replay replay : replays) {
             replay.source().openAllGates();
             join(replay.thread(), 5_000);
@@ -236,7 +236,7 @@ final class BlockingHandoverRunner {
         ControllableSource clean = new ControllableSource(HISTORY, marker, clock);
         clean.openAllGates();
         catchUps.add(clean);
-        Thread later = Thread.ofPlatform().name("handover-later-catch-up").start(() -> runCatchUp(handover, clean, catchUpOfThread));
+        Thread later = Thread.ofPlatform().name("handover-later-catch-up").start(() -> runCatchUp(handover, clean));
         join(later, 5_000);
         if (later.isAlive()) {
             notes.add("a later catch-up never returned, so the replay turn was not released");

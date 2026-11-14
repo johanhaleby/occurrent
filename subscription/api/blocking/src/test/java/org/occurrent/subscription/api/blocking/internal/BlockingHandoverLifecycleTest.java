@@ -77,4 +77,16 @@ class BlockingHandoverLifecycleTest {
         Trace trace = new Trace(BlockingHandoverRunner.HISTORY, List.of(), List.of(lost), List.of(), List.of(), List.of());
         assertThat(BlockingHandoverSpec.deliveryViolations(trace)).isEmpty();
     }
+
+    @Example
+    void a_fold_failure_in_the_catch_up_that_drains_a_payload_buffered_while_a_stopped_replay_was_open_counts_as_after_its_offer() {
+        Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(CATCH_UP, CANCEL, ACCEPT_REPORTING, FAIL_FOLD)));
+        assertThat(trace.offers()).hasSize(1).first().extracting(BlockingHandoverSpec.Offer::failureFiredAfterInItsCatchUp).isEqualTo(true);
+    }
+
+    @Example
+    void a_failure_fired_in_a_catch_up_that_ended_before_the_offer_does_not_count() {
+        Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(CATCH_UP, INTERRUPT, ACCEPT_REPORTING)));
+        assertThat(trace.offers()).hasSize(1).first().extracting(BlockingHandoverSpec.Offer::failureFiredAfterInItsCatchUp).isEqualTo(false);
+    }
 }
