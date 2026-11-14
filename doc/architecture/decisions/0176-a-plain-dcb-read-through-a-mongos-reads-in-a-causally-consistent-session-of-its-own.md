@@ -61,10 +61,10 @@ consistent session, so through a mongos it can still miss E. `ReactiveMongoTempl
 5.1.0 returns a `ReactiveMongoTemplate`, so only a subclass that overrides it takes this path. No test covers it.
 
 A read with `withVersions()` that falls back to a plain read takes the same path when it runs outside a session of the
-caller's. That's a read from a store set up with `resumeFromMarkerVersions(false)`, a read of `DcbCriteria.all()`, and a read whose snapshot
-transaction failed and that passed no saved versions. In the Spring and reactor stores, the fallback that already read
-in a session of its own, so as not to bind a session to a Spring scope with no session bound yet, now asks for a
-causally consistent session too. The MongoDB driver already made a session causally consistent when its options didn't
+caller's. That's a read from a store set up with `resumeFromMarkerVersions(false)`, a read of `DcbCriteria.all()`, and
+a read whose snapshot transaction failed and that passed no saved versions. In the Spring and reactor stores, the
+fallback that already read in a session of its own, so as not to bind a session to a Spring scope with no session bound
+yet, now asks for a causally consistent session too. The MongoDB driver already made a session causally consistent when its options didn't
 say, so that read doesn't change.
 
 The rest stays as it was.
@@ -89,10 +89,11 @@ The rest stays as it was.
   `afterClusterTime`, so a marker on the events' shard can be from before E. In a run of the test with a tag marker on
   each shard in each store, an assertion that this marker was at version 1 failed with version 0, so the test asserts
   only the events and the marker on the first shard.
-- By my reading of `DcbAppendConditionCheck`, a conditional append through a mongos with such a token sees the marker
-  from before E as moved, queries the events on that key in ADR 175's snapshot transaction, finds E and is refused,
-  although the read returned E. That's the torn token ADR 175 refuses. The test that builds a torn token by hand covers
-  that refusal, and no test appends with a token this read returned.
+- A conditional append through a mongos with such a token is refused, although the read returned E.
+  `DcbAppendConditionCheck` sees the marker from before E as moved and asks the events above it on that key, where it
+  finds E. That's the torn token ADR 175 refuses. A test on two shards for each store reads a token with `course:c1` at
+  version 1 and `student:s1` at version 0 while the read returns E, appends with it and asserts the refusal. With the
+  check changed to pass whenever a marker moved, that test fails on its refusal assertion in all three stores.
 - A plain read through a mongos outside a caller's session can now take as long as a commit in flight on the events'
   shard. In the probe it waited for as long as the commit was held. With nothing held, the probe's read in a causally
   consistent session took about 98 ms at read concern majority and about 3 ms at local. The probe didn't time the same
