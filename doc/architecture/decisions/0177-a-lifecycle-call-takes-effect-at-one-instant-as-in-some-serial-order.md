@@ -42,7 +42,8 @@ and HO1 the handover engines. They need one rule to build against and a test tha
 A lifecycle call on a subscription id X, or on the model, takes effect at one instant between the moment it's called
 and the moment it returns. A step that a replay thread or a handover engine takes on its own also takes effect at one
 instant. Once every call has returned and every replay has finished, X's observables are the ones that some serial
-order of those calls and steps gives, an order that keeps each thread's calls in the order the thread made them.
+order of those calls and steps gives. That order keeps each thread's calls in the order the thread made them, and it
+puts a call that returned before another call was made ahead of that call.
 
 A read (`isRunning`, `isPaused`, `isCatchingUp`, `isHeldPausedFor`) answers the state at some instant during the
 read.
@@ -64,7 +65,10 @@ Two properties are true at every instant, not only at the end:
 
 * **S1.** At most one call to X's action is running at a time, counting the replay thread and the wrapped model's
   live delivery together.
-* **S2.** No call to X's action starts after `cancelSubscription(X)`, `stop()` or `pauseSubscription(X)` returned.
+* **S2.** No call to X's action starts after `stop()` or `pauseSubscription(X)` returned, until a later
+  `resumeSubscription(X)` or `start(true)` takes effect. Once `cancelSubscription(X)` has returned, no call to the
+  action of the subscription it cancelled starts. A later `subscribe(X)` is a new subscription, and S2 doesn't hold
+  back its action.
 
 S2 covers pause in every phase. A `pauseSubscription(X)` that returns while X still replays its history stops the
 replay before the next event, and X is then held paused. Today a pause during a subscribe-started catch-up takes effect
@@ -91,21 +95,29 @@ The serial result of each call, as one step on that state:
 | `subscribe(X)` | absent, model stopped | parked |
 | `subscribe(X)` | any other phase | `DuplicateSubscriptionIdException`, nothing changes |
 | `cancelSubscription(X)` | any | absent, stored checkpoint removed |
+| `pauseSubscription(X)` | absent | `UnknownSubscriptionException`, nothing changes |
 | `pauseSubscription(X)` | live and running | live and paused |
 | `pauseSubscription(X)` | replaying | held paused, and the replay delivers nothing more |
-| `resumeSubscription(X)` | parked or held paused | replaying, then live and running |
-| `resumeSubscription(X)` | live and paused | live and running |
+| `pauseSubscription(X)` | parked, held paused, or live and paused | `SubscriptionNotRunningException`, nothing changes |
+| `resumeSubscription(X)` | absent | `UnknownSubscriptionException`, nothing changes |
+| `resumeSubscription(X)` | parked or held paused | the model running, X replaying, then live and running |
+| `resumeSubscription(X)` | live and paused | the model running, X live and running |
+| `resumeSubscription(X)` | replaying | nothing changes |
+| `resumeSubscription(X)` | live and running | `SubscriptionAlreadyRunningException`, nothing changes |
 | `resumeSubscription(X, startAt)` | known, not running | live and running from `startAt` |
 | `resumeSubscription(X, startAt)` | running | `SubscriptionAlreadyRunningException`, nothing changes |
 | `stop()` | any | model stopped, a replay becomes parked, a live subscription becomes paused |
 | `start(false)` | any | model running, nothing resumed |
 | `start(true)` | any | model running, parked replays and paused subscriptions run again |
 
-Three more rows decide what a failure means:
+Four more rows decide what a failure means:
 
 * A `start(..)` whose wrapped model throws before it started leaves the model stopped, as if the call never happened.
   One that throws after the wrapped model started leaves everything as a successful `start(..)` would, and the
   caller still gets the exception.
+* A `resumeSubscription(X)` on a stopped model starts the model first. When the wrapped model throws before it
+  started, nothing changes. When it throws after it started, the model runs, X stays as it was, and the caller gets
+  the exception.
 * A replay whose live start is lost is held paused. A resume of it with an origin above the beginning refuses with
   `CatchupCannotResumeException` until it is cancelled or resumed at a given position.
 * A takeover that the wrapped model holds paused again takes over again. Each takeover counts toward the 3 replays
@@ -137,7 +149,7 @@ The rule needs one lock for each scope, taken in a fixed order:
 | Order | Lock | Taken by |
 | --- | --- | --- |
 | 1 | `ManualStartSubscriptionModel` model lock | its `start(..)`, `stop()` and registration |
-| 2 | catch-up model lock, read and write | `start(..)`, `stop()` and `shutdown()` exclusively, across the loop over every id and the wrapped model's own `start(..)` or `stop()`. Every per-id call shared, around its claim. Replay threads never take it |
+| 2 | catch-up model lock, read and write | `start(..)`, `stop()` and `shutdown()` exclusively, across the loop over every id and the wrapped model's own `start(..)` or `stop()`. Every per-id call shared, around its claim. Replay threads never take it. The composite `CatchupSubscriptionModel` and its children share one model lock, as they share the claims. Its `start(..)` and `stop()` take it exclusively across every child's `beginStart()` or `stopReplay()` and the wrapped model's call |
 | 3 | per-id claim (`lifecycleClaims`) | each lifecycle call on X, as today |
 | 4 | per-id handover lock | the replay thread at every step it takes on its own, including the check and the write of a catch-up checkpoint |
 | 5 | `lifecycleLock` | short reads and writes of shared fields, nothing taken under it |
@@ -146,9 +158,20 @@ The model lock replaces the reasoning behind `lifecycleGeneration`, `liveDelegat
 A `start(..)` or `stop()` waits for the per-id calls in flight and then runs alone. A per-id call waits for a
 `start(..)` or `stop()` in flight.
 
-The exclusive wait has no deadline of its own. Each shared holder waits at most 10 seconds for its claim, so the
-exclusive wait ends too. A `start(..)` or `stop()` called from an action on a replay thread, or from a thread that
-holds a claim, throws at once, because it would wait for a per-id call that can only finish on that thread.
+A per-id call waits at most 10 seconds for the shared model lock, as it waits at most 10 seconds for its claim. A call
+that times out on either wait took no effect (`NOTHING_CHANGED`). The bound matters for an action that makes a per-id
+call. A `stop()` holds the model lock exclusively while the wrapped model's `stop()` waits for the actions that run,
+and an action that calls `pauseSubscription(Y)` in that time waits for the same lock. The MongoDB change-stream
+models' `stop()` gives up on a running action after 1 second, so the pause gets the lock after at most that long. With
+a wrapped model whose `stop()` waits for its actions without a deadline, the pause throws after 10 seconds, the action
+ends, and the `stop()` goes on.
+
+The exclusive wait has no deadline. It ends once every per-id call in flight has returned. A per-id call holds the
+shared lock while it waits for the handover lock, the wrapped model and the checkpoint storage, and none of those waits
+has a deadline, so a wrapped model or a checkpoint storage that never returns holds up `start(..)` and `stop()` too.
+
+A `start(..)` or `stop()` called from an action on a replay thread, or from a thread that holds a claim, throws at once,
+because it would wait for a per-id call that can only finish on that thread.
 
 Handover locks are counted and removed like claims. ADR 131 says its registry of handover locks is never reclaimed.
 Under this rule it keeps an entry only while a call or a replay thread uses it ([#1257](https://github.com/johanhaleby/occurrent/issues/1257)).
@@ -198,8 +221,9 @@ given back on every path. That includes a JVM-fatal error
 from `deliver`, a payload the buffer discards, a recording callback that throws and a replay thread that fails to start.
 
 The engine's lock and its replay turn are the only locks the rule needs here. Step 4 runs inside the replay turn and
-checks under the engine lock that the turn is still its own. The push models' `markerLocks` are replaced by that turn. Their
-`synchronized(this)` monitor becomes a lock that nothing waits under, stores nothing and calls no engine method
+checks under the engine lock that the turn is still its own. The blocking push model's `markerLocks` are replaced by
+that turn. On both push models the `synchronized(this)` monitor becomes a lock that nothing waits under, stores nothing
+and calls no engine method
 ([#893](https://github.com/johanhaleby/occurrent/issues/893) item 33).
 
 A `DomainEventFeed` registration is a lifecycle call on the feed's id. A failed engine leaves the failed phase only by a
@@ -217,7 +241,9 @@ A jqwik harness checks the rule against the code, in two test trees:
 
 For the catch-up models, jqwik generates 2 or 3 threads, each with 1 to 3 calls, over 1 or 2 ids. A runner starts the
 threads together, waits until every call returned and every replay finished, and reads the observables. A reference
-model in the test tree tries every order of the same calls that keeps each thread's order. The run passes when one of
+model in the test tree tries every order of the same calls that keeps each thread's order and puts a call that returned
+before another call was made ahead of it. For that the runner records when each call was made and when it returned. The
+run passes when one of
 those orders gives the same call results, the same `isRunning()` of the model, and the same `isRunning(id)` and
 `isPaused(id)` for each id. It doesn't compare the stored checkpoint, the handle or the delivered events.
 
@@ -296,8 +322,9 @@ Four more issues are owned outside these units and built against the rule. #1291
 
 * L2, L3 and HO1 are checked against the harness, not only against the window each issue found. A property that a
   unit's issue owns is enabled in that unit's PR.
-* A blocking `start(..)` or `stop()` waits for every per-id call in flight, up to 10 seconds for each. A per-id call
-  waits for a `start(..)` or `stop()` in flight, which includes the wrapped model's own `start(..)` or `stop()`.
+* A blocking `start(..)` or `stop()` waits for every per-id call in flight for as long as that call takes. A per-id
+  call waits at most 10 seconds for a `start(..)` or `stop()` in flight, which includes the wrapped model's own
+  `start(..)` or `stop()`, and then fails with `NOTHING_CHANGED`.
 * The handover lock registry stops growing with every id a model ever ran a catch-up for.
 * The `stillWanted` overloads are new public API on `CheckpointAwareSubscriptionModel`. A model written outside
   Occurrent that doesn't override them keeps today's behaviour, where the retry runs on after a cancel until it gives up.
