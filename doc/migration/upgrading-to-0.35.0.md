@@ -2337,8 +2337,8 @@ Code that subscribes one of these models at `StartAt.now()`, at the model defaul
 resolves to one of those, on a MongoDB server that sends no operation time. A `StartAt.dynamic(..)` start does the read
 at the subscribe whatever it resolves to, and when that read gives neither, it is refused if it resolves to the present
 as its change stream opens. A `CompetingConsumerSubscriptionModel` over one of these models, which the blocking Spring
-Boot starter always composes, forgets a subscription whose start is refused. Every node is refused the same way on
-such a server, so the subscription runs on no node. A replica set and a sharded cluster aren't affected.
+Boot starter always composes, forgets a subscription whose start is refused. Once every node that subscribed it has
+been refused, the subscription runs on no node. A replica set and a sharded cluster aren't affected.
 
 ### What to do
 
