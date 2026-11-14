@@ -129,8 +129,8 @@ final class CatchupLifecycleSpec {
         }
         State started = state.running(true);
         if (failure == StartFailure.AFTER_EFFECT) {
-            // The live model resumed what it holds paused, and the exception left the parked replays where they were
-            return new Step(INJECTED, resumeAutomatically ? started.mapPhases(p -> p == Phase.PAUSED ? Phase.RUNNING : p) : started);
+            // The exception reaches the caller, and everything else is as after a start(..) that returned
+            return new Step(INJECTED, resumeAutomatically ? started.mapPhases(p -> p == Phase.PARKED ? Phase.REPLAYING : p == Phase.PAUSED ? Phase.RUNNING : p) : started);
         }
         return new Step(OK, resumeAutomatically ? started.mapPhases(p -> p == Phase.PARKED ? Phase.REPLAYING : p == Phase.PAUSED ? Phase.RUNNING : p) : started);
     }
