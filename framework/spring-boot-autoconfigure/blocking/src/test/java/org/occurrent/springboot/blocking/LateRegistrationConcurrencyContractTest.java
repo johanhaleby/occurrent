@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -78,6 +79,13 @@ class LateRegistrationConcurrencyContractTest {
                     .isInstanceOf(Set.class)
                     .isInstanceOf(ConcurrentHashMap.KeySetView.class);
         }
+    }
+
+    @Test
+    void the_handler_registry_keeps_its_registered_methods_in_a_concurrent_map() throws Exception {
+        Object registeredHandlers = valueOf(new OccurrentBlockingAnnotationBeanPostProcessor(), "registeredHandlers");
+
+        assertThat(valueOf(registeredHandlers, "registered")).isInstanceOf(ConcurrentMap.class);
     }
 
     // Of the threads that ask to register one handler at the same moment, only one may be told it registered it, since
