@@ -22,10 +22,8 @@ package org.occurrent.dsl.saga.blocking;
  * is that model's to decide, and {@code DeliveryFailurePolicy} is where a broker source's choice is
  * configured. What the failing event holds up is decided by whatever feeds the subscription, and
  * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what that can be. {@link SagaRunner} describes how an
- * instance that keeps failing can be quarantined. For a timeout the poller catches it, logs it, and leaves the timer due for the next poll.
- * Nothing isolates it from the saga's other instances, because a poll fires a limited number of them and nothing
- * requires a store to give a different instance a turn. See
- * <a href="https://github.com/johanhaleby/occurrent/issues/1003">#1003</a>.
+ * instance that keeps failing can be quarantined. For a timeout the poller catches it and logs it. The timer stays due,
+ * and a later poll tries it again after the instances that were due at this attempt.
  */
 public class SagaConcurrencyException extends RuntimeException {
     public SagaConcurrencyException(String message) {

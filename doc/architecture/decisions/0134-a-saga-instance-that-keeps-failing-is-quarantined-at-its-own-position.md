@@ -44,6 +44,11 @@ record whose input is `position:N` counts as no failure record.
 unroutable-delivery `ERROR` in Decision point 3 repeats, for [#1063](https://github.com/johanhaleby/occurrent/issues/1063).
 A model that offers a refused event more than twice the interval apart gets a `WARN` on every offer instead.
 
+[ADR 173](0173-a-failing-saga-timer-is-tried-again-after-the-timers-already-due.md) fixes the first of the two timer
+mechanisms in the Context below, for [#1003](https://github.com/johanhaleby/occurrent/issues/1003). A timer that fails
+is tried again after every instance that was already due, so a failing timer no longer keeps other instances' timers
+from firing.
+
 ## Context
 
 `SagaExecution.onCloudEvent` runs the saga and catches nothing. `SagaExecutionSupport.process` calls

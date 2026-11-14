@@ -69,7 +69,9 @@ public interface SagaInstance {
     /** When the instance was created, or {@code null} if the store did not record it. */
     @Nullable Instant createdAt();
 
-    /** When the instance was last saved, which is when it last handled an input or recorded a failure. */
+    /**
+     * When the instance last handled an input or recorded a failure. A timer fire that throws does not move it.
+     */
     @Nullable Instant updatedAt();
 
     /** When the instance completed, or {@code null} when it has not, which includes a quarantined one. */

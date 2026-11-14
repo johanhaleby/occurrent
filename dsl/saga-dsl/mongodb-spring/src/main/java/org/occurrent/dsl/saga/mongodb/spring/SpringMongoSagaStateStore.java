@@ -58,8 +58,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 /**
  * A {@link SagaStateStore} backed by MongoDB. Each saga instance is one document keyed by its {@code _id} (the saga id),
  * carrying the user {@code state}, the lifecycle {@code status}, the optimistic-lock {@code version}, the pending timers,
- * and the dedup watermarks. A top-level indexed {@code nextTimerFiresAt} (the earliest pending timer) makes
- * {@link #findWithDueTimers(Instant, int)} an indexed query.
+ * and the dedup watermarks. A top-level indexed {@code nextTimerFiresAt}, the earliest due time across the pending
+ * timers, lets {@link #findWithDueTimers(Instant, int)} both find and order the due instances from the index.
  * <p>
  * State serialization: a core saga's state is written with the application's {@code MongoConverter}, like the
  * snapshot store. A flow saga's state ({@code FlowState}) is written field by field, with its received domain events
@@ -90,6 +90,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String TIMERS = "timers";
     private static final String TIMER_NAME = "name";
     private static final String TIMER_FIRES_AT = "firesAtEpochMilli";
+    // Written only when a fire of the timer has failed. A document stored before 0.35.0 has no such key, and 0.34.0 reads
+    // only the name and firesAtEpochMilli of a timer, so either version reads what the other wrote.
+    private static final String TIMER_NEXT_ATTEMPT_AT = "nextAttemptAtEpochMilli";
+    // Holds SagaEnvelope.earliestDueAtEpochMilli(), which is the earliest firesAtEpochMilli until a fire fails. The key
+    // keeps its 0.34.0 name so stored documents and the index on it need no migration
     private static final String NEXT_TIMER_FIRES_AT = "nextTimerFiresAt";
     private static final String CURRENT_STEP = "currentStep";
     private static final String STREAM_WATERMARKS = "streamWatermarks";
@@ -366,7 +371,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
         Objects.requireNonNull(now, "now cannot be null");
+        // Sorted on the field it filters on, so the (status, nextTimerFiresAt) index serves the order as well as the match
         Query query = Query.query(where(STATUS).is(SagaStatus.ACTIVE.name()).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
+                .with(Sort.by(Sort.Direction.ASC, NEXT_TIMER_FIRES_AT))
                 .limit(limit);
         // Project only the fields the poller needs to decide which timers are due. This deliberately excludes the state
         // (a flow saga's received log can be large), so the poll never pays to decode it. The executor re-loads the full
@@ -432,10 +439,14 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 .append(VERSION, envelope.version());
         List<Document> timers = new ArrayList<>();
         for (TimerEntry timer : envelope.timers()) {
-            timers.add(new Document(TIMER_NAME, timer.name()).append(TIMER_FIRES_AT, timer.firesAtEpochMilli()));
+            Document timerDocument = new Document(TIMER_NAME, timer.name()).append(TIMER_FIRES_AT, timer.firesAtEpochMilli());
+            if (timer.nextAttemptAtEpochMilli() != null) {
+                timerDocument.append(TIMER_NEXT_ATTEMPT_AT, timer.nextAttemptAtEpochMilli());
+            }
+            timers.add(timerDocument);
         }
         document.append(TIMERS, timers);
-        envelope.earliestTimerFiresAtEpochMilli().ifPresent(next -> document.append(NEXT_TIMER_FIRES_AT, next));
+        envelope.earliestDueAtEpochMilli().ifPresent(next -> document.append(NEXT_TIMER_FIRES_AT, next));
         // Denormalized beside nextTimerFiresAt and for the same reason: it lets a query answer SagaInstance.currentStep()
         // without decoding the state, which for a flow saga means not decoding its received log.
         if (envelope.currentStep() != null) {
@@ -571,7 +582,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         List<TimerEntry> timers = new ArrayList<>();
         List<Document> timerDocuments = document.getList(TIMERS, Document.class, List.of());
         for (Document timer : timerDocuments) {
-            timers.add(new TimerEntry(timer.getString(TIMER_NAME), timer.getLong(TIMER_FIRES_AT)));
+            timers.add(new TimerEntry(timer.getString(TIMER_NAME), timer.getLong(TIMER_FIRES_AT), timer.getLong(TIMER_NEXT_ATTEMPT_AT)));
         }
 
         Map<String, Long> streamWatermarks = new LinkedHashMap<>();

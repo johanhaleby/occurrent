@@ -12,6 +12,8 @@ other sections compile fine and behave differently, so read them first.
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
   `SagaEnvelope` gains a 14th record component and `SagaRunnerConfig` a 6th. **Breaks the build** if you use a record
   pattern over either.
+- [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due).
+  `SagaEnvelope.TimerEntry` gains a third record component. **Breaks the build** if you use a record pattern over it.
 - [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). `DomainEventFeed` and
   `CatchupProjectionFeed` lose both `accept(..)` overloads, on the blocking and the reactor stack. **Breaks the build**
   if you still call one of them.
@@ -48,6 +50,9 @@ other sections compile fine and behave differently, so read them first.
   `SagaRunnerConfig`.
 - [A saga's quarantine budget runs per failing event](#a-sagas-quarantine-budget-runs-per-failing-event). Each failing
   event keeps its own clock. Compiles unchanged.
+- [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due). A failed
+  timer is tried again after every instance that was already due. Compiles unchanged unless you use a record pattern
+  over `TimerEntry`.
 
 ### DCB
 
@@ -541,6 +546,55 @@ A `SagaStateStore` implemented outside this repository has to save `StreamMarks.
 other marks, or rebuilds them with the four-argument `StreamMarks` constructor, loses the instants. An instance whose
 failures alternate between two events, such as versions 7, 8, 7, 8 of one stream, then starts each event's clock again
 on every failure and never reaches its budget.
+
+## A saga timer that keeps failing waits behind the timers already due
+
+Up to 0.34.0 the timer poll took at most `timerBatchLimit` due instances in any order, and a timer whose reaction threw
+stayed due at the same `firesAt`. Once `timerBatchLimit` instances kept failing their timers, no other instance's timer
+fired. The reason for the change is in
+[ADR 173](../architecture/decisions/0173-a-failing-saga-timer-is-tried-again-after-the-timers-already-due.md), and the
+report is [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
+
+### Who is affected
+
+- Code that uses a record pattern over `SagaEnvelope.TimerEntry`, or compares entries with `equals`.
+- A `SagaStateStore` of your own.
+- Anything that reads the MongoDB field `nextTimerFiresAt` directly, for example a monitoring query.
+
+### What changes
+
+- `TimerEntry` gains `nextAttemptAtEpochMilli`, which is null until the timer fails. When a timer's reaction throws, the
+  poller writes the instant just after its poll there. A timer is due at the later of `firesAt` and that instant.
+- `findWithDueTimers` returns the earliest due instance first. Instances due at the same instant come back in no
+  particular order.
+- On MongoDB, a failed timer's subdocument holds `nextAttemptAtEpochMilli`, and `nextTimerFiresAt` is the earliest due
+  time across the instance's timers. For a timer that keeps failing that is its last failed attempt, not its `firesAt`.
+- `SagaInstance.nextTimerAt()` still returns the earliest `firesAt`, so an instance stuck on a failing timer still
+  shows a time in the past.
+- The write that records a failed timer keeps the instance's version. It reaches `compareAndSaveWithoutState`, or
+  `compareAndSave` through its default, with an envelope whose version equals `expectedVersion`. Every other save
+  still raises the version by one.
+
+### What to do
+
+- Add the third component to a record pattern over `TimerEntry`. The two-argument constructor still compiles and
+  sets it to null.
+- In a store of your own, persist the new component and return `findWithDueTimers` ordered by
+  `SagaEnvelope.earliestDueAtEpochMilli()`. A store that does neither keeps working, with the 0.34.0 order.
+- In a store of your own, store the version in the envelope as it comes, even when it equals `expectedVersion`. A
+  store that refuses that save refuses every record of a failed timer, so the poller logs a `WARN` for each failed fire
+  and the instance keeps the 0.34.0 order. A store that sets the version itself, for example with a JPA `@Version`
+  column, raises it on the record too, and an event that takes longer than the poll interval between its read and its
+  save can then lose its compare and set on every attempt and fail with `SagaConcurrencyException`.
+- Point a monitoring query at `SagaInstance.nextTimerAt()` rather than at `nextTimerFiresAt`, if it looks for instances
+  whose timers have been due for a long time.
+
+### Stored saga state
+
+Nothing to migrate. A 0.34.0 document has no `nextAttemptAtEpochMilli`, which reads as a timer that has not failed,
+and its `nextTimerFiresAt` is already the earliest due time. During a rolling deploy 0.34.0 reads only `name` and
+`firesAtEpochMilli` from a timer subdocument, so it ignores the new field, and a 0.34.0 write drops it, which gives
+that instance the 0.34.0 order again.
 
 ## The deprecated `accept(..)` on the projection feeds is removed
 

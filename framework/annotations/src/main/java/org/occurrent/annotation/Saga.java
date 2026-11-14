@@ -69,12 +69,12 @@ import java.lang.annotation.*;
  * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0134-a-saga-instance-that-keeps-failing-is-quarantined-at-its-own-position.md">ADR 134</a>
  * have the rest, including what a quarantined instance does afterwards and how to find one.
  * <p>
- * A failing timeout is caught per instance, logged, and left due for the next poll. Nothing isolates an instance that
- * keeps failing from the saga's other instances. A poll fires at most {@code SagaRunnerConfig.timerBatchLimit()}
- * instances, a hundred by default, and nothing in {@code SagaStateStore.findWithDueTimers} requires a store to give a
- * different instance a turn, so once that many instances cannot fire their timers the saga can stop firing timers
- * altogether. Nothing in 0.34.0 bounds that.
- * <a href="https://github.com/johanhaleby/occurrent/issues/1003">Issue 1003</a> is where it is being fixed.
+ * A failing timeout is caught per instance, logged, and left due. A poll fires at most
+ * {@code SagaRunnerConfig.timerBatchLimit()} instances, a hundred by default, earliest due first, and a failed fire
+ * makes the timer due again one millisecond after the poll that tried it. So an instance whose timer keeps failing is
+ * tried again after every instance that was due at that poll. When more than {@code timerBatchLimit} instances keep
+ * failing, the healthy ones still fire, each after the failing instances due ahead of it. A store whose
+ * {@code findWithDueTimers} ignores that order loses this. {@code SagaRunner} has the details.
  * <p>
  * Commands are dispatched before the state is saved and a lost save retries the step, so a receiver must be idempotent
  * and tolerate the same command arriving more than once per input.

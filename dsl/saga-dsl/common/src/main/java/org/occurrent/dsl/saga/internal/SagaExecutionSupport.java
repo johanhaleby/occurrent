@@ -652,6 +652,46 @@ public final class SagaExecutionSupport {
         return failureRecord(saga, sagaId, current, current == null ? null : current.failure(), currentStatus(current), now, false, meta, null, reorderWindow);
     }
 
+    /**
+     * The instance with the timer {@code attempted} due again from {@code nextAttemptAt}, so the due-timer query orders
+     * it behind the instances due before that. Save it with
+     * {@code compareAndSaveWithoutState(..., current.version())}. It changes the timer and nothing else the executor
+     * reads. The version stays the same, so an event that read the instance before the mark still wins its
+     * compare-and-set instead of losing it to every poll. That save writes the timers it read, so it drops the mark, and the
+     * timer is due at its {@code firesAt} again until it fails once more. {@code updatedAt} stays where it was, because
+     * a failed fire is no progress.
+     * <p>
+     * {@code null} when there is nothing to write. That is when the instance is gone, completed or quarantined, when it
+     * no longer has a timer of that name set to fire at that instant, or when the timer is already marked at or after
+     * {@code nextAttemptAt}.
+     */
+    public static <S extends @Nullable Object> @Nullable SagaEnvelope<S> withFailedTimerAttempt(@Nullable SagaEnvelope<S> current,
+                                                                                               TimerEntry attempted,
+                                                                                               Instant nextAttemptAt) {
+        if (current == null || current.status() != SagaStatus.ACTIVE) {
+            return null;
+        }
+        long nextAttemptAtMillis = nextAttemptAt.toEpochMilli();
+        List<TimerEntry> timers = new ArrayList<>(current.timers().size());
+        boolean marked = false;
+        for (TimerEntry timer : current.timers()) {
+            Long markedAt = timer.nextAttemptAtEpochMilli();
+            if (timer.name().equals(attempted.name()) && timer.firesAtEpochMilli() == attempted.firesAtEpochMilli()
+                && (markedAt == null || markedAt < nextAttemptAtMillis)) {
+                timers.add(new TimerEntry(timer.name(), timer.firesAtEpochMilli(), nextAttemptAtMillis));
+                marked = true;
+            } else {
+                timers.add(timer);
+            }
+        }
+        if (!marked) {
+            return null;
+        }
+        return new SagaEnvelope<>(current.sagaId(), current.state(), current.status(), current.version(), timers,
+                current.streamWatermarks(), null, current.createdAt(), current.updatedAt(),
+                current.completedAt(), current.currentStep(), current.started(), current.failure(), current.streamMarks());
+    }
+
     // Pending, or a failure recorded before pending existed. Either says the version was handed to the saga and failed.
     private static boolean isOutstanding(@Nullable StreamMarks marks, EventMeta meta) {
         return isPending(marks, meta) || marks != null && meta.streamVersion() != null && marks.legacyFailed().contains(meta.streamVersion());
@@ -726,12 +766,19 @@ public final class SagaExecutionSupport {
         for (SagaEffect<C> effect : effects) {
             switch (effect) {
                 case SagaEffect.IssueCommand<C> issue -> commands.add(issue.command());
-                case SagaEffect.StartTimeout<C> start ->
-                        timers.put(start.timerName().encode(), new TimerEntry(start.timerName().encode(), now.plus(start.after()).toEpochMilli()));
-                case SagaEffect.StartTimeoutAt<C> startAt ->
-                        timers.put(startAt.timerName().encode(), new TimerEntry(startAt.timerName().encode(), startAt.at().toEpochMilli()));
+                case SagaEffect.StartTimeout<C> start -> arm(timers, start.timerName().encode(), now.plus(start.after()).toEpochMilli());
+                case SagaEffect.StartTimeoutAt<C> startAt -> arm(timers, startAt.timerName().encode(), startAt.at().toEpochMilli());
                 case SagaEffect.CancelTimeout<C> cancel -> timers.remove(cancel.timerName().encode());
             }
         }
+    }
+
+    // A timer armed again for the instant it already fires at keeps its failed attempt, so an input that repeats the same
+    // deadline does not move a timer that keeps failing back ahead of the instances that were due before it. Any other
+    // instant is a new deadline and starts clean
+    private static void arm(Map<String, TimerEntry> timers, String name, long firesAtEpochMilli) {
+        TimerEntry existing = timers.get(name);
+        Long nextAttemptAtEpochMilli = existing != null && existing.firesAtEpochMilli() == firesAtEpochMilli ? existing.nextAttemptAtEpochMilli() : null;
+        timers.put(name, new TimerEntry(name, firesAtEpochMilli, nextAttemptAtEpochMilli));
     }
 }

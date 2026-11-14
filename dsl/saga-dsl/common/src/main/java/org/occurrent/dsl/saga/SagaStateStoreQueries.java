@@ -30,14 +30,12 @@ import java.util.List;
  * {@link SagaStateStore#compareAndSaveWithoutState(String, SagaEnvelope, long)}, which default to the first two. So a
  * store can run sagas perfectly well without implementing this.
  * <p>
- * It is a separate capability because enumeration asks something genuinely new of a store, an <em>ordering</em>.
- * {@code findWithDueTimers} may return its instances in any order at all, while {@link #findByStatus} must return them
- * ascending by {@code updatedAt}. A store that cannot index or sort on that field can still satisfy the core contract.
- * <p>
- * Any order at all is meant literally, and what the contract omits alongside it is a known defect rather than a
- * design choice. Nothing in {@link SagaStateStore#findWithDueTimers(Instant, int)} requires a store to give a
- * different instance a turn, so an instance whose timer never fires successfully can occupy a place in the answer
- * indefinitely. See <a href="https://github.com/johanhaleby/occurrent/issues/1003">#1003</a>.
+ * It is a separate capability because enumeration asks a store to sort on a second field. {@link #findByStatus} must
+ * return its instances ascending by {@code updatedAt}, while {@link SagaStateStore#findWithDueTimers(Instant, int)}
+ * sorts on the earliest timer due time, earliest first, and returns instances due at the same instant in no particular
+ * order. A store that cannot index or sort on {@code updatedAt} can still satisfy the core contract. One that ignores
+ * the due-time order can still run sagas, but {@code limit} instances whose timers keep failing can then keep every
+ * other instance's timers from firing, as that method explains.
  * <p>
  * {@link SagaInstances} needs this only to enumerate. A by-id lookup works against any store. Calling
  * {@link SagaInstances#findByStatus(SagaStatus, Instant, int)} on a store that does not implement this fails fast.
