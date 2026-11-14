@@ -23,6 +23,7 @@ import com.mongodb.event.CommandListener;
 import com.mongodb.event.CommandStartedEvent;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
+import org.bson.BsonNull;
 import org.bson.BsonString;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -36,9 +37,12 @@ import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
@@ -103,22 +107,40 @@ class SpringMongoEventStoreConformanceFixtureTransactionTest {
     }
 
     private static void assertWritesRanInACommittedTransaction(List<BsonDocument> commands) {
-        BsonDocument first = commands.stream().filter(command -> command.containsKey("autocommit")).findFirst().orElseThrow();
-        assertThat(first.getDocument("readConcern", new BsonDocument()).getString("level", new BsonString("none")).getValue())
-                .as("the read concern of the first command of the append's transaction, which the fixture's transaction manager was configured with")
-                .isEqualTo("majority");
-        List<BsonDocument> writes = commands.stream()
-                .filter(command -> Set.of("insert", "update").contains(command.getFirstKey()) && EVENTS.equals(command.getString(command.getFirstKey()).getValue()))
-                .toList();
+        List<Integer> writeIndexes = IntStream.range(0, commands.size()).filter(i -> isWriteToEvents(commands.get(i))).boxed().toList();
+        List<BsonDocument> writes = writeIndexes.stream().map(commands::get).toList();
         assertThat(writes).as("the writes of the append to the event collection").isNotEmpty();
         assertThat(writes).as("the writes of the append to the event collection, which a transaction tags with a transaction number and no autocommit")
                 .allSatisfy(write -> {
                     assertThat(write.containsKey("txnNumber")).as("txnNumber of %s", write.getFirstKey()).isTrue();
                     assertThat(write.getBoolean("autocommit", null)).as("autocommit of %s", write.getFirstKey()).isEqualTo(BsonBoolean.FALSE);
                 });
-        int lastWrite = commands.lastIndexOf(writes.get(writes.size() - 1));
-        assertThat(commands.subList(lastWrite + 1, commands.size())).as("the commands after the last write of the append")
-                .extracting(BsonDocument::getFirstKey).contains("commitTransaction");
+        assertThat(writes.stream().map(SpringMongoEventStoreConformanceFixtureTransactionTest::transactionOf).distinct())
+                .as("the transactions the writes of the append ran in, of which there should be one").hasSize(1);
+        BsonDocument transaction = transactionOf(writes.get(0));
+
+        Optional<BsonDocument> start = commands.stream()
+                .filter(command -> transaction.equals(transactionOf(command)) && command.getBoolean("startTransaction", BsonBoolean.FALSE).getValue())
+                .findFirst();
+        assertThat(start).as("the command that started the transaction the writes of the append ran in").isPresent();
+        assertThat(start.orElseThrow().getDocument("readConcern", new BsonDocument()).getString("level", new BsonString("none")).getValue())
+                .as("the read concern of the first command of the append's transaction, which the fixture's transaction manager was configured with")
+                .isEqualTo("majority");
+
+        int lastWrite = writeIndexes.get(writeIndexes.size() - 1);
+        OptionalInt commit = IntStream.range(lastWrite + 1, commands.size())
+                .filter(i -> "commitTransaction".equals(commands.get(i).getFirstKey()) && transaction.equals(transactionOf(commands.get(i))))
+                .findFirst();
+        assertThat(commit).as("the commit of the append's transaction after its last write").isPresent();
+    }
+
+    private static boolean isWriteToEvents(BsonDocument command) {
+        return Set.of("insert", "update").contains(command.getFirstKey()) && EVENTS.equals(command.getString(command.getFirstKey()).getValue());
+    }
+
+    private static BsonDocument transactionOf(BsonDocument command) {
+        return new BsonDocument("lsid", command.getDocument("lsid", new BsonDocument()).get("id", BsonNull.VALUE))
+                .append("txnNumber", command.get("txnNumber", BsonNull.VALUE));
     }
 
     private static ConnectionString connectionString() {
