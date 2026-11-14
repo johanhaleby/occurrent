@@ -196,10 +196,7 @@ public final class ChangeStreamSubscriptions {
     // A refused checkpoint write must never be retried, on either retry loop below. The call sites already pass
     // their own predicate, which RetryExecution combines with the strategy's own.
     private static final Predicate<Throwable> NOT_A_REFUSED_CHECKPOINT_WRITE = e -> !(e instanceof CheckpointWriteConditionNotFulfilledException);
-    // Nor a read of the present that gave no position. A start at the present is refused and a restart after a loss of
-    // history is held paused until a resume reads again, although a read after the next write could give a position
-    private static final Predicate<Throwable> NOT_WITHOUT_A_POSITION = e -> !(e instanceof NoPositionAtThePresent);
-    private final Predicate<Throwable> RETRYABLE = NOT_SHUTDOWN.and(NOT_A_REFUSED_CHECKPOINT_WRITE).and(NOT_WITHOUT_A_POSITION);
+    private final Predicate<Throwable> RETRYABLE = NOT_SHUTDOWN.and(NOT_A_REFUSED_CHECKPOINT_WRITE);
 
     /**
      * @param monitor    The monitor the model holds when it calls a method that changes which subscriptions are known
@@ -331,12 +328,7 @@ public final class ChangeStreamSubscriptions {
     // rather than interrupting it, since the thread it runs on belongs to the executor and runs other subscriptions.
     private void recordThePresent(String subscriptionId, AtomicReference<StartAt> currentStartAt, PresentAtSubscribe present, BooleanSupplier cancelled) {
         try {
-            executeWithRetry(() -> pinThePresent(currentStartAt, present), RETRYABLE.and(__ -> !cancelled.getAsBoolean() && !Thread.currentThread().isInterrupted()), retryStrategy).run();
-        } catch (NoPositionAtThePresent e) {
-            // Recorded here and not by the run that waits, since a run paused while it waits returns without the answer,
-            // and the run after it would then ask again. Logged by the run that waits for the answer, if it refuses
-            present.gaveNoPosition(e);
-            throw e;
+            executeWithRetry(() -> pinThePresentUnlessNoPosition(currentStartAt, present), RETRYABLE.and(__ -> !cancelled.getAsBoolean() && !Thread.currentThread().isInterrupted()), retryStrategy).run();
         } catch (RuntimeException e) {
             if (cancelled.getAsBoolean() || shutdown || e instanceof MongoInterruptedException || Thread.currentThread().isInterrupted()) {
                 log.debug("Stopped asking MongoDB where the present is for subscription {} because it was cancelled or the model shut down.", subscriptionId, e);
@@ -354,6 +346,16 @@ public final class ChangeStreamSubscriptions {
     // opens, and answers the recorded present if it resolves to the present then. A supplier that writes, such as
     // the one saving a durable subscription's first checkpoint, then writes once. Nothing is read for a position the
     // answer can't change, which asks MongoDB as its change stream opens
+    // Caught inside the retry, so a retry strategy that maps errors never sees it, and recorded rather than thrown, so
+    // the question ends answered and no run asks it again. Logged by the run that waits for the answer, if it refuses
+    private void pinThePresentUnlessNoPosition(AtomicReference<StartAt> currentStartAt, PresentAtSubscribe present) {
+        try {
+            pinThePresent(currentStartAt, present);
+        } catch (NoPositionAtThePresent e) {
+            present.gaveNoPosition(e);
+        }
+    }
+
     private void pinThePresent(AtomicReference<StartAt> currentStartAt, PresentAtSubscribe present) {
         if (!present.isUsedAt(currentStartAt.get())) {
             return;
@@ -400,7 +402,7 @@ public final class ChangeStreamSubscriptions {
             executeWithRetry(() -> newInternalSubscription(subscriptionId, internalSubscription), RETRYABLE.and(__ -> !internalSubscription.isIntentionallyClosed()), retryStrategy).run();
         } catch (RuntimeException e) {
             if (!internalSubscription.isIntentionallyClosed()) {
-                if (!(e instanceof CheckpointWriteConditionNotFulfilledException) && !(e instanceof NoPositionAtThePresent)) {
+                if (!(e instanceof CheckpointWriteConditionNotFulfilledException)) {
                     log.error("Gave up restarting subscription {}, as its retry strategy says. Pausing and resuming the subscription starts it again.", subscriptionId, e);
                 }
                 throw e;
@@ -1218,8 +1220,9 @@ public final class ChangeStreamSubscriptions {
     }
 
     // The question to MongoDB for the position that fixes where a subscription started at the present opens.
-    // One question shared by every run of the subscription, asked again after the retry strategy gives up on it, but not
-    // after MongoDB gave no position, since a later answer would skip what was written since the subscribe. It's
+    // One question shared by every run of the subscription, asked again after the retry strategy gives up on it. MongoDB
+    // giving no position is an answer, not a give-up, and isn't asked again, since a later answer would skip what was
+    // written since the subscribe. It's
     // asked on the executor right after subscribe(..) on a stopped model, or by the first run that gets to it. A pause
     // doesn't stop it.
     private static final class PresentAtSubscribe {
@@ -1282,15 +1285,11 @@ public final class ChangeStreamSubscriptions {
         // on without it. False when the run was closed or the question cancelled first. When the retry strategy gives
         // up, or MongoDB gives no position, its error is thrown to the open run waiting for the answer, or to the first
         // run of all when the give-up came before it, as when the strategy gives up opening the change stream. Any
-        // later run that finds the question given up asks again. A run that comes after MongoDB gave no position gets
-        // that answer thrown, also when no run was there to take it.
+        // later run that finds the question given up asks again. Every run that gets the answer after MongoDB gave no
+        // position has that answer thrown.
         boolean awaitedBy(InternalSubscription run) {
             boolean anEarlierRunReached = reached;
             reached = true;
-            NoPositionAtThePresent given = noPosition;
-            if (given != null) {
-                throw given;
-            }
             FutureTask<Void> current = asking;
             if (anEarlierRunReached && current.state() == Future.State.FAILED) {
                 askAgainAfter(current);
@@ -1300,6 +1299,10 @@ public final class ChangeStreamSubscriptions {
             while (true) {
                 try {
                     current.get(100, MILLISECONDS);
+                    NoPositionAtThePresent given = noPosition;
+                    if (given != null) {
+                        throw given;
+                    }
                     return true;
                 } catch (TimeoutException e) {
                     if (run.isIntentionallyClosed()) {
@@ -1314,10 +1317,8 @@ public final class ChangeStreamSubscriptions {
                     if (run.isIntentionallyClosed()) {
                         return false;
                     }
+                    askAgainAfter(current);
                     Throwable gaveUpOn = e.getCause();
-                    if (!(gaveUpOn instanceof NoPositionAtThePresent)) {
-                        askAgainAfter(current);
-                    }
                     if (gaveUpOn instanceof RuntimeException runtimeException) {
                         throw runtimeException;
                     } else if (gaveUpOn instanceof Error error) {
@@ -1345,8 +1346,8 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
-    // What the question for the present throws when MongoDB gives no position to record. Private, so an action or a
-    // dynamic position can't throw it, and the retries above can tell it apart
+    // What a read of the present throws when MongoDB gives no position to record. Private, so an action or a dynamic
+    // position can't throw it
     private static final class NoPositionAtThePresent extends RuntimeException {
         NoPositionAtThePresent(String what) {
             super(what);
