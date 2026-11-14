@@ -23,6 +23,8 @@ import org.occurrent.annotation.StreamVersion;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameterKind;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.aop.scope.ScopedProxyUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.config.BeanDefinitionHolder;
@@ -58,6 +60,8 @@ import java.util.stream.Collectors;
  * How the Spring Boot starters find a bean's handler methods, read their types against the bean's class, and decide which method a call runs on a proxy. Internal to the Spring Boot starters, not an API, so the scan rules can change in a minor release.
  */
 public final class HandlerScan {
+
+    private static final Logger log = LoggerFactory.getLogger(HandlerScan.class);
 
     private HandlerScan() {
     }
@@ -297,7 +301,9 @@ public final class HandlerScan {
      *
      * @param type            the concrete class the scan reads
      * @param annotationTypes the handler annotations to look for, searched with {@link SearchStrategy#TYPE_HIERARCHY}
-     * @return the matching methods, empty if there are none
+     * @return the matching methods, empty if there are none or if a method of a superclass or interface of
+     * {@code type} names a class missing at runtime, which is logged at debug level
+     * @throws NoClassDefFoundError  when a method {@code type} declares names a class missing at runtime, as in 0.34.0
      * @throws IllegalStateException when a method has an annotation Spring reads from a method it does not override
      * @throws IllegalArgumentException when {@code type} is a JDK proxy and two of its interfaces declare a method of
      *                                  the same name and parameter types with different handler annotations
@@ -337,20 +343,35 @@ public final class HandlerScan {
             }
             return annotated ? Boolean.TRUE : null;
         };
-        Set<Method> handlers = new LinkedHashSet<>(MethodIntrospector.selectMethods(type, handlerLookup).keySet());
-        // MethodIntrospector reads a package-private method through ClassUtils.getMostSpecificMethod, which takes the
-        // first method of the same signature up from type when type is in the method's package, even a method of
-        // another package that doesn't override it. The method MethodIntrospector never inspects is still the one the
-        // JVM runs, so each package-private method that ClassUtils.getMostSpecificMethod replaces is inspected here
-        for (Class<?> candidateClass = type; candidateClass != null && candidateClass != Object.class; candidateClass = candidateClass.getSuperclass()) {
-            for (Method method : candidateClass.getDeclaredMethods()) {
-                int modifiers = method.getModifiers();
-                boolean packagePrivate = !Modifier.isPublic(modifiers) && !Modifier.isProtected(modifiers) && !Modifier.isPrivate(modifiers);
-                if (packagePrivate && !method.isSynthetic() && ClassUtils.getMostSpecificMethod(method, type) != method
-                        && !handlers.contains(method) && Boolean.TRUE.equals(handlerLookup.inspect(method))) {
-                    handlers.add(method);
+        // A method type itself declares that names a class missing at runtime fails the scan, as in 0.34.0
+        type.getDeclaredMethods();
+        Set<Method> handlers;
+        try {
+            handlers = new LinkedHashSet<>(MethodIntrospector.selectMethods(type, handlerLookup).keySet());
+            // MethodIntrospector reads a package-private method through ClassUtils.getMostSpecificMethod, which takes
+            // the first method of the same signature up from type when type is in the method's package, even a method
+            // of another package that doesn't override it. The method MethodIntrospector never inspects is still the
+            // one the JVM runs, so each package-private method that ClassUtils.getMostSpecificMethod replaces is
+            // inspected here
+            for (Class<?> candidateClass = type; candidateClass != null && candidateClass != Object.class; candidateClass = candidateClass.getSuperclass()) {
+                for (Method method : candidateClass.getDeclaredMethods()) {
+                    int modifiers = method.getModifiers();
+                    boolean packagePrivate = !Modifier.isPublic(modifiers) && !Modifier.isProtected(modifiers) && !Modifier.isPrivate(modifiers);
+                    if (packagePrivate && !method.isSynthetic() && ClassUtils.getMostSpecificMethod(method, type) != method
+                            && !handlers.contains(method) && Boolean.TRUE.equals(handlerLookup.inspect(method))) {
+                        handlers.add(method);
+                    }
                 }
             }
+        } catch (IllegalStateException | LinkageError e) {
+            // ReflectionUtils reports a class it can't read as an IllegalStateException caused by the LinkageError,
+            // and a refusal above has no cause. A superclass or interface method naming a class missing at runtime
+            // skips the bean, as Spring's EventListenerMethodProcessor does
+            if (!(e instanceof LinkageError) && !(e.getCause() instanceof LinkageError)) {
+                throw e;
+            }
+            log.debug("Skipping {} in the search for Occurrent handler annotations, since its superclasses and interfaces can't be read", type.getName(), e);
+            return Set.of();
         }
         return java.lang.reflect.Proxy.isProxyClass(type) ? firstOfEachSignature(type, handlers, annotationTypes) : handlers;
     }
