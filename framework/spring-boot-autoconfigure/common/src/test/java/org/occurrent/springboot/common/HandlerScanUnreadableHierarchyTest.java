@@ -97,9 +97,47 @@ class HandlerScanUnreadableHierarchyTest {
         }
     }
 
+    // The method naming AbsentType is private, so the class that implements this interface can list its methods and the
+    // bridge to on(Object) it declares resolves, while the scan of the interface itself fails
+    public interface UnreadableGenericInterface<T> {
+        void on(T event);
+
+        @SuppressWarnings("unused")
+        private void uses(AbsentType absent) {
+        }
+    }
+
+    public static class DeclaresBridgedHandlerAndImplementsUnreadableInterface implements UnreadableGenericInterface<String> {
+        @Subscription(id = "bridged-handler")
+        @Override
+        public void on(String event) {
+        }
+    }
+
+    public abstract static class UnreadableGenericSuperclass<T> {
+        @SuppressWarnings("unused")
+        public void uses(AbsentType absent) {
+        }
+
+        public abstract void on(T event);
+    }
+
+    public static class DeclaresBridgeAndHandlerAndExtendsUnreadableSuperclass extends UnreadableGenericSuperclass<String> {
+        @Subscription(id = "bridged-handler")
+        @Override
+        public void on(String event) {
+        }
+
+        @Subscription(id = "own-handler")
+        public void own(Integer event) {
+        }
+    }
+
     private static final List<Class<?>> FIXTURES = List.of(UnreadableSuperclass.class, ChildOfUnreadableSuperclass.class,
             UnreadableInterface.class, ChildOfUnreadableInterface.class, DeclaresUnreadableMethod.class,
-            DeclaresHandlerAndExtendsUnreadableSuperclass.class, DeclaresHandlerAndImplementsUnreadableInterface.class);
+            DeclaresHandlerAndExtendsUnreadableSuperclass.class, DeclaresHandlerAndImplementsUnreadableInterface.class,
+            UnreadableGenericInterface.class, DeclaresBridgedHandlerAndImplementsUnreadableInterface.class,
+            UnreadableGenericSuperclass.class, DeclaresBridgeAndHandlerAndExtendsUnreadableSuperclass.class);
 
     @Test
     void handlerMethods_finds_the_handler_of_a_class_inheriting_it_when_every_class_the_hierarchy_names_is_present() {
@@ -137,6 +175,26 @@ class HandlerScanUnreadableHierarchyTest {
 
         assertThat(scanWithoutThrowing(child)).extracting(Method::getName, method -> method.getDeclaringClass().getName())
                 .containsExactly(tuple("own", child.getName()));
+    }
+
+    @Test
+    void handlerMethods_returns_the_method_a_declared_bridge_calls_and_not_the_bridge_when_an_interface_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(DeclaresBridgedHandlerAndImplementsUnreadableInterface.class.getName());
+
+        assertThat(child.getDeclaredMethods()).describedAs("the class declares the bridge beside the handler")
+                .extracting(Method::getName, Method::isBridge).containsExactlyInAnyOrder(tuple("on", false), tuple("on", true));
+        assertThat(scanWithoutThrowing(child)).extracting(Method::getName, Method::isBridge, method -> method.getDeclaringClass().getName(), method -> List.of(method.getParameterTypes()))
+                .containsExactly(tuple("on", false, child.getName(), List.of(String.class)));
+    }
+
+    @Test
+    void handlerMethods_leaves_out_a_declared_bridge_that_can_not_be_resolved_and_returns_the_other_handlers_the_class_declares_when_a_superclass_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(DeclaresBridgeAndHandlerAndExtendsUnreadableSuperclass.class.getName());
+
+        assertThat(child.getDeclaredMethods()).describedAs("the class declares a bridge beside its handlers")
+                .filteredOn(Method::isBridge).extracting(Method::getName).containsExactly("on");
+        assertThat(scanWithoutThrowing(child)).extracting(Method::getName, Method::isBridge, method -> method.getDeclaringClass().getName())
+                .containsExactlyInAnyOrder(tuple("on", false, child.getName()), tuple("own", false, child.getName()));
     }
 
     @Test

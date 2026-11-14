@@ -206,6 +206,36 @@ class UnreadableHierarchyRegistrationTest {
         });
     }
 
+    @Test
+    void an_eager_bean_whose_interface_declares_a_method_naming_a_missing_class_registers_the_handler_a_declared_bridge_calls_once() throws Exception {
+        Class<?> product = new LoaderWithoutAbsentType().loadClass(DeclaresBridgedHandlerAndImplementsUnreadableInterface.class.getName());
+        AtomicInteger constructed = new AtomicInteger();
+
+        runner.withBean("products", ProductFactoryBean.class, () -> new ProductFactoryBean(product, constructed, true)).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertSoftly(softly -> {
+                softly.assertThat(constructed).describedAs("the bean is built and scanned").hasPositiveValue();
+                softly.assertThat(subscribedIds(context.getBean(Subscriptions.class))).containsExactly("bridged-handler");
+            });
+        });
+    }
+
+    @Test
+    void an_eager_bean_whose_superclass_declares_a_method_naming_a_missing_class_registers_its_handlers_although_the_bridge_to_one_of_them_cannot_be_resolved() throws Exception {
+        Class<?> product = new LoaderWithoutAbsentType().loadClass(DeclaresBridgeAndHandlerAndExtendsUnreadableSuperclass.class.getName());
+        AtomicInteger constructed = new AtomicInteger();
+
+        runner.withBean("products", ProductFactoryBean.class, () -> new ProductFactoryBean(product, constructed, true)).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertSoftly(softly -> {
+                softly.assertThat(constructed).describedAs("the bean is built and scanned").hasPositiveValue();
+                softly.assertThat(subscribedIds(context.getBean(Subscriptions.class))).containsExactlyInAnyOrder("bridged-handler", "own-handler");
+            });
+        });
+    }
+
     private <T> ApplicationContextRunner withBean(String name, Class<T> type, AtomicInteger constructed, BeanDefinitionCustomizer... customizers) {
         return runner.withBean(name, type, () -> construct(type, constructed), customizers);
     }
@@ -300,9 +330,47 @@ class UnreadableHierarchyRegistrationTest {
         }
     }
 
+    // The method naming AbsentType is private, so the class that implements this interface can list its methods and the
+    // bridge to on(Object) it declares resolves, while the scan of the interface itself fails
+    public interface UnreadableGenericInterface<T> {
+        void on(T event);
+
+        @SuppressWarnings("unused")
+        private void uses(AbsentType absent) {
+        }
+    }
+
+    public static class DeclaresBridgedHandlerAndImplementsUnreadableInterface implements UnreadableGenericInterface<TestEvent> {
+        @Subscription(id = "bridged-handler")
+        @Override
+        public void on(TestEvent event) {
+        }
+    }
+
+    public abstract static class UnreadableGenericSuperclass<T> {
+        @SuppressWarnings("unused")
+        public void uses(AbsentType absent) {
+        }
+
+        public abstract void on(T event);
+    }
+
+    public static class DeclaresBridgeAndHandlerAndExtendsUnreadableSuperclass extends UnreadableGenericSuperclass<TestEvent> {
+        @Subscription(id = "bridged-handler")
+        @Override
+        public void on(TestEvent event) {
+        }
+
+        @Subscription(id = "own-handler")
+        public void own(TestEvent event) {
+        }
+    }
+
     private static final List<Class<?>> FIXTURES = List.of(UnreadableSuperclass.class, ChildOfUnreadableSuperclass.class,
             UnreadableInterface.class, ChildOfUnreadableInterface.class,
-            DeclaresHandlerAndExtendsUnreadableSuperclass.class, DeclaresHandlerAndImplementsUnreadableInterface.class);
+            DeclaresHandlerAndExtendsUnreadableSuperclass.class, DeclaresHandlerAndImplementsUnreadableInterface.class,
+            UnreadableGenericInterface.class, DeclaresBridgedHandlerAndImplementsUnreadableInterface.class,
+            UnreadableGenericSuperclass.class, DeclaresBridgeAndHandlerAndExtendsUnreadableSuperclass.class);
 
     // Defines the fixtures itself so the methods that name AbsentType are read through it, and refuses to load AbsentType
     private static final class LoaderWithoutAbsentType extends ClassLoader {
