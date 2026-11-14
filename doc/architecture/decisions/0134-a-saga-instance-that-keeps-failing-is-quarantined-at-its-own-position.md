@@ -49,6 +49,12 @@ mechanisms in the Context below, for [#1003](https://github.com/johanhaleby/occu
 is tried again after every instance that was already due, so a failing timer no longer keeps other instances' timers
 from firing.
 
+[ADR 178](0178-a-quarantined-saga-instance-records-what-it-skips-and-is-released-by-replaying-it.md) replaces how
+Decision point 7 releases an instance, for [#1259](https://github.com/johanhaleby/occurrent/issues/1259). A quarantined
+instance records the inputs it skips, and a release replays them from the event store instead of restarting the
+subscription. It also turns quarantine on by default again and corrects two sentences here that
+[#1088](https://github.com/johanhaleby/occurrent/issues/1088) found.
+
 ## Context
 
 `SagaExecution.onCloudEvent` runs the saga and catches nothing. `SagaExecutionSupport.process` calls
