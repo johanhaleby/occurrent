@@ -163,10 +163,15 @@ times.
 `startAtGlobalPosition`, `startAtDcbPosition` and `DcbStartAt.afterPosition(long)` are deprecated with `forRemoval =
 true`. `GlobalCheckpoint.of(long)` gets javadoc only and is not deprecated.
 
-How a refusal ends a replay depends on how the replay started. A replay started by a subscribe ends, reports the error
-at `waitUntilStarted`, and logs it once. A replay started by a resume or a takeover stops there, with one error log and
-no backoff. A later `resumeSubscription`, `start(true)` or lease acquisition under competing consumers runs it again and
-fails again.
+How a refusal ends a replay on a blocking catch-up depends on what was refused and how the replay started:
+
+* A replay whose live start is lost is held paused, whichever call started it, with one error log and no backoff. When
+  its origin is above the beginning, `resumeSubscription(id)` and `start(true)` refuse with
+  `CatchupCannotResumeException` until the subscription is cancelled or resumed at a given position. When its origin is
+  at the beginning, they replay it again from the beginning.
+* For any other refusal, a replay started by a subscribe ends, reports the error at `waitUntilStarted`, and logs it
+  once. A replay started by a resume or a takeover stops there, with one error log and no backoff, and a later
+  `resumeSubscription`, `start(true)` or lease acquisition under competing consumers runs it again and fails again.
 
 ### The oplog window must exceed the longest catch-up replay
 

@@ -323,8 +323,10 @@ From 0.35.0 a wrapper is unwrapped only for a capability that a wrapper's own st
 * `QuietPositionReportingSubscriptions`, which adds and removes a listener that is told positions.
 * `Pushable`, which takes events in at the bottom of the stack.
 * `HistoryLossReportingSubscriptions`, which a catch-up model reaches under a durable model.
-* `StartRefusalReportingSubscriptions`, which a competing consumer model reaches under a durable or catch-up model,
-  so it can give back the lease of a subscription whose start the MongoDB model refused.
+* `StartRefusalReportingSubscriptions`, which a competing consumer model reaches under a durable model, so it can
+  give back the lease of a subscription whose start the MongoDB model refused. A blocking catch-up model implements it
+  itself. It passes the listener on to the MongoDB model under it, and also tells the listener when it holds a
+  subscription paused because the live start of its replay is gone.
 
 Every other capability is found only on a model that implements it. That is `RepositionableSubscriptions`,
 `Subscribable`, `CancellableSubscriptions`, `SubscriptionModelLifeCycle`, `SubscriptionModel`,
@@ -1331,10 +1333,18 @@ A replay that started later and loses its live start is held paused the same way
 skip events, so `resumeSubscription(id)` throws `CatchupCannotResumeException` until you cancel the subscription, and so
 does `start(true)` on the blocking stack. A reactor `start(true)` keeps it held paused and replays nothing. On a
 blocking catch-up subscription model you call directly, `resumeSubscription(id, startAt)` at a position the change
-stream history still reaches resumes it. With checkpoint storage that position replaces the one the catch-up stored, so
-a resume after a later pause doesn't replay from where the lost replay got to. A `CompetingConsumerSubscriptionModel`,
-which the blocking Spring Boot starter puts around its catch-up, can't resume a subscription at a position. Through one,
-cancel the subscription and subscribe it again from the beginning or from a checkpoint you kept.
+stream history still reaches resumes it. With checkpoint storage that position replaces the one the catch-up stored
+when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to.
+
+A resume token or another checkpoint the MongoDB model restarts at is stored as given. A catch-up time without a live
+start is stored with the present position as its live start. A `GlobalCheckpoint` above 0 without a live start, and a
+checkpoint the MongoDB model doesn't restart at, store nothing, so the position the catch-up stored stays.
+
+A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts around its catch-up, can't resume a
+subscription at a position, and its `cancelSubscription(id)` acts only on the instance you call it on. With checkpoint
+storage every instance that gets the lease refuses the same stored checkpoint. Stop every instance of the application
+and delete or replace that checkpoint, as the `ERROR` the competing consumer logs says. Without checkpoint storage,
+cancel the subscription on every instance and subscribe it again from the beginning or from a checkpoint you kept.
 
 A DCB catch-up and the reactor catch-ups replay only by position, and throw the same exception when you start them from
 a time replay's checkpoint in the new form.
