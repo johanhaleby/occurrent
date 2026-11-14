@@ -79,9 +79,10 @@ final class InterleavingRunner {
             runThreads(run);
             quiesce(run);
             run.observed = observe(run);
+            if (recover) { for (String id : subscribedAndNeverCancelled(run)) { run.model.cancelSubscription(id); } }
             run.knownAtTheEnd.addAll(subscribedAndNeverCancelled(run));
             for (String id : run.knownAtTheEnd) {
-                if (!run.model.isRunning(id) && !run.model.isPaused(id)) {
+                if (staysNeitherRunningNorPaused(run, id)) {
                     run.notes.add(id + " was subscribed and never cancelled, but the model neither runs nor holds it paused");
                 }
             }
@@ -96,6 +97,18 @@ final class InterleavingRunner {
             }
         }
         return run;
+    }
+
+    /** Both reads are false for a moment while a subscribe-started catch-up hands over, so only an id that stays so counts as lost */
+    private static boolean staysNeitherRunningNorPaused(Run run, String id) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        do {
+            if (run.model.isRunning(id) || run.model.isPaused(id)) {
+                return false;
+            }
+            LockSupport.parkNanos(5_000_000);
+        } while (System.nanoTime() < deadline);
+        return true;
     }
 
     /** The ids a subscribe returned ok for and that no call of the scenario cancelled */

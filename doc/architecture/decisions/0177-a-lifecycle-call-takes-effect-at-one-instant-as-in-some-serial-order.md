@@ -291,13 +291,15 @@ These are disabled today:
 * [#1524](https://github.com/johanhaleby/occurrent/issues/1524), a second `pauseSubscription(X)` during a replay that a
   subscribe started returns normally instead of throwing `SubscriptionNotRunningException`. Both serial-order
   properties with a pause, and 1 example.
+* [#1526](https://github.com/johanhaleby/occurrent/issues/1526), a replay calls the action once more after `stop()`
+  returned. S2 on scripts of only subscribes and a `stop()`.
 * [#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 32, a catch-up that is cancelled once its history
   has been read still returns true and writes the marker. 2 handover properties and 2 examples.
 
-Each disabled property except S2 with a pause has an enabled copy that runs the same check on scripts without the
-calls its issues need, such as a second pause of one id, or a `stop()` in the same script as a `start(..)` or a
-resume. The copy's name says which calls it drops. S2 with a pause has no copy, because without the pause it checks
-nothing.
+Each disabled S1 and serial-order property has an enabled copy that runs the same check on scripts without the calls
+its issues need, such as a second pause of one id, or a `stop()` in the same script as a `start(..)` or a resume.
+The copy's name says which calls it drops. The three S2 properties have no enabled copy. Without the pause or the
+cancel, S2 checks only a `stop()`, and a script of only subscribes and a `stop()` already hits #1526.
 
 The reactor harness comes with L3.
 
@@ -307,7 +309,7 @@ An issue closes by construction when any change that meets the rule and passes t
 
 | Unit | Closes by construction | Doesn't |
 | --- | --- | --- |
-| L2, blocking catch-up | [#1225](https://github.com/johanhaleby/occurrent/issues/1225), [#1226](https://github.com/johanhaleby/occurrent/issues/1226), [#1237](https://github.com/johanhaleby/occurrent/issues/1237), [#1252](https://github.com/johanhaleby/occurrent/issues/1252), [#1255](https://github.com/johanhaleby/occurrent/issues/1255), [#1256](https://github.com/johanhaleby/occurrent/issues/1256), [#1257](https://github.com/johanhaleby/occurrent/issues/1257), [#1258](https://github.com/johanhaleby/occurrent/issues/1258), [#1269](https://github.com/johanhaleby/occurrent/issues/1269), [#1271](https://github.com/johanhaleby/occurrent/issues/1271), [#1515](https://github.com/johanhaleby/occurrent/issues/1515), [#1516](https://github.com/johanhaleby/occurrent/issues/1516), [#1517](https://github.com/johanhaleby/occurrent/issues/1517), [#1520](https://github.com/johanhaleby/occurrent/issues/1520), [#1266](https://github.com/johanhaleby/occurrent/issues/1266) item 1 | [#946](https://github.com/johanhaleby/occurrent/issues/946) (javadoc), [#1272](https://github.com/johanhaleby/occurrent/issues/1272) (test gaps), #1266 items 2 to 5 |
+| L2, blocking catch-up | [#1225](https://github.com/johanhaleby/occurrent/issues/1225), [#1226](https://github.com/johanhaleby/occurrent/issues/1226), [#1237](https://github.com/johanhaleby/occurrent/issues/1237), [#1252](https://github.com/johanhaleby/occurrent/issues/1252), [#1255](https://github.com/johanhaleby/occurrent/issues/1255), [#1256](https://github.com/johanhaleby/occurrent/issues/1256), [#1257](https://github.com/johanhaleby/occurrent/issues/1257), [#1258](https://github.com/johanhaleby/occurrent/issues/1258), [#1269](https://github.com/johanhaleby/occurrent/issues/1269), [#1271](https://github.com/johanhaleby/occurrent/issues/1271), [#1515](https://github.com/johanhaleby/occurrent/issues/1515), [#1516](https://github.com/johanhaleby/occurrent/issues/1516), [#1517](https://github.com/johanhaleby/occurrent/issues/1517), [#1520](https://github.com/johanhaleby/occurrent/issues/1520), [#1524](https://github.com/johanhaleby/occurrent/issues/1524), [#1526](https://github.com/johanhaleby/occurrent/issues/1526), [#1266](https://github.com/johanhaleby/occurrent/issues/1266) item 1 | [#946](https://github.com/johanhaleby/occurrent/issues/946) (javadoc), [#1272](https://github.com/johanhaleby/occurrent/issues/1272) (test gaps), #1266 items 2 to 5 |
 | L3, reactor catch-up | [#1156](https://github.com/johanhaleby/occurrent/issues/1156), [#1239](https://github.com/johanhaleby/occurrent/issues/1239), [#1268](https://github.com/johanhaleby/occurrent/issues/1268), [#1270](https://github.com/johanhaleby/occurrent/issues/1270) | |
 | HO1, handover engines | #1293 items 31, 32 and 33, [#1058](https://github.com/johanhaleby/occurrent/issues/1058), [#1062](https://github.com/johanhaleby/occurrent/issues/1062), [#1105](https://github.com/johanhaleby/occurrent/issues/1105), [#1134](https://github.com/johanhaleby/occurrent/issues/1134), [#1240](https://github.com/johanhaleby/occurrent/issues/1240), [#1278](https://github.com/johanhaleby/occurrent/issues/1278), [#1280](https://github.com/johanhaleby/occurrent/issues/1280), the `replayOpen` item of [#1107](https://github.com/johanhaleby/occurrent/issues/1107) | #1293 item 29 (an API change), [#1057](https://github.com/johanhaleby/occurrent/issues/1057) (test timing), #1293 item 11 (a test) |
 

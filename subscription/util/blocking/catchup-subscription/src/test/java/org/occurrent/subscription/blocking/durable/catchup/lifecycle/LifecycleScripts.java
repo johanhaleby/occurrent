@@ -51,9 +51,15 @@ final class LifecycleScripts {
         return scenarios.filter(scenario -> IDS.stream().noneMatch(id -> count(scenario, Kind.CANCEL, id) > 0 && count(scenario, Kind.SUBSCRIBE, id) > 1));
     }
 
-    /** Without a cancel, since a cancel after the subscribe returned can see the replay deliver after it returned, the shape of #1515 */
-    static Arbitrary<Scenario> mixedScenariosWithoutPauseAndWithoutCancel() {
-        return scenarios(mixedCalls().filter(call -> call.kind() != Kind.PAUSE && call.kind() != Kind.CANCEL));
+    /**
+     * Only subscribe and stop calls. With no pause and no cancel, a stop is the only call that makes S2 bind, so the
+     * other kinds only dilute the scenarios that can reach it. Cancel is left out for the shape of #1515, a cancel
+     * after the subscribe returned still sees the replay deliver after it returned.
+     */
+    static Arbitrary<Scenario> subscribeAndStopScenarios() {
+        return scenarios(Arbitraries.frequencyOf(
+                Tuple.of(3, id().map(id -> LifecycleCall.of(Kind.SUBSCRIBE, id))),
+                Tuple.of(2, Arbitraries.just(LifecycleCall.of(Kind.STOP, null)))));
     }
 
     /** Without a scenario that has a stop() together with a start(..) or a resume of an id, the shape of #1516 */

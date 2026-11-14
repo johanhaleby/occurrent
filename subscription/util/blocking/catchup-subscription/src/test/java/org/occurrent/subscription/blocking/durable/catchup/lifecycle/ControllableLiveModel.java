@@ -163,8 +163,6 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
             this.action = action;
         }
 
-        void rogue(CloudEvent e) { action.accept(e); }
-
         synchronized void receive(CloudEvent event) {
             if (started) {
                 action.accept(event);
