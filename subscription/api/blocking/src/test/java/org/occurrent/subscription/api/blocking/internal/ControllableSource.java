@@ -8,6 +8,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
@@ -29,9 +30,20 @@ final class ControllableSource implements BlockingHandover.Source<String> {
     volatile boolean markedWhileCancelled;
     volatile boolean markerWritten;
 
-    ControllableSource(List<String> history, AtomicBoolean marker) {
+    final AtomicLong clock;
+    /** When the catch-up that read this source started and ended, on the run's clock */
+    volatile long startedAt = Long.MAX_VALUE;
+    volatile long endedAt = Long.MAX_VALUE;
+    volatile Thread catchUpThread;
+    /** What the catch-up returned or "threw ...", null while it has not ended */
+    volatile String outcome;
+    /** When an injected failure fired in this catch-up's own replay or drain: the fold threw, the callback threw or an interrupt landed at a gate */
+    final List<Long> failuresFiredAt = new CopyOnWriteArrayList<>();
+
+    ControllableSource(List<String> history, AtomicBoolean marker, AtomicLong clock) {
         this.history = history;
         this.marker = marker;
+        this.clock = clock;
     }
 
     void step() {
@@ -52,6 +64,7 @@ final class ControllableSource implements BlockingHandover.Source<String> {
             toReplay.acquire();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            failuresFiredAt.add(clock.incrementAndGet());
             throw new IllegalStateException("interrupted at a gate", e);
         }
     }
@@ -104,6 +117,9 @@ final class ControllableSource implements BlockingHandover.Source<String> {
     @Override
     public void alreadyDeliveredByReplay(String payload) {
         if (failCallback) {
+            if (Thread.currentThread() == catchUpThread) {
+                failuresFiredAt.add(clock.incrementAndGet());
+            }
             throw new IllegalStateException("recording callback failed for " + payload);
         }
     }

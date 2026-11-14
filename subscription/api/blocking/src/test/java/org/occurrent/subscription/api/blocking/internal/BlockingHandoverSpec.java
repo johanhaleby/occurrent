@@ -11,11 +11,12 @@ import java.util.Set;
 final class BlockingHandoverSpec {
 
     /**
-     * An answer to a payload offered through one of the accept calls, null while it has none. failureAfterInItsReplay
-     * is true when a fold, callback or interrupt failure came after the offer while the replay open at the offer was
-     * still open, the only failure that can explain a reported payload being lost.
+     * An answer to a payload offered through one of the accept calls, null while it has none. failureFiredAfterInItsCatchUp
+     * is true when an injected failure fired, after the offer was answered, in the replay or drain of the catch-up that
+     * owns the payload: the one open at the offer, or the next to run. It is the only failure that can explain a
+     * reported payload being lost.
      */
-    record Offer(String payload, String call, String answer, boolean failureAfterInItsReplay) {
+    record Offer(String payload, String call, String answer, boolean failureFiredAfterInItsCatchUp) {
     }
 
     record Trace(List<String> history, List<String> delivered, List<Offer> offers, List<String> markerFindings, List<String> notes, List<String> replayed) {
@@ -63,7 +64,7 @@ final class BlockingHandoverSpec {
                     if (offer.answer().equals("applied") && !delivered) {
                         violations.add(offer.payload() + " was answered as applied but never delivered");
                     }
-                } else if (offer.answer().equals("reported:true") && !delivered && (offer.call().equals("acceptIfLive") || !offer.failureAfterInItsReplay())) {
+                } else if (offer.answer().equals("reported:true") && !delivered && (offer.call().equals("acceptIfLive") || !offer.failureFiredAfterInItsCatchUp())) {
                     violations.add(offer.payload() + " was reported delivered or buffered by " + offer.call() + " but never delivered");
                 } else if (offer.answer().equals("reported:false") && delivered) {
                     violations.add(offer.payload() + " was reported not delivered by " + offer.call() + " but delivered");

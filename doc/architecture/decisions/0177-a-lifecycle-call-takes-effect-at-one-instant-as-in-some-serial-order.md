@@ -234,8 +234,11 @@ For `BlockingHandover`, a runner steps one replay thread through its history rea
 call on a thread of its own. There is no reference model of the handover. Its properties check what holds in every
 order. The marker is written only for a catch-up that nothing cancelled. A live payload is delivered once, and a
 history payload at most once for each replay that read the history. Every accept call gets an answer that agrees with
-what was delivered, except an `acceptReportingDelivery` in a run that injects a failure, which can report a buffered
-payload that is then lost. A later catch-up gets the replay turn.
+what was delivered, with one exception. An `acceptReportingDelivery` can report a buffered payload that a failure then
+loses, so the harness excuses that loss when an injected failure fired after the call was answered, in the replay or
+drain of the catch-up that would have delivered the payload. That catch-up is the first one, in the order they
+start, that ends after the call without being stopped, because a stopped catch-up keeps the buffer for the next one.
+A failure anywhere else in the run excuses nothing. A later catch-up gets the replay turn.
 
 A property the code breaks today stays in the harness, disabled with the number of the issue that owns it. The unit
 that fixes that issue enables it. The timeout results are not exercised, because the 10 second wait is a constant.
