@@ -210,14 +210,28 @@ after each manual-start registration, and a registration that takes effect after
 A jqwik harness checks the rule against the code, in two test trees:
 
 * `subscription/util/blocking/catchup-subscription`, package `org.occurrent.subscription.blocking.durable.catchup.lifecycle`,
-  for the blocking catch-up models and the dispatcher.
+  for `CatchupSubscriptionModel` and `StreamCatchupSubscriptionModel`.
 * `subscription/api/blocking`, next to `BlockingHandoverTest`, for `BlockingHandover`.
 
-jqwik generates 2 or 3 threads, each with 1 to 3 calls, over 1 or 2 ids. A runner starts the threads together, waits
-until every call returned and every replay finished, and reads the observables. A reference model in the test tree,
-the tables above written as code, tries every order of the same calls that keeps each thread's order. The run passes
-when one of those orders gives the same call results and the same observables. S1 and S2 are checked while the run is
-going, by a wrapper around the action.
+For the catch-up models, jqwik generates 2 or 3 threads, each with 1 to 3 calls, over 1 or 2 ids. A runner starts the
+threads together, waits until every call returned and every replay finished, and reads the observables. A reference
+model in the test tree tries every order of the same calls that keeps each thread's order. The run passes when one of
+those orders gives the same call results and the same observables.
+
+The reference model covers `subscribe`, `cancelSubscription`, `pauseSubscription`, `resumeSubscription(id)`,
+`start(false)`, `start(true)` and `stop()`, and a start that fails before or after it takes effect. It doesn't cover
+`shutdown()`, `subscribePaused`, `resumeSubscription(id, startAt)`, a live start that is gone or a takeover, so the
+harness checks none of those rows yet.
+
+S1 and S2 are checked while the run is going, by a wrapper around the action. The S2 check skips a pause or a stop
+that a resume of the same id or a `start(true)` overlaps, because that call can take effect after it. The harness
+doesn't catch an action that starts in that window.
+
+For `BlockingHandover`, a runner steps one replay thread through its history reads and the drain, and runs each accept
+call on a thread of its own. There is no reference model of the handover. Its properties check what holds in every
+order. The marker is written only for a catch-up that nothing cancelled. A live payload is delivered once, and a
+history payload once for each replay that read the history. Every accept call gets an answer that agrees with what was
+delivered, and a later catch-up gets the replay turn.
 
 A property the code breaks today stays in the harness, disabled with the number of the issue that owns it. The unit
 that fixes that issue enables it. The timeout results are not exercised, because the 10 second wait is a constant.
@@ -265,3 +279,8 @@ Four more issues are owned outside these units and built against the rule. #1291
   Occurrent that doesn't override them keeps today's behaviour, where a cancel waits for the retry to give up.
 * A reactor catch-up no longer blocks a Reactor thread on a lifecycle lock.
 * The harness doesn't test the timeout results. L2 can test them if it makes the 10 second wait configurable in tests.
+* The catch-up reference model has no rows for `shutdown()`, `subscribePaused`, `resumeSubscription(id, startAt)`, a
+  live start that is gone or a takeover, so no property checks #1269 yet. No property checks #1252, #1255, #1257 or
+  #1258 either. They need a replay thread that fails to start, a read of `isRunning(id)` during the handover, a look
+  at the handover lock registry and a look at the checkpoint store. L2 adds what its issues need before it claims them
+  closed.
