@@ -2147,12 +2147,14 @@ Applications on either starter with one of these:
   so two handlers can't share it.
 - An inherited subscription handler that is static fails at startup with `SubscriptionHandlerNotInvocableException`.
   So does one on a bean behind a CGLIB proxy when it is private, final, or package-private in another package than
-  the bean's class, since the proxy can't override it. A handler method the bean's class declares already got the same
-  refusal, except the package-private case, which can't happen there.
-- An inherited `@Projection`, `@Snapshot` or `@Saga` factory method that is private, final, or package-private in
-  another package fails at startup with an `IllegalStateException` when the bean is behind a CGLIB proxy whose target
-  can't be unwrapped, for example a scoped proxy. A factory method the bean's class declares runs there as before, and
-  a static factory method always runs, since it reads no bean.
+  the bean's class, since the proxy can't override it. It also fails there when it is package-private and a class in
+  another package, between it and the bean's class, declares a public or protected method with the same name and
+  parameters, since the proxy runs that method instead. A handler method the bean's class declares already got the
+  same refusal, except the two package-private cases, which can't happen there.
+- An inherited `@Projection`, `@Snapshot` or `@Saga` factory method of one of those kinds fails at startup with an
+  `IllegalStateException` when the bean is behind a CGLIB proxy whose target can't be unwrapped, for example a proxy
+  built with a custom `TargetSource` whose `isStatic()` returns `false`. A factory method the bean's class declares
+  runs there as before, and a static factory method always runs, since it reads no bean.
 - In Kotlin a superclass method is final unless it is marked `open`, and the `kotlin-spring` plugin opens a class only
   when the class itself has a Spring annotation such as `@Component`. So an annotated method on a plain Kotlin
   superclass fails at startup when the bean that inherits it is behind a CGLIB proxy, for example because it has a
@@ -2181,9 +2183,11 @@ methods. For each one a bean inherits without overriding it:
   annotation runs under the annotation of the method it overrides, so leaving the annotation on the superclass keeps
   it running everywhere.
 - If it's static, make it an instance method. If the bean is behind a CGLIB proxy and the method is private, final,
-  or package-private in another package, make it public or protected and not final. In Kotlin, mark it `open`.
-- If it's package-private and a subclass in another package declares a method with the same name and parameters, the
-  application fails at startup. To keep the subclass's method as the handler, which is what ran before, make both
+  or package-private in another package, make it public or protected and not final. In Kotlin, mark it `open`. If it's
+  package-private and the proxy runs a public or protected method of the same name and parameters from a class in
+  another package, rename one of the two methods.
+- If it's package-private and a subclass in another package declares a method with the same name and parameters and
+  no handler annotation of its own, the application fails at startup. To keep the subclass's method as the handler, which is what ran before, make both
   methods protected or public, so the subclass's method overrides the superclass method. To run the superclass method
   instead, rename the subclass's method.
 - If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.

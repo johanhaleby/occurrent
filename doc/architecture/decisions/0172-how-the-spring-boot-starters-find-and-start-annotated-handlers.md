@@ -121,9 +121,11 @@ I rejected three smaller changes:
   annotation with an id of its own fixes it.
 - A subscription annotation on a superclass method that is static fails startup with
   `SubscriptionHandlerNotInvocableException`. So does one on a bean behind a CGLIB proxy when the method is private,
-  final, or package-private in another package than the bean's class, since the proxy can't override it. A method the
-  bean's class declares already gets the same refusal when it is static, private or final. An inherited factory method
-  of those three kinds is refused only when the CGLIB proxy's target can't be unwrapped, since the factory otherwise
+  final, or package-private in another package than the bean's class, since the proxy can't override it. It is refused
+  there too when it is package-private and a class in another package, between it and the bean's class, declares a
+  public or protected method with the same name and parameters, since the proxy overrides that method and runs it
+  instead. A method the bean's class declares already gets the same refusal when it is static, private or final. An
+  inherited factory method of those four kinds is refused only when the CGLIB proxy's target can't be unwrapped, since the factory otherwise
   runs on the unwrapped bean. A factory method the bean's class declares keeps running on such a proxy, as it did
   before, so no factory that worked in 0.34.0 starts failing.
 - In Kotlin a superclass method is final unless it is marked `open`, and the `kotlin-spring` plugin opens a class only
