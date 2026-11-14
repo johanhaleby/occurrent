@@ -982,10 +982,7 @@ public final class ChangeStreamSubscriptions {
         Subscription subscription = resumedByStart.subscription();
         InternalSubscription internalSubscription = resumedByStart.run();
         while (!subscription.waitUntilStarted(Duration.ofMillis(100))) {
-            // Nor for a run that waits for an action call of a run it replaced, as a run that lost its history as its
-            // change stream opened does before it has started, since that call can be the one that called start(true)
-            if (shutdown || runningSubscriptions.get(subscriptionId) != internalSubscription || internalSubscription.hasStoppedRestarting()
-                || internalSubscription.waitsForThePreviousRuns()) {
+            if (shutdown || runningSubscriptions.get(subscriptionId) != internalSubscription || internalSubscription.hasStoppedRestarting()) {
                 // Asked once more, since a refused run has recorded its failure by then, which the handle throws
                 subscription.waitUntilStarted(Duration.ZERO);
                 return;
@@ -1387,8 +1384,6 @@ public final class ChangeStreamSubscriptions {
         // The run a resume replaced to create this run, until this run has waited for it and every run before it to
         // stop delivering
         private volatile @Nullable InternalSubscription previous;
-        // True while waitForThePreviousRuns waits for a call that was still running when it looked
-        private volatile boolean waiting;
 
         private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, FirstStart firstStart,
                                      AtomicReference<@Nullable StartAt> restartedAfterHistoryLossAt) {
@@ -1432,7 +1427,10 @@ public final class ChangeStreamSubscriptions {
                 for (InternalSubscription run = previous; run != null; run = run.previous) {
                     if (waitingSince == null && run.isDelivering()) {
                         waitingSince = System.nanoTime();
-                        waiting = true;
+                        // Counts as started, since only an action call from before the pause holds it back. A run that lost
+                        // its history as it opened waits here before it started, and that call can be the one waiting
+                        // for it to start
+                        started();
                         log.warn("Subscription {} waits for an action call of a run it replaced to return before it goes on. The call hasn't returned since the subscription was paused. It waits with no deadline, and a pause or a cancel of the subscription ends the wait.", subscriptionId);
                     }
                     if (!run.awaitNotDeliveringUnlessClosed(this)) {
@@ -1442,18 +1440,12 @@ public final class ChangeStreamSubscriptions {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return false;
-            } finally {
-                waiting = false;
             }
             previous = null;
             if (waitingSince != null) {
                 log.warn("Subscription {} waited {} ms for an action call of a run it replaced to return, and goes on.", subscriptionId, Duration.ofNanos(System.nanoTime() - waitingSince).toMillis());
             }
             return true;
-        }
-
-        boolean waitsForThePreviousRuns() {
-            return waiting;
         }
 
         private boolean isDelivering() {

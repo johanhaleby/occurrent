@@ -459,7 +459,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * <p>
      * The wait for a subscription ends early when it's paused or cancelled, when the model shuts down, or when its
      * change stream won't open at all, because its {@code RetryStrategy} gave up or its change stream history was lost
-     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off.
+     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off. A subscription whose change stream history
+     * was lost as it opened, and which then waits for an action call made before it was paused, counts as started, so
+     * this method returns also when that action call is the one that called it.
      * <p>
      * A wait throws for a start position the model refuses, and for a subscription at the present when MongoDB gives
      * neither an operation time nor a change stream position. When a resume or a wait throws, every other subscription

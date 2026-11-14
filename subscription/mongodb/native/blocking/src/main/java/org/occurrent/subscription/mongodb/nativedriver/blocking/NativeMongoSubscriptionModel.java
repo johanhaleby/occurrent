@@ -440,7 +440,9 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * The wait for a subscription ends early when it's paused or cancelled, when the model shuts down, or when its
      * change stream won't open at all, because its {@code RetryStrategy} gave up or its change stream history was lost
      * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off. Until one of those happens, a returned
-     * {@code Subscription} that never answers that it has started keeps this method waiting. A subscription that isn't
+     * {@code Subscription} that never answers that it has started keeps this method waiting. A subscription whose change
+     * stream history was lost as it opened, and which then waits for an action call made before it was paused, counts as
+     * started, so this method returns also when that action call is the one that called it. A subscription that isn't
      * running once {@code resumeSubscription(..)} returns, such as when an override doesn't call the super method,
      * isn't waited for. A subscription that an override already resumed or cancelled while resuming an earlier one is
      * left out.
