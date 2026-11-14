@@ -311,13 +311,13 @@ class DcbAppendConditionCheckScopeTest {
     @Test
     void a_token_torn_across_shards_selects_the_events_above_the_marker_that_moved_when_the_transaction_snapshots_through_a_mongos() {
         Map<String, MarkerObservation> read = markers(KEY_A, version(1), KEY_B, version(1));
-        Map<String, MarkerObservation> now = markers(KEY_A, version(2), KEY_B, version(1));
+        Map<String, MarkerObservation> now = markers(KEY_A, version(1), KEY_B, version(2));
 
         Outcome outcome = check(TAGS_A_AND_B, read, now, Scope.SNAPSHOT_THROUGH_MONGOS);
 
         assertThat(outcome)
-                .as("marker b can be from after an event the read missed, so b being unmoved does not rule the item out, and the event is above a's version")
-                .isEqualTo(new QueryEvents(List.of(new ItemQuery(TAGS_A_AND_B, List.of(new KeySelection(KEY_A, 1))))));
+                .as("marker a can be from after an event the read missed, so a being unmoved does not rule the item out, and the event is above b's version, not on the first tag key")
+                .isEqualTo(new QueryEvents(List.of(new ItemQuery(TAGS_A_AND_B, List.of(new KeySelection(KEY_B, 1))))));
     }
 
     @Test
