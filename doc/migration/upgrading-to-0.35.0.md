@@ -1336,13 +1336,14 @@ blocking catch-up subscription model you call directly, `resumeSubscription(id, 
 stream history still reaches resumes it. With checkpoint storage that position replaces the one the catch-up stored
 when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to.
 
-A resume token or another checkpoint the MongoDB model restarts at is stored as given. A time a stream catch-up
-replays from without a live start is stored with the present position as its live start. A DCB catch-up replays only
-from a position and the MongoDB model doesn't restart at a time, so on a DCB catch-up a resume at a time stores
-nothing. A `GlobalCheckpoint` above 0 without a live start, and a checkpoint the MongoDB model doesn't restart at,
-store nothing, so the position the catch-up stored stays. A resume that needs the present position to store, such as
-one at `StartAt.now()`, throws `IllegalStateException` and stores nothing when neither the event store nor the MongoDB
-model answers one.
+A resume token or another checkpoint the MongoDB model restarts at is stored as given, and so is a checkpoint the
+catch-up replays from with a live start or at the beginning. A time after the beginning that a stream catch-up replays
+from without a live start is stored with the present position as its live start. A DCB catch-up replays only from a
+position and the MongoDB model doesn't restart at a time, so on a DCB catch-up a resume at a time stores nothing. A
+`GlobalCheckpoint` above 0 without a live start, and a checkpoint the MongoDB model doesn't restart at, store nothing,
+so the position the catch-up stored stays. A resume that needs the present position to store, such as one at
+`StartAt.now()`, throws `IllegalStateException` and stores nothing when neither the event store nor the MongoDB model
+answers one.
 
 A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts around its catch-up, can't resume a
 subscription at a position, and its `cancelSubscription(id)` acts only on the instance you call it on. With checkpoint

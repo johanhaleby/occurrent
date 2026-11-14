@@ -3686,7 +3686,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     key.subscriberId(), key.subscriptionId(), refused);
         } else {
             log.error("The wrapped subscription model refused to start or resume a subscription from a position it no longer has the history back to, so the subscription is held paused and doesn't compete for the lease, since a grant would only be refused again. A resume competes for the lease again and is refused again when this node gets it."
-                            + " When the subscription's position is stored, stop every instance of the application and delete or replace that stored checkpoint. Otherwise cancel the subscription and subscribe it again from the beginning or from a checkpoint the application kept (subscriberId={}, subscriptionId={})",
+                            + " When the subscription's position is stored, stop every instance of the application and delete or replace that stored checkpoint. Otherwise cancel the subscription on every instance and subscribe it again from the beginning or from a checkpoint the application kept (subscriberId={}, subscriptionId={})",
                     key.subscriberId(), key.subscriptionId(), refused);
         }
         warnedInThisCall(key, refused);
