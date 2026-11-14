@@ -818,8 +818,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * and ends once the live delegate has resumed the subscription, so the position given here wins over it. With
      * checkpoint storage, when the position stored for the subscription is one a catch-up replays from, such as the one
      * that replay stored, it is replaced before the live delegate resumes the subscription, so a
-     * {@link #resumeSubscription(String)} after a later pause doesn't replay from it. It is replaced only by a position a
-     * restart starts reading at:
+     * {@link #resumeSubscription(String)} after a later pause doesn't replay from it. While a replay that
+     * {@code subscribe(..)} started runs for the subscription, nothing is stored, since that replay reads the stored
+     * position to decide where it goes live from when it hands over. It is replaced only by a position a restart starts
+     * reading at:
      * <ul>
      * <li>A checkpoint the live delegate answers {@code true} for in {@link RepositionableSubscriptions#restartsAt(Checkpoint)}
      * is stored as given.</li>
@@ -947,7 +949,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                         // subscribe. When it answers nothing here, the live delegate asks it for itself.
                         StartAt answered = answeredForThisModel(startAt);
                         @Nullable StartAt forThisModel = answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered;
-                        replaced = owner.replaceTheStoredPosition(subscriptionId, forThisModel, true, repositionable);
+                        // Nothing is stored while a replay a subscribe started runs, since its handover reads what
+                        // is stored to decide where it goes live from
+                        replaced = aSubscribeReplays(subscriptionId) ? null : owner.replaceTheStoredPosition(subscriptionId, forThisModel, true, repositionable);
                         Checkpoint present = replaced == null ? null : replaced.present;
                         StartAt liveStartAt = present != null ? StartAt.checkpoint(present) : forThisModel;
                         if (liveStartAt != null) {
@@ -984,6 +988,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     repositioning.remove(subscriptionId);
                 }
             }
+        }
+    }
+
+    // Whether a replay a subscribe started runs for the id on any child of the dispatcher, which share the attempts. Only
+    // a replay a resume started runs again, so with the claim held none starts before the caller returns
+    private boolean aSubscribeReplays(String subscriptionId) {
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            CatchupAttempt running = currentAttempt.get(subscriptionId);
+            return running != null && !running.replay.resuming;
         }
     }
 

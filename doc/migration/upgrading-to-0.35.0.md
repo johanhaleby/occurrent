@@ -1334,7 +1334,9 @@ skip events, so `resumeSubscription(id)` throws `CatchupCannotResumeException` u
 does `start(true)` on the blocking stack. A reactor `start(true)` keeps it held paused and replays nothing. On a
 blocking catch-up subscription model you call directly, `resumeSubscription(id, startAt)` at a position the change
 stream history still reaches resumes it. With checkpoint storage that position replaces the one the catch-up stored
-when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to.
+when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to. While
+a replay that `subscribe(..)` started is still running, the resume stores nothing, since that replay reads the stored
+position to decide where it goes live from.
 
 A resume token or another checkpoint the MongoDB model restarts at is stored as given, and so is a checkpoint the
 catch-up replays from with a live start or at the beginning. A time after the beginning that a stream catch-up replays
