@@ -833,8 +833,6 @@ then fails after about `markerVersionsCommitTimeout`, and its append is refused.
 `maxPoolSize` above the number of conditional appends you run at the same time.
 
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
-Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with
-`withVersions()` doesn't when its stream reports `markerVersions()`, because it read both in one snapshot transaction.
 On any deployment, a read whose events are behind its token can do this, for
 example when a read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A
 token also doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a
@@ -845,6 +843,21 @@ So can a rollback of your transaction on the Spring and reactor stores, when the
 the same database factory as yours and its transaction is set to `REQUIRES_NEW` or `NOT_SUPPORTED`. The event then
 commits above the last reserved position. 0.35.0 reserves positions outside every transaction and waits for majority on
 the reservation, as [the next section](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation) says.
+
+Through a mongos, a read without `withVersions()` reads the markers and the events in separate operations, which can
+reach different shards. Outside a transaction or session of yours, the store reads the markers, the position counter
+and the events in a causally consistent session of its own. When the markers read sees a marker that a matching event
+moved, the events read waits for that event's commit on the shard that holds the events, and returns the event.
+
+Such a read can take as long as that commit. A marker in its token that's on the shard holding the events can still be
+from before the event.
+
+A read in a transaction or session of yours reads in it as before, and so does one in a transaction that
+`NativeMongoTransactionExecutor`, `SpringTransactionExecutor` or `SpringReactiveTransactionExecutor` opened. On the
+Spring stores that includes a read while transaction synchronization is active, since the template then reads in the
+session bound there, or binds one. No test checks whether such a read can miss the event. A read with `withVersions()`
+doesn't miss it when its stream reports `markerVersions()`, because it read the markers and the events in one snapshot
+transaction. On a replica set the read is the same as before.
 
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
