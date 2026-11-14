@@ -127,7 +127,7 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
 
     @Timeout(value = 90, unit = SECONDS)
     @Test
-    void a_node_whose_wrapped_model_holds_the_subscription_paused_after_a_refused_restart_keeps_the_lease_and_does_not_ask_mongodb_again() throws InterruptedException {
+    void a_node_currently_keeps_the_lease_while_its_wrapped_model_holds_the_subscription_paused_after_a_refused_restart_and_does_not_ask_mongodb_again() throws InterruptedException {
         // Given
         Subscription started = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
         });

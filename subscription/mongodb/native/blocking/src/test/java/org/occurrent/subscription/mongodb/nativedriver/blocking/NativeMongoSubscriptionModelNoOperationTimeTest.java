@@ -744,6 +744,31 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         assertThat(cursorsOpened).as("cursors of the subscription's change streams opened").isZero();
     }
 
+    @Test
+    void a_dynamic_position_that_resolves_to_the_present_on_a_stopped_model_is_refused_when_the_read_of_the_change_stream_gave_no_position_and_skips_no_event_written_since() {
+        // Given: a stopped model, and a subscription whose position resolves to the present while the read at the subscribe gave no position
+        presentRead.set(() -> cursorReading(null, null));
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        subscriptionModel.stop();
+        String subscriptionId = UUID.randomUUID().toString();
+        List<String> handled = new CopyOnWriteArrayList<>();
+        Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter(), StartAt.dynamic(ctx -> StartAt.now()), cloudEvent -> handled.add(cloudEvent.getId()));
+        waitAtMostFor(FIVE_SECONDS, () -> presentReads.get() == 1);
+        assertThat(presentReads).as("reads of the change stream that records the present at the subscribe").hasValue(1);
+        presentRead.set(null);
+        mongoEventStore.write("1", 0, serialize(nameDefined("written since the subscribe")));
+
+        // When
+        catchThrowable(() -> subscriptionModel.start(true));
+        Throwable thrown = catchThrowable(() -> subscription.waitUntilStarted(Duration.ofSeconds(10)));
+
+        // Then: refused, and not started at a present later than the subscribe, which would skip the event
+        assertThat(thrown).as("thrown by the handle").isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
+        assertThat(handled).as("events delivered").isEmpty();
+        assertThat(subscriptionModel.subscriptionIds()).as("known subscriptions").doesNotContain(subscriptionId);
+        assertThat(presentReads).as("reads of the change stream that records the present").hasValue(1);
+    }
+
     private NativeMongoSubscriptionModel modelOver(MongoDatabase databaseToAsk, RetryStrategy retryStrategy) {
         return modelOver(databaseToAsk, eventCollection, retryStrategy);
     }

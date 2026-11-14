@@ -340,15 +340,15 @@ class NativeMongoSubscriptionModelStuckActionTest {
         List<Thread> waiting = executorThreads.stream().filter(thread -> thread != stuckThread.get() && thread.isAlive()).toList();
         assertThat(waiting).as("executor threads other than the one running the stuck call").isNotEmpty();
 
-        // When
+        // When: shut down, which waits for the executor while the stuck call ignores its interrupts
         long startedShuttingDown = System.nanoTime();
-        subscriptionModel.shutdown();
-        Duration shuttingDown = Duration.ofNanos(System.nanoTime() - startedShuttingDown);
+        CompletableFuture<Void> shuttingDown = CompletableFuture.runAsync(subscriptionModel::shutdown);
 
-        // Then: the shutdown cancelled the run, and the close of that cancel ended its wait while the stuck call still runs
-        assertThat(shuttingDown).as("time to shut down while a call is stuck").isLessThan(Duration.ofSeconds(8));
-        waitAtMostFor(FIVE_SECONDS, () -> waiting.stream().noneMatch(Thread::isAlive));
-        assertThat(waiting).as("threads still waiting after the shutdown").noneMatch(Thread::isAlive);
+        // Then: the close of the cancel ended the wait of the run long before the executor gave up on it
+        waitAtMostFor(Duration.ofSeconds(2), () -> waiting.stream().noneMatch(Thread::isAlive));
+        assertThat(waiting).as("threads still waiting two seconds after the shutdown started").noneMatch(Thread::isAlive);
+        assertThat(shuttingDown).as("shutdown while a call is stuck").succeedsWithin(Duration.ofSeconds(8));
+        assertThat(Duration.ofNanos(System.nanoTime() - startedShuttingDown)).as("time to shut down while a call is stuck").isLessThan(Duration.ofSeconds(8));
         assertThat(stuckThread.get().isAlive()).as("thread of the stuck call, which ignores interrupts").isTrue();
     }
 
@@ -396,6 +396,38 @@ class NativeMongoSubscriptionModelStuckActionTest {
         // Then: the start didn't wait for the stuck call, which the run that never started waits for
         assertThat(starting).as("start while the first call for E1 is stuck").succeedsWithin(Duration.ofSeconds(5));
         assertThat(askedAbout).as("positions the listener was asked about while the first call for E1 is stuck").isEmpty();
+    }
+
+    @Test
+    void an_action_that_resumes_its_own_subscription_after_a_history_loss_and_waits_until_it_started_gets_past_the_wait() {
+        // Given: restarts after a history loss are on, and the action of E1 pauses its own subscription, resumes it as
+        // its history is lost as the resumed run opens, and waits with no timeout for the resumed run to start
+        subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatLosesItsHistoryWhenOpening(), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(true));
+        String subscriptionId = UUID.randomUUID().toString();
+        CountDownLatch gotPastTheWait = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        subscriptionModel.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+            if (!cloudEvent.getId().equals(e1.eventId())) {
+                return;
+            }
+            try {
+                subscriptionModel.pauseSubscription(subscriptionId);
+                historyLostWhenOpening.set(true);
+                subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted();
+                gotPastTheWait.countDown();
+            } catch (Throwable throwable) {
+                failure.set(throwable);
+            }
+        }).waitUntilStarted(Duration.ofSeconds(10));
+
+        // When
+        mongoEventStore.write("1", 0, serialize(e1));
+
+        // Then: the call got past the wait, although the resumed run waits for that very call to return
+        boolean gotPast = awaitUnlessInterrupted(gotPastTheWait, Duration.ofSeconds(8));
+        assertThat(gotPast).as("the action got past waitUntilStarted() on the subscription it resumed").isTrue();
+        assertThat(failure).as("failure of the action").hasValue(null);
     }
 
     @Test
@@ -494,6 +526,15 @@ class NativeMongoSubscriptionModelStuckActionTest {
         } finally {
             calls.add(name + " returned");
             inFlight.decrementAndGet();
+        }
+    }
+
+    private static boolean awaitUnlessInterrupted(CountDownLatch latch, Duration timeout) {
+        try {
+            return latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 
