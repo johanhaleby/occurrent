@@ -551,7 +551,6 @@ public final class ChangeStreamSubscriptions {
     // the update can read the failure before that. The start refusal listeners are told last, and only when this run
     // was still in the map.
     private void refuseStart(String subscriptionId, InternalSubscription internalSubscription, UnsupportedStartAtException refusal) {
-        log.error("Cannot open the change stream of subscription {} at its start position, will not restart subscription!", subscriptionId, refusal);
         AtomicBoolean refused = new AtomicBoolean();
         runningSubscriptions.computeIfPresent(subscriptionId, (__, current) -> {
             if (current != internalSubscription) {
@@ -563,7 +562,10 @@ public final class ChangeStreamSubscriptions {
         });
         internalSubscription.releaseWaitersOfAFailedStart();
         if (refused.get()) {
+            log.error("Cannot open the change stream of subscription {} at its start position, will not restart subscription!", subscriptionId, refusal);
             startRefused(subscriptionId, refusal);
+        } else {
+            log.debug("Cannot open the change stream of subscription {} at its start position, but it was paused, resumed or cancelled meanwhile, so it isn't refused.", subscriptionId, refusal);
         }
     }
 
