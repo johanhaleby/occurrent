@@ -2339,14 +2339,18 @@ for itself, as in 0.34.0. To resume the live model at a position of its own, pas
 `resumeSubscription(id, startAt)` on `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` or the blocking
 `CatchupSubscriptionModel` throws `SubscriptionAlreadyRunningException` when the catch-up made the subscription and it
 runs. It throws before it stores anything and before it asks a `StartAt.dynamic(..)` function. A subscription runs here
-when it isn't paused and no replay that `resumeSubscription(id)` started runs for it. That includes one whose
-`subscribe(..)` replay still runs, and one the live model is still opening after `subscribe(..)` returned, as the
-MongoDB models do. In 0.34.0 the catch-up passed such a resume on to the live model, which threw its own exception.
+when it isn't paused, the replay its `subscribe(..)` started didn't end before the live model got it, and no replay that
+`resumeSubscription(id)` started runs for it or is about to start to take over a live start the live model lost. That
+includes one whose `subscribe(..)` replay still runs, and one the live model is still opening after `subscribe(..)`
+returned, as the MongoDB models do. In 0.34.0 the catch-up passed such a resume on to the live model, which threw its
+own exception.
 
 `RepositionableSubscriptions` already says that `resumeSubscription(id, startAt)` throws
 `SubscriptionAlreadyRunningException` for a subscription that runs. A `catch` of that exception, or of
 `IllegalArgumentException`, which it extends, catches it. A `catch` of the exception the live model threw, such as
-`IllegalStateException`, no longer does. Pause the subscription before you resume it at a position.
+`IllegalStateException`, no longer does. A subscription you pause while its `subscribe(..)` replay runs isn't refused
+this way. The live model doesn't hold it until that replay hands over, so a resume at a position before then still
+throws the live model's own exception, as in 0.34.0.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
