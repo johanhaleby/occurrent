@@ -273,6 +273,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // thread creating it, which may be waiting for the lock this holds, so nothing here resolves anything. Both
     // sides can reach the same bean, and the RegisteredHandlers they both check admit only the first.
     //
+    // A scoped proxy is the exception, since the scan asks its scope for the target. That waits at most for a thread
+    // creating the target to finish. The only lock of this post-processor the startup thread holds here is
+    // registrationLock, which nothing but afterSingletonsInstantiated takes, so the creating thread never waits for
+    // the startup thread.
+    //
     // This runs on the startup thread inside afterSingletonsInstantiated, so a bean whose creating thread has
     // finished with it registers under the startup policy and keeps the WAIT_UNTIL_STARTED guarantee it would have
     // had a moment earlier. A bean still in creation does not, because a blocking replay delivers while this call
@@ -344,22 +349,29 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
             ScanType scanType;
             if (HandlerScan.isScopedProxy(beanFactory, beanName)) {
-                // The target is built only when its predicted class shows an annotation, the way a predicted type is
-                // built below, so a scoped bean without handlers is never asked for at startup
+                // The target's class is read the way any other bean's is, from a built instance's recording first and
+                // the prediction second, and the target is asked for only when that class shows an annotation, so a
+                // scoped bean without handlers is never asked for at startup. A class that can't be predicted is no
+                // answer, so the target is asked for then too, and its handlers register or startup fails instead of
+                // the bean being passed over without a trace
                 String targetName = ScopedProxyUtils.getTargetBeanName(beanName);
-                Class<?> predicted;
+                ScanType targetType;
                 try {
-                    predicted = applicationContext.getType(targetName);
+                    targetType = resolveScanType(targetName);
                 } catch (RuntimeException e) {
+                    targetType = null;
+                }
+                if (targetType != null && !declaresAnyOccurrentAnnotation(targetType.type(), subscribableExists)) {
                     continue;
                 }
-                if (predicted == null || !declaresAnyOccurrentAnnotation(ClassUtils.getUserClass(predicted), subscribableExists)) {
+                // Asked again, a scope that hands out a new target per request, such as prototype, would build one
+                // more target per pass and per late callback for handlers that are already registered
+                if (targetType != null && targetType.concrete() && registersNothingNew(beanName, targetType.type(), subscribableExists)) {
                     continue;
                 }
-                // Outside the catch above, so a scope that isn't active now, such as request or session scope at
-                // startup, fails the scan instead of hiding the bean's handlers. The class comes from the target,
-                // since a proxy of ScopedProxyMode.INTERFACES has only the interfaces' methods
-                Object scopedTarget = applicationContext.getBean(targetName);
+                // The class comes from the target, since a proxy of ScopedProxyMode.INTERFACES has only the
+                // interfaces' methods
+                Object scopedTarget = HandlerScan.scopedTargetToRegister(applicationContext, beanName, targetName);
                 scopedTargets.put(beanName, scopedTarget);
                 scanType = new ScanType(userClassOf(scopedTarget), true);
             } else {
@@ -466,6 +478,17 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             beanResolver.apply(beanName);
         }
         return registeredAnything;
+    }
+
+    // Whether every handler type declares that this pass could register is already registered under beanName, so
+    // scanning it again would register nothing
+    private boolean registersNothingNew(String beanName, Class<?> type, boolean subscribableExists) {
+        for (Method method : HandlerScan.handlerMethods(type, subscribableExists ? HANDLER_ANNOTATIONS : SUBSCRIPTION_ANNOTATIONS)) {
+            if (!registeredHandlers.isRegistered(beanName, new HandlerMethod(method, type))) {
+                return false;
+            }
+        }
+        return true;
     }
 
 

@@ -135,10 +135,15 @@ startup. The handlers register once, under the proxy's name, and each delivery g
 `@EventListener`, so it reaches the instance the scope holds at that moment. In a scope that replaces its instance, such
 as a refresh scope, a handler runs on the new instance after a refresh. A delivery while the scope isn't active fails
 with the exception the scope throws. I haven't tested what that does to a durable subscription's checkpoint. The scan
-asks the scope for the instance only when the predicted class of the target shows an Occurrent annotation, so a bean in
-request or session scope fails startup when it has a handler, and starts when it has none. A bean that is only named
-`scopedTarget.` plus another bean's name, with no scoped proxy decorating it, is scanned as any other bean. With
-`ScopedProxyMode.INTERFACES` the proxy implements only the bean's interfaces, so a handler that only the class declares
+asks the scope for the instance only when the target's class shows an Occurrent annotation, the class of a target
+already built when there is one and the predicted class otherwise. So a bean in request or session scope fails startup
+with an `IllegalStateException` that names the bean when it has a handler, and starts when it has none. The scan also
+asks when neither class is known, as for a lazy scoped proxy whose target definition has no class, so such a bean
+registers its handlers or fails startup instead of being passed over. A scoped proxy that isn't lazy already fails
+startup when its target's class is unknown, since Spring needs that class to create the proxy. Once every handler of
+the target's class is registered the scan doesn't ask again, so a prototype bean with a scoped proxy builds one target
+at startup and then one per delivery. A bean that is only named `scopedTarget.` plus another bean's name, with no
+scoped proxy decorating it, is scanned as any other bean. With `ScopedProxyMode.INTERFACES` the proxy implements only the bean's interfaces, so a handler that only the class declares
 fails startup with `SubscriptionHandlerNotInvocableException`, as for any JDK proxy. A `@Projection`, `@Saga` or
 `@Snapshot` factory method runs once, on the instance the scan asked the scope for, so a refresh doesn't change its
 descriptor ([#1492](https://github.com/johanhaleby/occurrent/issues/1492)).

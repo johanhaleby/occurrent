@@ -27,6 +27,12 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.springframework.aop.scope.ScopedProxyUtils;
+import org.springframework.beans.factory.config.BeanDefinitionHolder;
+import org.springframework.beans.factory.support.AbstractBeanDefinition;
+import org.springframework.beans.factory.support.BeanDefinitionRegistry;
+import org.springframework.beans.factory.support.RootBeanDefinition;
+import org.springframework.beans.factory.support.ScopeNotActiveException;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -36,6 +42,7 @@ import org.springframework.context.annotation.Scope;
 import org.springframework.context.annotation.ScopedProxyMode;
 import org.springframework.core.NestedExceptionUtils;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -116,6 +123,76 @@ class ScopedBeanDeliveryTest {
     }
 
     @Test
+    void a_scoped_proxy_in_a_scope_that_is_inactive_at_startup_fails_startup_naming_the_bean_and_its_scoped_target() {
+        scope.deactivate();
+        runner.withUserConfiguration(TargetClassConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(causeChain(context.getStartupFailure()))
+                    .filteredOn(cause -> cause instanceof IllegalStateException && String.valueOf(cause.getMessage()).startsWith("Bean 'targetClassHandler' has a scoped proxy"))
+                    .singleElement()
+                    .satisfies(cause -> assertThat(cause)
+                            .hasMessageStartingWith("Bean 'targetClassHandler' has a scoped proxy, and the scan asks for its scoped target 'scopedTarget.targetClassHandler' at startup to read its Occurrent handlers, but the target's scope isn't active then.")
+                            .hasCauseInstanceOf(ScopeNotActiveException.class));
+        });
+    }
+
+    @Test
+    void a_handler_only_the_built_class_declares_is_registered_and_delivered_through_the_proxy_when_the_target_was_built_before_the_scan() {
+        runner.withUserConfiguration(EarlyBuiltConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            assertThat(subscribedIds(subscriptions)).containsExactly("early-built-handler");
+            Function2<EventMetadata, TestEvent, Unit> handler = handlerFor(subscriptions, "early-built-handler");
+
+            handler.invoke(null, new TestEvent());
+
+            assertThat(context.getBean(Deliveries.class).ranOn()).containsExactly("instance-1");
+        });
+    }
+
+    @Test
+    void a_prototype_scoped_proxy_builds_exactly_one_target_during_startup_and_a_new_one_for_each_delivery() {
+        runner.withUserConfiguration(PrototypeScopedProxyConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(InstanceCounter.class).count()).hasValue(1);
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            assertThat(subscribedIds(subscriptions)).containsExactly("scoped-prototype-handler");
+            Function2<EventMetadata, TestEvent, Unit> handler = handlerFor(subscriptions, "scoped-prototype-handler");
+
+            handler.invoke(null, new TestEvent());
+            handler.invoke(null, new TestEvent());
+
+            assertThat(context.getBean(Deliveries.class).ranOn()).containsExactly("instance-2", "instance-3");
+        });
+    }
+
+    @Test
+    void a_lazy_scoped_proxy_whose_target_class_cannot_be_predicted_registers_its_handler_from_the_target_the_scan_asks_for() {
+        List<String> ranOn = new CopyOnWriteArrayList<>();
+        List<Class<?>> predictedTargetTypes = new ArrayList<>();
+        runner.withInitializer(context -> {
+            BeanDefinitionRegistry registry = (BeanDefinitionRegistry) context;
+            RootBeanDefinition target = new RootBeanDefinition();
+            target.setScope(RefreshableScope.NAME);
+            target.setInstanceSupplier(() -> new SuppliedHandler("supplied", ranOn));
+            BeanDefinitionHolder proxy = ScopedProxyUtils.createScopedProxy(new BeanDefinitionHolder(target, "suppliedHandler"), registry, true);
+            ((AbstractBeanDefinition) proxy.getBeanDefinition()).setLazyInit(true);
+            registry.registerBeanDefinition(proxy.getBeanName(), proxy.getBeanDefinition());
+            context.addBeanFactoryPostProcessor(beanFactory -> predictedTargetTypes.add(beanFactory.getType(ScopedProxyUtils.getTargetBeanName("suppliedHandler"))));
+        }).run(context -> {
+            assertThat(predictedTargetTypes).hasSize(1).containsOnlyNulls();
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            assertThat(subscribedIds(subscriptions)).containsExactly("supplied-handler");
+            Function2<EventMetadata, TestEvent, Unit> handler = handlerFor(subscriptions, "supplied-handler");
+
+            handler.invoke(null, new TestEvent());
+
+            assertThat(ranOn).containsExactly("supplied");
+        });
+    }
+
+    @Test
     void a_scoped_bean_without_an_occurrent_annotation_in_a_scope_that_is_inactive_at_startup_does_not_fail_startup() {
         scope.deactivate();
         runner.withUserConfiguration(UnannotatedScopedConfiguration.class).run(context -> {
@@ -172,6 +249,14 @@ class ScopedBeanDeliveryTest {
                     .hasRootCauseMessage("Scope refreshable is not active");
             assertThat(context.getBean(Deliveries.class).ranOn()).isEmpty();
         });
+    }
+
+    private static List<Throwable> causeChain(Throwable failure) {
+        List<Throwable> chain = new ArrayList<>();
+        for (Throwable cause = failure; cause != null && !chain.contains(cause); cause = cause.getCause()) {
+            chain.add(cause);
+        }
+        return chain;
     }
 
     private static List<String> subscribedIds(Subscriptions<?> subscriptions) {
@@ -261,6 +346,92 @@ class ScopedBeanDeliveryTest {
         @Subscription(id = "prototype-handler")
         public void on(TestEvent event) {
             deliveries.ranOn().add(name);
+        }
+    }
+
+    interface EarlyBuiltPort {
+        void on(TestEvent event);
+
+        String name();
+    }
+
+    static class EarlyBuiltHandler implements EarlyBuiltPort {
+        private final String name;
+        private final Deliveries deliveries;
+
+        EarlyBuiltHandler(String name, Deliveries deliveries) {
+            this.name = name;
+            this.deliveries = deliveries;
+        }
+
+        @Override
+        @Subscription(id = "early-built-handler")
+        public void on(TestEvent event) {
+            deliveries.ranOn().add(name);
+        }
+
+        @Override
+        public String name() {
+            return name;
+        }
+    }
+
+    static class EarlyBuiltCaller {
+        EarlyBuiltCaller(EarlyBuiltPort port) {
+            port.name();
+        }
+    }
+
+    public static class SuppliedHandler {
+        private final String name;
+        private final List<String> ranOn;
+
+        SuppliedHandler(String name, List<String> ranOn) {
+            this.name = name;
+            this.ranOn = ranOn;
+        }
+
+        @Subscription(id = "supplied-handler")
+        public void on(TestEvent event) {
+            ranOn.add(name);
+        }
+    }
+
+    public static class ScopedPrototypeHandler {
+        private final String name;
+        private final Deliveries deliveries;
+
+        ScopedPrototypeHandler(String name, Deliveries deliveries) {
+            this.name = name;
+            this.deliveries = deliveries;
+        }
+
+        @Subscription(id = "scoped-prototype-handler")
+        public void on(TestEvent event) {
+            deliveries.ranOn().add(name);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class EarlyBuiltConfiguration {
+        @Bean
+        @Scope(value = RefreshableScope.NAME, proxyMode = ScopedProxyMode.TARGET_CLASS)
+        EarlyBuiltPort earlyBuiltHandler(InstanceCounter counter, Deliveries deliveries) {
+            return new EarlyBuiltHandler(counter.nextName(), deliveries);
+        }
+
+        @Bean
+        EarlyBuiltCaller earlyBuiltCaller(EarlyBuiltPort port) {
+            return new EarlyBuiltCaller(port);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class PrototypeScopedProxyConfiguration {
+        @Bean
+        @Scope(value = "prototype", proxyMode = ScopedProxyMode.TARGET_CLASS)
+        ScopedPrototypeHandler scopedPrototypeHandler(InstanceCounter counter, Deliveries deliveries) {
+            return new ScopedPrototypeHandler(counter.nextName(), deliveries);
         }
     }
 

@@ -33,9 +33,11 @@ import org.springframework.asm.ClassVisitor;
 import org.springframework.asm.MethodVisitor;
 import org.springframework.asm.Opcodes;
 import org.springframework.asm.SpringAsmInfo;
+import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.config.BeanDefinitionHolder;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.support.RootBeanDefinition;
+import org.springframework.beans.factory.support.ScopeNotActiveException;
 import org.springframework.core.BridgeMethodResolver;
 import org.springframework.core.MethodIntrospector;
 import org.springframework.core.ResolvableType;
@@ -954,6 +956,28 @@ public final class HandlerScan {
      */
     public static boolean isScopedTarget(ConfigurableListableBeanFactory beanFactory, String beanName) {
         return ScopedProxyUtils.isScopedTarget(beanName) && isScopedProxy(beanFactory, ScopedProxyUtils.getOriginalBeanName(beanName));
+    }
+
+    /**
+     * Asks the container for the target of the scoped bean whose proxy is {@code beanName}, the instance its scope
+     * holds now, which the scan reads the bean's handlers and descriptors from. A scope that isn't active at startup,
+     * such as request or session scope, fails the scan with an exception that names the bean, instead of Spring's own,
+     * which advises adding the scoped proxy the bean already has. Internal to the Spring Boot starters.
+     *
+     * @param beanFactory the bean factory that defines {@code beanName}
+     * @param beanName    the name of the scoped proxy
+     * @param targetName  the name of its target, {@link ScopedProxyUtils#getTargetBeanName} of {@code beanName}
+     * @return the instance the target's scope holds now
+     * @throws IllegalStateException when the target's scope isn't active, with Spring's exception as its cause
+     */
+    public static Object scopedTargetToRegister(BeanFactory beanFactory, String beanName, String targetName) {
+        try {
+            return beanFactory.getBean(targetName);
+        } catch (ScopeNotActiveException e) {
+            throw new IllegalStateException(("Bean '%s' has a scoped proxy, and the scan asks for its scoped target '%s' at startup to read its Occurrent handlers, but the target's scope isn't active then. "
+                    + "The scan asks when the target's class shows an Occurrent annotation or can't be predicted. "
+                    + "A handler can't run in a bean whose scope is active only during a request or a session, so move it to a bean whose scope is active at startup.").formatted(beanName, targetName), e);
+        }
     }
 
     private static IllegalStateException annotationFromAMethodNotOverridden(Method method, Method declaration, MergedAnnotation<? extends Annotation> annotation) {
