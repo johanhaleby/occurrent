@@ -103,7 +103,13 @@ import static java.util.Objects.requireNonNull;
  * refusal from {@code waitUntilStarted}. Every node whose start is refused gives up the lease this way once, and
  * doesn't compete for the subscription again, so when every node subscribed with a refused start, the subscription runs
  * on no node and its lease stays free. It runs again once {@code subscribe} is called with the same id, on any node,
- * with a start position the wrapped model accepts.
+ * with a start position the wrapped model accepts. They refuse a start at the present the same way when MongoDB gives
+ * neither an operation time nor a change stream position to start from, and this model handles that refusal as above.
+ * When a resume, or a restart from the present after a loss of history, gets no such position, they hold the
+ * subscription paused instead and report it through
+ * {@link StartRefusalReportingSubscriptions.StartRefusalListener#handleStartHeldPaused(String, UnsupportedStartAtException)}.
+ * This node then keeps the subscription and its lease, so no other node runs it until it is resumed on this node, and a
+ * handle that waits for that start throws the refusal.
  * <br>
  * <br>
  * {@link #pauseSubscription(String)} works on a node that has not won the lock, not only on the one delivering events.

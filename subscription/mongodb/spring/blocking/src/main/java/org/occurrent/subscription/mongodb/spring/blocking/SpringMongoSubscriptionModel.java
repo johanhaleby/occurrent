@@ -337,6 +337,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * Pause an individual subscription. The change stream behind it is closed, but the position it has read to is
      * kept, so {@link #resumeSubscription(String)} continues from there and events written while it was paused are
      * delivered rather than skipped.
+     * <p>
+     * An action call that is still running when this method returns holds back a resume of the subscription, which
+     * waits for that call with no deadline before it delivers. An action that pauses and resumes its own subscription
+     * and then waits for a later delivery therefore never returns.
      *
      * @see #resumeSubscription(String)
      */
@@ -380,6 +384,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * {@link #resumeSubscription(String, StartAt)} with a stored checkpoint instead whenever one exists, so a
      * subscription reached that way can resume somewhere else entirely, for example the position a competing
      * consumer's other node advanced to while this one held no lease.
+     * <p>
+     * The resumed subscription waits, with no deadline, until an action call from before the pause has returned, and
+     * only then delivers. An action that pauses and resumes its own subscription and then waits for a later delivery
+     * therefore never returns.
      *
      * @see #pauseSubscription(String)
      * @see #resumeSubscription(String, StartAt)
@@ -403,6 +411,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * throws an {@code UnsupportedStartAtException}, and the subscription stays in this model, paused. A later
      * {@link #resumeSubscription(String)} reads the change stream again, and a subscribe with the same id throws a
      * {@code DuplicateSubscriptionIdException} until {@code cancelSubscription(id)} frees it.
+     * <p>
+     * The resumed subscription waits, with no deadline, until an action call from before the pause has returned, and
+     * only then delivers. An action that pauses and resumes its own subscription and then waits for a later delivery
+     * therefore never returns.
      *
      * @see RepositionableSubscriptions#resumeSubscription(String, StartAt)
      */
