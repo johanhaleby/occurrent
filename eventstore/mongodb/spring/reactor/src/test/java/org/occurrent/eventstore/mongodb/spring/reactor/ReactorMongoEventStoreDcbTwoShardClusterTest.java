@@ -47,7 +47,11 @@ import org.occurrent.testsupport.mongodb.TwoShardMongoCluster.Hold;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.transaction.reactive.TransactionCallback;
 import org.springframework.transaction.reactive.TransactionalOperator;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
@@ -55,6 +59,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -72,7 +78,8 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
 /**
  * What the reactor store answers to a conditional append through a mongos in front of two shards (ADR 175). The events
  * live on the second shard, the marker of tag course:c1 on the first and the marker of tag student:s1 on the second, so
- * a read can see one of an event's markers and not the other.
+ * a read can see one of an event's markers and not the other. The store asks for the events a moved marker may stand for in
+ * a snapshot transaction of its own, whatever transaction the append runs in.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorMongoEventStoreDcbTwoShardClusterTest {
@@ -217,7 +224,44 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
     }
 
     @Test
-    void refuses_an_append_after_an_event_of_another_type_with_the_tag_when_it_joins_a_callers_transaction_at_the_default_read_concern() {
+    void refuses_an_append_after_a_matching_event_in_the_stores_own_transaction() {
+        DcbConsistencyToken token = read(TICKETS_OF_K1).consistencyToken();
+        append(taggedEventWithId("matching", TICKET_SOLD, CONCERT_K1));
+
+        Throwable thrown = catchThrowable(() -> eventStore.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)).block());
+
+        assertThat(thrown)
+                .as("The marker of the tag moved, and the store's own snapshot transaction finds the matching event above it")
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        assertThat(read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("matching");
+    }
+
+    @Test
+    void accepts_an_append_after_an_event_of_another_type_with_the_tag_when_a_plain_read_in_the_operators_transaction_comes_first() {
+        DcbConsistencyToken token = read(TICKETS_OF_K1).consistencyToken();
+        append(taggedEventWithId("renamed", CONCERT_RENAMED, CONCERT_K1));
+
+        Throwable thrown = appendInTheOperatorsTransaction(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1), token);
+
+        assertThat(thrown).as("The marker of the tag moved, and the store's own snapshot transaction finds no matching event above it").isNull();
+        assertThat(read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("sold");
+    }
+
+    @Test
+    void refuses_an_append_after_a_matching_event_when_a_plain_read_in_the_operators_transaction_comes_first() {
+        DcbConsistencyToken token = read(TICKETS_OF_K1).consistencyToken();
+        append(taggedEventWithId("matching", TICKET_SOLD, CONCERT_K1));
+
+        Throwable thrown = appendInTheOperatorsTransaction(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1), token);
+
+        assertThat(thrown)
+                .as("The marker of the tag moved, and the store's own snapshot transaction finds the matching event above it")
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        assertThat(read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("matching");
+    }
+
+    @Test
+    void accepts_an_append_after_an_event_of_another_type_with_the_tag_when_it_joins_a_callers_transaction_at_the_default_read_concern() {
         DcbConsistencyToken token = read(TICKETS_OF_K1).consistencyToken();
         append(taggedEventWithId("renamed", CONCERT_RENAMED, CONCERT_K1));
 
@@ -225,10 +269,9 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
         Throwable thrown = catchThrowable(() -> TransactionalOperator.create(transactionManager)
                 .transactional(eventStore.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token))).block());
 
-        assertThat(thrown)
-                .as("The caller's transaction doesn't read every shard at one point in time, so the store compares only the markers, and the marker of the tag moved")
-                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
-        assertTheCallersTransactionWasNeverRestartedAndEndedWith("abortTransaction");
+        assertThat(thrown).as("The marker of the tag moved, and the store's own snapshot transaction finds no matching event above it, whatever the caller's transaction reads").isNull();
+        assertTheCallersTransactionWasNeverRestartedAndEndedWith("commitTransaction");
+        assertThat(read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("sold");
     }
 
     @Test
@@ -239,7 +282,7 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
 
         Throwable thrown = catchThrowable(() -> builtFromOperator.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)).block());
 
-        assertThat(thrown).as("The store restarts the transaction its operator began at snapshot and majority, so it asks the events above the marker that moved, and none matches").isNull();
+        assertThat(thrown).as("The marker of the tag moved, and the store's own snapshot transaction finds no matching event above it").isNull();
         assertThat(read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("sold");
     }
 
@@ -254,41 +297,115 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
         Throwable thrown = catchThrowable(() -> TransactionalOperator.create(callersTransactionManager)
                 .transactional(eventStore.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token))).block());
 
-        assertThat(thrown).as("The caller's transaction reads every shard at one point in time, so the store asks the events above the marker that moved, and none matches").isNull();
+        assertThat(thrown).as("The marker of the tag moved, and the store's own snapshot transaction finds no matching event above it").isNull();
         assertTheCallersTransactionWasNeverRestartedAndEndedWith("commitTransaction");
         assertThat(read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("sold");
     }
 
-    // The store's own conditional append restarts its transaction at snapshot and majority, through a mongos
     @Test
-    void commits_the_stores_own_conditional_append_with_the_wtimeout_and_journal_flag_of_the_client() {
-        List<BsonDocument> commands = recordedConditionalAppendWithConfiguredWriteConcern().commands();
+    void refuses_an_append_after_a_matching_event_when_it_joins_a_callers_transaction_at_the_default_read_concern() {
+        DcbConsistencyToken token = read(TICKETS_OF_K1).consistencyToken();
+        append(taggedEventWithId("matching", TICKET_SOLD, CONCERT_K1));
 
-        BsonDocument commit = single(commands, "commitTransaction");
-        assertThat(commit.getDocument("writeConcern"))
-                .as("the commitTransaction of the append, whose write concern the client configured with a wtimeout and the journal flag")
-                .isEqualTo(BsonDocument.parse("{\"w\": \"majority\", \"wtimeout\": " + WTIMEOUT_MS + ", \"j\": true}"));
+        Throwable thrown = catchThrowable(() -> TransactionalOperator.create(new ReactiveMongoTransactionManager(databaseFactory))
+                .transactional(eventStore.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token))).block());
+
+        assertThat(thrown)
+                .as("The marker of the tag moved, and the store's own snapshot transaction finds the matching event above it")
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        assertThat(read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("matching");
     }
 
     @Test
-    void sends_no_abortTransaction_while_the_store_restarts_its_own_conditional_append_and_the_append_commits() {
-        Recorded recorded = recordedConditionalAppendWithConfiguredWriteConcern();
+    void refuses_an_append_after_a_matching_event_that_committed_after_the_callers_transaction_read_the_events_and_before_it_read_the_marker() {
+        DcbConsistencyToken token = read(TICKETS_OF_K1).consistencyToken();
+
+        Throwable thrown = catchThrowable(() -> TransactionalOperator.create(new ReactiveMongoTransactionManager(databaseFactory)).transactional(
+                template.exists(new Query(Criteria.where("id").is("none")), "events")
+                        // toFuture subscribes without the caller's transaction, so the matching event commits on a transaction of its own
+                        .then(Mono.defer(() -> Mono.fromFuture(eventStore.append(List.of(taggedEventWithId("matching", TICKET_SOLD, CONCERT_K1))).toFuture())))
+                        .then(Mono.defer(() -> eventStore.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token))))).block());
+
+        assertThat(thrown)
+                .as("The caller's transaction read the events before the matching event committed and the marker after it, so the marker moved while its own read of the events misses "
+                        + "the matching event. The store's own snapshot transaction finds it")
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        assertThat(read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("matching");
+    }
+
+    @Test
+    void keeps_a_write_a_transactional_operator_made_before_the_stores_callback_and_sends_no_abortTransaction_when_a_conditional_append_runs_through_a_mongos() {
+        DcbConsistencyToken token = read(TICKETS_OF_K1).consistencyToken();
+        append(taggedEventWithId("renamed", CONCERT_RENAMED, CONCERT_K1));
+        // A collection can't be created inside a distributed transaction
+        template.createCollection("hook").block();
+        TransactionalOperator delegate = TransactionalOperator.create(transactionManager);
+        List<String> hookIds = new CopyOnWriteArrayList<>();
+        TransactionalOperator hookedOperator = new TransactionalOperator() {
+            @Override
+            public <T> Flux<T> execute(TransactionCallback<T> action) {
+                return delegate.execute(status -> {
+                    String id = UUID.randomUUID().toString();
+                    return template.insert(new Document("_id", id), "hook").doOnNext(inserted -> hookIds.add(id)).thenMany(action.doInTransaction(status));
+                });
+            }
+        };
+        ReactorMongoEventStore hookedEventStore = new ReactorMongoEventStore(template, configuration().transactionConfig(hookedOperator).build());
+
+        COMMANDS.clear();
+        hookedEventStore.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)).block();
+
+        assertThat(hookIds).as("the transactions the operator wrote in before it delegated").isNotEmpty();
+        assertThat(Flux.from(client.getDatabase(database).getCollection("hook").find()).map(document -> document.getString("_id")).collectList().block())
+                .as("the documents the operator wrote in its transaction, which the store's check neither aborted nor restarted").containsExactlyInAnyOrderElementsOf(hookIds);
+        assertThat(COMMANDS).filteredOn(command -> "insert".equals(command.getFirstKey()) && "hook".equals(command.getString("insert").getValue()))
+                .as("the operator's insert, which was sent in the transaction").isNotEmpty().allMatch(command -> command.containsKey("autocommit"));
+        assertThat(COMMANDS).extracting(BsonDocument::getFirstKey).as("the commands of the conditional append").doesNotContain("abortTransaction");
+        assertThat(read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("sold");
+    }
+
+    @Test
+    void commits_the_stores_own_conditional_append_with_the_configured_write_concern_through_a_mongos() {
+        List<BsonDocument> commands = recordedConditionalAppendWithConfiguredConcerns().commands();
+
+        BsonDocument commit = single(theAppendsTransaction(commands), "commitTransaction");
+        assertThat(commit.getDocument("writeConcern"))
+                .as("the commitTransaction of the append, which keeps the write concern the transaction options configured, not majority")
+                .isEqualTo(BsonDocument.parse("{\"w\": 1, \"wtimeout\": " + WTIMEOUT_MS + ", \"j\": true}"));
+    }
+
+    @Test
+    void sends_no_abortTransaction_when_the_stores_own_conditional_append_commits_through_a_mongos() {
+        Recorded recorded = recordedConditionalAppendWithConfiguredConcerns();
         List<BsonDocument> commands = recorded.commands();
 
-        assertThat(commands).extracting(BsonDocument::getFirstKey).as("the restart aborts locally, because the transaction had sent nothing").doesNotContain("abortTransaction");
-        assertThat(single(commands, "commitTransaction")).isNotNull();
+        assertThat(commands).extracting(BsonDocument::getFirstKey).as("nothing aborts the append's transaction or the store's snapshot transaction").doesNotContain("abortTransaction");
+        assertThat(single(theAppendsTransaction(commands), "commitTransaction")).isNotNull();
         assertThat(recorded.eventIds()).containsExactly("sold");
     }
 
     @Test
-    void runs_every_command_of_the_stores_own_conditional_append_in_one_session_and_transaction_that_starts_at_read_concern_snapshot() {
-        List<BsonDocument> commands = recordedConditionalAppendWithConfiguredWriteConcern().commands();
+    void runs_every_command_of_the_stores_own_conditional_append_in_one_session_and_transaction_that_starts_at_the_configured_read_concern() {
+        List<BsonDocument> inTransaction = theAppendsTransaction(recordedConditionalAppendWithConfiguredConcerns().commands());
 
-        List<BsonDocument> inTransaction = commands.stream().filter(command -> command.containsKey("autocommit")).toList();
-        assertThat(inTransaction).extracting(command -> command.getFirstKey()).as("the finds, the writes and the commit of the append").contains("find", "commitTransaction");
-        assertThat(inTransaction).extracting(command -> command.get("lsid")).as("the session of every command").hasSize(inTransaction.size()).containsOnly(inTransaction.get(0).get("lsid"));
+        assertThat(inTransaction).extracting(command -> command.getFirstKey()).as("the finds, the writes and the commit of the append").contains("find", "insert", "commitTransaction");
         assertThat(inTransaction).extracting(command -> command.get("txnNumber")).as("the transaction of every command").containsOnly(inTransaction.get(0).get("txnNumber"));
-        assertThat(inTransaction.get(0).getDocument("readConcern").getString("level").getValue()).as("the first command of the transaction").isEqualTo("snapshot");
+        assertThat(inTransaction.get(0).getDocument("readConcern").getString("level").getValue()).as("the first command of the transaction, which isn't raised to snapshot").isEqualTo("majority");
+    }
+
+    @Test
+    void asks_the_events_of_a_moved_marker_in_a_snapshot_transaction_on_another_session_than_the_appends() {
+        List<BsonDocument> commands = recordedConditionalAppendWithConfiguredConcerns().commands();
+
+        List<BsonDocument> append = theAppendsTransaction(commands);
+        List<BsonDocument> snapshot = theOtherTransactions(commands);
+        assertThat(snapshot).as("the commands of a transaction on another session than the append's").isNotEmpty();
+        assertThat(snapshot).extracting(command -> command.get("lsid")).as("the session of every command of that transaction").containsOnly(snapshot.get(0).get("lsid"));
+        assertThat(snapshot).extracting(command -> command.get("txnNumber")).as("the transaction of every command").containsOnly(snapshot.get(0).get("txnNumber"));
+        assertThat(snapshot.get(0).getDocument("readConcern").getString("level").getValue()).as("the first command of the transaction that asks for the events").isEqualTo("snapshot");
+        assertThat(snapshot).filteredOn(command -> asksForTheEventsOfAMovedMarker(command)).as("the events query of the moved marker in that transaction").hasSize(1);
+        assertThat(snapshot.get(snapshot.size() - 1).getFirstKey()).as("that transaction ends with a commit, since it only reads").isEqualTo("commitTransaction");
+        assertThat(append).filteredOn(command -> asksForTheEventsOfAMovedMarker(command)).as("the events query of the moved marker in the append's own transaction").isEmpty();
     }
 
     @Test
@@ -306,8 +423,8 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
         assertThat(recorded.eventIds()).containsExactly("sold");
     }
 
-    private Recorded recordedConditionalAppendWithConfiguredWriteConcern() {
-        return recordedAppend(null, true);
+    private Recorded recordedConditionalAppendWithConfiguredConcerns() {
+        return recordedAppend(TransactionOptions.builder().readConcern(ReadConcern.MAJORITY).writeConcern(CONFIGURED_WRITE_CONCERN).build(), true);
     }
 
     private Recorded recordedAppend(@Nullable TransactionOptions configured, boolean conditional) {
@@ -349,12 +466,35 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
         return matching.get(0);
     }
 
+    // The starters' path, where a SpringReactiveTransactionExecutor runs a plain command and then the append in a transaction of the store's own transaction manager
+    private Throwable appendInTheOperatorsTransaction(CloudEvent event, DcbConsistencyToken token) {
+        return catchThrowable(() -> TransactionalOperator.create(transactionManager)
+                .transactional(template.exists(new Query(Criteria.where("id").is("none")), "events").then(eventStore.append(List.of(event), failIfEventsMatch(token)))).block());
+    }
+
+    // The commands of the transaction that inserts the append's events
+    private static List<BsonDocument> theAppendsTransaction(List<BsonDocument> commands) {
+        BsonDocument insert = commands.stream().filter(command -> command.containsKey("autocommit") && "insert".equals(command.getFirstKey())).findFirst().orElseThrow();
+        return commands.stream().filter(command -> command.containsKey("autocommit") && insert.get("lsid").equals(command.get("lsid"))).toList();
+    }
+
+    private static List<BsonDocument> theOtherTransactions(List<BsonDocument> commands) {
+        BsonDocument insert = commands.stream().filter(command -> command.containsKey("autocommit") && "insert".equals(command.getFirstKey())).findFirst().orElseThrow();
+        return commands.stream().filter(command -> command.containsKey("autocommit") && !insert.get("lsid").equals(command.get("lsid"))).toList();
+    }
+
+    // The events query that follows a moved marker selects them by the marker versions in their mv. Spring's exists counts them
+    private static boolean asksForTheEventsOfAMovedMarker(BsonDocument command) {
+        return Set.of("find", "aggregate", "count").contains(command.getFirstKey()) && command.get(command.getFirstKey()).isString()
+                && "events".equals(command.getString(command.getFirstKey()).getValue()) && command.toJson().contains("\"mv\"");
+    }
+
     // The store joined the callers transaction, so its commands share the callers session and transaction number, and the only
-    // abortTransaction is the callers own rollback at the end
+    // abortTransaction is the callers own rollback at the end. The store's snapshot transaction is on a session of its own
     private static void assertTheCallersTransactionWasNeverRestartedAndEndedWith(String lastCommand) {
-        List<BsonDocument> inTransaction = COMMANDS.stream().filter(command -> command.containsKey("autocommit")).toList();
-        assertThat(inTransaction).as("the commands of the callers transaction").isNotEmpty();
-        assertThat(inTransaction).extracting(command -> command.get("lsid")).containsOnly(inTransaction.get(0).get("lsid"));
+        List<BsonDocument> all = COMMANDS.stream().filter(command -> command.containsKey("autocommit")).toList();
+        assertThat(all).as("the commands of the callers transaction").isNotEmpty();
+        List<BsonDocument> inTransaction = all.stream().filter(command -> all.get(0).get("lsid").equals(command.get("lsid"))).toList();
         assertThat(inTransaction).extracting(command -> command.get("txnNumber")).containsOnly(inTransaction.get(0).get("txnNumber"));
         assertThat(inTransaction.get(inTransaction.size() - 1).getFirstKey()).isEqualTo(lastCommand);
         assertThat(inTransaction.subList(0, inTransaction.size() - 1)).extracting(BsonDocument::getFirstKey).as("nothing aborted the transaction before it ended").doesNotContain("abortTransaction");

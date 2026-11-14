@@ -17,11 +17,7 @@
 package org.occurrent.eventstore.mongodb.dcb.internal;
 
 import com.mongodb.MongoCommandException;
-import com.mongodb.ReadConcern;
-import com.mongodb.ReadPreference;
 import com.mongodb.ServerAddress;
-import com.mongodb.TransactionOptions;
-import com.mongodb.WriteConcern;
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
 import org.bson.BsonString;
@@ -49,9 +45,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -70,202 +63,77 @@ class DcbAppendConditionCheckScopeTest {
     private static final DcbCriterion TAGS_Z = DcbCriteria.tags(Tag.of("z", "1"));
     private static final DcbCriterion TYPES_X_AND_Y = DcbCriteria.types("X", "Y");
 
-    private static final TransactionOptions SNAPSHOT_MAJORITY = TransactionOptions.builder().readConcern(ReadConcern.SNAPSHOT).writeConcern(WriteConcern.MAJORITY).build();
-
     // Scope.of
 
     @Test
-    void scope_of_a_replica_set_is_REPLICA_SET_whatever_the_transaction_options() {
-        assertThat(Scope.of(Deployment.REPLICA_SET, null)).isEqualTo(Scope.REPLICA_SET);
-        assertThat(Scope.of(Deployment.REPLICA_SET, TransactionOptions.builder().build())).isEqualTo(Scope.REPLICA_SET);
-        assertThat(Scope.of(Deployment.REPLICA_SET, SNAPSHOT_MAJORITY)).isEqualTo(Scope.REPLICA_SET);
-        assertThat(Scope.of(Deployment.REPLICA_SET, TransactionOptions.builder().readConcern(ReadConcern.LOCAL).writeConcern(WriteConcern.W1).build())).isEqualTo(Scope.REPLICA_SET);
+    void scope_of_a_replica_set_is_REPLICA_SET() {
+        assertThat(Scope.of(Deployment.REPLICA_SET)).isEqualTo(Scope.REPLICA_SET);
     }
 
     @Test
-    void scope_of_a_mongos_is_SNAPSHOT_THROUGH_MONGOS_for_read_concern_snapshot_with_write_concern_majority() {
-        assertThat(Scope.of(Deployment.MONGOS, SNAPSHOT_MAJORITY)).isEqualTo(Scope.SNAPSHOT_THROUGH_MONGOS);
+    void scope_of_a_mongos_is_SNAPSHOT_THROUGH_MONGOS() {
+        assertThat(Scope.of(Deployment.MONGOS)).isEqualTo(Scope.SNAPSHOT_THROUGH_MONGOS);
     }
 
     @Test
-    void scope_of_a_mongos_is_MARKERS_ONLY_when_the_transaction_options_could_not_be_read() {
-        assertThat(Scope.of(Deployment.MONGOS, null)).isEqualTo(Scope.MARKERS_ONLY);
+    void scope_of_any_other_deployment_is_MARKERS_ONLY() {
+        assertThat(Scope.of(Deployment.OTHER)).isEqualTo(Scope.MARKERS_ONLY);
+    }
+
+    // snapshotHoldsTheAppendsRead
+
+    @Test
+    void a_snapshot_holds_the_appends_read_when_every_marker_has_the_same_version() {
+        Map<String, MarkerObservation> read = markers(KEY_A, version(3), KEY_B, version(2));
+
+        assertThat(DcbAppendConditionCheck.snapshotHoldsTheAppendsRead(read, markers(KEY_A, version(3), KEY_B, version(2)))).isTrue();
     }
 
     @Test
-    void scope_of_a_mongos_is_MARKERS_ONLY_for_read_concern_snapshot_with_write_concern_w1() {
-        TransactionOptions options = TransactionOptions.builder().readConcern(ReadConcern.SNAPSHOT).writeConcern(WriteConcern.W1).build();
+    void a_snapshot_holds_the_appends_read_when_a_marker_has_a_higher_version_in_the_snapshot() {
+        Map<String, MarkerObservation> read = markers(KEY_A, version(3), KEY_B, version(2));
 
-        assertThat(Scope.of(Deployment.MONGOS, options)).isEqualTo(Scope.MARKERS_ONLY);
+        assertThat(DcbAppendConditionCheck.snapshotHoldsTheAppendsRead(read, markers(KEY_A, version(3), KEY_B, version(5)))).isTrue();
     }
 
     @Test
-    void scope_of_a_mongos_is_MARKERS_ONLY_for_write_concern_majority_without_read_concern_snapshot() {
-        TransactionOptions majorityRead = TransactionOptions.builder().readConcern(ReadConcern.MAJORITY).writeConcern(WriteConcern.MAJORITY).build();
+    void a_snapshot_does_not_hold_the_appends_read_when_a_marker_has_a_lower_version_in_the_snapshot() {
+        Map<String, MarkerObservation> read = markers(KEY_A, version(3), KEY_B, version(2));
 
-        assertThat(Scope.of(Deployment.MONGOS, majorityRead)).isEqualTo(Scope.MARKERS_ONLY);
+        assertThat(DcbAppendConditionCheck.snapshotHoldsTheAppendsRead(read, markers(KEY_A, version(3), KEY_B, version(1)))).as("a marker the snapshot reads from before the append's read").isFalse();
     }
 
     @Test
-    void scope_of_a_mongos_is_MARKERS_ONLY_for_write_concern_majority_without_a_read_concern() {
-        TransactionOptions options = TransactionOptions.builder().writeConcern(WriteConcern.MAJORITY).build();
+    void a_snapshot_does_not_hold_the_appends_read_when_a_marker_has_another_epoch_in_the_snapshot_even_at_a_higher_version() {
+        Map<String, MarkerObservation> read = markers(KEY_A, version(3));
 
-        assertThat(Scope.of(Deployment.MONGOS, options)).isEqualTo(Scope.MARKERS_ONLY);
+        assertThat(DcbAppendConditionCheck.snapshotHoldsTheAppendsRead(read, markers(KEY_A, new MarkerObservation("epoch-2", 9, 0)))).as("the versions of another epoch can't be compared").isFalse();
     }
 
     @Test
-    void scope_of_a_mongos_is_MARKERS_ONLY_for_read_concern_snapshot_without_a_write_concern() {
-        TransactionOptions options = TransactionOptions.builder().readConcern(ReadConcern.SNAPSHOT).build();
+    void a_snapshot_does_not_hold_the_appends_read_when_a_marker_is_present_in_the_append_and_absent_in_the_snapshot() {
+        Map<String, MarkerObservation> read = markers(KEY_A, version(1));
 
-        assertThat(Scope.of(Deployment.MONGOS, options)).isEqualTo(Scope.MARKERS_ONLY);
+        assertThat(DcbAppendConditionCheck.snapshotHoldsTheAppendsRead(read, markers(KEY_A, MarkerObservation.absent()))).as("a marker the snapshot doesn't have yet").isFalse();
     }
 
     @Test
-    void scope_of_any_other_deployment_is_MARKERS_ONLY_even_for_read_concern_snapshot_with_write_concern_majority() {
-        assertThat(Scope.of(Deployment.OTHER, SNAPSHOT_MAJORITY)).isEqualTo(Scope.MARKERS_ONLY);
-        assertThat(Scope.of(Deployment.OTHER, null)).isEqualTo(Scope.MARKERS_ONLY);
-    }
+    void a_snapshot_holds_the_appends_read_when_a_marker_is_absent_in_both() {
+        Map<String, MarkerObservation> read = markers(KEY_A, MarkerObservation.absent(), KEY_B, version(1));
 
-    // snapshotThroughMongos
-
-    @Test
-    void snapshotThroughMongos_sets_read_concern_snapshot_and_write_concern_majority() {
-        TransactionOptions options = DcbAppendConditionCheck.snapshotThroughMongos(TransactionOptions.builder().build(), WriteConcern.ACKNOWLEDGED);
-
-        assertThat(options.getReadConcern()).isEqualTo(ReadConcern.SNAPSHOT);
-        assertThat(options.getWriteConcern()).isEqualTo(WriteConcern.MAJORITY);
-        assertThat(Scope.of(Deployment.MONGOS, options)).isEqualTo(Scope.SNAPSHOT_THROUGH_MONGOS);
+        assertThat(DcbAppendConditionCheck.snapshotHoldsTheAppendsRead(read, markers(KEY_A, MarkerObservation.absent(), KEY_B, version(1)))).isTrue();
     }
 
     @Test
-    void snapshotThroughMongos_replaces_a_weaker_read_and_write_concern() {
-        TransactionOptions weaker = TransactionOptions.builder().readConcern(ReadConcern.LOCAL).writeConcern(WriteConcern.W1).build();
+    void a_snapshot_does_not_hold_the_appends_read_when_a_key_of_the_append_is_missing_from_the_snapshot_map() {
+        Map<String, MarkerObservation> read = markers(KEY_A, version(1), KEY_B, version(1));
 
-        TransactionOptions options = DcbAppendConditionCheck.snapshotThroughMongos(weaker, WriteConcern.ACKNOWLEDGED);
+        Boolean[] holds = new Boolean[1];
 
-        assertThat(options.getReadConcern()).isEqualTo(ReadConcern.SNAPSHOT);
-        assertThat(options.getWriteConcern()).isEqualTo(WriteConcern.MAJORITY);
-    }
+        Throwable thrown = catchThrowable(() -> holds[0] = DcbAppendConditionCheck.snapshotHoldsTheAppendsRead(read, markers(KEY_A, version(1))));
 
-    @Test
-    void snapshotThroughMongos_keeps_a_configured_wtimeout() {
-        TransactionOptions configured = TransactionOptions.builder().writeConcern(WriteConcern.W1.withWTimeout(750, TimeUnit.MILLISECONDS)).build();
-
-        TransactionOptions options = DcbAppendConditionCheck.snapshotThroughMongos(configured, WriteConcern.ACKNOWLEDGED);
-
-        assertThat(options.getWriteConcern().getWObject()).isEqualTo("majority");
-        assertThat(options.getWriteConcern().getWTimeout(TimeUnit.MILLISECONDS)).isEqualTo(750);
-    }
-
-    @Test
-    void snapshotThroughMongos_keeps_the_wtimeout_and_journal_flag_of_the_options_write_concern_next_to_read_concern_snapshot_and_write_concern_majority() {
-        TransactionOptions configured = TransactionOptions.builder().writeConcern(WriteConcern.W1.withWTimeout(750, TimeUnit.MILLISECONDS).withJournal(true)).build();
-
-        TransactionOptions options = DcbAppendConditionCheck.snapshotThroughMongos(configured, WriteConcern.W2.withWTimeout(20, TimeUnit.MILLISECONDS).withJournal(false));
-
-        assertThat(options.getReadConcern()).isEqualTo(ReadConcern.SNAPSHOT);
-        assertThat(options.getWriteConcern().getWObject()).isEqualTo("majority");
-        assertThat(options.getWriteConcern().getWTimeout(TimeUnit.MILLISECONDS)).isEqualTo(750);
-        assertThat(options.getWriteConcern().getJournal()).isTrue();
-    }
-
-    @Test
-    void snapshotThroughMongos_takes_the_wtimeout_and_journal_flag_from_the_client_write_concern_when_the_options_have_no_write_concern() {
-        TransactionOptions options = DcbAppendConditionCheck.snapshotThroughMongos(TransactionOptions.builder().build(), WriteConcern.W1.withWTimeout(300, TimeUnit.MILLISECONDS).withJournal(true));
-
-        assertThat(options.getWriteConcern().getWObject()).isEqualTo("majority");
-        assertThat(options.getWriteConcern().getWTimeout(TimeUnit.MILLISECONDS)).isEqualTo(300);
-        assertThat(options.getWriteConcern().getJournal()).isTrue();
-    }
-
-    @Test
-    void snapshotThroughMongos_sets_no_wtimeout_when_none_was_configured() {
-        TransactionOptions options = DcbAppendConditionCheck.snapshotThroughMongos(TransactionOptions.builder().writeConcern(WriteConcern.W1).build(), WriteConcern.ACKNOWLEDGED);
-
-        assertThat(options.getWriteConcern().getWTimeout(TimeUnit.MILLISECONDS)).isNull();
-    }
-
-    @Test
-    void snapshotThroughMongos_keeps_the_other_options() {
-        TransactionOptions configured = TransactionOptions.builder()
-                .maxCommitTime(1500L, TimeUnit.MILLISECONDS)
-                .readPreference(ReadPreference.primaryPreferred())
-                .build();
-
-        TransactionOptions options = DcbAppendConditionCheck.snapshotThroughMongos(configured, WriteConcern.ACKNOWLEDGED);
-
-        assertThat(options.getMaxCommitTime(TimeUnit.MILLISECONDS)).isEqualTo(1500L);
-        assertThat(options.getReadPreference()).isEqualTo(ReadPreference.primaryPreferred());
-    }
-
-    @Test
-    void restartAtOnePointInTime_is_empty_for_options_with_read_concern_snapshot_and_write_concern_majority() {
-        assertThat(DcbAppendConditionCheck.restartAtOnePointInTime(SNAPSHOT_MAJORITY)).isEmpty();
-    }
-
-    @Test
-    void restartAtOnePointInTime_gives_read_concern_snapshot_and_write_concern_majority_with_the_wtimeout_and_journal_flag_and_keeps_the_other_options() {
-        TransactionOptions running = TransactionOptions.builder()
-                .readConcern(ReadConcern.MAJORITY)
-                .writeConcern(WriteConcern.W1.withWTimeout(750, TimeUnit.MILLISECONDS).withJournal(true))
-                .maxCommitTime(1500L, TimeUnit.MILLISECONDS)
-                .readPreference(ReadPreference.primaryPreferred())
-                .build();
-
-        Optional<TransactionOptions> restarted = DcbAppendConditionCheck.restartAtOnePointInTime(running);
-
-        assertThat(restarted).isPresent();
-        TransactionOptions options = restarted.get();
-        assertThat(options.getReadConcern()).isEqualTo(ReadConcern.SNAPSHOT);
-        assertThat(options.getWriteConcern().getWObject()).isEqualTo("majority");
-        assertThat(options.getWriteConcern().getWTimeout(TimeUnit.MILLISECONDS)).isEqualTo(750);
-        assertThat(options.getWriteConcern().getJournal()).isTrue();
-        assertThat(options.getMaxCommitTime(TimeUnit.MILLISECONDS)).isEqualTo(1500L);
-        assertThat(options.getReadPreference()).isEqualTo(ReadPreference.primaryPreferred());
-    }
-
-    // Scope.reading
-
-    @Test
-    void reading_on_a_mongos_is_SNAPSHOT_THROUGH_MONGOS_for_options_with_read_concern_snapshot_and_write_concern_majority() {
-        assertThat(Scope.reading(Deployment.MONGOS, () -> SNAPSHOT_MAJORITY)).isEqualTo(Scope.SNAPSHOT_THROUGH_MONGOS);
-    }
-
-    @Test
-    void reading_on_a_mongos_is_MARKERS_ONLY_when_reading_the_options_throws_a_RuntimeException() {
-        Scope[] scope = new Scope[1];
-
-        Throwable thrown = catchThrowable(() -> scope[0] = Scope.reading(Deployment.MONGOS, () -> {
-            throw new IllegalStateException("no options");
-        }));
-
-        assertThat(thrown).as("reading the scope doesn't fail the append").isNull();
-        assertThat(scope[0]).isEqualTo(Scope.MARKERS_ONLY);
-    }
-
-    @Test
-    void reading_on_a_mongos_is_MARKERS_ONLY_when_reading_the_options_throws_a_LinkageError() {
-        Scope[] scope = new Scope[1];
-
-        Throwable thrown = catchThrowable(() -> scope[0] = Scope.reading(Deployment.MONGOS, () -> {
-            throw new NoSuchMethodError("getTransactionOptions");
-        }));
-
-        assertThat(thrown).as("reading the scope doesn't fail the append").isNull();
-        assertThat(scope[0]).isEqualTo(Scope.MARKERS_ONLY);
-    }
-
-    @Test
-    void reading_on_a_replica_set_is_REPLICA_SET_without_reading_the_options() {
-        AtomicInteger reads = new AtomicInteger();
-
-        Scope scope = Scope.reading(Deployment.REPLICA_SET, () -> {
-            reads.incrementAndGet();
-            return SNAPSHOT_MAJORITY;
-        });
-
-        assertThat(scope).isEqualTo(Scope.REPLICA_SET);
-        assertThat(reads).hasValue(0);
+        assertThat(thrown).as("a key the snapshot didn't read is answered, not dereferenced").isNull();
+        assertThat(holds[0]).as("a marker the snapshot has no observation of").isFalse();
     }
 
     // deployment

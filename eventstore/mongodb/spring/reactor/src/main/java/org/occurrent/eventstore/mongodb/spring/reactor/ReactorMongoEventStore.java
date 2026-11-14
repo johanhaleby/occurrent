@@ -203,7 +203,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final String dcbCheckpointCollectionName;
     private final TimeRepresentation timeRepresentation;
     private final TransactionalOperator transactionalOperator;
-    private final BoundTransactionOptions boundTransactionOptions;
     private final Function<Query, Query> queryOptions;
     private final Function<Query, Query> readOptions;
     private final Set<EventStoreCapability> eventStoreCapabilities;
@@ -251,7 +250,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             LOGGER.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
         this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(command -> mongoTemplate.executeCommand(command).block()) : Deployment.OTHER;
-        this.boundTransactionOptions = new BoundTransactionOptions(mongoTemplate.getMongoDatabaseFactory());
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, mongoTemplate).block();
     }
 
@@ -728,10 +726,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                 return insertAllDcb(streamId, currentStreamVersion, documents).thenReturn(new DcbAppendResult(firstPosition, lastPosition, eventCount, Optional.of(appendId), markerVersions));
                             });
                         });
-                Mono<DcbAppendResult> transaction = condition == null || deployment != Deployment.MONGOS
-                        ? transactionalOperator.transactional(append)
-                        // First, while the transaction has sent nothing, so its check can read every shard at one point in time (ADR 175)
-                        : transactionalOperator.execute(status -> boundTransactionOptions.restartAtOnePointInTime(status).then(append)).singleOrEmpty();
+                Mono<DcbAppendResult> transaction = transactionalOperator.transactional(append);
                 // The driver does not auto-retry a transient transaction conflict reactively, so retry it here, plus a
                 // DuplicateKeyException from two transactions first-creating the same conflict marker at once. A
                 // DcbAppendConditionNotFulfilledException and a DuplicateCloudEventException are deliberately not retried.
@@ -740,12 +735,31 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         });
     }
 
-    // Read inside the append's transaction, so a caller's transaction the append joined gives the caller's options
-    private Mono<Scope> appendCheckScope() {
-        if (deployment != Deployment.MONGOS) {
-            return Mono.just(Scope.of(deployment, null));
-        }
-        return boundTransactionOptions.current().map(options -> Scope.of(deployment, options.orElse(null)));
+    // Through a mongos the append's transaction reads each shard from when it first touched it, so it can miss an event
+    // that the markers it read reflect. The events are queried in a read-only snapshot transaction of the store's own
+    // instead, on a session no synchronization binds, and the answer counts only when that snapshot holds the markers
+    // the append read. Anything else refuses (ADR 175).
+    private Mono<Boolean> conflictsInASnapshotOfItsOwn(DcbCriteria criteria, Map<String, DcbConsistencyToken.MarkerObservation> current, Query matchingEvent) {
+        return Mono.usingWhen(
+                        mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build()),
+                        snapshotSession -> Mono.defer(() -> {
+                            snapshotSession.startTransaction(markerVersionsTransactionOptions);
+                            if (!(mongoTemplate.withSession(snapshotSession) instanceof ReactiveMongoTemplate sessionTemplate)) {
+                                return Mono.just(true);
+                            }
+                            sessionTemplate.setSessionSynchronization(NEVER);
+                            return queryMarkers(criteria, sessionTemplate)
+                                    .flatMap(markers -> DcbAppendConditionCheck.snapshotHoldsTheAppendsRead(current, DcbMarkerVersionsDocuments.observe(current.keySet(), markers))
+                                            ? sessionTemplate.exists(matchingEvent, eventStoreCollectionName)
+                                            : Mono.just(true))
+                                    .flatMap(conflict -> Mono.from(snapshotSession.commitTransaction()).thenReturn(conflict));
+                        }),
+                        // Closing the session aborts a read-only transaction that is still open
+                        snapshotSession -> Mono.fromRunnable(snapshotSession::close),
+                        (snapshotSession, error) -> Mono.fromRunnable(snapshotSession::close),
+                        snapshotSession -> Mono.fromRunnable(snapshotSession::close))
+                .onErrorResume(RuntimeException.class, e -> Mono.just(true))
+                .defaultIfEmpty(true);
     }
 
     private Mono<Map<String, Document>> enforceAppendCondition(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition, int stripe) {
@@ -756,16 +770,20 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             // compares each of the query's markers with what the read saw of it, and then queries the events above those
             // versions for an item that needs it (ADR 0149). Immune to read-watermark overshoot because marker versions
             // bump inside the append transaction.
-            conflictMono = appendCheckScope().flatMap(scope -> queryMarkers(condition.criteria(), mongoTemplate).flatMap(markers -> {
+            Scope scope = Scope.of(deployment);
+            conflictMono = queryMarkers(condition.criteria(), mongoTemplate).flatMap(markers -> {
                 Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
                 return switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, scope)) {
                     case DcbAppendConditionCheck.Pass ignored -> Mono.just(false);
                     case DcbAppendConditionCheck.Refuse ignored -> Mono.just(true);
-                    case DcbAppendConditionCheck.QueryEvents query -> mongoTemplate.exists(new Query(new Criteria().orOperator(query.items().stream()
-                            .map(item -> new Criteria().andOperator(toCriteria(item.item()), markerVersionsCriteria(DcbMarkerVersionsDocuments.selections(item, markers))))
-                            .toList())), eventStoreCollectionName);
+                    case DcbAppendConditionCheck.QueryEvents query -> {
+                        Query matchingEvent = new Query(new Criteria().orOperator(query.items().stream()
+                                .map(item -> new Criteria().andOperator(toCriteria(item.item()), markerVersionsCriteria(DcbMarkerVersionsDocuments.selections(item, markers))))
+                                .toList()));
+                        yield scope == Scope.SNAPSHOT_THROUGH_MONGOS ? conflictsInASnapshotOfItsOwn(condition.criteria(), current, matchingEvent) : mongoTemplate.exists(matchingEvent, eventStoreCollectionName);
+                    }
                 };
-            }));
+            });
         } else {
             // No token: an absolute "fail if any matching event exists" guard. The marker increments below still
             // serialize concurrent unconditional guards on the same boundary so two of them cannot both pass.

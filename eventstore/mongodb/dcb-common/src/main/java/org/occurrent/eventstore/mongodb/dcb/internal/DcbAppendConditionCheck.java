@@ -17,13 +17,8 @@
 package org.occurrent.eventstore.mongodb.dcb.internal;
 
 import com.mongodb.MongoCommandException;
-import com.mongodb.ReadConcern;
-import com.mongodb.ReadConcernLevel;
-import com.mongodb.TransactionOptions;
-import com.mongodb.WriteConcern;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
-import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken.MarkerObservation;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
@@ -34,12 +29,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.function.Supplier;
-
-import static java.util.Objects.requireNonNull;
 
 /**
  * The check of a conditional append with a consistency token on the MongoDB stores (ADR 149). It compares what the read
@@ -82,8 +73,9 @@ public final class DcbAppendConditionCheck {
          */
         REPLICA_SET,
         /**
-         * The transaction reads every shard at one point in time, but a token's markers can come from different points
-         * in time (ADR 175).
+         * The append's transaction can read each shard at another point in time, and a token's markers can come from
+         * different points in time. The store queries the events in a snapshot transaction of its own, whose answer
+         * counts only when {@link #snapshotHoldsTheAppendsRead(Map, Map)} (ADR 175).
          */
         SNAPSHOT_THROUGH_MONGOS,
         /**
@@ -92,76 +84,38 @@ public final class DcbAppendConditionCheck {
         MARKERS_ONLY;
 
         /**
-         * The scope of an append transaction with {@code options} on {@code deployment}.
+         * The scope of a conditional append on {@code deployment}.
          *
          * @param deployment the store's deployment
-         * @param options    the options the append's transaction started with, {@code null} when they couldn't be read
          */
-        public static Scope of(Deployment deployment, @Nullable TransactionOptions options) {
+        public static Scope of(Deployment deployment) {
             return switch (deployment) {
                 case REPLICA_SET -> REPLICA_SET;
-                case MONGOS -> readsEveryShardAtOnePointInTime(options) ? SNAPSHOT_THROUGH_MONGOS : MARKERS_ONLY;
+                case MONGOS -> SNAPSHOT_THROUGH_MONGOS;
                 case OTHER -> MARKERS_ONLY;
             };
         }
-
-        /**
-         * The scope of the append's transaction on {@code deployment}, reading its options only through a mongos, where
-         * they decide the scope. A failure to read them gives {@link #MARKERS_ONLY} there.
-         *
-         * @param deployment the store's deployment
-         * @param options    reads the options the append's transaction started with, {@code null} when there are none
-         */
-        public static Scope reading(Deployment deployment, Supplier<@Nullable TransactionOptions> options) {
-            if (deployment != Deployment.MONGOS) {
-                return of(deployment, null);
-            }
-            TransactionOptions read;
-            try {
-                read = options.get();
-            } catch (RuntimeException | LinkageError e) {
-                read = null;
-            }
-            return of(deployment, read);
-        }
     }
 
     /**
-     * The settings a conditional append's own transaction runs with through a mongos, {@code options} with read concern
-     * snapshot and write concern majority. MongoDB promises one point in time across the shards only for a transaction
-     * that commits at majority. The write concern keeps the {@code wtimeout} and the journal flag of the one in
-     * {@code options}, or of {@code clientWriteConcern} when {@code options} has none, since that's what the transaction
-     * would otherwise commit with.
+     * Whether the store's snapshot holds every event that the markers the append's transaction read reflect. It does
+     * when each marker has the same epoch in both reads and a version in the snapshot at least as high as the append
+     * read. An event that matches the condition increments one of the condition's markers in its own transaction (ADR
+     * 0021), so a snapshot that holds that increment holds the event. An event that commits after the append read the
+     * markers conflicts with the append's own increment of them (ADR 149).
      *
-     * @param options            the store's transaction options
-     * @param clientWriteConcern the write concern of the client the store starts its sessions on
+     * @param current    what the append's transaction read of every marker key of the condition
+     * @param inSnapshot what the store's snapshot read of the same keys
      */
-    public static TransactionOptions snapshotThroughMongos(TransactionOptions options, WriteConcern clientWriteConcern) {
-        WriteConcern configured = options.getWriteConcern() == null ? requireNonNull(clientWriteConcern, "clientWriteConcern cannot be null") : options.getWriteConcern();
-        return TransactionOptions.merge(TransactionOptions.builder().readConcern(ReadConcern.SNAPSHOT).writeConcern(configured.withW("majority")).build(), options);
-    }
-
-    /**
-     * The options the Spring stores start their own conditional append's transaction again with through a mongos, so it
-     * reads every shard at one point in time. That's {@code running} with read concern snapshot and write concern
-     * majority, keeping the {@code wtimeout} and the journal flag of its write concern. Empty when {@code running}
-     * already has that pair.
-     *
-     * @param running the options the transaction runs with, as its session reports them
-     */
-    public static Optional<TransactionOptions> restartAtOnePointInTime(TransactionOptions running) {
-        if (readsEveryShardAtOnePointInTime(running)) {
-            return Optional.empty();
+    public static boolean snapshotHoldsTheAppendsRead(Map<String, MarkerObservation> current, Map<String, MarkerObservation> inSnapshot) {
+        for (Map.Entry<String, MarkerObservation> entry : current.entrySet()) {
+            MarkerObservation inAppend = entry.getValue();
+            MarkerObservation inTheSnapshot = inSnapshot.get(entry.getKey());
+            if (inTheSnapshot == null || !Objects.equals(inAppend.epoch(), inTheSnapshot.epoch()) || inTheSnapshot.version() < inAppend.version()) {
+                return false;
+            }
         }
-        // A session reports the write concern it fills in from the client, so the fallback isn't used
-        return Optional.of(snapshotThroughMongos(running, WriteConcern.ACKNOWLEDGED));
-    }
-
-    private static boolean readsEveryShardAtOnePointInTime(@Nullable TransactionOptions options) {
-        if (options == null || options.getReadConcern() == null || options.getWriteConcern() == null) {
-            return false;
-        }
-        return options.getReadConcern().getLevel() == ReadConcernLevel.SNAPSHOT && "majority".equals(options.getWriteConcern().getWObject());
+        return true;
     }
 
     /**
@@ -211,7 +165,7 @@ public final class DcbAppendConditionCheck {
      * @param token            the token of the condition
      * @param criteria         the criteria of the condition
      * @param current          the marker observation of every marker key of {@code criteria}
-     * @param scope            what the check may assume, see {@link Scope#of(Deployment, TransactionOptions)}
+     * @param scope            what the check may assume, see {@link Scope#of(Deployment)}
      * @throws IllegalArgumentException if the token doesn't hold exactly the marker keys of {@code criteria}, which means
      *                                  this store's read didn't create it
      */
