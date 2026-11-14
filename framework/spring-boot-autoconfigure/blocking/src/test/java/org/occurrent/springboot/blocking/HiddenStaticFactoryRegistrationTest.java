@@ -62,9 +62,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockingDetails;
 
 /**
- * A static {@code @Snapshot}, {@code @Projection} or {@code @Saga} factory that hides the static factory of its superclass with the same name and
- * parameters and repeats the annotation is a factory of its own, so both register, and an id they share fails startup
- * with {@link DuplicateSubscriptionIdException}. The tests use {@code public} and {@code protected} factories, since
+ * A static {@code @Snapshot}, {@code @Projection} or {@code @Saga} factory that hides the static factory of its
+ * superclass with the same name and parameters and repeats the annotation is a factory of its own, so both register,
+ * and an id they share fails startup with {@link DuplicateSubscriptionIdException}. The tests use {@code public} and {@code protected} factories, since
  * the tests of the scan in {@code SubscriptionAnnotationsTest} use package-private ones. The projections and sagas
  * use {@code source = PUSH}, and the sagas {@code catchup = NONE}, which register without Docker.
  */
