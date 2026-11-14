@@ -46,6 +46,7 @@ import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.aop.TargetSource;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.FactoryBean;
+import org.springframework.beans.factory.SmartFactoryBean;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -383,6 +384,21 @@ class InheritedDescriptorFactoryTest {
     }
 
     @Test
+    void a_class_declared_projection_factory_behind_a_jdk_proxy_that_does_not_implement_the_declaring_class_is_refused_without_running() {
+        UNIMPLEMENTED_FACTORY_INVOCATIONS.set(0);
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(ProjectionInfrastructureConfiguration.class, UnimplementedFactoryProductConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("the proxy does not implement " + UnimplementedFactoryImpl.class.getName());
+                    assertThat(UNIMPLEMENTED_FACTORY_INVOCATIONS).describedAs("the factory never ran").hasValue(0);
+                });
+    }
+
+    @Test
     void an_interface_declared_projection_factory_on_a_prototype_that_switches_to_an_overriding_implementation_is_refused() {
         INTERFACE_FACTORY_INVOCATIONS.set(0);
         OVERRIDING_INTERFACE_FACTORY_INVOCATIONS.set(0);
@@ -473,6 +489,74 @@ class InheritedDescriptorFactoryTest {
         @Bean
         JdkProxyProductFactoryBean interfaceFactory() {
             return new JdkProxyProductFactoryBean();
+        }
+    }
+
+    private static final AtomicInteger UNIMPLEMENTED_FACTORY_INVOCATIONS = new AtomicInteger();
+
+    interface UnrelatedInterface {
+        void other();
+    }
+
+    // Declares the factory on the class only, so the proxy over UnrelatedInterface has no method that runs it
+    static class UnimplementedFactoryImpl implements UnrelatedInterface {
+        @Override
+        public void other() {
+        }
+
+        @Projection(id = "class-declared-projection", source = Source.PUSH)
+        public org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            UNIMPLEMENTED_FACTORY_INVOCATIONS.incrementAndGet();
+            return countingProjection();
+        }
+    }
+
+    // Eager, since the interface declares nothing for the startup scan to decide to build the product from
+    static class UnimplementedFactoryProductFactoryBean implements SmartFactoryBean<UnrelatedInterface> {
+        @Override
+        public boolean isEagerInit() {
+            return true;
+        }
+
+        @Override
+        public UnrelatedInterface getObject() {
+            UnimplementedFactoryImpl target = new UnimplementedFactoryImpl();
+            ProxyFactory proxyFactory = new ProxyFactory();
+            proxyFactory.addInterface(UnrelatedInterface.class);
+            proxyFactory.setTargetSource(new TargetSource() {
+                @Override
+                public Class<?> getTargetClass() {
+                    return UnimplementedFactoryImpl.class;
+                }
+
+                @Override
+                public boolean isStatic() {
+                    return false;
+                }
+
+                @Override
+                public Object getTarget() {
+                    return target;
+                }
+
+                @Override
+                public void releaseTarget(Object released) {
+                }
+            });
+            return (UnrelatedInterface) proxyFactory.getProxy();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return UnrelatedInterface.class;
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class UnimplementedFactoryProductConfiguration {
+        @Bean
+        UnimplementedFactoryProductFactoryBean unimplementedFactory() {
+            return new UnimplementedFactoryProductFactoryBean();
         }
     }
 

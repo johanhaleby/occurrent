@@ -402,6 +402,28 @@ class LateBeanAnnotationRegistrationTest {
         });
     }
 
+    // A handler that overrides a generic interface method has the concrete parameter type, on(TestEvent) for on(E),
+    // so no interface of a JDK proxy declares the signature the scan read. The delivery goes through the interface
+    // method the handler implements instead of failing the selection on the proxy's class.
+    @Test
+    void a_late_generic_interface_handler_wrapped_in_a_jdk_proxy_afterwards_is_delivered_through_the_proxy() {
+        LATE_GENERIC_HANDLER_CALLS.set(0);
+        LATE_GENERIC_ADVICE_CALLS.set(0);
+        runner.withUserConfiguration(LateGenericInterfaceHandlerConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Function2<EventMetadata, TestEvent, ?>> handler = ArgumentCaptor.forClass(Function2.class);
+            context.getBean("genericHandlerSubscriber");
+            verify(context.getBean(Subscriptions.class))
+                    .subscribe(eq("late-generic-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), handler.capture());
+
+            assertThatCode(() -> handler.getValue().invoke(null, new TestEvent())).describedAs("delivery through the proxy").doesNotThrowAnyException();
+
+            assertThat(LATE_GENERIC_HANDLER_CALLS).describedAs("the handler ran").hasValue(1);
+            assertThat(LATE_GENERIC_ADVICE_CALLS).describedAs("the advice of the proxy ran").hasValue(1);
+        });
+    }
+
     // A bean can declare several handlers, and the second one failing must not leave the first subscribed. The
     // bean's creation fails either way, so a handler registered before the failure would be delivering to an
     // instance nobody can reach, and the context stays up because a lazily built bean failing does not close it.
@@ -1312,6 +1334,64 @@ class LateBeanAnnotationRegistrationTest {
                     proxyFactory.setTarget(bean);
                     proxyFactory.setProxyTargetClass(true);
                     proxyFactory.addAdvice((MethodInterceptor) MethodInvocation::proceed);
+                    return proxyFactory.getProxy();
+                }
+            };
+        }
+    }
+
+    private static final AtomicInteger LATE_GENERIC_HANDLER_CALLS = new AtomicInteger();
+    private static final AtomicInteger LATE_GENERIC_ADVICE_CALLS = new AtomicInteger();
+
+    interface LateGenericHandler<E> {
+        void on(E event);
+    }
+
+    public static class LateGenericHandlerSubscriber implements Marker, LateGenericHandler<TestEvent> {
+        @Override
+        @Subscription(id = "late-generic-handler")
+        public void on(TestEvent event) {
+            LATE_GENERIC_HANDLER_CALLS.incrementAndGet();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class LateGenericInterfaceHandlerConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @Lazy
+        Marker genericHandlerSubscriber() {
+            return new LateGenericHandlerSubscriber();
+        }
+
+        // Wraps the bean only after this post processor's own callback has registered the handler, so the JDK proxy
+        // does not exist when the handler is registered.
+        @Bean
+        static BeanPostProcessor lateJdkProxyPostProcessor() {
+            return new BeanPostProcessor() {
+                @Override
+                public Object postProcessAfterInitialization(Object bean, String beanName) {
+                    if (!(bean instanceof LateGenericHandlerSubscriber)) {
+                        return bean;
+                    }
+                    ProxyFactory proxyFactory = new ProxyFactory();
+                    proxyFactory.setTarget(bean);
+                    proxyFactory.setInterfaces(Marker.class, LateGenericHandler.class);
+                    proxyFactory.addAdvice((MethodInterceptor) invocation -> {
+                        LATE_GENERIC_ADVICE_CALLS.incrementAndGet();
+                        return invocation.proceed();
+                    });
                     return proxyFactory.getProxy();
                 }
             };
