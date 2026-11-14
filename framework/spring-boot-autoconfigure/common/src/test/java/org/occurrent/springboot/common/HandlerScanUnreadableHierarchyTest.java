@@ -22,6 +22,14 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.springboot.common.internal.HandlerScan;
+import org.occurrent.springboot.common.overriding.declaring.MidOverridingInTheDeclaringPackage;
+import org.occurrent.springboot.common.overriding.declaring.MissingAtRuntime;
+import org.occurrent.springboot.common.overriding.declaring.UnreadableBaseWithPackagePrivateHandler;
+import org.occurrent.springboot.common.overriding.declaring.UnreadableMidInTheDeclaringPackage;
+import org.occurrent.springboot.common.overriding.elsewhere.MidInAnotherPackage;
+import org.occurrent.springboot.common.overriding.leaf.LeafOverMidInAnotherPackage;
+import org.occurrent.springboot.common.overriding.leaf.LeafOverUnreadableMidInTheDeclaringPackage;
+import org.occurrent.springboot.common.overriding.leaf.LeafOverMidInTheDeclaringPackage;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -259,7 +267,11 @@ class HandlerScanUnreadableHierarchyTest {
             LeafOverUnreadableBaseWithPackagePrivateOverload.class, UnreadableBaseWithPackagePrivateOverload.class,
             LeafOverReadablePackagePrivateBelowUnreadableTop.class, ReadablePackagePrivateBelowUnreadableTop.class, UnreadableTop.class,
             UnreadableGenericSuperclassWithHandler.class, ReAnnotatesGenericHandlerOfUnreadableSuperclass.class,
-            OverridesUnreadableHandlerWithoutAnnotation.class, UnreadableSuperclassWithPrivateHandler.class, DeclaresHandlerOfTheSignatureOfAnUnreadablePrivateHandler.class);
+            OverridesUnreadableHandlerWithoutAnnotation.class, UnreadableSuperclassWithPrivateHandler.class, DeclaresHandlerOfTheSignatureOfAnUnreadablePrivateHandler.class,
+            LeafOverloadingAnUnreadableBaseHandler.class, UnreadablePackagePrivateBaseWithObjectHandler.class,
+            UnreadableBaseWithPackagePrivateHandler.class, MidOverridingInTheDeclaringPackage.class, LeafOverMidInTheDeclaringPackage.class,
+            MidInAnotherPackage.class, LeafOverMidInAnotherPackage.class,
+            UnreadableMidInTheDeclaringPackage.class, LeafOverUnreadableMidInTheDeclaringPackage.class);
 
     @Test
     void handlerMethods_finds_the_handler_of_a_class_inheriting_it_when_every_class_the_hierarchy_names_is_present() {
@@ -453,6 +465,39 @@ class HandlerScanUnreadableHierarchyTest {
     }
 
     @Test
+    void handlerMethods_returns_the_overload_and_the_visibility_bridge_for_the_handler_of_the_package_private_superclass_when_the_class_declares_an_annotated_overload_and_the_superclass_can_not_be_read() throws Exception {
+        Class<?> leaf = new LoaderWithoutAbsentType().loadClass(LeafOverloadingAnUnreadableBaseHandler.class.getName());
+
+        assertThat(leaf.getDeclaredMethods()).describedAs("the class declares the overload beside the visibility bridge")
+                .extracting(Method::getName, Method::isBridge, method -> List.of(method.getParameterTypes()))
+                .containsExactlyInAnyOrder(tuple("on", false, List.of(String.class)), tuple("on", true, List.of(Object.class)));
+        assertThat(scanWithoutThrowing(leaf)).extracting(Method::getName, Method::isBridge, method -> method.getDeclaringClass().getName(), method -> List.of(method.getParameterTypes()))
+                .containsExactlyInAnyOrder(tuple("on", false, leaf.getName(), List.of(String.class)), tuple("on", true, leaf.getName(), List.of(Object.class)));
+    }
+
+    @Test
+    void handlerMethods_returns_the_overriding_handler_of_the_class_when_a_class_between_it_and_the_unreadable_declaring_class_overrides_the_package_private_handler_in_the_package_of_it() throws Exception {
+        Class<?> leaf = new LoaderWithoutAbsentType().loadClass(LeafOverMidInTheDeclaringPackage.class.getName());
+
+        assertThat(scanWithoutThrowing(leaf)).extracting(Method::getName, method -> method.getDeclaringClass().getName())
+                .containsExactly(tuple("on", leaf.getName()));
+    }
+
+    @Test
+    void handlerMethods_throws_naming_the_package_private_handler_when_the_class_between_it_and_the_class_overriding_it_declares_the_method_in_a_third_package() throws Exception {
+        Class<?> leaf = new LoaderWithoutAbsentType().loadClass(LeafOverMidInAnotherPackage.class.getName());
+
+        assertRefusedForUnreadableHandler(leaf, UnreadableBaseWithPackagePrivateHandler.class, "on(java.lang.String)", MissingAtRuntime.class);
+    }
+
+    @Test
+    void handlerMethods_throws_naming_the_package_private_handler_when_the_class_between_it_and_the_class_overriding_it_can_not_be_read_to_tell_whether_it_overrides_the_handler() throws Exception {
+        Class<?> leaf = new LoaderWithoutAbsentType().loadClass(LeafOverUnreadableMidInTheDeclaringPackage.class.getName());
+
+        assertRefusedForUnreadableHandler(leaf, UnreadableBaseWithPackagePrivateHandler.class, "on(java.lang.String)", MissingAtRuntime.class);
+    }
+
+    @Test
     void handlerMethods_still_throws_NoClassDefFoundError_when_the_class_itself_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
         Class<?> declaring = new LoaderWithoutAbsentType().loadClass(DeclaresUnreadableMethod.class.getName());
 
@@ -464,7 +509,11 @@ class HandlerScanUnreadableHierarchyTest {
     }
 
     private static AbstractThrowableAssert<?, ? extends Throwable> assertRefusedForUnreadableHandler(Class<?> type, Class<?> unreadable, String handler) {
-        String missing = AbsentType.class.getName();
+        return assertRefusedForUnreadableHandler(type, unreadable, handler, AbsentType.class);
+    }
+
+    private static AbstractThrowableAssert<?, ? extends Throwable> assertRefusedForUnreadableHandler(Class<?> type, Class<?> unreadable, String handler, Class<?> absent) {
+        String missing = absent.getName();
 
         return assertThatThrownBy(() -> HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS))
                 .isInstanceOf(IllegalStateException.class)
@@ -494,7 +543,7 @@ class HandlerScanUnreadableHierarchyTest {
         return scanned.get();
     }
 
-    // Defines the fixtures itself so the methods that name AbsentType are read through it, and refuses to load AbsentType.
+    // Defines the fixtures itself so the methods that name AbsentType or MissingAtRuntime are read through it, and refuses to load both.
     // It can also hide the class file of a fixture it still defines
     private static final class LoaderWithoutAbsentType extends ClassLoader {
         private final String hiddenResource;
@@ -522,7 +571,7 @@ class HandlerScanUnreadableHierarchyTest {
         @Override
         protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
             synchronized (getClassLoadingLock(name)) {
-                if (name.equals(AbsentType.class.getName())) {
+                if (name.equals(AbsentType.class.getName()) || name.equals(MissingAtRuntime.class.getName())) {
                     throw new ClassNotFoundException(name);
                 }
                 if (FIXTURES.stream().noneMatch(fixture -> fixture.getName().equals(name))) {

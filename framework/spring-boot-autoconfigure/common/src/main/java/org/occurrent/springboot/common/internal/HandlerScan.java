@@ -59,6 +59,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -522,15 +523,8 @@ public final class HandlerScan {
     // The methods of the class file of candidate that have one of annotationTypes, directly or as a meta-annotation,
     // read without loading candidate
     private static Set<ClassFileMethod> annotatedMethodsInClassFile(Class<?> candidate, List<Class<? extends Annotation>> annotationTypes) throws IOException {
-        ClassLoader classLoader = candidate.getClassLoader() != null ? candidate.getClassLoader() : ClassUtils.getDefaultClassLoader();
-        String classFileName = ClassUtils.convertClassNameToResourcePath(candidate.getName()) + ClassUtils.CLASS_FILE_SUFFIX;
-        ClassReader reader;
-        try (InputStream classFile = classLoader == null ? null : classLoader.getResourceAsStream(classFileName)) {
-            if (classFile == null) {
-                throw new FileNotFoundException(classFileName);
-            }
-            reader = new ClassReader(classFile);
-        }
+        ClassLoader classLoader = classLoaderOf(candidate);
+        ClassReader reader = classReaderOf(candidate);
         Set<ClassFileMethod> annotated = new LinkedHashSet<>();
         reader.accept(new ClassVisitor(SpringAsmInfo.ASM_VERSION) {
             @Override
@@ -547,6 +541,22 @@ public final class HandlerScan {
             }
         }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
         return annotated;
+    }
+
+    // Reads the class file of type without loading the classes it names
+    private static ClassReader classReaderOf(Class<?> type) throws IOException {
+        ClassLoader classLoader = classLoaderOf(type);
+        String classFileName = ClassUtils.convertClassNameToResourcePath(type.getName()) + ClassUtils.CLASS_FILE_SUFFIX;
+        try (InputStream classFile = classLoader == null ? null : classLoader.getResourceAsStream(classFileName)) {
+            if (classFile == null) {
+                throw new FileNotFoundException(classFileName);
+            }
+            return new ClassReader(classFile);
+        }
+    }
+
+    private static @Nullable ClassLoader classLoaderOf(Class<?> type) {
+        return type.getClassLoader() != null ? type.getClassLoader() : ClassUtils.getDefaultClassLoader();
     }
 
     // The JVM ignores an annotation whose class is missing, so the scan does too
@@ -566,38 +576,106 @@ public final class HandlerScan {
     }
 
     // Whether a method type declares runs method when it is invoked on an instance of type, and the scan returns that
-    // method or a method it bridges to. That is a method of the same name and parameter types that overrides it, or
-    // the visibility bridge javac adds for a public method of a superclass that isn't public. Only a method that isn't
-    // static or private, and is public, protected, or in type's package, is run that way
+    // method or the method it calls when it's a bridge. That is a method of the same name and parameter types that
+    // overrides it, which includes the visibility bridge javac adds for a public method of a superclass that isn't public
     private static boolean runByAHandlerTypeDeclares(Class<?> type, Class<?> candidate, ClassFileMethod method, Set<Method> handlers) {
-        int access = method.access();
-        boolean overridable = !method.isStatic() && (access & Opcodes.ACC_PRIVATE) == 0
-                && ((access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_PROTECTED)) != 0 || inSameRuntimePackage(candidate, type));
-        if (!overridable) {
+        if (!overriddenInType(type, candidate, method)) {
             return false;
         }
         for (Method declared : type.getDeclaredMethods()) {
             if (declared.getName().equals(method.name()) && parametersOf(org.springframework.asm.Type.getMethodDescriptor(declared)).equals(method.parameters())
-                    && (handlers.contains(declared) || handlers.contains(bridgedMethod(declared)) || handlers.stream().anyMatch(handler -> bridges(declared, handler)))) {
+                    && (handlers.contains(declared) || declared.isBridge() && callsAnyOf(type, declared, handlers))) {
                 return true;
             }
         }
         return false;
     }
 
-    // Whether bridge is the bridge javac adds to the class of method when method overrides one whose parameter or return
-    // types are erased to other types, as against a visibility bridge, which calls an inherited method
-    private static boolean bridges(Method bridge, Method method) {
-        if (!bridge.isBridge() || method.isBridge() || method.getDeclaringClass() != bridge.getDeclaringClass() || !method.getName().equals(bridge.getName())
-                || method.getParameterCount() != bridge.getParameterCount() || !bridge.getReturnType().isAssignableFrom(method.getReturnType())) {
+    private static boolean callsAnyOf(Class<?> type, Method bridge, Set<Method> handlers) {
+        BridgeCall call = bridgeCallsOf(type).get(bridge.getName() + org.springframework.asm.Type.getMethodDescriptor(bridge));
+        return call != null && handlers.stream().anyMatch(handler -> call.calls(type, handler));
+    }
+
+    // Whether a method of type with the name and parameter types of method overrides it, by the JVM's rules. A static or
+    // private method is never overridden. A package-private method of another package than type's is overridden only
+    // through a public or protected method of the same name and parameter types that a class between them declares in
+    // its package. When that class can't be read, the scan can't tell, and counts the method as not overridden
+    private static boolean overriddenInType(Class<?> type, Class<?> candidate, ClassFileMethod method) {
+        int access = method.access();
+        if (method.isStatic() || (access & Opcodes.ACC_PRIVATE) != 0) {
             return false;
         }
-        for (int i = 0; i < method.getParameterCount(); i++) {
-            if (!bridge.getParameterTypes()[i].isAssignableFrom(method.getParameterTypes()[i])) {
-                return false;
+        if ((access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_PROTECTED)) != 0 || inSameRuntimePackage(candidate, type)) {
+            return true;
+        }
+        for (Class<?> between = type.getSuperclass(); between != null && between != candidate; between = between.getSuperclass()) {
+            if (inSameRuntimePackage(between, candidate) && declaresOverridable(between, method)) {
+                return true;
             }
         }
-        return true;
+        return false;
+    }
+
+    private static boolean declaresOverridable(Class<?> declaringClass, ClassFileMethod method) {
+        Method[] declaredMethods;
+        try {
+            declaredMethods = declaringClass.getDeclaredMethods();
+        } catch (LinkageError e) {
+            return false;
+        }
+        return Arrays.stream(declaredMethods).anyMatch(declared -> declared.getName().equals(method.name())
+                && parametersOf(org.springframework.asm.Type.getMethodDescriptor(declared)).equals(method.parameters())
+                && (Modifier.isPublic(declared.getModifiers()) || Modifier.isProtected(declared.getModifiers())) && !Modifier.isStatic(declared.getModifiers()));
+    }
+
+    // The method a bridge calls, as the bridge's code in the class file names it. The bridge javac adds for an override
+    // with other erased types and the visibility bridge it adds for a public method of a superclass that isn't public can
+    // have the same name and parameter types, and only the code tells them apart. The first calls a method of the class
+    // that declares the bridge, the second the method of a superclass or interface that class inherits
+    private record BridgeCall(String owner, String name, String descriptor) {
+        boolean callsAMethodOf(Class<?> type) {
+            return owner.equals(org.springframework.asm.Type.getInternalName(type));
+        }
+
+        // Whether a bridge type declares, with this call, runs method
+        boolean calls(Class<?> type, Method method) {
+            if (!name.equals(method.getName()) || !descriptor.equals(org.springframework.asm.Type.getMethodDescriptor(method))) {
+                return false;
+            }
+            if (callsAMethodOf(type)) {
+                return method.getDeclaringClass() == type;
+            }
+            return method.getDeclaringClass() != type && superclassesAndInterfacesOf(type).stream()
+                    .anyMatch(ownerClass -> org.springframework.asm.Type.getInternalName(ownerClass).equals(owner) && method.getDeclaringClass().isAssignableFrom(ownerClass));
+        }
+    }
+
+    // The method each bridge type declares calls, keyed by the bridge's name and descriptor, read from the class file
+    // of type. Empty when the class file can't be read, so no bridge counts as calling a method the scan returns
+    private static Map<String, BridgeCall> bridgeCallsOf(Class<?> type) {
+        ClassReader reader;
+        try {
+            reader = classReaderOf(type);
+        } catch (IOException | IllegalArgumentException e) {
+            log.debug("Can't read the class file of {} to find the methods its bridges call", type.getName(), e);
+            return Map.of();
+        }
+        Map<String, BridgeCall> calls = new HashMap<>();
+        reader.accept(new ClassVisitor(SpringAsmInfo.ASM_VERSION) {
+            @Override
+            public @Nullable MethodVisitor visitMethod(int access, String name, String descriptor, @Nullable String signature, String @Nullable [] exceptions) {
+                if ((access & Opcodes.ACC_BRIDGE) == 0) {
+                    return null;
+                }
+                return new MethodVisitor(SpringAsmInfo.ASM_VERSION) {
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String calledName, String calledDescriptor, boolean isInterface) {
+                        calls.putIfAbsent(name + descriptor, new BridgeCall(owner, calledName, calledDescriptor));
+                    }
+                };
+            }
+        }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return calls;
     }
 
     // Every superclass and interface of type, up to and without Object
@@ -620,12 +698,14 @@ public final class HandlerScan {
     }
 
     // The handlers among the methods type declares, for a type whose superclasses or interfaces can't be read. A bridge
-    // counts as the method it calls, as MethodIntrospector counts it. When finding the method a visibility bridge calls
-    // has to read a class missing at runtime, the bridge with a handler annotation javac copied to it is the handler, as
-    // in 0.34.0. Any other method is left out when finding the method a bridge calls, or checking a method for a
-    // handler annotation, has to read a class missing at runtime
+    // counts as the method it calls, as MethodIntrospector counts it. When finding the method a bridge calls has to
+    // read a class missing at runtime, the bridge's code says it. A bridge that calls a method of type is left out, since
+    // that method is checked on its own. Any other bridge with a handler annotation javac copied to it is the handler,
+    // as in 0.34.0, and so is one whose class file can't be read. Any other method is left out when checking it for a
+    // handler annotation has to read a class missing at runtime
     private static Set<Method> declaredHandlerMethods(Class<?> type, MethodIntrospector.MetadataLookup<Boolean> handlerLookup, List<Class<? extends Annotation>> annotationTypes) {
         Set<Method> handlers = new LinkedHashSet<>();
+        Map<String, BridgeCall> bridgeCalls = null;
         for (Method method : type.getDeclaredMethods()) {
             if (method.isSynthetic() && !method.isBridge()) {
                 continue;
@@ -639,10 +719,15 @@ public final class HandlerScan {
                 if (!isReadFailure(e)) {
                     throw e;
                 }
-                if (method.isBridge() && Arrays.stream(type.getDeclaredMethods()).noneMatch(declared -> bridges(method, declared))
-                        && annotationTypes.stream().anyMatch(method::isAnnotationPresent)) {
-                    handlers.add(method);
-                    continue;
+                if (method.isBridge()) {
+                    if (bridgeCalls == null) {
+                        bridgeCalls = bridgeCallsOf(type);
+                    }
+                    BridgeCall call = bridgeCalls.get(method.getName() + org.springframework.asm.Type.getMethodDescriptor(method));
+                    if ((call == null || !call.callsAMethodOf(type)) && annotationTypes.stream().anyMatch(method::isAnnotationPresent)) {
+                        handlers.add(method);
+                        continue;
+                    }
                 }
                 log.debug("Skipping {} in the search for Occurrent handler annotations, since a class it depends on can't be read", method, e);
             }

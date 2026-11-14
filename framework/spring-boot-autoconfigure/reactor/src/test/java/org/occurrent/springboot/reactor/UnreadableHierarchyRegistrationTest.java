@@ -30,6 +30,10 @@ import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.reactor.overriding.declaring.MidOverridingInTheDeclaringPackage;
+import org.occurrent.springboot.reactor.overriding.declaring.MissingAtRuntime;
+import org.occurrent.springboot.reactor.overriding.declaring.UnreadableBaseWithPackagePrivateHandler;
+import org.occurrent.springboot.reactor.overriding.leaf.LeafOverMidInTheDeclaringPackage;
 import org.springframework.beans.factory.SmartFactoryBean;
 import org.springframework.beans.factory.config.BeanDefinitionCustomizer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -250,6 +254,30 @@ class UnreadableHierarchyRegistrationTest {
             assertThat(context).hasNotFailed();
 
             assertThat(subscribedIds(context.getBean(Subscriptions.class))).containsExactly("generic-handler");
+        });
+    }
+
+    @Test
+    void an_eager_bean_registers_the_handler_of_an_unreadable_package_private_superclass_beside_the_overload_it_declares() throws Exception {
+        Class<?> product = new LoaderWithoutAbsentType().loadClass(LeafOverloadingAnUnreadableBaseHandler.class.getName());
+        AtomicInteger constructed = new AtomicInteger();
+
+        runner.withBean("products", ProductFactoryBean.class, () -> new ProductFactoryBean(product, constructed, true)).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(subscribedIds(context.getBean(Subscriptions.class))).containsExactlyInAnyOrder("overload-handler", "base-handler");
+        });
+    }
+
+    @Test
+    void an_eager_bean_registers_its_handler_when_a_class_between_it_and_the_unreadable_declaring_class_overrides_the_package_private_handler_in_the_package_of_it() throws Exception {
+        Class<?> product = new LoaderWithoutAbsentType().loadClass(LeafOverMidInTheDeclaringPackage.class.getName());
+        AtomicInteger constructed = new AtomicInteger();
+
+        runner.withBean("products", ProductFactoryBean.class, () -> new ProductFactoryBean(product, constructed, true)).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(subscribedIds(context.getBean(Subscriptions.class))).containsExactly("leaf-handler");
         });
     }
 
@@ -506,9 +534,11 @@ class UnreadableHierarchyRegistrationTest {
             GrandchildOfUnreadableSuperclass.class, UnreadableSuperclassWithoutHandler.class, DeclaresHandlerAndExtendsUnreadableSuperclassWithoutHandler.class,
             LeafOverUnreadablePackagePrivateBase.class, UnreadablePackagePrivateBase.class,
             LeafOverUnreadableBaseWithPackagePrivateOverload.class, UnreadableBaseWithPackagePrivateOverload.class,
-            UnreadableGenericSuperclassWithHandler.class, ReAnnotatesGenericHandlerOfUnreadableSuperclass.class);
+            UnreadableGenericSuperclassWithHandler.class, ReAnnotatesGenericHandlerOfUnreadableSuperclass.class,
+            LeafOverloadingAnUnreadableBaseHandler.class, UnreadablePackagePrivateBaseWithBaseEventHandler.class,
+            UnreadableBaseWithPackagePrivateHandler.class, MidOverridingInTheDeclaringPackage.class, LeafOverMidInTheDeclaringPackage.class);
 
-    // Defines the fixtures itself so the methods that name AbsentType are read through it, and refuses to load AbsentType.
+    // Defines the fixtures itself so the methods that name AbsentType or MissingAtRuntime are read through it, and refuses to load both.
     // It can also hide the class file of a fixture it still defines
     private static final class LoaderWithoutAbsentType extends ClassLoader {
         private final String hiddenResource;
@@ -536,7 +566,7 @@ class UnreadableHierarchyRegistrationTest {
         @Override
         protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
             synchronized (getClassLoadingLock(name)) {
-                if (name.equals(AbsentType.class.getName())) {
+                if (name.equals(AbsentType.class.getName()) || name.equals(MissingAtRuntime.class.getName())) {
                     throw new ClassNotFoundException(name);
                 }
                 if (FIXTURES.stream().noneMatch(fixture -> fixture.getName().equals(name))) {

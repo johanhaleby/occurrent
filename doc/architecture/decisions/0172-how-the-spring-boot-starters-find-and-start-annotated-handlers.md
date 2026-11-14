@@ -79,10 +79,15 @@ method as the one the bean's class actually runs:
   Startup doesn't fail when the bean's class declares a method that runs the handler, which is an override with a
   handler annotation, or the bridge javac adds to a public class for a public handler it inherits from a superclass
   that isn't public. The scan registers that bridge as the handler, as 0.34.0 did, and the code after the scan uses
-  the bridge itself where it can't read the method the bridge calls. Startup fails the same way when a class file
-  can't be read either, since the scan can't rule out a handler there. When none declares a handler, the scan logs at
-  debug level that it skips the inherited methods. A method the bean's class declares itself that names a missing class
-  fails startup with `NoClassDefFoundError`, as in 0.34.0.
+  the bridge itself where it can't read the method the bridge calls. Which method a bridge calls comes from the
+  bridge's code in the class file of the bean's class, since the bridge javac adds for an override with other erased
+  types can have the same name and parameter types as that bridge, and only the code tells them apart. Whether a
+  method overrides the handler follows the JVM's rules, so a method in another package overrides a package-private
+  handler through a public or protected method that a class between them in the handler's package declares. When the
+  scan can't read what it needs to tell, it counts the handler as never run and startup fails. Startup fails the same
+  way when a class file can't be read either, since the scan can't rule out a handler there. When none declares a
+  handler, the scan logs at debug level that it skips the inherited methods. A method the bean's class declares itself
+  that names a missing class fails startup with `NoClassDefFoundError`, as in 0.34.0.
 
 A handler's event type and a factory's state type are read against the bean's class with Spring's `ResolvableType`.
 So `on(E event)` on `Base<E>` subscribes to `Placed` on a class that extends `Base<Placed>`. When the class doesn't give
