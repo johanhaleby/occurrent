@@ -487,10 +487,13 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * {@link RepositionableSubscriptions#findIn} finds this model only when the wrapped model is repositionable.
      *
      * @throws UnsupportedOperationException if the wrapped model is not itself repositionable.
+     * @throws org.occurrent.subscription.SubscriptionAlreadyRunningException if a catch-up of this model made the
+     *         subscription and it runs, as that description says. In 0.34.0 the wrapped model was asked to resume it and
+     *         threw its own exception.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-        return anyCatchupModel().resumeSubscription(subscriptionId, startAt, presentCatchupModels().toList(), () -> isRunning(subscriptionId) && !isPaused(subscriptionId));
+        return anyCatchupModel().resumeSubscription(subscriptionId, startAt, presentCatchupModels().toList(), () -> isRunning(subscriptionId) && !isPaused(subscriptionId), () -> isPaused(subscriptionId));
     }
 
     /**

@@ -34,6 +34,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
@@ -74,6 +75,8 @@ class StreamCatchupResumeRacesTheHandoverTest {
     private final CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
     private final CountDownLatch replayHeldBeforeTheHandover = new CountDownLatch(1);
     private final CountDownLatch releaseTheReplay = new CountDownLatch(1);
+    private final CountDownLatch openPending = new CountDownLatch(1);
+    private final CountDownLatch releaseTheOpen = new CountDownLatch(1);
     private InMemorySubscriptionModel inMemorySubscriptionModel;
     private CloudEventConverter<DomainEvent> cloudEventConverter;
     private InMemoryEventStore eventStore;
@@ -98,6 +101,7 @@ class StreamCatchupResumeRacesTheHandoverTest {
     @AfterEach
     void shutdown() {
         releaseTheReplay.countDown();
+        releaseTheOpen.countDown();
         storage.releaseTheResume.countDown();
         if (catchup != null) {
             catchup.shutdown();
@@ -149,14 +153,100 @@ class StreamCatchupResumeRacesTheHandoverTest {
         }
         assertThat(received).as("events delivered, each of the replayed events once").extracting(DomainEvent::eventId)
                 .containsExactlyInAnyOrderElementsOf(replayed.stream().map(DomainEvent::eventId).toList());
-        // The live model does not hold the subscription while its subscribe replay runs, so the resume fails there
+        // The catch-up refuses a resume of a subscription its subscribe replay runs for, before it stores anything,
         // and the replay goes live from its own live start
-        assertThat(thrown).as("the resume fails in the live model, which does not hold the subscription while its replay runs")
-                .isExactlyInstanceOf(IllegalStateException.class).hasMessage("Subscription " + ID + " is not paused");
+        assertThat(thrown).as("the catch-up refuses a resume of a subscription its subscribe replay runs for")
+                .isExactlyInstanceOf(SubscriptionAlreadyRunningException.class);
         assertAll("the resume threw " + thrown + ", the stored position at the end is " + storage.read(ID) + ", the present position is " + presentPosition,
                 () -> assertThat(liveModel.openedAt).as("live starts the live model opened, and the event committed after the live start of the replay lies between it and the present position")
                         .containsExactly(liveStartOfTheReplay),
                 () -> assertThat(storage.read(ID)).as("stored position at the end").isNotNull().isNotEqualTo(presentPosition)
+        );
+    }
+
+    @Test
+    void goes_live_from_the_live_start_of_the_replay_and_refuses_a_resume_from_now_that_comes_after_the_handover_while_the_live_model_still_opens() {
+        // Given
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> {
+        }).neverLosingAnOpen().beforeTheFirstOpen(() -> {
+            openPending.countDown();
+            awaitLatch(releaseTheOpen);
+        });
+        catchup = new StreamCatchupSubscriptionModel(liveModel, eventStore, config());
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        assertThat(reached(openPending)).as("the replay handed over and the open of the live model is pending").isTrue();
+        Checkpoint liveStartOfTheReplay = liveModel.readLiveStarts.get(0);
+        write(nameDefined(LocalDateTime.now(), "committed-after-the-live-start-of-the-replay"));
+
+        // When
+        CompletableFuture<Throwable> resumed = CompletableFuture.supplyAsync(() -> {
+            storage.theResumeThread = Thread.currentThread();
+            return catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
+        });
+        boolean atItsPauseOrEnd = reached(CompletableFuture.anyOf(storage.presentPositionSaved, resumed));
+        boolean openedBeforeTheResumeWasReleased = !liveModel.openedAt.isEmpty();
+        releaseTheOpen.countDown();
+        boolean opened = false;
+        try {
+            await().atMost(WAIT).until(() -> !liveModel.openedAt.isEmpty());
+            opened = true;
+        } catch (org.awaitility.core.ConditionTimeoutException ignored) {
+        }
+        storage.releaseTheResume.countDown();
+        Throwable thrown = resumed.orTimeout(WAIT.toSeconds(), TimeUnit.SECONDS).join();
+
+        // Then
+        boolean openedInTime = opened;
+        assertAll("the test entered the window, with the open of the live model pending while the resume ran",
+                () -> assertThat(atItsPauseOrEnd).as("window: the resume ran to its end or to its pause after saving a position").isTrue(),
+                () -> assertThat(openedBeforeTheResumeWasReleased).as("window: the live model had not opened before the open was released").isFalse(),
+                () -> assertThat(openedInTime).as("window: the live model opened once the open was released").isTrue(),
+                () -> assertThat(storage.read(ID)).as("window: a position is stored").isNotNull()
+        );
+        assertAll("the resume threw " + thrown + ", the live model opened at " + liveModel.openedAt + ", the live start of the replay is " + liveStartOfTheReplay,
+                () -> assertThat(thrown).as("the resume is refused while the live model still opens the subscription")
+                        .isExactlyInstanceOf(SubscriptionAlreadyRunningException.class),
+                () -> assertThat(liveModel.openedAt).as("live starts the live model opened").containsExactly(liveStartOfTheReplay)
+        );
+    }
+
+    @Test
+    void goes_live_from_the_live_start_of_the_replay_and_not_from_the_present_position_a_resume_from_now_stores_after_a_pause_asked_for_during_the_subscribe_replay() {
+        // Given
+        catchup = new StreamCatchupSubscriptionModel(new HoldingTheLiveStartCheck(liveModel), eventStore, config());
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        assertThat(reached(replayHeldBeforeTheHandover)).as("the replay reached the check of its live start after the bulk read and the reconcile").isTrue();
+        Checkpoint liveStartOfTheReplay = liveModel.readLiveStarts.get(0);
+        catchup.pauseSubscription(ID);
+        write(nameDefined(LocalDateTime.now(), "committed-after-the-live-start-of-the-replay"));
+
+        // When
+        CompletableFuture<Throwable> resumed = CompletableFuture.supplyAsync(() -> {
+            storage.theResumeThread = Thread.currentThread();
+            return catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
+        });
+        boolean atItsPauseOrEnd = reached(CompletableFuture.anyOf(storage.presentPositionSaved, resumed));
+        boolean presentPositionSaved = storage.presentPositionSaved.isDone();
+        releaseTheReplay.countDown();
+        if (presentPositionSaved) {
+            reached(storage.handoverRead);
+        }
+        storage.releaseTheResume.countDown();
+        Throwable thrown = resumed.orTimeout(WAIT.toSeconds(), TimeUnit.SECONDS).join();
+        await().atMost(WAIT).untilAsserted(() -> assertThat(liveModel.openedAt).as("live starts the live model opened").isNotEmpty());
+
+        // Then
+        Checkpoint presentPosition = storage.presentPosition;
+        assertAll("the test entered the window, with the replay held and a pause asked for during it when the resume ran",
+                () -> assertThat(catchup.isPaused(ID)).as("window: the subscription reads as paused after the pause asked for during the replay").isTrue(),
+                () -> assertThat(atItsPauseOrEnd).as("window: the resume ran to its end or to its pause after saving a position while the replay was held").isTrue(),
+                () -> assertThat(presentPosition).as("window: any position the resume saved differs from the live start of the replay").isNotEqualTo(liveStartOfTheReplay)
+        );
+        assertAll("the resume threw " + thrown + ", saved the present position " + presentPositionSaved + ", the stored position at the end is " + storage.read(ID) + ", the present position is " + presentPosition,
+                () -> assertThat(liveModel.openedAt).as("live starts the live model opened").containsExactly(liveStartOfTheReplay),
+                () -> assertThat(storage.read(ID)).as("stored position at the end").isNotNull().isNotEqualTo(presentPosition),
+                () -> assertThat(thrown).as("the resume is refused by the live model, which does not hold the subscription while its replay runs")
+                        .isExactlyInstanceOf(IllegalStateException.class).hasMessage("Subscription " + ID + " is not paused")
         );
     }
 

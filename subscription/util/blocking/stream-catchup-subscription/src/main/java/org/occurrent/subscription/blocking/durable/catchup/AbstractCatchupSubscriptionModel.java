@@ -813,14 +813,23 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@link RepositionableSubscriptions} the live delegate resolves to. Unlike {@link #resumeSubscription(String)}, it
      * doesn't start this model first or run a parked replay, and for a subscription the live delegate holds it never
      * replays, also not at a position a catch-up stores. The live delegate handles such a position as one it cannot open
-     * its live feed at. A subscription held before it reached the live delegate is the exception, described below. A replay that
-     * {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
+     * its live feed at. A subscription held before it reached the live delegate is the exception, described below.
+     * <p>
+     * A subscription this model made that isn't paused, and that no replay a {@link #resumeSubscription(String)} started
+     * runs for, is refused with {@link SubscriptionAlreadyRunningException} before anything is stored and before a
+     * dynamic {@code startAt} is asked. That includes one whose {@code subscribe(..)} replay still runs and one the live
+     * delegate is still opening. This model decides it from what it knows itself, since a live delegate can run a
+     * subscription before it reports it as running. In 0.34.0 the live delegate was asked to resume it and threw its own
+     * exception.
+     * <p>
+     * A replay that {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
      * and ends once the live delegate has resumed the subscription, so the position given here wins over it. With
      * checkpoint storage, when the position stored for the subscription is one a catch-up replays from, such as the one
      * that replay stored, it is replaced before the live delegate resumes the subscription, so a
      * {@link #resumeSubscription(String)} after a later pause doesn't replay from it. While a replay that
-     * {@code subscribe(..)} started runs for the subscription, nothing is stored and no present position is read,
-     * since that replay reads the stored position to decide where it goes live from when it hands over. It is replaced
+     * {@code subscribe(..)} started runs for a subscription a pause was asked for during that replay, nothing is stored
+     * and no present position is read, since that replay reads the stored position to decide where it goes live from
+     * when it hands over. It is replaced
      * only by a position a restart starts reading at:
      * <ul>
      * <li>A checkpoint the live delegate answers {@code true} for in {@link RepositionableSubscriptions#restartsAt(Checkpoint)}
@@ -885,24 +894,31 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * <p>
      * {@link RepositionableSubscriptions#findIn} finds this model only when the live delegate is repositionable.
      *
-     * @throws UnsupportedOperationException if the live delegate is not itself repositionable.
+     * @throws UnsupportedOperationException      if the live delegate is not itself repositionable.
+     * @throws SubscriptionAlreadyRunningException if this model made the subscription and it runs, as described above.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-        return resumeSubscription(subscriptionId, startAt, List.of(this), () -> isRunning(subscriptionId) && !isPaused(subscriptionId));
+        return resumeSubscription(subscriptionId, startAt, List.of(this), () -> isRunning(subscriptionId) && !isPaused(subscriptionId), () -> isPaused(subscriptionId));
     }
 
     /**
      * Resumes {@code subscriptionId} at {@code startAt} as {@link #resumeSubscription(String, StartAt)} describes, ending
      * a replay in the way on any of {@code models}, which are this model or every child of the dispatcher this model is
      * a child of. They share the claim, the live delegate and what runs a resume at a given position. {@code runs} tells
-     * whether the subscription reads as running and not paused on the model the caller called.
+     * whether the subscription reads as running and not paused on the model the caller called, and {@code paused}
+     * whether it reads as paused there.
      */
-    Subscription resumeSubscription(String subscriptionId, StartAt startAt, List<AbstractCatchupSubscriptionModel> models, BooleanSupplier runs) {
+    Subscription resumeSubscription(String subscriptionId, StartAt startAt, List<AbstractCatchupSubscriptionModel> models, BooleanSupplier runs, BooleanSupplier paused) {
         SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
         RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(liveDelegate)
                 .orElseThrow(() -> new UnsupportedOperationException(liveDelegate.getClass().getSimpleName() + " is not repositionable"));
         try (Claim ignored = claim(subscriptionId)) {
+            // Decided here and not by the live delegate, which can run the subscription before it reports it as running,
+            // as one that opens after its subscribe returned does
+            if (subscribed.containsKey(subscriptionId) && !paused.getAsBoolean() && !isReplayingToResume(subscriptionId)) {
+                throw new SubscriptionAlreadyRunningException(subscriptionId);
+            }
             // Only one that runs, so an unknown or paused one reads as it did, also when this fails
             boolean marked = runs.getAsBoolean() && repositioning.add(subscriptionId);
             try {
@@ -949,8 +965,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                         // subscribe. When it answers nothing here, the live delegate asks it for itself.
                         StartAt answered = answeredForThisModel(startAt);
                         @Nullable StartAt forThisModel = answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered;
-                        // Nothing is stored while a replay a subscribe started runs, since its handover reads what
-                        // is stored to decide where it goes live from
+                        // Nothing is stored while a replay a subscribe started runs after a pause asked for during
+                        // it, since its handover reads what is stored to decide where it goes live from
                         replaced = aSubscribeReplays(subscriptionId) ? null : owner.replaceTheStoredPosition(subscriptionId, forThisModel, true, repositionable);
                         Checkpoint present = replaced == null ? null : replaced.present;
                         StartAt liveStartAt = present != null ? StartAt.checkpoint(present) : forThisModel;
