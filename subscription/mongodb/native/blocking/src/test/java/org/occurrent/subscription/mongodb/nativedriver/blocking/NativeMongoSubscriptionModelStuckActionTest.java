@@ -129,6 +129,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
     private final CopyOnWriteArrayList<Throwable> uncaught = new CopyOnWriteArrayList<>();
     private final NameDefined e1 = nameDefined("name1");
     private final NameDefined e2 = nameDefined("name2");
+    private final NameDefined e3 = nameDefined("name3");
     private MongoClient mongoClient;
     private MongoCollection<Document> eventCollection;
     private MongoDatabase database;
@@ -326,6 +327,13 @@ class NativeMongoSubscriptionModelStuckActionTest {
         waitAtMostFor(Duration.ofSeconds(2), () -> calls.size() > 2);
         assertThat(calls).as("calls once the stuck call was released").containsExactly("E1 started", "E1 returned");
         assertThat(uncaught).as("exceptions that ended an executor thread").isEmpty();
+
+        // And: a pause and a resume starts a run that delivers an event written after the resume
+        subscriptionModel.pauseSubscription(subscriptionId);
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("run started by the resume").isTrue();
+        mongoEventStore.write("3", 0, serialize(e3));
+        waitAtMostFor(TEN_SECONDS, () -> calls.contains("E3 returned"));
+        assertThat(calls).as("calls once the subscription was paused and resumed").contains("E3 started", "E3 returned");
     }
 
     @Test
@@ -465,12 +473,52 @@ class NativeMongoSubscriptionModelStuckActionTest {
         }
     }
 
+    @Test
+    @Timeout(60)
+    void a_resumed_run_that_waits_for_the_stuck_call_warns_again_after_ten_seconds_and_once_more_after_twenty_seconds_after_that() {
+        // Given: the first call for E1 is stuck
+        Logger modelLog = (Logger) LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        modelLog.addAppender(appender);
+        try {
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), this::action).waitUntilStarted(Duration.ofSeconds(10));
+            mongoEventStore.write("1", 0, serialize(e1));
+            await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
+            subscriptionModel.pauseSubscription(subscriptionId);
+
+            // When: resumed, which makes a run that waits for the stuck call, and the call stays stuck
+            assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+            waitAtMostFor(Duration.ofSeconds(45), () -> warningsContaining(appender, "still waits for an action call").size() >= 2);
+
+            // Then: it said so when the wait began, and again after ten seconds and after twenty more
+            List<ILoggingEvent> began = warningsContaining(appender, "waits for an action call of a run it replaced to return before it goes on");
+            List<ILoggingEvent> stillWaiting = warningsContaining(appender, "still waits for an action call");
+            assertThat(began).as("warnings when the wait began").hasSize(1);
+            assertThat(stillWaiting).as("warnings while the first call for E1 stays stuck").hasSize(2);
+            long sinceTheWaitBegan = began.getFirst().getTimeStamp();
+            assertThat(stillWaiting.get(0).getTimeStamp() - sinceTheWaitBegan).as("milliseconds from the start of the wait to the first repeated warning").isGreaterThanOrEqualTo(9_500);
+            assertThat(stillWaiting.get(1).getTimeStamp() - sinceTheWaitBegan).as("milliseconds from the start of the wait to the second repeated warning").isGreaterThanOrEqualTo(29_500);
+            assertThat(stillWaiting).allSatisfy(event -> assertThat(event.getFormattedMessage()).contains(subscriptionId));
+        } finally {
+            modelLog.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
     // The executor thread that runs the resumed run, which is in the code of the model while it waits for the stuck call
     private @Nullable Thread threadOfTheResumedRun() {
         return executorThreads.stream()
                 .filter(thread -> thread != stuckThread.get() && thread.isAlive())
                 .filter(thread -> Arrays.stream(thread.getStackTrace()).anyMatch(frame -> frame.getClassName().contains("ChangeStreamSubscriptions")))
                 .findFirst().orElse(null);
+    }
+
+    private static List<ILoggingEvent> warningsContaining(ListAppender<ILoggingEvent> appender, String text) {
+        synchronized (appender) {
+            return appender.list.stream().filter(event -> event.getLevel() == Level.WARN && event.getFormattedMessage().contains(text)).toList();
+        }
     }
 
     private static List<String> messagesAt(ListAppender<ILoggingEvent> appender, Level level) {
@@ -515,7 +563,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
     }
 
     private void action(CloudEvent cloudEvent) {
-        String name = cloudEvent.getId().equals(e1.eventId()) ? "E1" : "E2";
+        String name = cloudEvent.getId().equals(e1.eventId()) ? "E1" : cloudEvent.getId().equals(e3.eventId()) ? "E3" : "E2";
         mostInFlight.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
         calls.add(name + " started");
         try {
