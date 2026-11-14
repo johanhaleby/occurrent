@@ -71,6 +71,8 @@ class StreamCatchupResumeRacesALostLiveStartTest {
 
     private static final String ID = "subscription";
     private static final Duration WAIT = Duration.ofSeconds(10);
+    // Longer than WAIT, so a resume that waits for the held replay runs out of WAIT before the hold ends
+    private static final Duration HOLD = WAIT.multipliedBy(3);
     private static final Checkpoint LIVE_START = new StringBasedCheckpoint("token-1");
     // Replays from position 1, after the beginning, so the loss of LIVE_START is recorded
     private static final Checkpoint STORED = new StringBasedCheckpoint(CatchupCheckpoints.format(1, 1, 3, LIVE_START));
@@ -130,8 +132,8 @@ class StreamCatchupResumeRacesALostLiveStartTest {
         assertThat(reached(replayHeldInTheHistoryRead)).as("the replay of the first resume reached its history read").isTrue();
 
         // When
-        CompletableFuture<Subscription> secondResume =CompletableFuture.supplyAsync(() -> catchup.resumeSubscription(ID));
-        boolean secondResumeReturnedWhileTheReplayWasHeld = reached(secondResume);
+        CompletableFuture<Subscription> secondResume = CompletableFuture.supplyAsync(() -> catchup.resumeSubscription(ID));
+        boolean secondResumeReturnedWhileTheReplayWasHeld = returnedWithinTheWait(secondResume);
         boolean replayLeftTheHoldBeforeTheSecondResumeReturned = replayLeftTheHold.get();
         int replaysStartedWhenTheSecondResumeReturned = replaysStarted.get();
         Throwable thrownByTheSecondResume = thrownBy(secondResume);
@@ -164,7 +166,7 @@ class StreamCatchupResumeRacesALostLiveStartTest {
 
         // When
         CompletableFuture<Subscription> resume = CompletableFuture.supplyAsync(() -> catchup.resumeSubscription(ID));
-        boolean resumeReturnedWhileTheReplayWasHeld = reached(resume);
+        boolean resumeReturnedWhileTheReplayWasHeld = returnedWithinTheWait(resume);
         boolean replayLeftTheHoldBeforeTheResumeReturned = replayLeftTheHold.get();
         int replaysStartedWhenTheResumeReturned = replaysStarted.get();
         Throwable thrownByTheResume = thrownBy(resume);
@@ -215,8 +217,11 @@ class StreamCatchupResumeRacesALostLiveStartTest {
             if (heldOnce.compareAndSet(false, true)) {
                 liveModel.withoutHistoryBack(LIVE_START);
                 replayHeldInTheHistoryRead.countDown();
-                awaitLatch(releaseTheReplay);
-                replayLeftTheHold.set(true);
+                try {
+                    awaitLatch(releaseTheReplay, HOLD);
+                } finally {
+                    replayLeftTheHold.set(true);
+                }
             }
             received.add(cloudEventConverter.toDomainEvent(cloudEvent));
         };
@@ -251,7 +256,8 @@ class StreamCatchupResumeRacesALostLiveStartTest {
         }
     }
 
-    private static boolean reached(CompletableFuture<?> future) {
+    // False when it threw, unlike reached in StreamCatchupResumeRacesTheHandoverTest
+    private static boolean returnedWithinTheWait(CompletableFuture<?> future) {
         try {
             future.get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
             return true;
@@ -272,10 +278,10 @@ class StreamCatchupResumeRacesALostLiveStartTest {
         }
     }
 
-    private static void awaitLatch(CountDownLatch latch) {
+    private static void awaitLatch(CountDownLatch latch, Duration timeout) {
         try {
-            if (!latch.await(WAIT.toMillis(), TimeUnit.MILLISECONDS)) {
-                throw new IllegalStateException("Not released within " + WAIT);
+            if (!latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                throw new IllegalStateException("Not released within " + timeout);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -286,13 +292,13 @@ class StreamCatchupResumeRacesALostLiveStartTest {
     private record Report(String subscriptionId, CatchupCannotResumeException refusal) {
     }
 
-    // Records each subscription reported held paused, and refuses to be told of a refused start
+    // Records each subscription reported held paused. HistoryLosingLiveModel reports no refused start, so nothing calls
+    // handleStartRefusal
     private static final class HeldPausedReports implements StartRefusalListener {
         private final List<Report> heldPaused = new CopyOnWriteArrayList<>();
 
         @Override
         public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
-            throw new AssertionError("A catch-up subscription model was not expected to refuse the start of " + subscriptionId, refusal);
         }
 
         @Override

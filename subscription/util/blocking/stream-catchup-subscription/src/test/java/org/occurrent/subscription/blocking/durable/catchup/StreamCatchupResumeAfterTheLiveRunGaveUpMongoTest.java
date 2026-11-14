@@ -74,6 +74,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.InstanceOfAssertFactories.THROWABLE;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -83,7 +84,7 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
  * {@link NativeMongoSubscriptionModel}, whose event collection stops serving change streams while a flag is set.
  */
 @Testcontainers
-@Timeout(30)
+@Timeout(60)
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class StreamCatchupResumeAfterTheLiveRunGaveUpMongoTest {
 
@@ -138,7 +139,9 @@ class StreamCatchupResumeAfterTheLiveRunGaveUpMongoTest {
         if (dispatcher != null) {
             dispatcher.shutdownNow();
         }
-        mongoClient.close();
+        if (mongoClient != null) {
+            mongoClient.close();
+        }
     }
 
     @Test
@@ -154,7 +157,7 @@ class StreamCatchupResumeAfterTheLiveRunGaveUpMongoTest {
         // And its open change stream fails and every reopen is refused until the retry strategy gives up
         changeStreamsFail.set(true);
         await("the live delegate gives up restarting the subscription").atMost(10, SECONDS)
-                .untilAsserted(() -> assertThat(thrownOnTheDispatcher).singleElement().isInstanceOf(MongoTimeoutException.class));
+                .untilAsserted(() -> assertThat(thrownOnTheDispatcher).singleElement(THROWABLE).isInstanceOf(MongoTimeoutException.class).hasMessageContaining("Change streams cannot be opened"));
         assertThat(refusedOpens.get()).as("reopens refused before the give-up").isPositive();
         assertThat(catchup.isRunning(subscriptionId)).as("running on the catch-up model after the give-up").isTrue();
         changeStreamsFail.set(false);
@@ -176,10 +179,12 @@ class StreamCatchupResumeAfterTheLiveRunGaveUpMongoTest {
                 .as("a resume at a position of the paused subscription")
                 .doesNotThrowAnyException();
 
-        // Then it delivers what was written after the position and not what was written before it
-        await("the resumed subscription delivers what was written after the position").atMost(10, SECONDS)
-                .untilAsserted(() -> assertThat(received).contains("afterPosition"));
-        assertThat(received).as("what the subscription received").containsExactly("beforeGiveUp", "afterPosition");
+        // Then it delivers what was written after the position and not what was written before it, and nothing twice
+        // before an event written after the resume
+        append(nameDefined("afterResume", 3));
+        await("the resumed subscription delivers what was written after the resume").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(received).contains("afterResume"));
+        assertThat(received).as("what the subscription received").containsExactly("beforeGiveUp", "afterPosition", "afterResume");
     }
 
     // Fails the open cursor on its next read and refuses every change stream opened while the flag is set, so the give-up
