@@ -1338,7 +1338,9 @@ when a restart starts from it, so a resume after a later pause doesn't replay fr
 
 A resume token or another checkpoint the MongoDB model restarts at is stored as given. A catch-up time without a live
 start is stored with the present position as its live start. A `GlobalCheckpoint` above 0 without a live start, and a
-checkpoint the MongoDB model doesn't restart at, store nothing, so the position the catch-up stored stays.
+checkpoint the MongoDB model doesn't restart at, store nothing, so the position the catch-up stored stays. When
+neither the event store nor the MongoDB model answers a present position, a resume at a catch-up time throws
+`IllegalStateException` and stores nothing.
 
 A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts around its catch-up, can't resume a
 subscription at a position, and its `cancelSubscription(id)` acts only on the instance you call it on. With checkpoint

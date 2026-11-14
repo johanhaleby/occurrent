@@ -212,6 +212,23 @@ class StreamCatchupResumeStoresARestartablePositionTest {
         );
     }
 
+    @Test
+    void resumes_the_live_model_at_the_position_a_dynamic_start_answers_it_and_leaves_the_stored_position_when_the_function_answers_the_catch_up_nothing() {
+        // Given
+        Checkpoint storedBefore = heldTakeoverReplayWithACatchupPositionStored();
+        Checkpoint answeredTheLiveModel = new StringBasedCheckpoint("answered-the-live-model");
+        StartAt dynamic = StartAt.dynamic(context -> StreamCatchupSubscriptionModel.class.equals(context.subscriptionModelType()) ? null : StartAt.checkpoint(answeredTheLiveModel));
+
+        // When
+        catchup.resumeSubscription(ID, dynamic);
+
+        // Then
+        assertAll(
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened, the position the function answered it").containsExactly(answeredTheLiveModel),
+                () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(storedBefore)
+        );
+    }
+
     // A takeover replay from the beginning whose live start the live model loses at each open, held once the catch-up
     // made 4 replays, with the catch-up position it stored. The live model keeps every open after this returns
     private Checkpoint heldTakeoverReplayWithACatchupPositionStored() {

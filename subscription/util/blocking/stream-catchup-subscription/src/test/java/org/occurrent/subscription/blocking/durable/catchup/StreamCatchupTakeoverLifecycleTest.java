@@ -859,14 +859,13 @@ class StreamCatchupTakeoverLifecycleTest {
 
     private CatchupCannotResumeException heldTakeoverReplayWhoseRefusalWasReported() {
         heldTakeoverReplayWithACatchupPositionStored();
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(heldPausedReports).as("refusals the held replay reported").hasSize(1));
         CatchupCannotResumeException reported = heldPausedReports.get(0);
         assertThat(catchup.isHeldPausedFor(ID, reported)).as("held paused for the refusal reported").isTrue();
         return reported;
     }
 
     // A takeover replay from the beginning whose live start the live model loses at each open, held once the catch-up
-    // made 4 replays, with the catch-up position it stored. The live model keeps every open after this returns
+    // made 4 replays, with the catch-up position it stored, and the hold reported. The live model keeps every open after this returns
     private Checkpoint heldTakeoverReplayWithACatchupPositionStored() {
         liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> {
         }).losingEveryOpen();
@@ -875,6 +874,7 @@ class StreamCatchupTakeoverLifecycleTest {
         assertThat(waitUpTo(Duration.ofSeconds(10), () -> heldReplays() == 1)).as("the takeover replay was held").isTrue();
         Checkpoint stored = storage.read(ID);
         assertThat(stored).as("position the takeover replay stored").isNotNull().matches(GlobalCheckpoint::isGlobalCheckpoint, "a catch-up position");
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(heldPausedReports).as("refusals the held replay reported").hasSize(1));
         liveModel.keepingEveryOpen();
         return stored;
     }
