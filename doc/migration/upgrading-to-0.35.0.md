@@ -120,6 +120,9 @@ other sections compile fine and behave differently, so read them first.
 - [A dynamic `StartAt.now()` that the wrapped model refuses fails `waitUntilStarted()` instead of `subscribe(..)`](#a-dynamic-startatnow-that-the-wrapped-model-refuses-fails-waituntilstarted-instead-of-subscribe).
   A refusal of the subscribe, for an unsupported filter for example, no longer throws from `subscribe(..)`. Compiles
   unchanged.
+- [A blocking catch-up resume at a dynamic start uses the catch-up's answer](#a-blocking-catch-up-resume-at-a-dynamic-start-uses-the-catch-ups-answer).
+  The live model resumes at the start a `StartAt.dynamic(..)` function answered the catch-up, where 0.34.0 let the live
+  model ask the function for itself. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
@@ -2311,6 +2314,20 @@ for a checkpoint that a cancel of the id deleted to be written back was handed o
 Handle the refusal where you wait for `waitUntilStarted()`, as 0.34.0 already required for a subscription from the
 subscription-model default. Keep handling `DuplicateSubscriptionIdException` at the call too, since it can come from
 either place.
+
+## A blocking catch-up resume at a dynamic start uses the catch-up's answer
+
+`resumeSubscription(id, startAt)` on `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` or the blocking
+`CatchupSubscriptionModel` asks a `StartAt.dynamic(..)` function for the catch-up first, with or without checkpoint
+storage, and the live model resumes at the start the function answered. In 0.34.0 the catch-up passed the `StartAt`
+on unchanged, and the live model asked the function for itself.
+
+A function that answers the same position for every model sees no change. A function that answers by
+`SubscriptionModelContext`, with one position for the catch-up and another for the live model, now resumes the live
+model at the catch-up's position. A live model that wraps another, such as `DurableSubscriptionModel`, is still asked
+whether it starts at all, as at a subscribe. When the function answers `null` for the catch-up, the live model asks it
+for itself, as in 0.34.0. To resume the live model at a position of its own, pass that position with
+`StartAt.checkpoint(..)` instead of the dynamic start.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
