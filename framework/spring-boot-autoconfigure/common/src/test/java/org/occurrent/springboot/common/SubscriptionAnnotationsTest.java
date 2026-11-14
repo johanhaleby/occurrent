@@ -25,6 +25,7 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.springboot.common.internal.HandlerMethod;
+import org.occurrent.springboot.common.between.PublicFactoryThatDoesNotOverride;
 import org.occurrent.springboot.common.between.PublicMethodThatDoesNotOverride;
 import org.occurrent.springboot.common.bridged.PublicLeafWithBridges;
 import org.occurrent.springboot.common.declaring.OverridesHandlerBelowAMethodThatDoesNot;
@@ -35,6 +36,11 @@ import org.occurrent.springboot.common.declaring.PackagePrivateOverridingMid;
 import org.occurrent.springboot.common.declaring.PublicOverridingMid;
 import org.occurrent.springboot.common.declaring.PublicOverridingOfPackagePrivateMid;
 import org.occurrent.springboot.common.declaring.SubclassInDeclaringPackage;
+import org.occurrent.springboot.common.declaring.SubclassInDeclaringPackageOfPublicFactory;
+import org.occurrent.springboot.common.shadowed.a.A;
+import org.occurrent.springboot.common.shadowed.a.LeafOfAnnotated;
+import org.occurrent.springboot.common.shadowed.a.LeafOfPrivate;
+import org.occurrent.springboot.common.shadowed.b.MidAnnotated;
 import org.occurrent.springboot.common.other.CrossPackageMethods;
 import org.occurrent.springboot.common.other.CrossPackageSubscriptionBase;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
@@ -973,22 +979,20 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void handlerMethod_gives_the_class_method_of_a_generic_handler_and_the_interface_method_of_a_jdk_proxy_in_front_of_it_the_same_signature() throws Exception {
+    void handlerMethod_keys_the_interface_method_of_a_generic_handler_differently_from_the_class_method_of_the_class_a_jdk_proxys_target_source_names() throws Exception {
         ProxyFactory proxyFactory = new ProxyFactory();
         proxyFactory.setTargetSource(new AlwaysFreshTargetSource(GenericHandlerBean.class));
         proxyFactory.setInterfaces(GenericHandler.class);
         proxyFactory.setProxyTargetClass(false);
         Object proxy = proxyFactory.getProxy();
         Class<?> scanned = SubscriptionAnnotations.implementationClassOf(proxy);
-        assertThat(scanned).describedAs("the class behind the proxy, never the proxy's own").isEqualTo(GenericHandlerBean.class);
+        assertThat(scanned).describedAs("the class the target source names").isEqualTo(GenericHandlerBean.class);
 
         Method fromTheProxy = SubscriptionAnnotations.handlerMethods(scanned, MARKERS).iterator().next();
         Method interfaceMethod = GenericHandler.class.getDeclaredMethod("on", Object.class);
 
-        assertThat(HandlerMethod.in(scanned, fromTheProxy).signature())
-                .isEqualTo(HandlerMethod.in(GenericHandlerBean.class, GenericHandlerBean.class.getDeclaredMethod("on", String.class)).signature());
         assertThat(HandlerMethod.in(scanned, interfaceMethod).signature())
-                .describedAs("the interface method alone would be a second handler, which is why the proxy's class is never scanned")
+                .describedAs("the interface method keys differently from the class method, so a scan that read it would register a second handler")
                 .isNotEqualTo(HandlerMethod.in(scanned, fromTheProxy).signature());
     }
 
@@ -1256,6 +1260,45 @@ class SubscriptionAnnotationsTest {
                 .hasMessageContaining(shadowing)
                 .hasMessageContaining(shadowed)
                 .hasMessageContaining("@Subscription with id \"h\"");
+    }
+
+    @Test
+    void handlerMethods_returns_a_package_private_handler_below_a_private_method_of_the_same_signature_in_another_package() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(LeafOfPrivate.class, List.of(Subscription.class)))
+                .containsExactly(A.class.getDeclaredMethod("on", String.class));
+    }
+
+    @Test
+    void handlerMethods_returns_both_a_package_private_handler_and_the_annotated_method_of_the_same_signature_above_it_in_another_package() throws Exception {
+        assertThat(SubscriptionAnnotations.handlerMethods(LeafOfAnnotated.class, List.of(Subscription.class)))
+                .containsExactlyInAnyOrder(
+                        A.class.getDeclaredMethod("on", String.class),
+                        MidAnnotated.class.getDeclaredMethod("on", String.class));
+    }
+
+    @Test
+    void methodACglibProxyRunsInsteadOf_gives_the_public_method_of_another_package_that_sits_below_the_package_private_handler() throws Exception {
+        Method handler = A.class.getDeclaredMethod("on", String.class);
+
+        assertThat(SubscriptionAnnotations.methodACglibProxyRunsInsteadOf(handler, LeafOfAnnotated.class))
+                .isEqualTo(MidAnnotated.class.getDeclaredMethod("on", String.class));
+    }
+
+    @Test
+    void methodACglibProxyRunsInsteadOf_gives_null_when_the_method_below_the_package_private_handler_is_private() throws Exception {
+        Method handler = A.class.getDeclaredMethod("on", String.class);
+
+        assertThat(SubscriptionAnnotations.methodACglibProxyRunsInsteadOf(handler, LeafOfPrivate.class)).isNull();
+    }
+
+    @Test
+    void invokeDescriptorFactory_refuses_a_package_private_factory_that_a_public_method_of_another_package_sits_below_on_a_cglib_proxy_left_proxied() throws Exception {
+        SubclassInDeclaringPackageOfPublicFactory proxy = cglibProxyLeftProxied(SubclassInDeclaringPackageOfPublicFactory.class);
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, PackagePrivateFactoryBase.class.getDeclaredMethod("factory")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("@Projection factory " + PackagePrivateFactoryBase.class.getName() + "#factory")
+                .hasMessageContaining(PublicFactoryThatDoesNotOverride.class.getName() + " declares a method of the same name and parameter types without overriding it");
     }
 
     @Test

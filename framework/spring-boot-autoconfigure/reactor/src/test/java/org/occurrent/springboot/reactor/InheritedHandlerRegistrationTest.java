@@ -39,6 +39,10 @@ import org.occurrent.springboot.reactor.other.CrossPackageEvent;
 import org.occurrent.springboot.reactor.other.CrossPackageFixedShadowing;
 import org.occurrent.springboot.reactor.other.CrossPackageOverridingMid;
 import org.occurrent.springboot.reactor.other.CrossPackageWideningMid;
+import org.occurrent.springboot.reactor.shadowed.a.A;
+import org.occurrent.springboot.reactor.shadowed.a.LeafOfAnnotated;
+import org.occurrent.springboot.reactor.shadowed.a.LeafOfPrivate;
+import org.occurrent.springboot.reactor.shadowed.b.MidAnnotated;
 import org.occurrent.springboot.reactor.shadowing.CrossPackageRepeatingShadowing;
 import org.occurrent.springboot.reactor.shadowing.CrossPackageShadowing;
 import org.occurrent.springboot.reactor.other.CrossPackagePackagePrivateHandler;
@@ -611,6 +615,70 @@ class InheritedHandlerRegistrationTest {
                 });
     }
 
+    // ------------------------------------------------------------------------------------------------------
+    // A package-private handler that a method of a class in another package sits below without overriding it
+    // ------------------------------------------------------------------------------------------------------
+
+    @Test
+    void a_package_private_handler_below_a_private_method_of_the_same_signature_registers_once_and_runs_its_own_body() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", LeafOfPrivate.class, () -> new LeafOfPrivate(bodies)).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactly("a-handler");
+            anyHandlerFor(subscriptions, "a-handler").invoke(null, new CrossPackageEvent()).block();
+            assertThat(bodies).containsExactly("a-body");
+        });
+    }
+
+    @Test
+    void a_package_private_handler_below_an_annotated_method_of_the_same_signature_registers_both_and_each_runs_its_own_body() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", LeafOfAnnotated.class, () -> new LeafOfAnnotated(bodies)).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactlyInAnyOrder("a-handler", "mid-handler");
+            anyHandlerFor(subscriptions, "a-handler").invoke(null, new CrossPackageEvent()).block();
+            anyHandlerFor(subscriptions, "mid-handler").invoke(null, new CrossPackageEvent()).block();
+            assertThat(bodies).containsExactly("a-body", "mid-body");
+        });
+    }
+
+    @Test
+    void a_package_private_handler_below_an_annotated_method_of_the_same_signature_is_refused_on_a_cglib_proxied_bean_naming_that_method_class() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        cglibProxying(LeafOfAnnotated.class, new AtomicInteger())
+                .withBean("subscriber", LeafOfAnnotated.class, () -> new LeafOfAnnotated(bodies))
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
+                            .hasMessageContaining(A.class.getName() + ".on")
+                            .hasMessageContaining(MidAnnotated.class.getName() + " declares a public method of the same name and parameter types without overriding it");
+                    assertThat(bodies).isEmpty();
+                });
+    }
+
+    @Test
+    void a_package_private_handler_below_a_private_method_of_the_same_signature_runs_through_the_advice_of_a_cglib_proxy() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        AtomicInteger adviceCalls = new AtomicInteger();
+        cglibProxying(LeafOfPrivate.class, adviceCalls)
+                .withBean("subscriber", LeafOfPrivate.class, () -> new LeafOfPrivate(bodies))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+                    assertThat(subscribedIds(subscriptions)).containsExactly("a-handler");
+                    anyHandlerFor(subscriptions, "a-handler").invoke(null, new CrossPackageEvent()).block();
+
+                    assertThat(bodies).containsExactly("a-body");
+                    assertThat(adviceCalls).hasValue(1);
+                });
+    }
+
     private ApplicationContextRunner cglibProxying(Class<?> proxied, AtomicInteger adviceCalls) {
         return runner.withBean(CglibProxyingPostProcessor.class, () -> new CglibProxyingPostProcessor(proxied, adviceCalls));
     }
@@ -910,10 +978,10 @@ class InheritedHandlerRegistrationTest {
     // ------------------------------------------------------------------------------------------------------
 
     // The startup scan reads the handler off the bean's class. A prototype built after startup is wrapped by a JDK
-    // proxy that cannot be unwrapped to a target, and the scan of that proxy finds the interface's method instead. It
-    // is the same handler, so the second scan must not register it again.
+    // proxy whose target source names that class, so the later scan reads the same class as the startup scan. It is
+    // the same handler, so the later scan must not register it again.
     @Test
-    void a_handler_read_from_the_class_and_later_from_a_jdk_proxys_interface_method_registers_once() {
+    void a_handler_registers_once_when_a_later_instance_arrives_as_a_jdk_proxy_whose_target_source_names_its_class() {
         AtomicBoolean proxying = new AtomicBoolean();
         runner.withBean(JdkProxyingPostProcessor.class, () -> new JdkProxyingPostProcessor(proxying))
                 .withUserConfiguration(PrototypeInterfaceHandlerConfiguration.class)
@@ -1160,7 +1228,7 @@ class InheritedHandlerRegistrationTest {
     }
 
     @Test
-    void a_generic_interface_handler_read_from_the_class_and_later_from_a_jdk_proxys_interface_method_registers_once() {
+    void a_generic_interface_handler_registers_once_when_a_later_instance_arrives_as_a_jdk_proxy_whose_target_source_names_its_class() {
         AtomicBoolean proxying = new AtomicBoolean();
         runner.withBean(JdkProxyingPostProcessor.class, () -> new JdkProxyingPostProcessor(proxying))
                 .withUserConfiguration(PrototypeGenericHandlerConfiguration.class)
@@ -1480,6 +1548,41 @@ class InheritedHandlerRegistrationTest {
     @Test
     void a_prototype_returning_another_class_that_inherits_the_same_public_handler_from_a_superclass_is_skipped() {
         assertSecondInstanceIsSkipped(PublicVaryingA::new, InheritingVaryingB::new);
+    }
+
+    @Test
+    void a_prototype_returning_a_subclass_that_inherits_the_same_private_handler_is_skipped() {
+        assertSecondInstanceIsSkipped(PrivateVaryingA::new, PrivateInheritingVaryingB::new);
+    }
+
+    @Test
+    void a_prototype_returning_a_subclass_that_inherits_the_same_package_private_handler_is_skipped() {
+        assertSecondInstanceIsSkipped(PackagePrivateVaryingA::new, PackagePrivateInheritingVaryingB::new);
+    }
+
+    static class PrivateInheritingVaryingB extends PrivateVaryingA {
+        PrivateInheritingVaryingB(List<String> bodies) {
+            super(bodies);
+        }
+    }
+
+    static class PackagePrivateVaryingA implements VaryingMarker {
+        private final List<String> bodies;
+
+        PackagePrivateVaryingA(List<String> bodies) {
+            this.bodies = bodies;
+        }
+
+        @Subscription(id = "varying-handler", startupMode = StartupMode.BACKGROUND)
+        void on(TestEvent event) {
+            bodies.add("first-body");
+        }
+    }
+
+    static class PackagePrivateInheritingVaryingB extends PackagePrivateVaryingA {
+        PackagePrivateInheritingVaryingB(List<String> bodies) {
+            super(bodies);
+        }
     }
 
     // The first instance registers the handler, the second is built by the same factory after startup, and its class
