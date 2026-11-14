@@ -124,8 +124,8 @@ other sections compile fine and behave differently, so read them first.
   The live model resumes at the start a `StartAt.dynamic(..)` function answered the catch-up, where 0.34.0 let the live
   model ask the function for itself. Compiles unchanged.
 - [A blocking catch-up refuses a resume at a position of a subscription that runs](#a-blocking-catch-up-refuses-a-resume-at-a-position-of-a-subscription-that-runs).
-  `resumeSubscription(id, startAt)` throws `SubscriptionAlreadyRunningException` where 0.34.0 threw what the live model
-  threw. Compiles unchanged.
+  `resumeSubscription(id, startAt)` throws `SubscriptionAlreadyRunningException` where 0.34.0 threw
+  `UnknownSubscriptionException` while the `subscribe(..)` replay ran. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
@@ -304,14 +304,18 @@ position or the quiet save. That section stays as it was released, and over a du
 A blocking catch-up model with checkpoint storage that resumes a subscription at a checkpoint or at now also replaces a
 stored position a catch-up replays from, such as the one its replay stored, whatever its live delegate. So a
 `resumeSubscription(subscriptionId)` after a later pause doesn't replay from that position, as it could in 0.34.0. At
-now it stores the present position, and throws `IllegalStateException` when it can read none. While a replay that
-`subscribe(..)` started is still running for a subscription paused during that replay, it stores nothing and reads no
-present position.
+now it stores the present position, and throws `IllegalStateException` when it can read none. At a time after the
+beginning without a live start, a stream catch-up stores that time with the present position as its live start, in the
+`position:time;v:2;` form that
+[A catch-up keeps its live start in the checkpoints it stores](#a-catch-up-keeps-its-live-start-in-the-checkpoints-it-stores)
+describes, and 0.34 refuses that form. While a replay that `subscribe(..)` started is still running for a subscription
+paused during that replay, it stores nothing and reads no present position.
 
 There is nothing to change in your code unless it depends on the checkpoint staying where it was after a resume at a
 position. A `DurableSubscriptionModel` over a repositionable subscription model you wrote yourself stores nothing on a
 resume at a position, as in 0.34.0. To have the position stored, override `RepositionableSubscriptions.restartsAt(..)`
-in that model to answer `true` for every checkpoint a subscription it subscribes there starts reading at. Nothing stored changes format, and there is no OpenRewrite recipe for this. See
+in that model to answer `true` for every checkpoint a subscription it subscribes there starts reading at. Apart from a time a stream catch-up stores in the `;v:2;` form, nothing stored changes format, and
+there is no OpenRewrite recipe for this. See
 [ADR 151](../architecture/decisions/0151-a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper.md) and
 [#1253](https://github.com/johanhaleby/occurrent/issues/1253).
 
@@ -1299,6 +1303,10 @@ when the replay started after position 0 or after the beginning of time:
 | By position | `position:<position>;v:2;origin:<position>;replayTo:<position>;liveFrom:<live start>` |
 | By time | `position:time;v:2;at:<time>;origin:<time>;liveFrom:<live start>` |
 
+A blocking stream catch-up with checkpoint storage stores the time form too when you resume a subscription with
+`resumeSubscription(id, startAt)` at a time after the beginning without a live start. The present position is then the
+live start. In 0.34.0 such a resume stored nothing.
+
 The other checkpoints a catch-up stores keep the form they had in 0.34.
 
 A catch-up runs without the live delegate when the model it wraps answers `null` to its start. Under the Spring Boot
@@ -1348,7 +1356,8 @@ nothing and reads no present position, since that replay reads the stored positi
 
 A resume token or another checkpoint the MongoDB model restarts at is stored as given, and so is a checkpoint the
 catch-up replays from with a live start or at the beginning. A time after the beginning that a stream catch-up replays
-from without a live start is stored with the present position as its live start. A DCB catch-up replays only from a
+from without a live start is stored with the present position as its live start, in the new form, which 0.34 refuses.
+A DCB catch-up replays only from a
 position and the MongoDB model doesn't restart at a time, so on a DCB catch-up a resume at a time stores nothing. A
 `GlobalCheckpoint` above 0 without a live start, and a checkpoint the MongoDB model doesn't restart at, store nothing,
 so the position the catch-up stored stays. A resume that needs the present position to store, such as one at
@@ -2342,15 +2351,17 @@ runs. It throws before it stores anything and before it asks a `StartAt.dynamic(
 when it isn't paused, the replay its `subscribe(..)` started didn't end before the live model got it, and no replay that
 `resumeSubscription(id)` started runs for it or is about to start to take over a live start the live model lost. That
 includes one whose `subscribe(..)` replay still runs, and one the live model is still opening after `subscribe(..)`
-returned, as the MongoDB models do. In 0.34.0 the catch-up passed such a resume on to the live model, which threw its
-own exception.
+returned, as the MongoDB models do. In 0.34.0 the catch-up passed such a resume on to the live model. The MongoDB
+models threw `SubscriptionAlreadyRunningException` for a subscription they held, which is what the catch-up throws
+now. While the `subscribe(..)` replay ran they didn't hold it yet, and threw `UnknownSubscriptionException`.
 
 `RepositionableSubscriptions` already says that `resumeSubscription(id, startAt)` throws
-`SubscriptionAlreadyRunningException` for a subscription that runs. A `catch` of that exception, or of
-`IllegalArgumentException`, which it extends, catches it. A `catch` of the exception the live model threw, such as
-`IllegalStateException`, no longer does. A subscription you pause while its `subscribe(..)` replay runs isn't refused
-this way. The live model doesn't hold it until that replay hands over, so a resume at a position before then still
-throws the live model's own exception, as in 0.34.0.
+`SubscriptionAlreadyRunningException` for a subscription that runs. A `catch` of that exception, of
+`SubscriptionRefusedException` or of `IllegalArgumentException`, which it extends, catches it. A `catch` of
+`UnknownSubscriptionException` no longer catches a resume during the `subscribe(..)` replay. A subscription you pause
+while its `subscribe(..)` replay runs isn't refused this way. The live model doesn't hold it until that replay hands
+over, so a resume at a position before then still throws `UnknownSubscriptionException` from a MongoDB model, as in
+0.34.0.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
