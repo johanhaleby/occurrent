@@ -6,6 +6,10 @@ Date: 2026-08-09
 
 Accepted. Fixes #668. Found and deliberately left out of [ADR 116](0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md) (#665), which named the same node's own regain as a different defect and filed it separately.
 
+[ADR 161](0161-a-held-event-is-withdrawn-instead-of-delivered-without-the-lease.md) names one resume this doesn't reach.
+A blocking catch-up replay that runs again after its action withdrew an event starts from this node's own last stored
+position, not the stored checkpoint, see [#1514](https://github.com/johanhaleby/occurrent/issues/1514).
+
 ## Context
 
 A competing consumer that loses its lease is paused, and a competing consumer that wins the lease back is resumed. Resuming used to continue the paused subscription itself, from the change-stream position it had already read, with nothing re-reading the checkpoint. Whichever node held the lease in the meantime kept moving the checkpoint forward, so the node coming back was behind where the subscription actually was. It redelivered everything the other node had already handled and wrote the checkpoint backward as it went.
