@@ -115,7 +115,9 @@ class SubscriptionAnnotationRegistrar {
     }
 
     // A CGLIB proxy cannot override a final method, or a package-private one declared outside the package of the class
-    // it subclasses, so invoking either on the proxy runs the method's own body on the proxy instance with no advice
+    // it subclasses, so invoking either on the proxy runs the method's own body on the proxy instance with no advice.
+    // For a package-private method that a public or protected method of another package shadows without overriding
+    // it, the proxy overrides the shadowing method, and invoking the package-private one runs that method's body
     private static void refuseWhatACglibProxyCannotOverride(Method method, Object bean) {
         if (!SubscriptionAnnotations.anyProxyLayerIsCglib(bean)) {
             return;
@@ -129,6 +131,12 @@ class SubscriptionAnnotationRegistrar {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The method is package-private and declared in package %s, so a CGLIB proxy in the chain, which subclasses %s in package %s, cannot override it. Make the method public or protected.".formatted(
                             method.getDeclaringClass().getPackageName(), implementation.getName(), implementation.getPackageName()));
+        }
+        Method runInstead = SubscriptionAnnotations.methodACglibProxyRunsInsteadOf(method, implementation);
+        if (runInstead != null) {
+            throw new SubscriptionHandlerNotInvocableException(method,
+                    "The method is package-private and %s declares %s of the same name and parameter types without overriding it, so a CGLIB proxy in the chain, which subclasses %s, runs that method instead. Rename one of the two methods.".formatted(
+                            runInstead.getDeclaringClass().getName(), Modifier.isPublic(runInstead.getModifiers()) ? "a public method" : "a protected method", implementation.getName()));
         }
     }
 

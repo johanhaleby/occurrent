@@ -370,6 +370,10 @@ public final class SubscriptionAnnotations {
                 if (isPackagePrivateOutsidePackageOf(method, targetUserClass)) {
                     throw new IllegalStateException("%s factory %s#%s cannot run because it is package-private and declared in %s, outside the package of %s, so the CGLIB proxy around the bean cannot override it and would run it on the proxy instead of on the bean. Make the method public or protected.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName(), targetUserClass.getName()));
                 }
+                Method runInstead = methodACglibProxyRunsInsteadOf(method, targetUserClass);
+                if (runInstead != null) {
+                    throw new IllegalStateException("%s factory %s#%s cannot run because it is package-private and %s declares a method of the same name and parameter types without overriding it, so the CGLIB proxy around the bean runs that method instead. Rename one of the two methods.".formatted(annotationName, declaringClass.getName(), method.getName(), runInstead.getDeclaringClass().getName()));
+                }
             }
         }
         try {
@@ -594,10 +598,11 @@ public final class SubscriptionAnnotations {
      * refused the way one the class declares is. Both annotation post-processors call this, so they find the same
      * methods.
      * <p>
-     * The scan misses this case. When {@code type} is in the package of a package-private annotated method, Spring
-     * takes the first method of the same signature up from {@code type} as the one it runs, even a method in another
-     * package that doesn't override it. When that method is private, or has a handler annotation of its own, the
-     * annotated method isn't returned, though the JVM runs it.
+     * A package-private annotated method is returned when {@code type} runs it, even when a method of the same
+     * signature from another package sits between it and {@code type}. That method doesn't override it, and is
+     * returned on its own when it has a handler annotation. When that method is public or protected, a CGLIB proxy of
+     * {@code type} runs it for both, which {@link #methodACglibProxyRunsInsteadOf} answers so the caller can refuse
+     * the package-private one.
      *
      * @param type            the concrete class the scan reads
      * @param annotationTypes the handler annotations to look for, searched with {@link SearchStrategy#TYPE_HIERARCHY}
@@ -610,7 +615,7 @@ public final class SubscriptionAnnotations {
         if (!AnnotationUtils.isCandidateClass(type, annotationTypes)) {
             return Set.of();
         }
-        Set<Method> handlers = MethodIntrospector.selectMethods(type, (MethodIntrospector.MetadataLookup<Boolean>) method -> {
+        MethodIntrospector.MetadataLookup<Boolean> handlerLookup = method -> {
             if (Modifier.isStatic(method.getModifiers()) && method.getDeclaringClass().isInterface()) {
                 return null;
             }
@@ -640,8 +645,55 @@ public final class SubscriptionAnnotations {
                 annotated = true;
             }
             return annotated ? Boolean.TRUE : null;
-        }).keySet();
+        };
+        Set<Method> handlers = new LinkedHashSet<>(MethodIntrospector.selectMethods(type, handlerLookup).keySet());
+        // MethodIntrospector reads a package-private method through ClassUtils.getMostSpecificMethod, which takes the
+        // first method of the same signature up from type when type is in the method's package, even a method of
+        // another package that doesn't override it. The method MethodIntrospector never inspects is still the one the
+        // JVM runs, so every package-private method of the hierarchy is inspected here as well
+        for (Class<?> candidateClass = type; candidateClass != null && candidateClass != Object.class; candidateClass = candidateClass.getSuperclass()) {
+            for (Method method : candidateClass.getDeclaredMethods()) {
+                int modifiers = method.getModifiers();
+                boolean packagePrivate = !Modifier.isPublic(modifiers) && !Modifier.isProtected(modifiers) && !Modifier.isPrivate(modifiers);
+                if (packagePrivate && !method.isSynthetic() && !handlers.contains(method) && Boolean.TRUE.equals(handlerLookup.inspect(method))) {
+                    handlers.add(method);
+                }
+            }
+        }
         return java.lang.reflect.Proxy.isProxyClass(type) ? firstOfEachSignature(type, handlers, annotationTypes) : handlers;
+    }
+
+    /**
+     * Answers which method a CGLIB proxy of {@code implementation} runs when {@code method} is invoked on it, when that
+     * is another method than {@code method}. A CGLIB proxy overrides one method for each name and parameter types, the
+     * first instance method up from {@code implementation} that is public, protected, or package-private in
+     * {@code implementation}'s package. When {@code method} is package-private and a public or protected method of the
+     * same signature from another package sits between {@code implementation} and {@code method}'s class, the proxy
+     * overrides that method. The proxy is in {@code method}'s package, so the JVM treats the proxy's method as
+     * overriding {@code method} too, and invoking {@code method} on the proxy runs the other method's body.
+     *
+     * @param method         the handler or factory method the scan found
+     * @param implementation the class a CGLIB proxy in the bean's chain subclasses
+     * @return the method the proxy runs instead of {@code method}, or {@code null} when it runs {@code method}
+     */
+    public static @Nullable Method methodACglibProxyRunsInsteadOf(Method method, Class<?> implementation) {
+        int modifiers = method.getModifiers();
+        if (Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers) || Modifier.isPrivate(modifiers) || Modifier.isStatic(modifiers)
+                || !inSameRuntimePackage(method.getDeclaringClass(), implementation) || !method.getDeclaringClass().isAssignableFrom(implementation)) {
+            return null;
+        }
+        for (Class<?> candidateClass = implementation; candidateClass != method.getDeclaringClass(); candidateClass = candidateClass.getSuperclass()) {
+            Method candidate = declaredMethod(candidateClass, method);
+            if (candidate == null || Modifier.isStatic(candidate.getModifiers()) || Modifier.isPrivate(candidate.getModifiers())) {
+                continue;
+            }
+            boolean visibleToTheProxy = Modifier.isPublic(candidate.getModifiers()) || Modifier.isProtected(candidate.getModifiers())
+                    || inSameRuntimePackage(candidateClass, implementation);
+            if (visibleToTheProxy) {
+                return overrides(candidate, method) ? null : candidate;
+            }
+        }
+        return null;
     }
 
     // A JDK proxy hands its invocation handler one method for each name and parameter types, the one from the first
