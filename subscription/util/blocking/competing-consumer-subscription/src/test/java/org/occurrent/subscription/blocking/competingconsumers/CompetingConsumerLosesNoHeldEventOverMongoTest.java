@@ -100,6 +100,9 @@ class CompetingConsumerLosesNoHeldEventOverMongoTest {
     // Longer than the 200 ms an event waits at most between two looks at the lease
     private static final Duration HELD_FOR = Duration.ofMillis(500);
 
+    // The native model gives its executor 5 s to end before it interrupts it, so a held event that is withdrawn at once ends shutdown well within it. 3 s allows for a slow CI machine and is still under those 5 s.
+    private static final Duration WITHDRAWN_WITHOUT_WAITING_FOR_THE_EXECUTOR = Duration.ofSeconds(3);
+
     private final FenceStrategy strategy = new FenceStrategy();
     private final CountDownLatch inFirst = new CountDownLatch(1);
     private final CountDownLatch releaseFirst = new CountDownLatch(1);
@@ -329,13 +332,17 @@ class CompetingConsumerLosesNoHeldEventOverMongoTest {
             assertThat(strategy.askedWithoutTheLease.await(10, SECONDS)).as("e1 waits for the lease on A").isTrue();
 
             // When
+            long shutdownBegan = System.nanoTime();
             a.shutdown();
+            Duration shutdownTook = Duration.ofNanos(System.nanoTime() - shutdownBegan);
             strategy.transfer("X", "node", "other-node");
             strategy.fenced = false;
             b.subscribe("other-node", "X", null, StartAt.subscriptionModelDefault(), e -> receivedOnB.add(e.getId())).waitUntilStarted();
             write("e2", 3);
 
             // Then
+            assertThat(shutdownTook).as("[time A took to shut down while e1 waited. The wrapped model's own bound for its executor is 5 s, so a held event that is not withdrawn first keeps shutdown() waiting for that bound]")
+                    .isLessThan(WITHDRAWN_WITHOUT_WAITING_FOR_THE_EXECUTOR);
             await().atMost(EVENTUALLY).until(() -> receivedOnB.contains("e2"));
             assertThat(received).as("[events delivered on A, which shut down while e1 waited there for the lease]").containsExactly("e0");
             assertThat(receivedOnB).as("[events delivered on B, which took the lease over from the checkpoint A left]").containsExactly("e1", "e2");

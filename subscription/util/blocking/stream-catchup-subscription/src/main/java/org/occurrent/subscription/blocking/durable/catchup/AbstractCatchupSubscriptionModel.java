@@ -177,9 +177,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // None of the waits above call into the model that wraps this model. A CompetingConsumerSubscriptionModel calls this
     // model from its own threads while it holds its own locks, and reaches back only through the subscriber's action,
     // which runs on a replay thread or the live delegate's thread and never on one that holds a claim. Its action
-    // wrapper waits for the lease without its locks, and lets an event through while it calls this model for the
-    // subscription. A cycle through it has to pass through a wait for an action, which LIFECYCLE_WAIT bounds, and so
-    // does one through any other caller.
+    // wrapper waits for the lease without its locks. Over a model that redelivers, as this model does when its live
+    // delegate does, the wrapper keeps an event waiting while it asks or starts this model for the subscription, and
+    // withdraws it once a pause, cancel or stop of it has returned or a shutdown has begun, apart from a few rare
+    // cases in which it lets the event through. Over any other model it lets the event through while it calls this
+    // model for the subscription. A cycle through it has to pass through a wait for an action, which LIFECYCLE_WAIT
+    // bounds, and so does one through any other caller.
     private final ConcurrentMap<String, ClaimLock> lifecycleClaims;
     // The subscribes whose function is asked with no claim held, shared by every child of the same dispatcher
     private final Set<AskedFirst> askedFirst;

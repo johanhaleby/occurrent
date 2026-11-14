@@ -20,6 +20,13 @@ package org.occurrent.retry;
  * Thrown by an action to say that the attempt for this event wasn't made, for example because the subscription it
  * would deliver to has been closed, or because the event was withdrawn before the action ran it. It is not a failure.
  * <p>
+ * It is meant for subscription models and the models that wrap them, such as {@code CompetingConsumerSubscriptionModel}
+ * when it withdraws an event it holds for the lease, and not for an event handler. A model throws it from the action
+ * once it has paused, cancelled or stopped the subscription, or begun to shut down. Thrown from the action of a
+ * subscription that is still open, it ends that subscription's run on the MongoDB change stream models, which deliver
+ * nothing more for the subscription until it is paused and resumed. A catch-up replay runs again instead, after a
+ * backoff or once the subscription is resumed.
+ * <p>
  * A subscription model that declares {@code RedeliveringSubscriptions} and answers {@code true} treats it this way.
  * It doesn't move the subscription's position past the event, doesn't retry the event, and doesn't report it as a
  * failure or to the listeners of its {@link RetryStrategy}. It delivers the event again when the subscription is

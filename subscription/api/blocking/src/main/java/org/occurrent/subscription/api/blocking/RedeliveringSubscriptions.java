@@ -37,8 +37,11 @@ import java.util.Optional;
  * attempt.
  * <p>
  * A caller can hold an event in the action until a call it makes into the model has returned. So a model that answers
- * {@code true} never waits for the thread that delivers an event inside a call that only asks about a subscription or
- * starts the model, and waits for it only for a limited time inside a pause, a cancel, a stop or a shutdown.
+ * {@code true} waits for the thread that delivers an event only inside a pause, a cancel, a stop or a shutdown, and
+ * there only for a limited time. It never waits for that thread inside any other call, which includes a subscribe, a
+ * resume, a start and each call that only asks about a subscription. A caller such as
+ * {@code CompetingConsumerSubscriptionModel} waits for such a call to return before it shuts the model down, so a model
+ * that waits in a resume for a running action can keep that shutdown from returning.
  * <p>
  * A caller that finds no implementation, which is an empty result from {@link #findIn(SubscriptionModelCapability)},
  * treats the model as not delivering an event again.

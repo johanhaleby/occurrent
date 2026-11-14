@@ -37,6 +37,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -502,6 +503,18 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     @Override
     public boolean redeliversAnAttemptNotMade() {
         return RedeliveringSubscriptions.findIn(delegate).map(RedeliveringSubscriptions::redeliversAnAttemptNotMade).orElse(false);
+    }
+
+    /**
+     * Empty for {@link RedeliveringSubscriptions} when the delegate doesn't declare it, as {@code DurableSubscriptionModel}
+     * and the catch-up models answer, so this model is found to declare it only when the delegate does.
+     */
+    @Override
+    public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+        if (type == RedeliveringSubscriptions.class && RedeliveringSubscriptions.findIn(delegate).isEmpty()) {
+            return Optional.empty();
+        }
+        return RedeliveringSubscriptions.super.capability(type);
     }
 
     /**

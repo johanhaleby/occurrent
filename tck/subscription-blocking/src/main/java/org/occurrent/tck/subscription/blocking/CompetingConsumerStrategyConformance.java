@@ -32,6 +32,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
@@ -56,7 +58,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * Every wait here is for something that must arrive, capped by {@link CompetingConsumerStrategyFixture#timeToConverge()},
  * apart from one. The test that asks {@code hasLock} while a listener is told that the consumer lost the lock asserts
- * that no {@code true} comes, so against a working strategy it waits out the whole of {@code timeToConverge()}. It also
+ * that no {@code true} comes, so against a working strategy it waits out the whole of {@code timeToConverge()}. It
+ * waits up to twice that for the listener to return, since a strategy may tell its listeners on another thread after
+ * the call that changed the lock has returned. It also
  * asserts that the lock was granted, lost and granted again, so a strategy that coordinates with nobody fails it, and a
  * slow machine can only make it ask fewer times, never fail a working strategy. No other test waits for a quiet period,
  * because such a wait would pass just as well against a strategy that coordinates with nobody, and any constant short
@@ -139,8 +143,9 @@ public abstract class CompetingConsumerStrategyConformance {
 
         assertThat(acquired).as("nothing else has registered, so there is nobody to lose to").isTrue();
         assertThat(strategy().hasLock(subscription, HOLDER))
-                .as("hasLock has to agree with what registering just returned, since a consumer polling for the lock "
-                        + "and a consumer reading the return value must not get different answers")
+                .as("for a fresh registration that no listener was told it lost, hasLock has to agree with what "
+                        + "registering just returned, since a consumer polling for the lock and a consumer reading the "
+                        + "return value must not get different answers")
                 .isTrue();
     }
 
@@ -355,6 +360,7 @@ public abstract class CompetingConsumerStrategyConformance {
         RecordedLockChanges changes = new RecordedLockChanges();
         List<Boolean> answersWhileTold = new CopyOnWriteArrayList<>();
         AtomicBoolean asked = new AtomicBoolean();
+        CountDownLatch listenerReturned = new CountDownLatch(1);
         strategy().addListener(new CompetingConsumerListener() {
             @Override
             public void onConsumeGranted(String subscriptionId, String subscriberId) {
@@ -365,7 +371,11 @@ public abstract class CompetingConsumerStrategyConformance {
             public void onConsumeProhibited(String subscriptionId, String subscriberId) {
                 changes.onConsumeProhibited(subscriptionId, subscriberId);
                 if (subscriptionId.equals(subscription) && subscriberId.equals(HOLDER) && asked.compareAndSet(false, true)) {
-                    askUntilYes(() -> strategy().hasLock(subscription, HOLDER), answersWhileTold);
+                    try {
+                        askUntilYes(() -> strategy().hasLock(subscription, HOLDER), answersWhileTold);
+                    } finally {
+                        listenerReturned.countDown();
+                    }
                 }
             }
         });
@@ -373,6 +383,12 @@ public abstract class CompetingConsumerStrategyConformance {
 
         strategy().releaseCompetingConsumer(subscription, HOLDER);
 
+        // The listener holds the strategy's attention for up to timeToConverge(), and a strategy may tell it on another
+        // thread after release returned. The wait for the regrant therefore starts once the listener has returned,
+        // so it is the same wait whichever thread the listener was called on.
+        assertThat(awaitReturned(listenerReturned))
+                .as("the listener has to be told the consumer lost the lock for the answers below to be about anything")
+                .isTrue();
         assertThat(changes.awaitAtLeast(3, fixture().timeToConverge()))
                 .as("nobody else is competing for this subscription, so the consumer that released the lock takes it "
                         + "back, which is what the answers below were given against")
@@ -444,6 +460,16 @@ public abstract class CompetingConsumerStrategyConformance {
                 return false;
             }
             sleep(POLL_INTERVAL);
+        }
+    }
+
+    // The listener spends up to timeToConverge() asking, and may start a little after the call that caused it returned
+    private boolean awaitReturned(CountDownLatch listenerReturned) {
+        try {
+            return listenerReturned.await(fixture().timeToConverge().multipliedBy(2).toNanos(), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

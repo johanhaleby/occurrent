@@ -31,7 +31,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * What {@link ManualStartSubscriptionModel} answers to {@link RedeliveringSubscriptions#redeliversAnAttemptNotMade()}.
- * It hands each action to the wrapped model unchanged, so it says what the wrapped model says and nothing more.
+ * It hands each action to the wrapped model unchanged, so it says what the wrapped model says and nothing more, and the
+ * lookup finds it only when the wrapped model declares the capability.
  */
 @DisplayName("ManualStartSubscriptionModelRedelivery")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -96,6 +97,43 @@ class ManualStartSubscriptionModelRedeliveryTest {
 
         // Then
         assertThat(found).containsSame(model);
+    }
+
+    @Test
+    void is_not_found_as_a_redelivering_model_by_the_lookup_when_the_wrapped_model_does_not_declare_it() {
+        // Given
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(new SilentModel());
+
+        // When
+        var found = RedeliveringSubscriptions.findIn(model);
+
+        // Then
+        assertThat(found).isEmpty();
+    }
+
+    @Test
+    void is_not_found_as_a_redelivering_model_by_the_lookup_when_a_wrapper_that_does_not_declare_it_sits_between_it_and_a_model_that_does() {
+        // Given
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(new PlainWrapper(new DeclaringModel(true)));
+
+        // When
+        var found = RedeliveringSubscriptions.findIn(model);
+
+        // Then
+        assertThat(found).isEmpty();
+    }
+
+    @Test
+    void is_found_as_a_redelivering_model_by_the_lookup_when_the_wrapped_model_declares_that_it_does_not() {
+        // Given
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(new DeclaringModel(false));
+
+        // When
+        var found = RedeliveringSubscriptions.findIn(model);
+
+        // Then
+        assertThat(found).containsSame(model);
+        assertThat(found.orElseThrow().redeliversAnAttemptNotMade()).isFalse();
     }
 
     private static class SilentModel implements SubscriptionModel {

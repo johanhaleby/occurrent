@@ -36,7 +36,10 @@ public interface CompetingConsumerStrategy {
      *
      * @param subscriptionId The subscription if to consume from
      * @param subscriberId   The unique of of the subscriber
-     * @return <code>true</code> if the registered competing consumer has access (lock) to consume events, <code>false</code> otherwise.
+     * @return <code>true</code> if the registered competing consumer holds the lock once registered, <code>false</code>
+     * otherwise. Whether it may consume an event is answered by {@link #hasLock(String, String)}, which answers
+     * {@code false} while the listeners are still owed an {@code onConsumeProhibited} for a lost lock, also when this
+     * returned {@code true}.
      */
     boolean registerCompetingConsumer(String subscriptionId, String subscriberId);
 
@@ -157,7 +160,8 @@ public interface CompetingConsumerStrategy {
      * returned, and then that call does not throw what the listener throws.
      * <p>
      * Registering a listener is optional. A consumer that would rather ask than be told uses
-     * {@link CompetingConsumerStrategy#hasLock(String, String)}, which answers the same thing.
+     * {@link CompetingConsumerStrategy#hasLock(String, String)}, which answers the same thing, and
+     * also answers {@code false} while the listeners are still owed an {@code onConsumeProhibited} for a lost lock.
      */
     interface CompetingConsumerListener {
 
