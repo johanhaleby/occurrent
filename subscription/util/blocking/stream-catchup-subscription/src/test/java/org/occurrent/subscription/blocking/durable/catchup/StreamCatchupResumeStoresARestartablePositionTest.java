@@ -143,6 +143,45 @@ class StreamCatchupResumeStoresARestartablePositionTest {
     }
 
     @Test
+    void stores_the_position_given_as_it_is_when_a_resume_at_global_position_0_without_a_live_start_over_a_stored_catch_up_position() {
+        // Given
+        heldTakeoverReplayWithACatchupPositionStored();
+        Checkpoint resumedAt = GlobalCheckpoint.of(0);
+
+        // When
+        catchup.resumeSubscription(ID, StartAt.checkpoint(resumedAt));
+
+        // Then
+        assertThat(storage.read(ID).asString()).as("stored position").isEqualTo(resumedAt.asString());
+    }
+
+    @Test
+    void stores_the_position_given_as_it_is_when_a_resume_at_a_catch_up_position_after_the_beginning_with_a_live_start_over_a_stored_catch_up_position() {
+        // Given
+        heldTakeoverReplayWithACatchupPositionStored();
+        Checkpoint resumedAt = new StringBasedCheckpoint(CatchupCheckpoints.format(2, 1, 3, LATER_TOKEN));
+
+        // When
+        catchup.resumeSubscription(ID, StartAt.checkpoint(resumedAt));
+
+        // Then
+        assertThat(storage.read(ID).asString()).as("stored position").isEqualTo(resumedAt.asString());
+    }
+
+    @Test
+    void stores_the_time_given_as_it_is_when_a_resume_at_the_beginning_of_time_without_a_live_start_over_a_stored_catch_up_position() {
+        // Given
+        heldTakeoverReplayWithACatchupPositionStored();
+        Checkpoint resumedAt = TimeBasedCheckpoint.beginningOfTime();
+
+        // When
+        catchup.resumeSubscription(ID, StartAt.checkpoint(resumedAt));
+
+        // Then
+        assertThat(storage.read(ID).asString()).as("stored position").isEqualTo(resumedAt.asString());
+    }
+
+    @Test
     void throws_an_IllegalStateException_naming_the_time_and_stores_nothing_when_a_resume_at_a_time_without_a_live_start_over_a_stored_catch_up_position_finds_no_present_position() {
         // Given
         Checkpoint storedBefore = heldTakeoverReplayWithACatchupPositionStored(ReadingNoPresentPosition::new);
