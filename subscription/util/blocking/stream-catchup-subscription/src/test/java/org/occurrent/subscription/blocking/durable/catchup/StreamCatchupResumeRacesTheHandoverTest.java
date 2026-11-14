@@ -126,7 +126,7 @@ class StreamCatchupResumeRacesTheHandoverTest {
             return catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
         });
         boolean resumeEndedWhileTheReplayWasHeld = reached(resumed);
-        Checkpoint storedWhileTheReplayWasHeld = resumeEndedWhileTheReplayWasHeld ? storage.read(ID) : null;
+        Checkpoint storedAfterTheRefusedResume = storage.read(ID);
         releaseTheReplay.countDown();
         Throwable thrown = resumed.orTimeout(WAIT.toSeconds(), TimeUnit.SECONDS).join();
         await().atMost(WAIT).untilAsserted(() -> assertThat(liveModel.openedAt).as("live starts the live model opened").isNotEmpty());
@@ -135,11 +135,7 @@ class StreamCatchupResumeRacesTheHandoverTest {
         assertAll("the test entered the window, with the replay held between its reconcile and the handover lock and the resume returned or thrown",
                 () -> assertThat(resumeEndedWhileTheReplayWasHeld).as("window: the resume returned or threw while the replay was held").isTrue(),
                 () -> assertThat(storage.presentPositionSaved).as("window: the resume saved no present position while the replay was held").isNotDone(),
-                () -> {
-                    if (resumeEndedWhileTheReplayWasHeld) {
-                        assertThat(storedWhileTheReplayWasHeld).as("window: stored position while the replay was held is what the replay stored").isEqualTo(storedByTheReplay);
-                    }
-                },
+                () -> assertThat(storedAfterTheRefusedResume).as("window: the position the replay stored is still stored after the refused resume").isEqualTo(storedByTheReplay),
                 () -> assertThat(received).as("window: the event committed after the live start was not delivered by the replay, so only a live start at or before it delivers it")
                         .extracting(DomainEvent::eventId).doesNotContain(committedAfterTheLiveStart.eventId())
         );
@@ -176,7 +172,7 @@ class StreamCatchupResumeRacesTheHandoverTest {
             return catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
         });
         boolean resumeEnded = reached(resumed);
-        boolean openedBeforeTheResumeWasReleased = !liveModel.openedAt.isEmpty();
+        boolean openedBeforeTheOpenWasReleased = !liveModel.openedAt.isEmpty();
         releaseTheOpen.countDown();
         boolean opened = false;
         try {
@@ -190,7 +186,7 @@ class StreamCatchupResumeRacesTheHandoverTest {
         boolean openedInTime = opened;
         assertAll("the test entered the window, with the open of the live model pending while the resume ran",
                 () -> assertThat(resumeEnded).as("window: the resume returned or threw while the open was pending").isTrue(),
-                () -> assertThat(openedBeforeTheResumeWasReleased).as("window: the live model had not opened before the open was released").isFalse(),
+                () -> assertThat(openedBeforeTheOpenWasReleased).as("window: the live model had not opened before the open was released").isFalse(),
                 () -> assertThat(openedInTime).as("window: the live model opened once the open was released").isTrue(),
                 () -> assertThat(storage.read(ID)).as("window: a position is stored").isNotNull()
         );
