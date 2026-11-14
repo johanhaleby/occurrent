@@ -210,6 +210,10 @@ class StreamCatchupResumeRacesALostLiveStartTest {
                 reportsBeforeTheThrowingListenerWasCalled.set(reports.heldPaused.size());
                 throw new IllegalStateException("The listener failed.");
             }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+            }
         });
         catchup.addStartRefusalListener(reports);
 
@@ -337,6 +341,10 @@ class StreamCatchupResumeRacesALostLiveStartTest {
         @Override
         public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             heldPaused.add(new Report(subscriptionId, refusal));
+        }
+
+        @Override
+        public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
         }
     }
 }

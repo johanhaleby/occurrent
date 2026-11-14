@@ -2780,15 +2780,18 @@ When that read returns neither an event nor a resume token, the subscription can
 * A `resumeSubscription(id, StartAt.now())` does the read when the resumed change stream opens. When it gets neither,
   the subscription is held paused and stays in the model, `waitUntilStarted(..)` on the handle the resume returned
   throws the `UnsupportedStartAtException`, and the listeners added through `StartRefusalReportingSubscriptions` are
-  told through `handleStartHeldPaused(..)`, not `handleStartRefusal(..)`. `resumeSubscription(id)` reads the change
+  told through `handleHeldPaused(..)`, not `handleStartRefusal(..)`. `resumeSubscription(id)` reads the change
   stream again. A `StartAt.dynamic(..)` resume that resolves to the present as its change stream opens is held the
   same way.
 * With `restartSubscriptionsOnChangeStreamHistoryLost` on, a restart from the present after the history was lost that
   gets neither holds the subscription paused. `isPaused(id)` answers `true`, an error in the log names it, the
-  listeners are told through `handleStartHeldPaused(..)`, and `resumeSubscription(id)` reads the change stream again.
+  listeners are told through `handleHeldPaused(..)`, and `resumeSubscription(id)` reads the change stream again.
   When the subscription hadn't started before that, `waitUntilStarted(..)` on the handle `subscribe(..)` returned
-  throws the `UnsupportedStartAtException`, until a resume starts it. Under a `CompetingConsumerSubscriptionModel` the node that holds it keeps the lease, so no other node runs the
-  subscription until it is resumed on that node.
+  throws the `UnsupportedStartAtException`, until a resume starts it.
+* Under a `CompetingConsumerSubscriptionModel` the node that holds a subscription paused this way holds it as if the
+  user had paused it. It gives the lease back, so another node can get it, and doesn't compete for the lease again
+  until `resumeSubscription(id)` is called on that node. A handle that waits for the held start throws once the lease
+  is given back, or once the node finds that a resume or a cancel ended the hold first.
 
 In 0.34.0 such a subscription opened at the present.
 

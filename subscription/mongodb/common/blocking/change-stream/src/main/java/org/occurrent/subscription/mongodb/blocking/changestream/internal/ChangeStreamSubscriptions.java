@@ -568,7 +568,6 @@ public final class ChangeStreamSubscriptions {
                 return current;
             }
             internalSubscription.recordFailureToStart(refusal);
-            internalSubscription.presentAtSubscribe.removedFromTheModel();
             refused.set(true);
             return null;
         });
@@ -593,7 +592,7 @@ public final class ChangeStreamSubscriptions {
         if (pausedOnThisRun(subscriptionId, internalSubscription, () -> internalSubscription.recordHeldBeforeStarting(refusal))) {
             internalSubscription.releaseWaitersOfAFailedStart();
             log.error("Cannot open the change stream of subscription {} at the present: {} It is paused, and resuming it asks MongoDB again.", subscriptionId, noPosition.getMessage(), noPosition);
-            startHeldPaused(subscriptionId, refusal, internalSubscription.presentAtSubscribe::isSubscribed);
+            heldPaused(subscriptionId, refusal);
         } else {
             log.debug("Cannot open the change stream of subscription {} at the present, but it was paused, resumed or cancelled meanwhile, so it isn't held.", subscriptionId, noPosition);
         }
@@ -802,6 +801,16 @@ public final class ChangeStreamSubscriptions {
         startRefusalListeners.remove(listener);
     }
 
+    // While the run held for refusal is still the subscription's paused run. A resume, a start(true) and a cancel take
+    // that run out of pausedSubscriptions, and a shutdown empties it, so a pause or a stop after a resume, and a later
+    // subscribe with the same id, put another run there
+    public boolean isHeldPausedFor(String subscriptionId, UnsupportedStartAtException refusal) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(refusal, UnsupportedStartAtException.class.getSimpleName() + " cannot be null");
+        InternalSubscription paused = pausedSubscriptions.get(subscriptionId);
+        return !shutdown && paused != null && paused.isHeldFor(refusal);
+    }
+
     // Each listener gets a copy, so what one adds to it doesn't show up in what a handle throws or another listener gets
     private void startRefused(String subscriptionId, UnsupportedStartAtException refusal) {
         for (StartRefusalListener listener : startRefusalListeners) {
@@ -813,10 +822,12 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
-    private void startHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
+    // Each listener gets a copy, as in startRefused, with the refusal the run holds as its cause, which
+    // isHeldPausedFor(..) knows it by
+    private void heldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
         for (StartRefusalListener listener : startRefusalListeners) {
             try {
-                listener.handleStartHeldPaused(subscriptionId, copyOf(refusal), stillSubscribed);
+                listener.handleHeldPaused(subscriptionId, copyOf(refusal));
             } catch (RuntimeException e) {
                 log.error("A listener failed when told that subscription {} is held paused without a position at the present. The subscription stays paused, and the other listeners are told.", subscriptionId, e);
             }
@@ -836,13 +847,7 @@ public final class ChangeStreamSubscriptions {
     // Only while the subscription is still on this run. A pause and a resume in the meantime started a new run, which
     // has not lost anything. Runs on the executor thread without the model's monitor.
     private void forget(String subscriptionId, InternalSubscription internalSubscription) {
-        runningSubscriptions.computeIfPresent(subscriptionId, (__, current) -> {
-            if (current != internalSubscription) {
-                return current;
-            }
-            internalSubscription.presentAtSubscribe.removedFromTheModel();
-            return null;
-        });
+        runningSubscriptions.remove(subscriptionId, internalSubscription);
     }
 
     // The position the run's change stream opens at when its position resolves to the present. Refused for a dynamic
@@ -1270,9 +1275,6 @@ public final class ChangeStreamSubscriptions {
         private volatile @Nullable Checkpoint answer;
         private volatile FutureTask<Void> asking;
         private volatile boolean cancelled;
-        // Set where the model removes the subscription without a cancel, as a refused start and a loss of history it
-        // doesn't restart after do
-        private volatile boolean removed;
         // Set by the first run to get here, whether it waits for the answer or not
         private volatile boolean reached;
         // Set when the read gave no position, and kept, so the question isn't asked again
@@ -1289,19 +1291,6 @@ public final class ChangeStreamSubscriptions {
 
         void ask() {
             asking.run();
-        }
-
-        // Marked before the model lets go of the subscription's last run, so whoever finds the id free finds this
-        // marked too
-        void removedFromTheModel() {
-            removed = true;
-        }
-
-        // False once a cancel, a shutdown, a refused start or a loss of history the model doesn't restart after
-        // removed this subscribe, which every run of it shares. A listener told about one of its runs can then tell
-        // it from a later subscribe with the same id
-        boolean isSubscribed() {
-            return !cancelled && !removed;
         }
 
         void answered(Checkpoint position) {
@@ -1543,6 +1532,8 @@ public final class ChangeStreamSubscriptions {
         final CountDownLatch startedLatch = new CountDownLatch(1);
         // Set before startedLatch is released, when this run failed for good instead of opening its change stream
         private volatile @Nullable UnsupportedStartAtException startFailure;
+        // Set when this run is held paused, and never cleared, since a resume replaces the run
+        private volatile @Nullable UnsupportedStartAtException heldFor;
         // Shared by every run of the subscription
         final FirstStart firstStart;
         private final CountDownLatch stoppedRestartingLatch = new CountDownLatch(1);
@@ -1779,10 +1770,17 @@ public final class ChangeStreamSubscriptions {
         // As recordFailureToStart, for a run held paused, whose refusal a later run of the subscription can override by
         // starting
         void recordHeldBeforeStarting(UnsupportedStartAtException refusal) {
+            heldFor = refusal;
             if (startedLatch.getCount() > 0) {
                 startFailure = refusal;
             }
             firstStart.recordHeld(refusal);
+        }
+
+        // The refusal itself, or a copy made of it
+        boolean isHeldFor(UnsupportedStartAtException refusal) {
+            UnsupportedStartAtException held = heldFor;
+            return held != null && (refusal == held || refusal.getCause() == held);
         }
 
         // Does nothing for a run that recorded no failure, because it had started or something else took it out of the map

@@ -42,9 +42,9 @@ import org.junit.jupiter.api.Timeout;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
-import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -67,7 +67,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BooleanSupplier;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -112,6 +111,7 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
     private final CountDownLatch heldPausedReachedTheListenerAfterTheNode = new CountDownLatch(1);
     // The refusals the test listener lets through to the node before it blocks on refusalGate
     private final AtomicInteger refusalsTold = new AtomicInteger();
+    private final AtomicInteger heldPausedTold = new AtomicInteger();
     private volatile int refusalsLetThrough;
     private MongoClient mongoClient;
     private MongoDatabase database;
@@ -149,7 +149,8 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
             }
 
             @Override
-            public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
+            public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+                heldPausedTold.incrementAndGet();
                 heldPausedReachedTheTestListener.countDown();
                 awaitUninterruptibly(heldPausedGate);
             }
@@ -165,7 +166,7 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
             }
 
             @Override
-            public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
+            public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
                 heldPausedReachedTheListenerAfterTheNode.countDown();
             }
 
@@ -186,35 +187,50 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
 
     @Timeout(value = 90, unit = SECONDS)
     @Test
-    void a_node_currently_keeps_the_lease_while_its_wrapped_model_holds_the_subscription_paused_after_a_refused_restart_and_does_not_ask_mongodb_again() throws InterruptedException {
+    void a_node_gives_the_lease_back_while_its_wrapped_model_holds_the_subscription_paused_after_a_refused_restart_and_competes_again_only_after_a_resume() {
         // Given
         Subscription started = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
         });
         assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
         assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A holds the lease before the history is lost").isTrue();
 
-        // When
+        // When the history is lost and the restart from the present is refused
         presentRefused.set(true);
         historyLost.set(true);
         await().atMost(15, SECONDS).until(() -> wrappedA.isPaused(SUBSCRIPTION_ID));
-        int readsWhenHeld = reads.get();
-        // A sleep, since what is asserted is that nothing happens over four lease times, and no condition ends that wait
-        Thread.sleep(LEASE_TIME.multipliedBy(4).toMillis());
-        int readsAfterFourLeaseTimes = reads.get();
-        nodeB.subscribe("B", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
-        });
-        // A sleep for the same reason, since B must not get the lease over two lease times
-        Thread.sleep(LEASE_TIME.multipliedBy(2).toMillis());
 
-        // Then
-        assertThat(wrappedA.isPaused(SUBSCRIPTION_ID)).as("wrapped model on A is held paused").isTrue();
+        // Then A gives the lease back and is paused
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A gave the lease back").isFalse());
         assertThat(nodeA.isPaused(SUBSCRIPTION_ID)).as("node A is paused").isTrue();
         assertThat(nodeA.isRunning(SUBSCRIPTION_ID)).as("node A is running").isFalse();
-        assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A keeps the lease while its subscription is held paused").isTrue();
-        assertThat(strategyB.hasLock(SUBSCRIPTION_ID, "B")).as("B does not get the lease").isFalse();
-        assertThat(nodeB.isRunning(SUBSCRIPTION_ID)).as("node B is running without the lease").isFalse();
-        assertThat(readsAfterFourLeaseTimes).as("reads of MongoDB for the present while held, after four lease times").isEqualTo(readsWhenHeld);
-        assertThat(reads.get()).as("reads of MongoDB for the present while held, at the end").isEqualTo(readsWhenHeld);
+        int readsWhenHeld = reads.get();
+
+        // And A does not hold the lease again, nor ask MongoDB for the present again, over four lease times with the lease free
+        await().during(LEASE_TIME.multipliedBy(4)).atMost(LEASE_TIME.multipliedBy(4).plusSeconds(10)).pollInterval(Duration.ofMillis(100))
+                .until(() -> !strategyA.hasLock(SUBSCRIPTION_ID, "A"));
+        assertThat(reads.get()).as("reads of MongoDB for the present while held, after four lease times").isEqualTo(readsWhenHeld);
+
+        // And B gets the lease when it subscribes the same id, and its own wrapped model starts it, since its present is not refused
+        Subscription b = nodeB.subscribe("B", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
+        });
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(strategyB.hasLock(SUBSCRIPTION_ID, "B")).as("B gets the lease").isTrue());
+        assertThat(b.waitUntilStarted(Duration.ofSeconds(10))).as("B starts").isTrue();
+        assertThat(nodeB.isRunning(SUBSCRIPTION_ID)).as("node B is running").isTrue();
+        assertThat(nodeA.isPaused(SUBSCRIPTION_ID)).as("node A is still paused").isTrue();
+        assertThat(wrappedA.isPaused(SUBSCRIPTION_ID)).as("wrapped model on A is still held paused").isTrue();
+
+        // When A is resumed and the present is no longer refused
+        presentRefused.set(false);
+        nodeA.resumeSubscription(SUBSCRIPTION_ID);
+
+        // Then A does not take the lease from B while B holds it
+        await().during(LEASE_TIME.multipliedBy(2)).atMost(LEASE_TIME.multipliedBy(2).plusSeconds(10)).pollInterval(Duration.ofMillis(100))
+                .until(() -> strategyB.hasLock(SUBSCRIPTION_ID, "B") && !strategyA.hasLock(SUBSCRIPTION_ID, "A"));
+
+        // And A gets the lease and runs once B is cancelled, so A competes for it again
+        nodeB.cancelSubscription(SUBSCRIPTION_ID);
+        await().atMost(20, SECONDS).untilAsserted(() -> assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A gets the lease after the resume").isTrue());
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(nodeA.isRunning(SUBSCRIPTION_ID)).as("node A is running after the resume").isTrue());
     }
 
     @Timeout(value = 60, unit = SECONDS)
@@ -266,6 +282,41 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
 
         // When / Then
         theReportForGeneration1ReachesTheNodeWhileTheRefusalOfGeneration2IsHeld(generation2);
+    }
+
+    @Timeout(value = 60, unit = SECONDS)
+    @Test
+    void a_late_report_that_the_wrapped_model_held_a_cancelled_subscription_paused_does_not_hold_the_consumer_of_the_same_id_subscribed_again_and_it_keeps_competing() throws Exception {
+        // Given generation 1 held paused, with the wrapped model's report of it blocked in front of the node's listener
+        heldPausedGate = new CountDownLatch(1);
+        Subscription generation1 = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
+        });
+        assertThat(generation1.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+        presentRefused.set(true);
+        historyLost.set(true);
+        assertThat(heldPausedReachedTheTestListener.await(15, SECONDS)).as("the wrapped model reported that it held generation 1 paused").isTrue();
+        assertThat(heldPausedReachedTheListenerAfterTheNode.getCount()).as("the node's listener has not run for generation 1 yet").isEqualTo(1);
+
+        // And generation 1 cancelled and the id subscribed again, which the wrapped model starts and the node runs under its lease
+        nodeA.cancelSubscription(SUBSCRIPTION_ID);
+        presentRefused.set(false);
+        Subscription generation2 = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
+        });
+        assertThat(generation2.waitUntilStarted(Duration.ofSeconds(10))).as("generation 2 started").isTrue();
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A holds the lease for generation 2").isTrue());
+
+        // When the report for generation 1 reaches the node
+        heldPausedGate.countDown();
+        assertThat(heldPausedReachedTheListenerAfterTheNode.await(15, SECONDS)).as("the node's listener ran for generation 1").isTrue();
+
+        // Then generation 2 is not held as paused, and keeps its lease over two lease times
+        assertThat(nodeA.isPaused(SUBSCRIPTION_ID)).as("node A is paused").isFalse();
+        assertThat(nodeA.isRunning(SUBSCRIPTION_ID)).as("node A is running").isTrue();
+        assertThat(wrappedA.isPaused(SUBSCRIPTION_ID)).as("wrapped model on A is paused").isFalse();
+        assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A holds the lease right after the report").isTrue();
+        await().during(LEASE_TIME.multipliedBy(2)).atMost(LEASE_TIME.multipliedBy(2).plusSeconds(10)).pollInterval(Duration.ofMillis(100))
+                .until(() -> strategyA.hasLock(SUBSCRIPTION_ID, "A") && nodeA.isRunning(SUBSCRIPTION_ID));
+        assertThat(generation2.waitUntilStarted(Duration.ofSeconds(1))).as("the handle of generation 2 still answers that it started").isTrue();
     }
 
     @Timeout(value = 60, unit = SECONDS)
@@ -327,6 +378,75 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
 
         // When / Then
         theReportForGeneration1ReachesTheNodeWhileTheRefusalOfGeneration2IsHeld(generation2);
+    }
+
+    @Timeout(value = 60, unit = SECONDS)
+    @Test
+    void waiting_on_a_resume_that_is_held_a_second_time_after_the_first_hold_was_acted_on_keeps_waiting_for_the_node_to_act_on_the_second_hold() throws Exception {
+        // Given a first hold the node acted on by giving the lease back
+        Subscription started = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
+        });
+        assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+        presentRefused.set(true);
+        historyLost.set(true);
+        assertThat(heldPausedReachedTheListenerAfterTheNode.await(15, SECONDS)).as("the node's listener ran for the first hold").isTrue();
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A gave the lease back for the first hold").isFalse());
+        assertThat(nodeA.isPaused(SUBSCRIPTION_ID)).as("node A is paused by the first hold").isTrue();
+
+        // And a resume that gets the lease back for A and is held a second time, with the report of the second hold blocked in front of the node's listener
+        heldPausedGate = new CountDownLatch(1);
+        Subscription resumed = nodeA.resumeSubscription(SUBSCRIPTION_ID);
+        await().atMost(15, SECONDS).until(() -> heldPausedTold.get() == 2);
+
+        // When the handle of the resume is waited on while the node has not acted on the second hold
+        CompletableFuture<Boolean> waiting = CompletableFuture.supplyAsync(() -> resumed.waitUntilStarted(Duration.ofSeconds(20)));
+
+        // Then it keeps waiting, though the first hold was acted on
+        assertThatThrownBy(() -> waiting.get(1, SECONDS))
+                .as("[waitUntilStarted on the resume ended before the node acted on the second hold, which the first hold ended]")
+                .isInstanceOf(TimeoutException.class);
+
+        // And it throws the refusal once the node acted on the second hold, with the lease given back
+        heldPausedGate.countDown();
+        assertThatThrownBy(() -> waiting.get(10, SECONDS)).isInstanceOf(ExecutionException.class).hasCauseInstanceOf(UnsupportedStartAtException.class);
+        assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A gave the lease back for the second hold").isFalse();
+        assertThat(nodeA.isPaused(SUBSCRIPTION_ID)).as("node A is paused by the second hold").isTrue();
+    }
+
+    @Timeout(value = 60, unit = SECONDS)
+    @Test
+    void waiting_on_a_resume_that_is_held_answers_with_the_refusal_well_before_the_timeout_when_the_node_resumes_the_subscription_before_it_acts_on_the_report_of_the_hold() throws Exception {
+        // Given a first hold the node acted on, and a resume that is held again, with the report of the hold blocked in front of the node's listener
+        Subscription started = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
+        });
+        assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+        presentRefused.set(true);
+        historyLost.set(true);
+        assertThat(heldPausedReachedTheListenerAfterTheNode.await(15, SECONDS)).as("the node's listener ran for the first hold").isTrue();
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A gave the lease back for the first hold").isFalse());
+        heldPausedGate = new CountDownLatch(1);
+        Subscription resumed = nodeA.resumeSubscription(SUBSCRIPTION_ID);
+        await().atMost(15, SECONDS).until(() -> heldPausedTold.get() == 2);
+        CompletableFuture<Boolean> waiting = CompletableFuture.supplyAsync(() -> resumed.waitUntilStarted(Duration.ofSeconds(30)));
+
+        // And the node pausing and resuming the subscription, which the wrapped model then runs since the present is no longer refused, before it acts on the report
+        presentRefused.set(false);
+        nodeA.pauseSubscription(SUBSCRIPTION_ID);
+        nodeA.resumeSubscription(SUBSCRIPTION_ID);
+        await().atMost(15, SECONDS).until(() -> wrappedA.isRunning(SUBSCRIPTION_ID));
+        assertThat(waiting.isDone()).as("the handle is still waiting for the node to act on the report").isFalse();
+
+        // When the report of the hold that the resume ended reaches the node
+        heldPausedGate.countDown();
+
+        // Then the handle throws the refusal well within its timeout
+        assertThatThrownBy(() -> waiting.get(10, SECONDS)).isInstanceOf(ExecutionException.class).hasCauseInstanceOf(UnsupportedStartAtException.class);
+
+        // And the consumer is not held paused, and keeps its lease
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A holds the lease").isTrue());
+        assertThat(nodeA.isPaused(SUBSCRIPTION_ID)).as("node A is paused").isFalse();
+        assertThat(nodeA.isRunning(SUBSCRIPTION_ID)).as("node A is running").isTrue();
+        assertThat(wrappedA.isPaused(SUBSCRIPTION_ID)).as("wrapped model on A is paused").isFalse();
     }
 
     private void theReportForGeneration1ReachesTheNodeWhileTheRefusalOfGeneration2IsHeld(Subscription generation2) throws Exception {

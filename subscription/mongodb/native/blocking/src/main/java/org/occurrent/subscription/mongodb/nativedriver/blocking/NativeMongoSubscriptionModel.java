@@ -340,6 +340,16 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         subscriptions.removeStartRefusalListener(listener);
     }
 
+    /**
+     * True while the subscription is still held paused for {@code refusal}, the instance passed to the listener, since
+     * it got no position to open its change stream at the present. A resume, a {@code start(true)}, a cancel and a
+     * shutdown end that hold.
+     */
+    @Override
+    public boolean isHeldPausedFor(String subscriptionId, UnsupportedStartAtException refusal) {
+        return subscriptions.isHeldPausedFor(subscriptionId, refusal);
+    }
+
     @Override
     public void addQuietPositionListener(QuietPositionListener listener) {
         subscriptions.addQuietPositionListener(listener);

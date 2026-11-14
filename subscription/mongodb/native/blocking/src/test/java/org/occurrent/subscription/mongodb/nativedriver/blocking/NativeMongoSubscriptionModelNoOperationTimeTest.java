@@ -1487,7 +1487,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
             }
 
             @Override
-            public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
+            public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
                 throw new IllegalStateException("listener failed");
             }
 
@@ -1510,6 +1510,80 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         // Then
         assertThat(listener.heldPaused).as("subscriptions the listener after the one that throws was told are held paused").containsExactly(subscriptionId);
         assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+    }
+
+    @Test
+    void a_hold_reported_before_a_cancel_is_not_held_once_the_same_id_is_held_again_and_the_report_of_the_new_hold_is() {
+        // Given: a subscription held paused for want of a position, and the instance the listener got for that hold
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        RecordingStartRefusalListener listener = new RecordingStartRefusalListener();
+        subscriptionModel.addStartRefusalListener(listener);
+        String subscriptionId = UUID.randomUUID().toString();
+        holdPausedForWantOfAPosition(subscriptionId, listener, 1);
+        UnsupportedStartAtException first = listener.heldPausedWith.get(0);
+        assertThat(subscriptionModel.isHeldPausedFor(subscriptionId, first)).as("held paused for the first report while the hold lasts").isTrue();
+
+        // When: it is cancelled, and the same id subscribed again and held again
+        subscriptionModel.cancelSubscription(subscriptionId);
+        presentRead.set(null);
+        holdPausedForWantOfAPosition(subscriptionId, listener, 2);
+        UnsupportedStartAtException second = listener.heldPausedWith.get(1);
+
+        // Then: the first report is stale, and only the second is held
+        assertThat(second).as("the second hold reported another instance").isNotSameAs(first);
+        assertThat(subscriptionModel.isHeldPausedFor(subscriptionId, first)).as("held paused for the report of the cancelled hold").isFalse();
+        assertThat(subscriptionModel.isHeldPausedFor(subscriptionId, second)).as("held paused for the report of the new hold").isTrue();
+    }
+
+    @Test
+    void a_hold_ends_when_the_held_subscription_is_resumed() {
+        // Given: a subscription held paused for want of a position, and the instance the listener got for that hold
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        RecordingStartRefusalListener listener = new RecordingStartRefusalListener();
+        subscriptionModel.addStartRefusalListener(listener);
+        String subscriptionId = UUID.randomUUID().toString();
+        holdPausedForWantOfAPosition(subscriptionId, listener, 1);
+        UnsupportedStartAtException reported = listener.heldPausedWith.get(0);
+        assertThat(subscriptionModel.isHeldPausedFor(subscriptionId, reported)).as("held paused for the report while the hold lasts").isTrue();
+
+        // When: the present can be read again and the subscription is resumed
+        presentRead.set(null);
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
+
+        // Then
+        assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isTrue();
+        assertThat(subscriptionModel.isHeldPausedFor(subscriptionId, reported)).as("held paused for the report of the hold the resume ended").isFalse();
+    }
+
+    @Test
+    void a_hold_that_a_resume_ended_is_not_held_again_once_a_pause_holds_the_subscription_paused() {
+        // Given: a held subscription that was resumed
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        RecordingStartRefusalListener listener = new RecordingStartRefusalListener();
+        subscriptionModel.addStartRefusalListener(listener);
+        String subscriptionId = UUID.randomUUID().toString();
+        holdPausedForWantOfAPosition(subscriptionId, listener, 1);
+        UnsupportedStartAtException reported = listener.heldPausedWith.get(0);
+        presentRead.set(null);
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
+
+        // When: a pause holds it paused again
+        subscriptionModel.pauseSubscription(subscriptionId);
+
+        // Then
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+        assertThat(subscriptionModel.isHeldPausedFor(subscriptionId, reported)).as("held paused for the report of the hold the resume ended").isFalse();
+        assertThat(listener.heldPausedWith).as("holds reported").containsExactly(reported);
+    }
+
+    // Subscribes, pauses and resumes at the present while the server gives no position, until the listener has been told of holds holds in all
+    private void holdPausedForWantOfAPosition(String subscriptionId, RecordingStartRefusalListener listener, int holds) {
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
+        }).waitUntilStarted(Duration.ofSeconds(10));
+        subscriptionModel.pauseSubscription(subscriptionId);
+        presentRead.set(() -> cursorReading(null, null));
+        subscriptionModel.resumeSubscription(subscriptionId, StartAt.now());
+        waitAtMostFor(TEN_SECONDS, () -> listener.heldPausedWith.size() == holds);
     }
 
     // A read of the present whose cursor blocks in tryNext() until it is closed, for far longer than any wait of the test
@@ -1581,7 +1655,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         }
 
         @Override
-        public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
+        public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
             heldPausedWith.add(refusal);
             heldPaused.add(subscriptionId);
         }
@@ -1795,6 +1869,10 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
             @Override
             public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
                 throw new AssertionError("A MongoDB model never holds a subscription paused, but was asked to for " + subscriptionId, refusal);
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
             }
         };
     }

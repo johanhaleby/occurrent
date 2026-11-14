@@ -32,6 +32,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
@@ -535,6 +536,16 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public void removeStartRefusalListener(StartRefusalListener listener) {
         subscriptions.removeStartRefusalListener(listener);
+    }
+
+    /**
+     * True while the subscription is still held paused for {@code refusal}, the instance passed to the listener, since
+     * it got no position to open its change stream at the present. A resume, a {@code start(true)}, a cancel and a
+     * shutdown end that hold.
+     */
+    @Override
+    public boolean isHeldPausedFor(String subscriptionId, UnsupportedStartAtException refusal) {
+        return subscriptions.isHeldPausedFor(subscriptionId, refusal);
     }
 
     @Override
