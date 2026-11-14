@@ -23,6 +23,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoInterruptedException;
 import com.mongodb.ServerAddress;
 import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoClient;
@@ -51,6 +52,7 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
@@ -303,37 +305,47 @@ class NativeMongoSubscriptionModelStuckActionTest {
     }
 
     @Test
-    void an_interrupt_of_a_resumed_run_that_waits_for_the_stuck_call_ends_that_run_and_delivers_nothing_until_it_is_paused_and_resumed() {
-        // Given: the first call for E1 is stuck, and a resumed run waits for it, so two executor threads are busy
-        String subscriptionId = UUID.randomUUID().toString();
-        subscriptionModel.subscribe(subscriptionId, StartAt.now(), this::action).waitUntilStarted(Duration.ofSeconds(10));
-        mongoEventStore.write("1", 0, serialize(e1));
-        await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
-        subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
-        await().atMost(FIVE_SECONDS).until(() -> subscriptionExecutor.getActiveCount() == 2);
-        Thread waiting = await().atMost(FIVE_SECONDS).until(this::threadOfTheResumedRun, thread -> thread != null);
+    void an_interrupt_of_a_resumed_run_that_waits_for_the_stuck_call_reaches_the_retry_strategy_of_that_run_as_an_interrupted_exception_and_a_pause_and_resume_delivers_again() {
+        // Given: the first call for E1 is stuck, a resumed run waits for it, and the retry strategy records the errors it is given
+        List<Throwable> givenToTheRetryStrategy = new CopyOnWriteArrayList<>();
+        subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatLosesItsHistoryWhenOpening(), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(100).onError((Throwable error) -> givenToTheRetryStrategy.add(error))));
+        Logger modelLog = (Logger) LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        modelLog.addAppender(appender);
+        try {
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), this::action).waitUntilStarted(Duration.ofSeconds(10));
+            mongoEventStore.write("1", 0, serialize(e1));
+            await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
+            subscriptionModel.pauseSubscription(subscriptionId);
+            assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("resumed run started").isTrue();
+            await().atMost(FIVE_SECONDS).until(() -> subscriptionExecutor.getActiveCount() == 2);
+            Thread waiting = await().atMost(FIVE_SECONDS).until(this::threadOfTheResumedRun, thread -> thread != null);
 
-        // When: the thread of the waiting run is interrupted, with no pause or cancel
-        waiting.interrupt();
+            // When: the thread of the waiting run is interrupted, with no pause or cancel
+            waiting.interrupt();
 
-        // Then: the run ended and freed its thread, while the stuck call still runs
-        waitAtMostFor(FIVE_SECONDS, () -> subscriptionExecutor.getActiveCount() == 1);
-        assertThat(subscriptionExecutor.getActiveCount()).as("executor threads in use while the first call for E1 is stuck").isEqualTo(1);
+            // Then: the retry strategy of the run was given an interrupted exception, as for an interrupted read of the change stream
+            waitAtMostFor(FIVE_SECONDS, () -> givenToTheRetryStrategy.stream().anyMatch(MongoInterruptedException.class::isInstance));
+            assertThat(givenToTheRetryStrategy).as("errors given to the retry strategy").filteredOn(MongoInterruptedException.class::isInstance).first()
+                    .satisfies(error -> assertThat(error).hasMessageContaining(subscriptionId).hasMessageContaining("was interrupted while it waited for an action call of a run it replaced"));
+            waitAtMostFor(FIVE_SECONDS, () -> warningsContaining(appender, "Will restart!").stream().anyMatch(event -> event.getFormattedMessage().contains("MongoInterruptedException")));
+            assertThat(warningsContaining(appender, "Will restart!")).as("warnings that the run restarts").anySatisfy(event -> assertThat(event.getFormattedMessage()).contains(subscriptionId).contains("MongoInterruptedException"));
+            assertThat(messagesAt(appender, Level.WARN)).as("warnings of the model").noneMatch(message -> message.contains("so this run stops and delivers nothing"));
 
-        // And: the run delivers nothing, also once the stuck call has returned, since it ended
-        mongoEventStore.write("2", 0, serialize(e2));
-        releaseFirstCallOfE1.countDown();
-        waitAtMostFor(Duration.ofSeconds(2), () -> calls.size() > 2);
-        assertThat(calls).as("calls once the stuck call was released").containsExactly("E1 started", "E1 returned");
-        assertThat(uncaught).as("exceptions that ended an executor thread").isEmpty();
-
-        // And: a pause and a resume starts a run that delivers an event written after the resume
-        subscriptionModel.pauseSubscription(subscriptionId);
-        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("run started by the resume").isTrue();
-        mongoEventStore.write("3", 0, serialize(e3));
-        waitAtMostFor(TEN_SECONDS, () -> calls.contains("E3 returned"));
-        assertThat(calls).as("calls once the subscription was paused and resumed").contains("E3 started", "E3 returned");
+            // And: a pause and a resume once the stuck call has returned starts a run that delivers an event written after the resume
+            releaseFirstCallOfE1.countDown();
+            subscriptionModel.pauseSubscription(subscriptionId);
+            assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("run started by the resume").isTrue();
+            mongoEventStore.write("3", 0, serialize(e3));
+            waitAtMostFor(TEN_SECONDS, () -> calls.contains("E3 returned"));
+            assertThat(calls).as("calls once the subscription was paused and resumed").contains("E3 started", "E3 returned");
+        } finally {
+            modelLog.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     @Test

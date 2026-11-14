@@ -1324,6 +1324,7 @@ public class SpringMongoSubscriptionModelTest {
                 await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                         assertThat(state).extracting(CloudEvent::getId).contains(written.eventId()));
                 assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+                assertThat(holdsTheRefusal.errorsThatItWillNotRestart(subscriptionId)).as("errors logged that the subscription is not restarted").isEmpty();
             } finally {
                 holdsTheRefusal.release.countDown();
                 resumedRunMayOpen.countDown();
@@ -1367,6 +1368,7 @@ public class SpringMongoSubscriptionModelTest {
                 await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                         assertThat(state).extracting(CloudEvent::getId).contains(written.eventId()));
                 assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+                assertThat(holdsTheRefusal.errorsThatItWillNotRestart(subscriptionId)).as("errors logged that the subscription is not restarted").isEmpty();
             } finally {
                 holdsTheRefusal.release.countDown();
                 modelLogger.detachAppender(holdsTheRefusal);
@@ -1464,6 +1466,7 @@ public class SpringMongoSubscriptionModelTest {
                 mongoEventStore.write("1", 0, serialize(sentinel));
                 await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                         assertThat(later).extracting(CloudEvent::getId).contains(sentinel.eventId()));
+                assertThat(holdsTheRefusal.errorsThatItWillNotRestart(subscriptionId)).as("errors logged that the subscription is not restarted").isEmpty();
             } finally {
                 holdsTheRefusal.release.countDown();
                 modelLogger.detachAppender(holdsTheRefusal);
@@ -2525,13 +2528,21 @@ public class SpringMongoSubscriptionModelTest {
         private final AtomicBoolean first = new AtomicBoolean(true);
         private final CountDownLatch held = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
+        private final List<String> errors = new CopyOnWriteArrayList<>();
 
         private HoldsTheFirstRefusal() {
             start();
         }
 
+        List<String> errorsThatItWillNotRestart(String subscriptionId) {
+            return errors.stream().filter(message -> message.contains(subscriptionId) && message.contains("will not restart subscription!")).toList();
+        }
+
         @Override
         protected void append(ILoggingEvent event) {
+            if (event.getLevel() == Level.ERROR) {
+                errors.add(event.getFormattedMessage());
+            }
             if (event.getLevel() == Level.DEBUG && event.getFormattedMessage().startsWith("Cannot open the change stream of subscription") && first.compareAndSet(true, false)) {
                 held.countDown();
                 try {
