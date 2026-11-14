@@ -695,6 +695,7 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
                 () -> assertThat(logged.errors()).as("errors logged").containsExactly(terminalFailureLog(lostFrom)),
                 () -> assertThat(catchThrowable(() -> catchup.resumeSubscription(ID))).as("what a resume throws")
                         .isInstanceOf(CatchupCannotResumeException.class).hasMessage(HistoryLossMessages.historyLost(ID, lostFrom).getMessage())
+                        .hasMessageContaining("catch-up subscription " + ID + ",").hasMessageContaining("\"" + lostFrom.asString() + "\"")
         );
     }
 

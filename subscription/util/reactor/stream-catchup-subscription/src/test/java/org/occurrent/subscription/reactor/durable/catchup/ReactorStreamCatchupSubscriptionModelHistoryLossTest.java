@@ -46,6 +46,8 @@ import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.RepositionableSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.slf4j.helpers.MessageFormatter;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -371,6 +373,44 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
             assertThat(wrapped.resumedAt).as("resumed at a live start read for the replay the resume ran").hasSize(4).last().isEqualTo(wrapped.issued.getLast());
             assertThat(catchup.isRunning(ID)).isTrue();
             assertThat(catchup.isPaused(ID)).isFalse();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_takeover_replay_from_above_the_beginning_that_loses_the_live_start_logs_it_once_and_refuses_a_resume_naming_the_live_start_without_resuming_the_wrapped_model() throws InterruptedException {
+        // Given a subscription that started above the beginning, whose wrapped model loses the live start it handed over at
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        Checkpoint lostLiveStart = new StringBasedCheckpoint("stored live start");
+        try (ErrorsLoggedByTheCatchup errors = new ErrorsLoggedByTheCatchup()) {
+            Subscription subscription = catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(2, lostLiveStart, 2, 3)),
+                    cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+            subscription.waitUntilStarted().block(Duration.ofSeconds(5));
+            assertThat(received).as("the history after position 2").containsExactly("e3");
+            reader.head = 4;
+
+            // When the wrapped model loses that live start, so the takeover replay fails, and the subscription is resumed
+            wrapped.opensAndLosesTheLiveStart();
+            awaitNoReplayInFlight(catchup);
+            Throwable resume = catchThrowable(() -> catchup.resumeSubscription(ID));
+
+            // Then
+            assertAll(
+                    () -> assertThat(resume).as("what the resume throws").isInstanceOf(CatchupCannotResumeException.class)
+                            .hasMessage(HistoryLossMessages.liveStartLostOnResume(ID, lostLiveStart).getMessage())
+                            .hasMessageContaining("catch-up subscription " + ID + ",")
+                            .hasMessageContaining("\"" + lostLiveStart.asString() + "\"")
+                            .hasMessageContaining("the live start its replay would go live from"),
+                    () -> assertThat(errors.errors()).as("errors logged").containsExactly(MessageFormatter.arrayFormat(HistoryLossMessages.LIVE_START_LOST_LOG,
+                            new Object[]{ID, lostLiveStart.asString(), lostLiveStart.asString()}).getMessage()),
+                    () -> assertThat(received).as("nothing delivered by the takeover replay").containsExactly("e3"),
+                    () -> assertThat(wrapped.resumedAt).as("resumed at a position").isEmpty(),
+                    () -> assertThat(wrapped.resumedWhereItWasHeld).as("resumed where it lost the history").hasValue(0),
+                    () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                    () -> assertThat(catchup.isRunning(ID)).as("running").isFalse()
+            );
         } finally {
             catchup.shutdown();
         }

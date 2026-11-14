@@ -796,6 +796,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
             // Then
             assertThat(resume).as("what the resume throws").isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessage(HistoryLossMessages.liveStartLostOnResume("sub", liveStart).getMessage())
+                    .hasMessageContaining("catch-up subscription sub,").hasMessageContaining("\"stored live start\"")
                     .hasMessageNotContaining("where it stopped");
         } finally {
             catchup.shutdown();
