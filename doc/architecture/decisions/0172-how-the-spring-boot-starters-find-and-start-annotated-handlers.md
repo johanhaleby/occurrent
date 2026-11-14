@@ -130,11 +130,22 @@ building that instance fails with `DuplicateSubscriptionIdException`. In 0.34.0 
 exception.
 
 A bean with a scoped proxy has two bean definitions, the proxy's and its target's under the `scopedTarget.` name. The
-scan skips the proxy's, so the handlers register once, under the target's name. They run on the target instance the
-scan built, not through the scoped proxy. In a scope that replaces its instance, such as a refresh scope, a handler
-keeps running on the instance the scan built.
-[#1492](https://github.com/johanhaleby/occurrent/issues/1492) changes that, so a handler runs through the scoped proxy
-as Spring's `@EventListener` does.
+scan skips the target's and reads the handlers under the proxy's name, from the class of the instance the scope holds at
+startup. The handlers register once, under the proxy's name, and each delivery goes through the proxy, as with Spring's
+`@EventListener`, so it reaches the instance the scope holds at that moment. In a scope that replaces its instance, such
+as a refresh scope, a handler runs on the new instance after a refresh. A delivery while the scope isn't active fails
+with the exception the scope throws. I haven't tested what that does to a durable subscription's checkpoint. The scan
+asks the scope for the instance only when the predicted class of the target shows an Occurrent annotation, so a bean in
+request or session scope fails startup when it has a handler, and starts when it has none. A bean that is only named
+`scopedTarget.` plus another bean's name, with no scoped proxy decorating it, is scanned as any other bean. With
+`ScopedProxyMode.INTERFACES` the proxy implements only the bean's interfaces, so a handler that only the class declares
+fails startup with `SubscriptionHandlerNotInvocableException`, as for any JDK proxy. A `@Projection`, `@Saga` or
+`@Snapshot` factory method runs once, on the instance the scan asked the scope for, so a refresh doesn't change its
+descriptor ([#1492](https://github.com/johanhaleby/occurrent/issues/1492)).
+
+A prototype bean without a scoped proxy runs every delivery on the one instance the scan asked for, as in 0.34.0.
+Asking the container per delivery, as `@EventListener` does, would build the bean and its collaborators for each event
+with nothing to destroy them, and a projection, saga or snapshot, which reads its descriptor once, couldn't follow.
 
 The key that tells whether a handler is already registered is the bean name, the method's name and its parameter
 types, as in 0.34.0, and each key records the methods registered under it, each with the class its scan read. A later
