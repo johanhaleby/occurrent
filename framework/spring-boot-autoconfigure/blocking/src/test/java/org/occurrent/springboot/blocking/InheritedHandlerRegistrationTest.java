@@ -35,6 +35,9 @@ import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.blocking.bridged.PublicBridgedSubscriber;
+import org.occurrent.springboot.blocking.bridged.PublicSubscriberBindingPlaced;
+import org.occurrent.springboot.blocking.bridged.PublicSubscriberBindingTheBound;
+import org.occurrent.springboot.blocking.bridged.PublicSubscriberThroughRawSupertype;
 import org.occurrent.springboot.blocking.other.CrossPackageEvent;
 import org.occurrent.springboot.blocking.other.CrossPackageFixedShadowing;
 import org.occurrent.springboot.blocking.other.CrossPackageOverridingMid;
@@ -625,6 +628,33 @@ class InheritedHandlerRegistrationTest {
             anyHandlerFor(context.getBean(Subscriptions.class), "bridged-handler").invoke(null, new CrossPackageEvent());
 
             assertThat(bodies).containsExactly("bridged-body");
+        });
+    }
+
+    @Test
+    void a_generic_handler_inherited_from_a_package_private_class_by_a_public_subclass_that_binds_the_bound_keeps_subscribing_to_the_bound_and_its_permitted_subtypes() {
+        runner.withBean(PublicSubscriberBindingTheBound.class, PublicSubscriberBindingTheBound::new).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(argumentOf(context.getBean(Subscriptions.class), "subscribe", "bridged-generic-handler"))
+                    .isEqualTo(AgnosticSubscriptionFilter.filter(new Filter.CompositionFilter(Filter.CompositionOperator.OR, List.of(Filter.type("OrderEvent"), Filter.type("Placed"), Filter.type("Paid")))));
+        });
+    }
+
+    @Test
+    void a_generic_handler_inherited_from_a_package_private_class_by_a_public_subclass_through_a_raw_supertype_keeps_subscribing_to_the_bound_and_its_permitted_subtypes() {
+        runner.withBean(PublicSubscriberThroughRawSupertype.class, PublicSubscriberThroughRawSupertype::new).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(argumentOf(context.getBean(Subscriptions.class), "subscribe", "bridged-generic-handler"))
+                    .isEqualTo(AgnosticSubscriptionFilter.filter(new Filter.CompositionFilter(Filter.CompositionOperator.OR, List.of(Filter.type("OrderEvent"), Filter.type("Placed"), Filter.type("Paid")))));
+        });
+    }
+
+    @Test
+    void a_generic_handler_inherited_from_a_package_private_class_by_a_public_subclass_that_binds_a_subtype_subscribes_to_that_subtype_only() {
+        runner.withBean(PublicSubscriberBindingPlaced.class, PublicSubscriberBindingPlaced::new).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(argumentOf(context.getBean(Subscriptions.class), "subscribe", "bridged-generic-handler"))
+                    .isEqualTo(AgnosticSubscriptionFilter.filter(Filter.type("Placed")));
         });
     }
 
@@ -2283,6 +2313,16 @@ class InheritedHandlerRegistrationTest {
         });
     }
 
+    @Test
+    void a_generic_interface_handler_subscribes_to_the_bound_for_a_jdk_proxy_that_implements_a_sub_interface_binding_the_bound() {
+        runner.withUserConfiguration(NoTargetClassOrderEventProxyConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(argumentOf(context.getBean(Subscriptions.class), "subscribe", "proxy-bounded"))
+                    .isEqualTo(AgnosticSubscriptionFilter.filter(new Filter.CompositionFilter(Filter.CompositionOperator.OR, List.of(Filter.type("OrderEvent"), Filter.type("Placed"), Filter.type("Paid")))));
+        });
+    }
+
     interface ProxyBoundedHandler<E extends OrderEvent> {
         @Subscription(id = "proxy-bounded")
         void on(E event);
@@ -2310,6 +2350,23 @@ class InheritedHandlerRegistrationTest {
         @Bean
         ProxyPlacedHandler placedProxy() {
             return (ProxyPlacedHandler) noTargetClassProxy(ProxyPlacedHandler.class, new ProxyBoundedTarget());
+        }
+    }
+
+    interface ProxyOrderEventHandler extends ProxyBoundedHandler<OrderEvent> {
+    }
+
+    static class ProxyOrderEventTarget implements ProxyOrderEventHandler {
+        @Override
+        public void on(OrderEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class NoTargetClassOrderEventProxyConfiguration {
+        @Bean
+        ProxyOrderEventHandler orderEventProxy() {
+            return (ProxyOrderEventHandler) noTargetClassProxy(ProxyOrderEventHandler.class, new ProxyOrderEventTarget());
         }
     }
 

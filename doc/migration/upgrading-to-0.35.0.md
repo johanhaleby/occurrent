@@ -2268,11 +2268,15 @@ methods. For each one a bean inherits without overriding it:
   the same name and parameters, the application fails at startup, or registers both when that method repeats the
   annotation. To run the subclass's method, which is what ran before, put the annotation on it and remove it from the
   superclass method. To run the superclass method instead, rename the subclass's method.
-- If it's a handler of either kind above declared with a type variable, check that the type the bean's class, or the
-  proxy's interfaces, give the variable is the one it should get, since events of the bound's other types stop
-  reaching it. Remove from its `eventTypes` the types that aren't that type or a subtype of it, or the application
-  fails at startup. A factory method of either kind keeps the store it named, or the one bean of the store type it
-  got.
+- If it's a handler of either kind above declared with a type variable, and the bean's class, or the proxy's
+  interfaces, give the variable a narrower type than its bound, events of the bound's other types stop reaching it.
+  To keep the types it subscribed to in 0.34.0, make one of these changes before you upgrade. For the bridge kind,
+  bind the variable to its bound, for example `extends Base<OrderEvent>`, or extend `Base` raw. For the JDK proxy
+  kind, have the proxy implement an interface that binds the variable to its bound, such as
+  `OrderHandler extends Handler<OrderEvent>`, or have it implement `Handler` itself in place of `PlacedHandler`. To
+  keep the narrower type instead, remove from its `eventTypes` the types that aren't that type or a subtype of it, or
+  the application fails at startup. A factory method of either kind keeps the store it named, or the one bean of the
+  store type it got.
 - If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
   A bean of the class that declares it keeps the original id. If the method is private, or package-private and
   declared in another package than a subclass, the subclasses can't override it, so first make it protected or public,
