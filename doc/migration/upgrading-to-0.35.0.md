@@ -232,6 +232,9 @@ other sections compile fine and behave differently, so read them first.
 - `org.occurrent.MigrateNativeMongoSubscriptionRecordPattern_0_35` adds the new binding to a record pattern over
   `NativeMongoSubscription`. See
   [A record pattern over `NativeMongoSubscription` stops compiling](#a-record-pattern-over-nativemongosubscription-stops-compiling).
+- `org.occurrent.MoveAttemptNotMade_0_35` changes each reference to `RetryExecution.AttemptNotMade` to
+  `org.occurrent.retry.AttemptNotMade`. See
+  [A held event is withdrawn instead of delivered without the lease](#a-held-event-is-withdrawn-instead-of-delivered-without-the-lease).
 - No recipe rewrites a `DcbConsistencyToken` or the streams that create one. See
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
 
@@ -500,9 +503,15 @@ Delivery stays at-least-once in these cases:
   the `CompetingConsumerStrategy.hasLock` javadoc describes.
 * An action still running when the lease is given up runs on, since the pause of a MongoDB subscription waits at most a
   second for it. See [#1513](https://github.com/johanhaleby/occurrent/issues/1513).
+* A catch-up replay that loses the lease while it reads history can run an event on two nodes. A pause during a
+  replay that a subscribe started takes effect only at the handover, so the replay hands the next event to the action
+  after the pause has returned, and that event runs once the node gets the lease back. 0.34.0 did the same. See
+  [#1528](https://github.com/johanhaleby/occurrent/issues/1528).
 * A catch-up replay that runs again starts from this node's own last stored position, not the stored checkpoint, so
   after a failover it delivers again what another node delivered meanwhile. See
-  [#1514](https://github.com/johanhaleby/occurrent/issues/1514).
+  [#1514](https://github.com/johanhaleby/occurrent/issues/1514). Without a failover, the node also delivers again the
+  events it replayed since it last stored a position, up to 999 with the Spring Boot starter, which stores one every
+  1,000 events.
 * A catch-up replay built with `dontUseCheckpointStorage()` has stored no position, so when it runs again after a
   withdrawn event it starts from where the subscription asked to start, and this node delivers again the events it
   replayed before the withdrawn one.
@@ -516,9 +525,10 @@ doesn't stop the action.
 * For a subscription model of your own, implement `RedeliveringSubscriptions` and answer `true` from
   `redeliversAnAttemptNotMade()` only when the model honours the contract in its javadoc. When the action throws
   `AttemptNotMade`, the model moves no position past the event, doesn't retry it or report it as a failure, and
-  delivers it again when the subscription is resumed or started. It never waits for the delivering thread in a call
-  that only asks about a subscription or starts the model, and waits for it only for a limited time in a pause, cancel,
-  stop or shutdown. If the model can't do that, leave the capability out. The competing consumer then lets the held
+  delivers it again when the subscription is resumed or started. It waits for the delivering thread only in a pause,
+  cancel, stop or shutdown, and there only for a limited time. It never waits for it in any other call, a subscribe, a
+  resume and a start included, since the competing consumer waits for such a call to return before it shuts the model
+  down. If the model can't do that, leave the capability out. The competing consumer then lets the held
   event through as in 0.34.0 and logs a WARN.
 * For a `SubscriptionModelWrapper` of your own, implement `RedeliveringSubscriptions` and answer what the model beneath
   answers, as `DurableSubscriptionModel` does, as long as the wrapper stores no position past an event whose action
@@ -528,10 +538,10 @@ doesn't stop the action.
   listeners an `onConsumeProhibited` for a lock the subscriber lost, also when it holds the lock again by then. A
   strategy that answers `true` then lets the held event run under the new lock, although another node may have
   delivered it in between.
-* Change an import of `org.occurrent.retry.internal.RetryExecution.AttemptNotMade` to `org.occurrent.retry.AttemptNotMade`.
+* Change a reference to `org.occurrent.retry.internal.RetryExecution.AttemptNotMade` to
+  `org.occurrent.retry.AttemptNotMade`. `UpgradeToOccurrent_0_35` does that for you.
 
-The code compiles unchanged unless it names `RetryExecution.AttemptNotMade`, and `UpgradeToOccurrent_0_35` doesn't
-rewrite that import. Nothing stored changes. See
+The code compiles unchanged unless it names `RetryExecution.AttemptNotMade`. Nothing stored changes. See
 [ADR 161](../architecture/decisions/0161-a-held-event-is-withdrawn-instead-of-delivered-without-the-lease.md).
 
 ## A saga applies a stream version that arrives after a higher one

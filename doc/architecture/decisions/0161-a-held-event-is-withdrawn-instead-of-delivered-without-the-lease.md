@@ -95,15 +95,23 @@ I rejected four other designs.
 
 ## Consequences
 
-- **The fix is complete only on a stack that resumes from the stored checkpoint.** That is a stack with a
+- **The fix holds only on a stack that resumes from the stored checkpoint.** That is a stack with a
   `DurableSubscriptionModel`, directly or under a catch-up model, as ADR 117 decided. The Spring Boot starter always puts
   one under its `CompetingConsumerSubscriptionModel`. Over a bare `NativeMongoSubscriptionModel` or
   `SpringMongoSubscriptionModel` the event is withdrawn, but the node resumes from its own position in memory, so it
   delivers again what the node that held the lease delivered meanwhile.
+- **A catch-up replay that loses the lease while it reads history can still run an event on two nodes.** A pause
+  during a replay that a subscribe started takes effect only at the handover
+  ([#1256](https://github.com/johanhaleby/occurrent/issues/1256)), so the replay hands the next event
+  to the action after the pause has returned. Nothing withdraws that event, it waits for the lease, and it runs once
+  this node gets the lease back, also when another node delivered it meanwhile. The duplicate is older than this
+  decision. That is [#1528](https://github.com/johanhaleby/occurrent/issues/1528).
 - **A catch-up replay that runs again starts from this node's own last stored position, not the stored checkpoint.**
-  After a failover it delivers again what another node delivered meanwhile. Nothing is lost. That is #1514. A replay
-  built with `dontUseCheckpointStorage()` has stored no position, so it starts again from where the subscription asked
-  to start, and this node delivers again the events it replayed before the withdrawn one.
+  After a failover it delivers again what another node delivered meanwhile. Nothing is lost. That is #1514. Without a
+  failover, this node also delivers again the events it replayed since it last stored a position, up to 999 with the
+  Spring Boot starter, which stores one every 1,000 events. A replay built with `dontUseCheckpointStorage()` has stored
+  no position, so it starts again from where the subscription asked to start, and this node delivers again the events
+  it replayed before the withdrawn one.
 - **Some cases stay at-least-once.** A node that stalls after `hasLock` answered yes, for example in a long GC pause,
   runs the action once it wakes up, also when its lease expired meanwhile. A MongoDB clock that runs ahead of the node's
   can make `hasLock` answer yes after another node took the lease, as the `hasLock` javadoc of
