@@ -34,10 +34,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.Objects.requireNonNull;
 
 /**
  * The check of a conditional append with a consistency token on the MongoDB stores (ADR 149). It compares what the read
@@ -102,29 +104,58 @@ public final class DcbAppendConditionCheck {
                 case OTHER -> MARKERS_ONLY;
             };
         }
+
+        /**
+         * The scope of the append's transaction on {@code deployment}, reading its options only through a mongos, where
+         * they decide the scope. A failure to read them gives {@link #MARKERS_ONLY} there.
+         *
+         * @param deployment the store's deployment
+         * @param options    reads the options the append's transaction started with, {@code null} when there are none
+         */
+        public static Scope reading(Deployment deployment, Supplier<@Nullable TransactionOptions> options) {
+            if (deployment != Deployment.MONGOS) {
+                return of(deployment, null);
+            }
+            TransactionOptions read;
+            try {
+                read = options.get();
+            } catch (RuntimeException | LinkageError e) {
+                read = null;
+            }
+            return of(deployment, read);
+        }
     }
 
     /**
      * The settings a conditional append's own transaction runs with through a mongos, {@code options} with read concern
      * snapshot and write concern majority. MongoDB promises one point in time across the shards only for a transaction
-     * that commits at majority. A {@code wtimeout} in {@code options} is kept.
+     * that commits at majority. The write concern keeps the {@code wtimeout} and the journal flag of the one in
+     * {@code options}, or of {@code clientWriteConcern} when {@code options} has none, since that's what the transaction
+     * would otherwise commit with.
      *
-     * @param options the store's transaction options
+     * @param options            the store's transaction options
+     * @param clientWriteConcern the write concern of the client the store starts its sessions on
      */
-    public static TransactionOptions snapshotThroughMongos(TransactionOptions options) {
-        WriteConcern configured = options.getWriteConcern();
-        Integer wTimeout = configured == null ? null : configured.getWTimeout(MILLISECONDS);
-        WriteConcern majority = wTimeout == null ? WriteConcern.MAJORITY : WriteConcern.MAJORITY.withWTimeout(wTimeout, MILLISECONDS);
-        return TransactionOptions.merge(TransactionOptions.builder().readConcern(ReadConcern.SNAPSHOT).writeConcern(majority).build(), options);
+    public static TransactionOptions snapshotThroughMongos(TransactionOptions options, WriteConcern clientWriteConcern) {
+        WriteConcern configured = options.getWriteConcern() == null ? requireNonNull(clientWriteConcern, "clientWriteConcern cannot be null") : options.getWriteConcern();
+        return TransactionOptions.merge(TransactionOptions.builder().readConcern(ReadConcern.SNAPSHOT).writeConcern(configured.withW("majority")).build(), options);
     }
 
     /**
-     * The Spring Data transaction labels for read concern snapshot and write concern majority, which the Spring stores
-     * put on a conditional append's transaction through a mongos. Spring Data's default resolver reads them, and a
-     * resolver that doesn't starts the transaction without them, which {@link Scope#of(Deployment, TransactionOptions)}
-     * then sees.
+     * The options the Spring stores start their own conditional append's transaction again with through a mongos, so it
+     * reads every shard at one point in time. That's {@code running} with read concern snapshot and write concern
+     * majority, keeping the {@code wtimeout} and the journal flag of its write concern. Empty when {@code running}
+     * already has that pair.
+     *
+     * @param running the options the transaction runs with, as its session reports them
      */
-    public static final List<String> SNAPSHOT_THROUGH_MONGOS_LABELS = List.of("mongo:readConcern=snapshot", "mongo:writeConcern=majority");
+    public static Optional<TransactionOptions> restartAtOnePointInTime(TransactionOptions running) {
+        if (readsEveryShardAtOnePointInTime(running)) {
+            return Optional.empty();
+        }
+        // A session reports the write concern it fills in from the client, so the fallback isn't used
+        return Optional.of(snapshotThroughMongos(running, WriteConcern.ACKNOWLEDGED));
+    }
 
     private static boolean readsEveryShardAtOnePointInTime(@Nullable TransactionOptions options) {
         if (options == null || options.getReadConcern() == null || options.getWriteConcern() == null) {

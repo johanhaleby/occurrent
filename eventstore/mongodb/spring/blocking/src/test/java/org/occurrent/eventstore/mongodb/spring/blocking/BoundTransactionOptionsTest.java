@@ -18,8 +18,11 @@ package org.occurrent.eventstore.mongodb.spring.blocking;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
+import com.mongodb.ReadConcern;
 import com.mongodb.ReadConcernLevel;
 import com.mongodb.TransactionOptions;
+import com.mongodb.WriteConcern;
+import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import org.junit.jupiter.api.AfterAll;
@@ -28,7 +31,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
 import org.occurrent.testsupport.mongodb.TwoShardMongoCluster;
@@ -37,16 +39,23 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Pins what the append check relies on in Spring Data 5.1: that {@code MongoTransactionManager.doGetTransaction} reaches
- * the session bound to the template's factory, and that the manager reads a transaction's labels from a
- * {@code TransactionAttribute} (dec-0340 condition 2). Runs through a mongos, where the options decide the scope.
+ * the session bound to the template's factory, and that the store can abort the transaction its own template just began
+ * on that session and start it again at read concern snapshot and write concern majority (ADR 175). Runs through a
+ * mongos, where the options decide the scope.
  */
 @DisplayName("BoundTransactionOptions")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class BoundTransactionOptionsTest {
+
+    private static final int WTIMEOUT_MS = 12_345;
+    private static final TransactionOptions MAJORITY_READ_AND_WRITE_WITH_WTIMEOUT_AND_JOURNAL = TransactionOptions.builder()
+            .readConcern(ReadConcern.MAJORITY).writeConcern(WriteConcern.MAJORITY.withWTimeout(WTIMEOUT_MS, MILLISECONDS).withJournal(true)).build();
+    private static final TransactionOptions SNAPSHOT_MAJORITY = TransactionOptions.builder().readConcern(ReadConcern.SNAPSHOT).writeConcern(WriteConcern.MAJORITY).build();
 
     private static TwoShardMongoCluster cluster;
     private static MongoClient client;
@@ -91,10 +100,11 @@ class BoundTransactionOptionsTest {
     }
 
     @Test
-    void the_options_of_a_labelled_transaction_template_are_read_concern_snapshot_and_write_concern_majority() {
-        TransactionTemplate labelled = new LabelledTransactionTemplate(new TransactionTemplate(transactionManager), DcbAppendConditionCheck.SNAPSHOT_THROUGH_MONGOS_LABELS);
-
-        TransactionOptions options = labelled.execute(status -> boundOptions.current());
+    void restarts_a_transaction_its_own_template_just_began_at_read_concern_snapshot_and_write_concern_majority() {
+        TransactionOptions options = new TransactionTemplate(transactionManager).execute(status -> {
+            boundOptions.restartAtOnePointInTime(status);
+            return boundOptions.current();
+        });
 
         assertThat(options).isNotNull();
         assertThat(options.getReadConcern().getLevel()).isEqualTo(ReadConcernLevel.SNAPSHOT);
@@ -103,24 +113,101 @@ class BoundTransactionOptionsTest {
     }
 
     @Test
-    void the_options_of_a_labelled_template_that_joins_a_callers_plain_transaction_are_the_callers() {
-        TransactionTemplate labelled = new LabelledTransactionTemplate(new TransactionTemplate(transactionManager), DcbAppendConditionCheck.SNAPSHOT_THROUGH_MONGOS_LABELS);
+    void keeps_the_wtimeout_and_the_journal_flag_of_the_transaction_it_restarts() {
+        TransactionTemplate template = new TransactionTemplate(new MongoTransactionManager(databaseFactory, MAJORITY_READ_AND_WRITE_WITH_WTIMEOUT_AND_JOURNAL));
 
-        TransactionOptions options = new TransactionTemplate(transactionManager).execute(outer -> labelled.execute(inner -> boundOptions.current()));
+        TransactionOptions options = template.execute(status -> {
+            boundOptions.restartAtOnePointInTime(status);
+            return boundOptions.current();
+        });
 
         assertThat(options).isNotNull();
-        assertThat(Scope.of(Deployment.MONGOS, options))
-                .as("a joined transaction keeps the options it started with, so the labels of the append don't apply")
-                .isEqualTo(Scope.MARKERS_ONLY);
+        assertThat(options.getReadConcern().getLevel()).isEqualTo(ReadConcernLevel.SNAPSHOT);
+        assertThat(options.getWriteConcern().getWObject()).isEqualTo("majority");
+        assertThat(options.getWriteConcern().getWTimeout(MILLISECONDS)).isEqualTo(WTIMEOUT_MS);
+        assertThat(options.getWriteConcern().getJournal()).isTrue();
+    }
+
+    @Test
+    void leaves_a_transaction_that_already_runs_at_read_concern_snapshot_and_write_concern_majority_as_it_is() {
+        TransactionTemplate template = new TransactionTemplate(new MongoTransactionManager(databaseFactory, SNAPSHOT_MAJORITY));
+
+        Observed[] observed = new Observed[2];
+        template.executeWithoutResult(status -> {
+            observed[0] = observe();
+            boundOptions.restartAtOnePointInTime(status);
+            observed[1] = observe();
+        });
+
+        assertThat(observed[1].transactionNumber()).as("the same transaction").isEqualTo(observed[0].transactionNumber());
+        assertThat(observed[1].options().getReadConcern()).isEqualTo(ReadConcern.SNAPSHOT);
+        assertThat(observed[1].options().getWriteConcern()).isEqualTo(WriteConcern.MAJORITY);
+    }
+
+    @Test
+    void doesnt_touch_a_callers_transaction_that_the_template_joins() {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+
+        Observed[] observed = new Observed[2];
+        template.executeWithoutResult(outer -> {
+            observed[0] = observe();
+            template.executeWithoutResult(joined -> boundOptions.restartAtOnePointInTime(joined));
+            observed[1] = observe();
+        });
+
+        assertThat(observed[1].transactionNumber()).as("the callers transaction").isEqualTo(observed[0].transactionNumber());
+        assertThat(observed[1].options().getReadConcern()).isEqualTo(observed[0].options().getReadConcern());
+        assertThat(observed[1].options().getWriteConcern()).isEqualTo(observed[0].options().getWriteConcern());
+        assertThat(Scope.of(Deployment.MONGOS, observed[1].options())).isEqualTo(Scope.MARKERS_ONLY);
+    }
+
+    @Test
+    void doesnt_touch_the_bound_session_when_the_new_transaction_belongs_to_another_database_factory() {
+        TransactionTemplate outerTemplate = new TransactionTemplate(transactionManager);
+        SimpleMongoClientDatabaseFactory otherFactory = new SimpleMongoClientDatabaseFactory(client, databaseFactory.getMongoDatabase().getName());
+        TransactionTemplate otherTemplate = new TransactionTemplate(new MongoTransactionManager(otherFactory));
+
+        Observed[] observed = new Observed[2];
+        outerTemplate.executeWithoutResult(outer -> {
+            observed[0] = observe();
+            otherTemplate.executeWithoutResult(other -> {
+                assertThat(other.isNewTransaction()).as("the other manager began its own transaction").isTrue();
+                boundOptions.restartAtOnePointInTime(other);
+            });
+            observed[1] = observe();
+        });
+
+        assertThat(observed[1].transactionNumber()).as("the outer transaction on the bound session").isEqualTo(observed[0].transactionNumber());
+        assertThat(observed[1].options().getReadConcern()).isEqualTo(observed[0].options().getReadConcern());
+        assertThat(observed[1].options().getWriteConcern()).isEqualTo(observed[0].options().getWriteConcern());
+        assertThat(Scope.of(Deployment.MONGOS, observed[1].options())).isEqualTo(Scope.MARKERS_ONLY);
     }
 
     @Test
     void the_options_are_null_when_read_through_the_factory_the_transaction_is_not_bound_to() {
         BoundTransactionOptions other = new BoundTransactionOptions(new SimpleMongoClientDatabaseFactory(client, databaseFactory.getMongoDatabase().getName()));
-        TransactionTemplate labelled = new LabelledTransactionTemplate(new TransactionTemplate(transactionManager), DcbAppendConditionCheck.SNAPSHOT_THROUGH_MONGOS_LABELS);
 
-        TransactionOptions options = labelled.execute(status -> other.current());
+        TransactionOptions options = new TransactionTemplate(transactionManager).execute(status -> other.current());
 
         assertThat(options).isNull();
+    }
+
+    private static Observed observe() {
+        ClientSession session = new SessionOfTheBoundTransaction(databaseFactory).session();
+        return new Observed(session.getTransactionOptions(), session.getServerSession().getTransactionNumber());
+    }
+
+    private static final class SessionOfTheBoundTransaction extends MongoTransactionManager {
+
+        private SessionOfTheBoundTransaction(SimpleMongoClientDatabaseFactory databaseFactory) {
+            super(databaseFactory);
+        }
+
+        private ClientSession session() {
+            return ((MongoTransactionObject) doGetTransaction()).getSession();
+        }
+    }
+
+    private record Observed(TransactionOptions options, long transactionNumber) {
     }
 }

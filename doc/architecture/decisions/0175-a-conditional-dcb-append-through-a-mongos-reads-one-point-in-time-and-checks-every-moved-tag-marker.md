@@ -37,9 +37,15 @@ concern `majority`. MongoDB promises one point in time across the shards only fo
 
 | Store | How it asks |
 | --- | --- |
-| Native `MongoEventStore` | Merges both into its `TransactionOptions`, keeping a configured `wtimeout`. |
-| `SpringMongoEventStore` | Runs the append through a copy of its `TransactionTemplate` labelled `mongo:readConcern=snapshot` and `mongo:writeConcern=majority`, which Spring Data's default resolver turns into transaction options. |
-| `ReactorMongoEventStore` | Builds a `TransactionalOperator` with those labels on the `ReactiveTransactionManager` its `EventStoreConfig` was given. |
+| Native `MongoEventStore` | Merges both into its `TransactionOptions`, keeping the `wtimeout` and journal flag of its own write concern, or of the client's when it has none. |
+| `SpringMongoEventStore` | Runs the append through its `TransactionTemplate`. When the template has just begun the transaction on the session bound to the store's database factory, the store aborts that transaction before it sends anything and starts it again with the same options, at `snapshot` and with `withW("majority")` on its write concern. |
+| `ReactorMongoEventStore` | Does the same in its `TransactionalOperator`. |
+
+The Spring stores start the transaction again because Spring Data 5.1 can't take the pair any other way without
+losing options. The manager keeps its options in a private field, and a `mongo:writeConcern` label replaces the whole
+write concern with a name such as `majority`, which drops a `wtimeout` and a journal flag that 0.34.0 kept. The
+session reports the options the manager and the client gave the transaction, so the restart keeps them. The driver
+aborts a transaction that sent nothing without a command to the server.
 
 The check doesn't trust what the store asked for. Inside the transaction it reads the options of the transaction the
 bound session runs, and gives the check one of three scopes.
@@ -51,9 +57,15 @@ bound session runs, and gives the check one of three scopes.
 | `MARKERS_ONLY` | Anything else, including any failure to read the options. | Every marker that moved refuses, as in ADR 149. |
 
 The Spring stores reach the bound session through a private subclass of `MongoTransactionManager` or
-`ReactiveMongoTransactionManager` that calls the protected `doGetTransaction`. That's an internal of Spring Data 5.1.
-A test asserts what it returns, so an upgrade that changes it fails the build. At run time a cast that fails, a missing session, a
-transaction object of another class and any exception all give `MARKERS_ONLY`, never `SNAPSHOT_THROUGH_MONGOS`.
+`ReactiveMongoTransactionManager` that calls the protected `doGetTransaction`. That's an internal of Spring Data 5.1,
+kept in one class per store, `BoundTransactionOptions`. A test asserts what it returns, so an upgrade that changes it
+fails the build. At run time a cast that fails, a missing session, a transaction object of another class and any
+exception all leave the transaction as it began and give `MARKERS_ONLY`, never `SNAPSHOT_THROUGH_MONGOS`.
+
+The store starts a transaction again only when the transaction status says it's new and the status's transaction
+object holds the bound session. A caller's transaction that the append joins isn't new. A new transaction of another
+manager, such as a `REQUIRES_NEW` one inside a caller's MongoDB transaction, doesn't hold the bound session. Neither is
+ever aborted.
 
 ### Through a mongos, step 3 rules out an item only when none of its tag markers moved
 
@@ -67,17 +79,22 @@ An item without tags already worked this way on a replica set, and it does the s
 
 ## Consequences
 
-- Through a mongos, the three cases of #1476 pass when the store runs its own transaction.
+- Through a mongos, the three cases of #1476 pass when the append's transaction runs at `snapshot` and `majority`, as
+  it does when the store starts it.
 - A test on two shards for each store checks the three cases of #1476, a torn token built by hand, a token read while
   a matching event had committed on one shard and not the other, and an append in a caller's transaction.
 - A conditional append through a mongos costs a transaction at read concern `snapshot` and write concern `majority`.
 - An append that joins a caller's transaction gets the caller's options. Unless the caller started it at `snapshot` and
   `majority`, the check is `MARKERS_ONLY` and refuses as it did before.
-- A reactor store built from a `TransactionalOperator` has no transaction manager to put labels on, so its appends
-  through a mongos run without them and the check is `MARKERS_ONLY`. A store built with
-  `transactionConfig(ReactiveTransactionManager)`, as the reactive Spring Boot starter does, gets the new scope.
-- A Spring transaction manager with a `MongoTransactionOptionsResolver` that ignores the labels starts the transaction
-  without them, and the check is `MARKERS_ONLY`.
+- A transaction manager that isn't Spring Data's `MongoTransactionManager` or `ReactiveMongoTransactionManager`, or one
+  on another database factory than the store's template, begins no transaction the store can start again, and the check
+  is `MARKERS_ONLY`.
+- A read with `confirmsAppendBeforeSaving()` on a Spring or reactor store, in a Spring transaction that holds no MongoDB
+  session for the store's database factory, binds a MongoDB transaction at the client's default options, so that the
+  append joins the session it read in. Through a mongos the append then gets `MARKERS_ONLY` unless the client's defaults
+  are `snapshot` and `majority`. That refuses more than it has to, and lets nothing through.
+- A conditional append through a mongos keeps the `wtimeout`, the journal flag and the other options of the
+  transaction manager or the client on all three stores.
 - The type marker stripes of [ADR 162](0162-a-dcb-type-marker-is-split-into-stripes.md) change only the keys of an item
   without tags, which already select on every moved key in every scope. This ADR changes step 3 only for items with
   tags, whose keys the stripes don't touch. I checked this by reading the stripes change in
@@ -116,6 +133,13 @@ after E, the query finds nothing and the append passes.
 **Read the token and the events in one snapshot transaction.** That closes #1479 as well, but on its own it doesn't close
 reason 1 for the append, and it costs a transaction on every read. #1479 decides it separately.
 
-**Trust the store's own request instead of reading the session.** A caller's transaction that the append joins, or a
-resolver that drops the labels, would then run step 3 without one point in time, and that can let a matching append
-through.
+**Trust the store's own request instead of reading the session.** A caller's transaction that the append joins would
+then run step 3 without one point in time, and that can let a matching append through.
+
+**Ask for the pair with Spring Data transaction labels.** `mongo:readConcern=snapshot` and `mongo:writeConcern=majority`
+on the store's transaction need no restart, but the write concern label replaces the manager's and the client's write
+concern, and drops a `wtimeout` and a journal flag that 0.34.0 kept. A resolver that ignores labels also gets no pair.
+
+**Ask only for read concern `snapshot` with a label.** That keeps the write concern, but a manager without options, as
+the reactive Spring Boot starter builds it, then commits at the client's write concern, which isn't `majority` by
+default, and the check stays `MARKERS_ONLY`.

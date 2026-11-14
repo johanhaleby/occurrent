@@ -162,9 +162,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final String dcbCheckpointCollectionName;
     private final TimeRepresentation timeRepresentation;
     private final TransactionTemplate transactionTemplate;
-    // The template a conditional DCB append runs in, with labels for read concern snapshot and write concern majority
-    // through a mongos (ADR 175)
-    private final TransactionTemplate conditionalAppendTransactionTemplate;
     private final BoundTransactionOptions boundTransactionOptions;
     private final Function<Query, Query> queryOptions;
     private final Function<Query, Query> readOptions;
@@ -214,9 +211,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
         this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(mongoTemplate::executeCommand) : Deployment.OTHER;
-        this.conditionalAppendTransactionTemplate = deployment == Deployment.MONGOS && transactionManager != null
-                ? new LabelledTransactionTemplate(transactionTemplate, DcbAppendConditionCheck.SNAPSHOT_THROUGH_MONGOS_LABELS)
-                : transactionTemplate;
         this.boundTransactionOptions = new BoundTransactionOptions(mongoTemplate.getMongoDatabaseFactory());
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, streamPositionEnabled, mongoTemplate);
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
@@ -860,8 +854,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private DcbAppendResult appendDcbInTransaction(String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition, AppendId appendId) {
-        TransactionTemplate template = condition == null ? transactionTemplate : conditionalAppendTransactionTemplate;
-        return requireNonNull(template.execute(transactionStatus -> {
+        return requireNonNull(transactionTemplate.execute(transactionStatus -> {
+            if (condition != null && deployment == Deployment.MONGOS) {
+                // First, while the transaction has sent nothing, so its check can read every shard at one point in time (ADR 175)
+                boundTransactionOptions.restartAtOnePointInTime(transactionStatus);
+            }
             long currentStreamVersion = currentStreamVersion(streamId);
             // The same stripe for every event and every attempt of this append, since the append id is created once
             int stripe = DcbMarkerModel.stripeOf(appendId, spreadTypeMarkerWrites);
@@ -981,7 +978,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             Map<String, Document> markers = queryMarkers(condition.criteria(), mongoTemplate);
             Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
             // Read inside the append's transaction, so a caller's transaction the append joined gives the caller's options
-            Scope scope = Scope.of(deployment, deployment == Deployment.MONGOS ? boundTransactionOptions.current() : null);
+            Scope scope = Scope.reading(deployment, boundTransactionOptions::current);
             conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, scope)) {
                 case DcbAppendConditionCheck.Pass ignored -> false;
                 case DcbAppendConditionCheck.Refuse ignored -> true;

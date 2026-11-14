@@ -815,17 +815,23 @@ doesn't match a condition's criteria no longer fails it, so you'll see fewer `Dc
 on a busy tag. A condition can still fail with no matching event, for example after a marker was deleted, when a
 0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had written.
 
-Through a mongos, an event that doesn't match the criteria doesn't fail it either when the store runs the append's
-transaction itself. The store then runs a conditional append's transaction at read concern `snapshot` and write concern
-`majority`, and a transaction through a mongos reads every shard at one point in time only at that pair. The check reads
-the options the transaction actually runs with, and when they aren't that pair, any event that moves a marker of the
-criteria still fails the condition. That happens in three cases:
+Through a mongos, an event that doesn't match the criteria doesn't fail it either when the append's transaction runs at
+read concern `snapshot` and write concern `majority`. A transaction through a mongos reads every shard at one point in
+time only at that pair, and the store asks for it when it starts a conditional append's transaction there. The check
+reads the options the transaction actually runs with, and when they aren't that pair, any event that moves a marker of
+the criteria still fails the condition. Some examples:
 
 - The append joins a transaction of your own that runs at another read concern or write concern.
-- The append is on a `ReactorMongoEventStore` whose `EventStoreConfig` was given a `TransactionalOperator` instead of a
-  `ReactiveTransactionManager`. The store can't put options on an operator.
-- The transaction manager has a `MongoTransactionOptionsResolver` of your own that ignores the `mongo:readConcern` and
-  `mongo:writeConcern` labels the store puts on its transaction.
+- A read with `confirmsAppendBeforeSaving()` on a Spring or reactor store, in a Spring transaction that holds no MongoDB
+  session for the store's database factory, such as a JDBC one, starts a MongoDB transaction at your client's default
+  options. An append later in that Spring transaction joins it.
+- The transaction manager isn't Spring Data's `MongoTransactionManager` or `ReactiveMongoTransactionManager`, or it
+  isn't on the store's database factory.
+
+The Spring and reactor stores get that pair by starting their own transaction again before it sends anything, with the
+options the transaction manager and the `MongoClient` gave it, at read concern `snapshot` and write concern `majority`.
+A `wtimeout`, a journal flag and a `maxCommitTime` set there still apply. The native `MongoEventStore` keeps them from
+its own `TransactionOptions`, or from the `MongoClient` when those have no write concern.
 
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
 Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with

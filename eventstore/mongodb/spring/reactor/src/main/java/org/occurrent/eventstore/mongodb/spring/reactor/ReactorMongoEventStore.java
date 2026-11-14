@@ -203,9 +203,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final String dcbCheckpointCollectionName;
     private final TimeRepresentation timeRepresentation;
     private final TransactionalOperator transactionalOperator;
-    // The operator a conditional DCB append runs in, with labels for read concern snapshot and write concern majority
-    // through a mongos when the config has a transaction manager (ADR 175)
-    private final TransactionalOperator conditionalAppendOperator;
     private final BoundTransactionOptions boundTransactionOptions;
     private final Function<Query, Query> queryOptions;
     private final Function<Query, Query> readOptions;
@@ -254,9 +251,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             LOGGER.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
         this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(command -> mongoTemplate.executeCommand(command).block()) : Deployment.OTHER;
-        this.conditionalAppendOperator = deployment == Deployment.MONGOS && config.reactiveTransactionManager != null
-                ? LabelledTransactions.operator(config.reactiveTransactionManager, DcbAppendConditionCheck.SNAPSHOT_THROUGH_MONGOS_LABELS)
-                : transactionalOperator;
         this.boundTransactionOptions = new BoundTransactionOptions(mongoTemplate.getMongoDatabaseFactory());
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, mongoTemplate).block();
     }
@@ -716,8 +710,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
             return reservePositions(eventCount).flatMap(firstPosition -> {
                 long lastPosition = firstPosition + eventCount - 1;
-                Mono<DcbAppendResult> transaction = (condition == null ? transactionalOperator : conditionalAppendOperator).transactional(
-                        currentStreamVersion(streamId).flatMap(currentStreamVersion -> {
+                Mono<DcbAppendResult> append = currentStreamVersion(streamId).flatMap(currentStreamVersion -> {
                             final Mono<Map<String, Document>> conditionAndMarkers;
                             if (condition != null) {
                                 conditionAndMarkers = enforceAppendCondition(condition, eventsToAppend, lastPosition, stripe);
@@ -734,7 +727,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                 Optional<DcbMarkerVersions> markerVersions = resumeFromMarkerVersions ? DcbMarkerVersionsDocuments.appendedVersions(condition, markers) : Optional.empty();
                                 return insertAllDcb(streamId, currentStreamVersion, documents).thenReturn(new DcbAppendResult(firstPosition, lastPosition, eventCount, Optional.of(appendId), markerVersions));
                             });
-                        }));
+                        });
+                Mono<DcbAppendResult> transaction = condition == null || deployment != Deployment.MONGOS
+                        ? transactionalOperator.transactional(append)
+                        // First, while the transaction has sent nothing, so its check can read every shard at one point in time (ADR 175)
+                        : transactionalOperator.execute(status -> boundTransactionOptions.restartAtOnePointInTime(status).then(append)).singleOrEmpty();
                 // The driver does not auto-retry a transient transaction conflict reactively, so retry it here, plus a
                 // DuplicateKeyException from two transactions first-creating the same conflict marker at once. A
                 // DcbAppendConditionNotFulfilledException and a DuplicateCloudEventException are deliberately not retried.

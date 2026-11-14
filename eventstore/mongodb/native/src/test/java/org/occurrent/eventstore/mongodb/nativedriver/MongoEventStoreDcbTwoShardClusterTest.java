@@ -16,6 +16,9 @@
 
 package org.occurrent.eventstore.mongodb.nativedriver;
 
+import com.mongodb.ReadConcern;
+import com.mongodb.TransactionOptions;
+import com.mongodb.WriteConcern;
 import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
@@ -213,6 +216,32 @@ class MongoEventStoreDcbTwoShardClusterTest {
         assertThat(thrown)
                 .as("The caller's transaction doesn't read every shard at one point in time, so the store compares only the markers, and the marker of the tag moved")
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+    }
+
+    @Test
+    void accepts_an_append_after_an_event_of_another_type_with_the_tag_when_it_joins_a_callers_transaction_at_read_concern_snapshot_and_write_concern_majority() {
+        DcbConsistencyToken token = eventStore.read(TICKETS_OF_K1).consistencyToken();
+        eventStore.append(List.of(taggedEventWithId("renamed", CONCERT_RENAMED, CONCERT_K1)));
+
+        Throwable thrown;
+        try (ClientSession session = client.startSession()) {
+            session.startTransaction(TransactionOptions.builder().readConcern(ReadConcern.SNAPSHOT).writeConcern(WriteConcern.MAJORITY).build());
+            ClientSessionHolder.set(session);
+            try {
+                thrown = catchThrowable(() -> eventStore.append(List.of(taggedEventWithId("sold", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)));
+                if (thrown == null) {
+                    session.commitTransaction();
+                }
+            } finally {
+                ClientSessionHolder.remove();
+                if (session.hasActiveTransaction()) {
+                    session.abortTransaction();
+                }
+            }
+        }
+
+        assertThat(thrown).as("The caller's transaction reads every shard at one point in time, so the store asks the events above the marker that moved, and none matches").isNull();
+        assertThat(eventStore.read(TICKETS_OF_K1).events()).extracting(CloudEvent::getId).containsExactly("sold");
     }
 
     // The first shard committed its half of the transaction once the marker is there, while the second shard holds its own

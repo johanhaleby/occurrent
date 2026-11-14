@@ -187,7 +187,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
         this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(database::runCommand) : Deployment.OTHER;
-        this.conditionalAppendTransactionOptions = deployment == Deployment.MONGOS ? DcbAppendConditionCheck.snapshotThroughMongos(transactionOptions) : transactionOptions;
+        this.conditionalAppendTransactionOptions = deployment == Deployment.MONGOS ? DcbAppendConditionCheck.snapshotThroughMongos(transactionOptions, mongoClient.getWriteConcern()) : transactionOptions;
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -722,16 +722,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     // The session's options, not the store's, so an executor's transaction the append joined gives that executor's options
     private Scope appendCheckScope(ClientSession clientSession) {
-        if (deployment != Deployment.MONGOS) {
-            return Scope.of(deployment, null);
-        }
-        TransactionOptions options;
-        try {
-            options = clientSession.hasActiveTransaction() ? clientSession.getTransactionOptions() : null;
-        } catch (RuntimeException e) {
-            options = null;
-        }
-        return Scope.of(deployment, options);
+        return Scope.reading(deployment, () -> clientSession.hasActiveTransaction() ? clientSession.getTransactionOptions() : null);
     }
 
     private Map<String, Document> enforceAppendCondition(ClientSession clientSession, DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition, int stripe) {
