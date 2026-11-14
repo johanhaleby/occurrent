@@ -1112,12 +1112,18 @@ public final class ChangeStreamSubscriptions {
             StartAt resolved = repositionTo.get(ctx);
             if (notAChangeStreamPosition(resolved) instanceof Checkpoint unreadable) {
                 logResumingFromTheTrackedPosition(subscriptionId, unreadable);
-                // Refused as the position the subscription was made with is, since it can't open at a later present
+                StartAt fallback = present.pinnedIfSubscribedAt(tracked);
                 NoPositionAtThePresent noPosition = present.noPositionAt(tracked);
-                if (noPosition != null) {
+                if (noPosition == null) {
+                    return fallback;
+                }
+                // Resolved here, since the run's own position isn't the one the subscription was made with, so opening
+                // at the present would read a later present rather than be refused as that position is
+                StartAt resolvedFallback = fallback.get(ctx);
+                if (MongoCommons.opensAtThePresent(resolvedFallback)) {
                     throw noPosition;
                 }
-                return present.pinnedIfSubscribedAt(tracked);
+                return resolvedFallback;
             }
             return resolved;
         });
