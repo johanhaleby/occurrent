@@ -82,12 +82,21 @@ class CatchupLifecycleExamplesTest {
             assertThat(InterleavingRunner.execute(run, call(Kind.CANCEL, "a"))).isEqualTo("ok");
             cancelReturned.countDown();
             InterleavingRunner.quiesce(run);
-            assertThat(checks.get()).as("checks, where 4 or more means the replay went on after the cancel").isLessThan(4);
+            assertThat(checks.get()).as("checks, where more than the one made before the cancel returned is a replay again that ran after it").isEqualTo(1);
+            assertThat(run.monitor.s2Violations).isEmpty();
             assertThat(run.model.isRunning("a") || run.model.isPaused("a")).isFalse();
         } finally {
             cancelReturned.countDown();
             run.model.shutdown();
         }
+    }
+
+    @Example
+    void a_subscribe_after_a_cancel_of_the_same_id_in_one_thread_is_known_at_the_end() {
+        Scenario scenario = new Scenario(false, 0, 0, List.of(List.of(call(Kind.CANCEL, "a"), call(Kind.SUBSCRIBE, "a")), List.of(call(Kind.SUBSCRIBE, "b"))));
+        Run run = InterleavingRunner.run(scenario, false);
+        assertThat(run.outcomes.get(0)).as(run.toString()).containsExactly("ok", "ok");
+        assertThat(run.knownAtTheEnd).as("a is subscribed after its only cancel returned").contains("a");
     }
 
     @Example

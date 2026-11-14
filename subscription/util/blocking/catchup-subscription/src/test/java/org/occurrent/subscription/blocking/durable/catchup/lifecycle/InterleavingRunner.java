@@ -79,10 +79,10 @@ final class InterleavingRunner {
             runThreads(run);
             quiesce(run);
             run.observed = observe(run);
-            run.knownAtTheEnd.addAll(subscribedAndNeverCancelled(run));
+            run.knownAtTheEnd.addAll(subscribedAfterEveryCancel(run.scenario, run.outcomes, run.timing()));
             for (String id : run.knownAtTheEnd) {
                 if (staysNeitherRunningNorPaused(run, id)) {
-                    run.notes.add(id + " was subscribed and never cancelled, but the model neither runs nor holds it paused");
+                    run.notes.add(id + " was subscribed after every cancel of it returned, but the model neither runs nor holds it paused");
                 }
             }
             if (recover) {
@@ -110,19 +110,36 @@ final class InterleavingRunner {
         return true;
     }
 
-    /** The ids a subscribe returned ok for and that no call of the scenario cancelled */
-    private static Set<String> subscribedAndNeverCancelled(Run run) {
+    /**
+     * The ids that must be known at the end. An id counts when some subscribe of it returned ok and every cancel of it in the
+     * scenario returned before that subscribe was made. A cancel that never returned has Long.MAX_VALUE, so it never qualifies.
+     */
+    static Set<String> subscribedAfterEveryCancel(Scenario scenario, List<List<String>> outcomes, Timing timing) {
         Set<String> ids = new TreeSet<>();
-        for (int t = 0; t < run.scenario.threads().size(); t++) {
-            List<LifecycleCall> script = run.scenario.threads().get(t);
+        for (int t = 0; t < scenario.threads().size(); t++) {
+            List<LifecycleCall> script = scenario.threads().get(t);
             for (int i = 0; i < script.size(); i++) {
-                if (script.get(i).kind() == LifecycleCall.Kind.SUBSCRIBE && "ok".equals(run.outcomes.get(t).get(i))) {
-                    ids.add(script.get(i).id());
+                LifecycleCall subscribe = script.get(i);
+                if (subscribe.kind() == LifecycleCall.Kind.SUBSCRIBE && "ok".equals(outcomes.get(t).get(i))
+                        && everyCancelReturnedBefore(scenario, timing, subscribe.id(), timing.invoked().get(t)[i])) {
+                    ids.add(subscribe.id());
                 }
             }
         }
-        run.scenario.threads().forEach(script -> script.stream().filter(call -> call.kind() == LifecycleCall.Kind.CANCEL).forEach(call -> ids.remove(call.id())));
         return ids;
+    }
+
+    private static boolean everyCancelReturnedBefore(Scenario scenario, Timing timing, String id, long subscribeInvokedAt) {
+        for (int t = 0; t < scenario.threads().size(); t++) {
+            List<LifecycleCall> script = scenario.threads().get(t);
+            for (int i = 0; i < script.size(); i++) {
+                LifecycleCall call = script.get(i);
+                if (call.kind() == LifecycleCall.Kind.CANCEL && id.equals(call.id()) && timing.returned().get(t)[i] >= subscribeInvokedAt) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static void runThreads(Run run) {

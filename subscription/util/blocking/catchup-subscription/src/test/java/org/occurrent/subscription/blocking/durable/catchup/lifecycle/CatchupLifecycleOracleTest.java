@@ -99,6 +99,26 @@ class CatchupLifecycleOracleTest {
     }
 
     @Example
+    void a_start_true_that_ended_without_returning_and_had_no_injected_failure_leaves_a_stop_in_force() {
+        ExclusiveAction monitor = new ExclusiveAction(Set.of("a"));
+        ExclusiveAction.Generation generation = subscribed(monitor);
+        callToCompletion(monitor, STOP, true);
+        callToCompletion(monitor, LifecycleCall.of(Kind.START_TRUE, null), false);
+        monitor.actionOf(generation).accept(EVENT);
+        assertThat(monitor.s2Violations).as("an action after a stop that no start(true) undid").hasSize(1);
+    }
+
+    @Example
+    void a_start_true_that_failed_after_its_effect_lifts_a_stop() {
+        ExclusiveAction monitor = new ExclusiveAction(Set.of("a"));
+        ExclusiveAction.Generation generation = subscribed(monitor);
+        callToCompletion(monitor, STOP, true);
+        callToCompletion(monitor, new LifecycleCall(Kind.START_TRUE, null, StartFailure.AFTER_EFFECT), false);
+        monitor.actionOf(generation).accept(EVENT);
+        assertThat(monitor.s2Violations).isEmpty();
+    }
+
+    @Example
     void a_resume_whose_model_start_failed_after_it_took_effect_leaves_a_pause_in_force() {
         ExclusiveAction monitor = new ExclusiveAction(Set.of("a"));
         ExclusiveAction.Generation generation = subscribed(monitor);
@@ -148,5 +168,33 @@ class CatchupLifecycleOracleTest {
         }
         monitor.actionOf(generation).accept(EVENT);
         assertThat(monitor.s2Violations).hasSize(1);
+    }
+
+    private static final Scenario CANCEL_A_THEN_SUBSCRIBE_A_AND_SUBSCRIBE_B = new Scenario(false, 0, 0,
+            List.of(List.of(call(Kind.CANCEL, "a"), call(Kind.SUBSCRIBE, "a")), List.of(call(Kind.SUBSCRIBE, "b"))));
+
+    @Example
+    void an_id_is_known_at_the_end_when_every_cancel_of_it_returned_before_its_subscribe_was_made() {
+        Timing cancelReturnedFirst = timing(new long[]{1, 3}, new long[]{2, 4}, new long[]{5}, new long[]{6});
+        assertThat(InterleavingRunner.subscribedAfterEveryCancel(CANCEL_A_THEN_SUBSCRIBE_A_AND_SUBSCRIBE_B, List.of(List.of("ok", "ok"), List.of("ok")), cancelReturnedFirst))
+                .containsExactly("a", "b");
+    }
+
+    @Example
+    void an_id_is_not_required_when_a_cancel_of_it_overlapped_its_subscribe() {
+        Timing overlapping = timing(new long[]{1}, new long[]{4}, new long[]{2}, new long[]{3});
+        assertThat(InterleavingRunner.subscribedAfterEveryCancel(SUBSCRIBE_THEN_CANCEL, BOTH_OK, overlapping)).isEmpty();
+    }
+
+    @Example
+    void an_id_is_not_required_when_a_cancel_of_it_never_returned() {
+        Timing cancelHung = timing(new long[]{1}, new long[]{2}, new long[]{3}, new long[]{Long.MAX_VALUE});
+        assertThat(InterleavingRunner.subscribedAfterEveryCancel(SUBSCRIBE_THEN_CANCEL, List.of(List.of("ok"), List.of("hung")), cancelHung)).isEmpty();
+    }
+
+    @Example
+    void an_id_is_not_required_when_no_subscribe_of_it_returned_ok() {
+        Timing serial = timing(new long[]{1}, new long[]{2}, new long[]{3}, new long[]{4});
+        assertThat(InterleavingRunner.subscribedAfterEveryCancel(SUBSCRIBE_THEN_CANCEL, List.of(List.of("IllegalStateException"), List.of("ok")), serial)).isEmpty();
     }
 }

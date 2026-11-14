@@ -17,7 +17,7 @@ import java.util.function.Consumer;
  * Wraps the subscriber's action and watches S1 (never two actions in flight for one id) and S2 (a subscribe's
  * generation delivers nothing after a cancel of its id, or a pause of it or a stop, has returned).
  * Only a generation whose subscribe returned before that call began is bound by it. A pause or a stop binds until an
- * enabling call, a resume of the id that returned ok or a start(true) that did not fail before its effect, ends after the
+ * enabling call, a resume of the id that returned ok or a start(true) that returned or failed after its effect, ends after the
  * pause or the stop began. One still in flight counts, since it can take effect at any instant.
  */
 final class ExclusiveAction {
@@ -140,7 +140,7 @@ final class ExclusiveAction {
             clock++;
             switch (call.kind()) {
                 case RESUME -> finish(enablingOfThisThread.get(), returned);
-                case START_TRUE -> finish(enablingOfThisThread.get(), call.failure() != LifecycleCall.StartFailure.BEFORE_EFFECT);
+                case START_TRUE -> finish(enablingOfThisThread.get(), returned || call.failure() == LifecycleCall.StartFailure.AFTER_EFFECT);
                 case SUBSCRIBE -> {
                     if (returned && made != null) {
                         made.subscribedOk = true;
