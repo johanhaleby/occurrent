@@ -819,9 +819,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * checkpoint storage, when the position stored for the subscription is one a catch-up replays from, such as the one
      * that replay stored, it is replaced before the live delegate resumes the subscription, so a
      * {@link #resumeSubscription(String)} after a later pause doesn't replay from it. While a replay that
-     * {@code subscribe(..)} started runs for the subscription, nothing is stored, since that replay reads the stored
-     * position to decide where it goes live from when it hands over. It is replaced only by a position a restart starts
-     * reading at:
+     * {@code subscribe(..)} started runs for the subscription, nothing is stored and no present position is read,
+     * since that replay reads the stored position to decide where it goes live from when it hands over. It is replaced
+     * only by a position a restart starts reading at:
      * <ul>
      * <li>A checkpoint the live delegate answers {@code true} for in {@link RepositionableSubscriptions#restartsAt(Checkpoint)}
      * is stored as given.</li>

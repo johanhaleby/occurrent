@@ -301,7 +301,8 @@ position or the quiet save. That section stays as it was released, and over a du
 A blocking catch-up model with checkpoint storage that resumes a subscription at a checkpoint or at now also replaces a
 stored position a catch-up replays from, such as the one its replay stored, whatever its live delegate. So a
 `resumeSubscription(subscriptionId)` after a later pause doesn't replay from that position, as it could in 0.34.0. At
-now it stores the present position, and throws `IllegalStateException` when it can read none.
+now it stores the present position, and throws `IllegalStateException` when it can read none. While a replay that
+`subscribe(..)` started is still running, it stores nothing and reads no present position.
 
 There is nothing to change in your code unless it depends on the checkpoint staying where it was after a resume at a
 position. A `DurableSubscriptionModel` over a repositionable subscription model you wrote yourself stores nothing on a
@@ -1338,8 +1339,8 @@ does `start(true)` on the blocking stack. A reactor `start(true)` keeps it held 
 blocking catch-up subscription model you call directly, `resumeSubscription(id, startAt)` at a position the change
 stream history still reaches resumes it. With checkpoint storage that position replaces the one the catch-up stored
 when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to. While
-a replay that `subscribe(..)` started is still running, the resume stores nothing, since that replay reads the stored
-position to decide where it goes live from.
+a replay that `subscribe(..)` started is still running, the resume stores nothing and reads no present position, since
+that replay reads the stored position to decide where it goes live from.
 
 A resume token or another checkpoint the MongoDB model restarts at is stored as given, and so is a checkpoint the
 catch-up replays from with a live start or at the beginning. A time after the beginning that a stream catch-up replays
