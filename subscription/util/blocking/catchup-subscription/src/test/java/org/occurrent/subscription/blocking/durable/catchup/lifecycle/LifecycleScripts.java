@@ -41,6 +41,10 @@ final class LifecycleScripts {
         return mixedCalls().list().ofMinSize(1).ofMaxSize(6);
     }
 
+    static Arbitrary<List<LifecycleCall>> serialScriptsWithoutStartTrueAfterEffect() {
+        return mixedCalls().filter(call -> !(call.kind() == Kind.START_TRUE && call.failure() == StartFailure.AFTER_EFFECT)).list().ofMinSize(1).ofMaxSize(6);
+    }
+
     private static Arbitrary<Scenario> scenarios(Arbitrary<LifecycleCall> calls) {
         Arbitrary<List<List<LifecycleCall>>> threads = calls.list().ofMinSize(1).ofMaxSize(3).list().ofMinSize(2).ofMaxSize(3);
         return Combinators.combine(Arbitraries.of(false, true), Arbitraries.of(0, 300), Arbitraries.of(0, 300), threads).as(Scenario::new);

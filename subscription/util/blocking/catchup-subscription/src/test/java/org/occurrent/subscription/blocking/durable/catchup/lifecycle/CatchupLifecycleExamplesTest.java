@@ -129,7 +129,7 @@ class CatchupLifecycleExamplesTest {
         assertThat(unexplained).isZero();
     }
 
-    @Disabled("#START_ISSUE: a start(true) that throws after the live model started leaves the parked replay parked, where a start(true) that returns runs it again")
+    @Disabled("#1520: a start(true) that throws after the live model started leaves the parked replay parked, where a start(true) that returns runs it again")
     @Example
     void a_start_true_that_throws_after_it_took_effect_runs_the_parked_replay_again() throws Exception {
         Run run = plainRun();
@@ -148,27 +148,6 @@ class CatchupLifecycleExamplesTest {
         } finally {
             run.history.gate.countDown();
             run.model.shutdown();
-        }
-    }
-
-    @Example
-    void tmp_serial_stop_subscribe_start_true_after_effect() {
-        for (boolean composite : new boolean[]{false, true}) {
-            List<LifecycleCall> script = List.of(call(Kind.STOP, null), call(Kind.SUBSCRIBE, "a"), new LifecycleCall(Kind.START_TRUE, null, StartFailure.AFTER_EFFECT));
-            Run run = new Run(new Scenario(composite, 0, 0, List.of(script)));
-            try {
-                CatchupLifecycleSpec.State state = CatchupLifecycleSpec.initial();
-                for (LifecycleCall c : script) {
-                    String outcome = InterleavingRunner.execute(run, c);
-                    InterleavingRunner.quiesce(run);
-                    CatchupLifecycleSpec.Step step = CatchupLifecycleSpec.apply(state, c);
-                    state = CatchupLifecycleSpec.settle(step.next());
-                    assertThat(outcome).as("composite=%s outcome of %s", composite, c).isEqualTo(step.outcome());
-                    assertThat(InterleavingRunner.observe(run)).as("composite=%s state after %s", composite, c).isEqualTo(CatchupLifecycleSpec.observe(state, InterleavingRunner.IDS));
-                }
-            } finally {
-                run.model.shutdown();
-            }
         }
     }
 }
