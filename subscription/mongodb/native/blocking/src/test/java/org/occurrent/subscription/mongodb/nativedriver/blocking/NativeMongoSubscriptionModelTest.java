@@ -47,6 +47,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpoint;
@@ -98,6 +99,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -238,6 +240,20 @@ public class NativeMongoSubscriptionModelTest {
             executor.shutdown();
             ExecutorShutdown.shutdownSafely(executor, 10, TimeUnit.SECONDS);
         }
+    }
+
+    private static StartRefusalListener onStartRefusal(BiConsumer<String, UnsupportedStartAtException> onRefusal) {
+        return new StartRefusalListener() {
+            @Override
+            public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+                onRefusal.accept(subscriptionId, refusal);
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+                throw new AssertionError("A MongoDB model never holds a subscription paused, but was asked to for " + subscriptionId, refusal);
+            }
+        };
     }
 
     @Nested
@@ -2073,9 +2089,9 @@ public class NativeMongoSubscriptionModelTest {
         void a_start_refusal_listener_is_told_once_with_the_id_and_a_copy_of_the_refusal_when_a_dynamic_position_answers_a_global_checkpoint() {
             // Given
             List<Map.Entry<String, UnsupportedStartAtException>> told = new CopyOnWriteArrayList<>();
-            subscriptionModel.addStartRefusalListener((id, refusal) -> told.add(Map.entry(id, refusal)));
+            subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> told.add(Map.entry(id, refusal))));
             List<UnsupportedStartAtException> toldTheOtherListener = new CopyOnWriteArrayList<>();
-            subscriptionModel.addStartRefusalListener((id, refusal) -> toldTheOtherListener.add(refusal));
+            subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> toldTheOtherListener.add(refusal)));
             String subscriptionId = UUID.randomUUID().toString();
             StartAt answered = StartAt.checkpoint(GlobalCheckpoint.of(0));
 
@@ -2099,10 +2115,10 @@ public class NativeMongoSubscriptionModelTest {
         void a_start_refusal_listener_that_throws_does_not_keep_the_next_listener_from_being_told() {
             // Given
             List<String> told = new CopyOnWriteArrayList<>();
-            subscriptionModel.addStartRefusalListener((id, refusal) -> {
+            subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> {
                 throw new IllegalStateException("listener failed");
-            });
-            subscriptionModel.addStartRefusalListener((id, refusal) -> told.add(id));
+            }));
+            subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> told.add(id)));
             String subscriptionId = UUID.randomUUID().toString();
 
             // When
@@ -2119,9 +2135,9 @@ public class NativeMongoSubscriptionModelTest {
             // Given
             List<String> toldTheRemoved = new CopyOnWriteArrayList<>();
             List<String> toldTheKept = new CopyOnWriteArrayList<>();
-            StartRefusalListener removed = (id, refusal) -> toldTheRemoved.add(id);
+            StartRefusalListener removed = onStartRefusal((id, refusal) -> toldTheRemoved.add(id));
             subscriptionModel.addStartRefusalListener(removed);
-            subscriptionModel.addStartRefusalListener((id, refusal) -> toldTheKept.add(id));
+            subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> toldTheKept.add(id)));
             subscriptionModel.removeStartRefusalListener(removed);
             String subscriptionId = UUID.randomUUID().toString();
 
@@ -2139,7 +2155,7 @@ public class NativeMongoSubscriptionModelTest {
         void a_start_refusal_listener_is_not_told_of_a_refusal_of_a_run_a_cancel_has_closed() throws Exception {
             // Given
             List<String> told = new CopyOnWriteArrayList<>();
-            subscriptionModel.addStartRefusalListener((id, refusal) -> told.add(id));
+            subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> told.add(id)));
             String subscriptionId = UUID.randomUUID().toString();
             HoldsTheFirstRefusal holdsTheRefusal = new HoldsTheFirstRefusal();
             ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);

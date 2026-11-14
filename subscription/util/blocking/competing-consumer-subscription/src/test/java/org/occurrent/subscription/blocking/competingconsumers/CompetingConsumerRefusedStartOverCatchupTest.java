@@ -38,8 +38,10 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
+import org.occurrent.subscription.blocking.durable.catchup.StreamCatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.StartAtTime;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
@@ -91,7 +93,8 @@ class CompetingConsumerRefusedStartOverCatchupTest {
     private MongoClient mongoClient;
     private SpringMongoEventStore eventStore;
     private NativeMongoLeaseCompetingConsumerStrategy strategy;
-    private CatchupSubscriptionModel catchup;
+    private NativeMongoSubscriptionModel nativeModel;
+    private SubscriptionModel catchup;
     private CompetingConsumerSubscriptionModel competing;
     private final List<CloudEvent> delivered = new CopyOnWriteArrayList<>();
 
@@ -106,7 +109,7 @@ class CompetingConsumerRefusedStartOverCatchupTest {
         MongoTransactionManager transactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, databaseName));
         eventStore = new SpringMongoEventStore(mongoTemplate, new EventStoreConfig.Builder().eventStoreCollectionName(eventCollection)
                 .transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build());
-        NativeMongoSubscriptionModel nativeModel = new NativeMongoSubscriptionModel(database, eventCollection, TimeRepresentation.RFC_3339_STRING, Executors.newCachedThreadPool());
+        nativeModel = new NativeMongoSubscriptionModel(database, eventCollection, TimeRepresentation.RFC_3339_STRING, Executors.newCachedThreadPool());
         catchup = new CatchupSubscriptionModel(nativeModel, eventStore, new CatchupSubscriptionModelConfig(1000));
         strategy = new NativeMongoLeaseCompetingConsumerStrategy.Builder(database, "locks-" + UUID.randomUUID()).leaseTime(LEASE_TIME).build();
         competing = new CompetingConsumerSubscriptionModel(catchup, strategy);
@@ -127,6 +130,34 @@ class CompetingConsumerRefusedStartOverCatchupTest {
         // Given a start that the catch-up model passes straight to the native model, which answers a catch-up position for it
         StartAt skipsTheReplayAndIsRefusedByTheNativeModel = StartAt.dynamic(context -> {
             if (context.subscriptionModelType() == CatchupSubscriptionModel.class) {
+                return null;
+            }
+            return context.subscriptionModelType() == NativeMongoSubscriptionModel.class ? StartAt.checkpoint(GlobalCheckpoint.of(0)) : StartAt.now();
+        });
+
+        // When
+        Subscription subscription = competing.subscribe("A", SUBSCRIPTION_ID, null, skipsTheReplayAndIsRefusedByTheNativeModel, delivered::add);
+
+        // Then
+        assertThatThrownBy(() -> subscription.waitUntilStarted(EVENTUALLY))
+                .as("[waitUntilStarted answers although the native model refused the start]")
+                .isInstanceOf(UnsupportedStartAtException.class);
+        assertTheNodeGaveUpTheLeaseAndTheSubscriptionId();
+    }
+
+    @Timeout(value = 60, unit = SECONDS)
+    @Test
+    void a_start_that_skips_the_replay_and_that_the_native_model_refuses_is_reported_through_a_stream_catchup_model_used_directly_and_frees_the_lease_and_the_subscription_id() {
+        // Given a stream catch-up model that wraps the native model without the dispatcher, under the competing consumer model
+        competing.shutdown();
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+        MongoDatabase database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
+        nativeModel = new NativeMongoSubscriptionModel(database, requireNonNull(connectionString.getCollection()), TimeRepresentation.RFC_3339_STRING, Executors.newCachedThreadPool());
+        strategy = new NativeMongoLeaseCompetingConsumerStrategy.Builder(database, "locks-" + UUID.randomUUID()).leaseTime(LEASE_TIME).build();
+        catchup = new StreamCatchupSubscriptionModel(nativeModel, eventStore, new CatchupSubscriptionModelConfig(1000));
+        competing = new CompetingConsumerSubscriptionModel(catchup, strategy);
+        StartAt skipsTheReplayAndIsRefusedByTheNativeModel = StartAt.dynamic(context -> {
+            if (context.subscriptionModelType() == StreamCatchupSubscriptionModel.class) {
                 return null;
             }
             return context.subscriptionModelType() == NativeMongoSubscriptionModel.class ? StartAt.checkpoint(GlobalCheckpoint.of(0)) : StartAt.now();

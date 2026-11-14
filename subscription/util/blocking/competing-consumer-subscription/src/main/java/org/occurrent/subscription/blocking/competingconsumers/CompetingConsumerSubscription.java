@@ -2,13 +2,16 @@ package org.occurrent.subscription.blocking.competingconsumers;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.StringJoiner;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -87,6 +90,10 @@ public class CompetingConsumerSubscription implements Subscription {
     static final class StartRefusal {
         // Reported by the wrapped model, until the competing consumer model has acted on it
         final AtomicReference<@Nullable UnsupportedStartAtException> reported = new AtomicReference<>();
+        // Reported by the wrapped model each time it holds the consumer paused because the history its subscription would
+        // go live from is gone, until the competing consumer model has acted on it. Each report is kept, since a late one
+        // for an earlier hold can come after the one for the hold the wrapped model is in now
+        final Set<CatchupCannotResumeException> heldPaused = ConcurrentHashMap.newKeySet();
         private volatile @Nullable UnsupportedStartAtException refused;
         // Only waited for when the wrapped model reports its refusals, since nothing would act on one otherwise
         private final boolean reportedByTheWrappedModel;

@@ -841,10 +841,8 @@ class DcbCatchupSubscriptionModelTest {
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         // When
-        Subscription started = subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received));
-
-        // Then
-        assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(20)))
+        // Then the subscribe refuses before anything replays
+        assertThatThrownBy(() -> subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received)))
                 .isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContaining("subscription")
                 .hasMessageContaining("from the beginning again");
@@ -865,7 +863,7 @@ class DcbCatchupSubscriptionModelTest {
             @Override
             public boolean canResumeFrom(Checkpoint checkpoint) {
                 resumeProbes.add(checkpoint);
-                return resumeProbes.size() == 1;
+                return resumeProbes.size() <= 2;
             }
         };
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
@@ -879,7 +877,7 @@ class DcbCatchupSubscriptionModelTest {
                     .isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessageContaining("subscription")
                     .hasMessageContaining("from the beginning again");
-            assertThat(resumeProbes).as("asked before the replay and once after it, which did not run again").hasSize(2);
+            assertThat(resumeProbes).as("asked when subscribed, before the replay and once after it, which did not run again").hasSize(3);
             assertThat(received).as("delivered by the one replay").containsExactly(history.get(1), history.get(2));
         } finally {
             subscription.shutdown();

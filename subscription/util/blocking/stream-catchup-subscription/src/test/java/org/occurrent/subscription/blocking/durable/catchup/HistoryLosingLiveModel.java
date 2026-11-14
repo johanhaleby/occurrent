@@ -37,6 +37,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
@@ -56,7 +57,15 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     private final Set<Checkpoint> agedOut = ConcurrentHashMap.newKeySet();
     private final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
     private final AtomicInteger liveStartsRead = new AtomicInteger();
+    private record Committed(long sequence, CloudEvent cloudEvent) {
+    }
+
+    // What the live stream holds, in commit order, and the point in it each position answered by globalCheckpoint stands for
+    private final List<Committed> committed = new CopyOnWriteArrayList<>();
+    private final Map<String, Long> positionsRead = new ConcurrentHashMap<>();
+    private final AtomicLong commits = new AtomicLong();
     private volatile boolean running_ = true;
+    private volatile boolean answersNothingForTheCurrentPosition;
     private volatile @Nullable Checkpoint lossReportedInsideSubscribe;
     private volatile @Nullable Throwable nextSubscribeThrows;
     private volatile @Nullable RuntimeException nextRepositioningResumeThrows;
@@ -66,11 +75,14 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     };
     private volatile Runnable beforeTheNextResume = () -> {
     };
+    private volatile Runnable beforeTheNextSubscribe = () -> {
+    };
     private volatile boolean defersTheNextAfterPause;
     private volatile @Nullable Runnable deferredAfterPause;
 
     final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
     final List<String> subscribePausedCalls = new CopyOnWriteArrayList<>();
+    final List<StartAt> subscribePausedStartAts = new CopyOnWriteArrayList<>();
     final List<String> resumeCalls = new CopyOnWriteArrayList<>();
     final List<String> restartedFromNow = new CopyOnWriteArrayList<>();
     final List<Checkpoint> lossesReported = new CopyOnWriteArrayList<>();
@@ -105,6 +117,12 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     // Runs once, at the start of the next resume at a given position and before the subscription is resumed
     HistoryLosingLiveModel beforeTheNextResumeAt(Runnable beforeTheNextResumeAt) {
         this.beforeTheNextResumeAt = beforeTheNextResumeAt;
+        return this;
+    }
+
+    // Runs once, at the start of the next subscribe and before it fails or opens the subscription
+    HistoryLosingLiveModel beforeTheNextSubscribe(Runnable beforeTheNextSubscribe) {
+        this.beforeTheNextSubscribe = beforeTheNextSubscribe;
         return this;
     }
 
@@ -149,9 +167,22 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         reportLoss(subscriptionId, open, lostFrom);
     }
 
+    // The run a pause stopped reports late that its position is gone, as a change stream does that fails after the pause
+    void losesTheHistoryOfTheRunPaused(String subscriptionId, Checkpoint lostFrom) {
+        Open open = paused.get(subscriptionId);
+        if (open == null) {
+            throw new IllegalStateException("Subscription " + subscriptionId + " is not paused");
+        }
+        reportLoss(subscriptionId, open, lostFrom);
+    }
+
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         subscribeCalls.add(subscriptionId);
+        Runnable beforeThisSubscribe = beforeTheNextSubscribe;
+        beforeTheNextSubscribe = () -> {
+        };
+        beforeThisSubscribe.run();
         Throwable failure = nextSubscribeThrows;
         if (failure != null) {
             nextSubscribeThrows = null;
@@ -171,8 +202,24 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     @Override
     public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         subscribePausedCalls.add(subscriptionId);
+        subscribePausedStartAts.add(startAt);
         paused.put(subscriptionId, new Open(filter, action, startAt));
         return handle(subscriptionId);
+    }
+
+    // Commits an event to the live stream. A subscription opened from now never gets it, and one opened from a position
+    // read by globalCheckpoint before the commit gets it when it opens, as a stream resumed from a position does
+    void commits(CloudEvent cloudEvent) {
+        committed.add(new Committed(commits.incrementAndGet(), cloudEvent));
+    }
+
+    // The start a running subscription was opened at
+    StartAt startOf(String subscriptionId) {
+        Open open = running.get(subscriptionId);
+        if (open == null) {
+            throw new IllegalStateException("Subscription " + subscriptionId + " does not run");
+        }
+        return open.startAt();
     }
 
     // Hands an event to the action of a running subscription, as the live model does for an event it reads
@@ -231,6 +278,10 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
             return;
         }
         running.put(subscriptionId, open);
+        if (resolved instanceof StartAtCheckpoint position && positionsRead.containsKey(position.checkpoint.asString())) {
+            long after = positionsRead.get(position.checkpoint.asString());
+            committed.stream().filter(event -> event.sequence() > after).forEach(event -> open.action().accept(event.cloudEvent()));
+        }
     }
 
     private void reportLoss(String subscriptionId, Open open, Checkpoint lostFrom) {
@@ -283,14 +334,31 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         listeners.remove(listener);
     }
 
+    // As a live model does when the call that reads its current position was refused
+    HistoryLosingLiveModel answeringNothingForTheCurrentPosition() {
+        answersNothingForTheCurrentPosition = true;
+        return this;
+    }
+
     @Override
     public @Nullable Checkpoint globalCheckpoint() {
-        return new StringBasedCheckpoint("live-start-" + liveStartsRead.incrementAndGet());
+        if (answersNothingForTheCurrentPosition) {
+            return null;
+        }
+        String position = "live-start-" + liveStartsRead.incrementAndGet();
+        positionsRead.put(position, commits.get());
+        return new StringBasedCheckpoint(position);
     }
 
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint) {
         return !agedOut.contains(checkpoint);
+    }
+
+    // As the MongoDB models answer: it opens at any checkpoint but a catch-up's position, which it doesn't recognize
+    @Override
+    public boolean restartsAt(Checkpoint checkpoint) {
+        return !AbstractCatchupSubscriptionModel.isCatchupCheckpoint(checkpoint);
     }
 
     @Override
