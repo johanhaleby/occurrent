@@ -89,13 +89,6 @@ public record DcbMarkerVersions(String criteria, Map<String, MarkerVersion> mark
         public static MarkerVersion absent() {
             return ABSENT;
         }
-
-        /**
-         * Whether this is {@link #absent()}.
-         */
-        public boolean isAbsent() {
-            return version == 0;
-        }
     }
 
     public DcbMarkerVersions {

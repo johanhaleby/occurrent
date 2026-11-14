@@ -175,7 +175,7 @@ public final class DcbMarkerVersionsDocuments {
         for (String key : DcbMarkerVersionsSupport.selectionKeys(item)) {
             DcbMarkerVersions.MarkerVersion savedVersion = saved.get(key).orElseThrow(() -> new IllegalStateException("No saved version for " + key));
             Document marker = markersByKey.get(key);
-            if (marker == null && savedVersion.isAbsent()) {
+            if (marker == null && savedVersion.equals(DcbMarkerVersions.MarkerVersion.absent())) {
                 continue;
             }
             Objects.requireNonNull(marker, () -> "No marker for " + key);

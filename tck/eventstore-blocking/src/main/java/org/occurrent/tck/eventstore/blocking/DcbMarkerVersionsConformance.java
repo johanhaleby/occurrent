@@ -857,11 +857,11 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             DcbMarkerVersions saved = versionsOf(dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().withVersions()));
 
             assertThat(saved.keys()).as("A version for every marker key of the criteria, absent ones included").isEqualTo(keysOf(criteria));
-            assertThat(saved.markers().values().stream().filter(version -> !version.isAbsent()).toList())
+            assertThat(saved.markers().values().stream().filter(version -> !version.equals(MarkerVersion.absent())).toList())
                     .as("One event of the type was appended, so one part of its type has a marker, at version 1")
                     .hasSize(1)
                     .allSatisfy(version -> assertThat(version.version()).isEqualTo(1));
-            assertThat(saved.markers().values().stream().filter(MarkerVersion::isAbsent).count())
+            assertThat(saved.markers().values().stream().filter(version -> version.equals(MarkerVersion.absent())).count())
                     .as("Every other part of the type has no marker")
                     .isEqualTo(DcbMarkerVersionsSupport.STRIPES - 1);
         }
@@ -876,7 +876,7 @@ public abstract class DcbMarkerVersionsConformance extends EventStoreConformance
             assertThat(saved.markers().values())
                     .as("No event of the type was appended, so no part of it has a marker")
                     .hasSize(DcbMarkerVersionsSupport.STRIPES)
-                    .allSatisfy(version -> assertThat(version.isAbsent()).isTrue());
+                    .allSatisfy(version -> assertThat(version).isEqualTo(MarkerVersion.absent()));
         }
 
         @Test

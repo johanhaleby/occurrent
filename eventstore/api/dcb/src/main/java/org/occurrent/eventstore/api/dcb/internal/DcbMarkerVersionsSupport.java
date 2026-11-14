@@ -222,7 +222,7 @@ public final class DcbMarkerVersionsSupport {
         for (String key : keys) {
             DcbMarkerVersions.MarkerVersion savedVersion = saved.get(key).orElseThrow();
             MarkerObservation marker = observed.get(key);
-            if (savedVersion.isAbsent()) {
+            if (savedVersion.equals(DcbMarkerVersions.MarkerVersion.absent())) {
                 if (!isTypeKey(key)) {
                     throw new DcbSnapshotInvalidException(criteria, saved, "The saved marker versions have an absent entry for marker key " + key + ", which isn't a type marker key");
                 }

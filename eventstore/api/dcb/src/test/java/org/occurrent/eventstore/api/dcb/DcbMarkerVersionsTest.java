@@ -116,9 +116,9 @@ class DcbMarkerVersionsTest {
         }
 
         @Test
-        void is_absent_only_for_the_absent_value() {
-            assertThat(MarkerVersion.absent().isAbsent()).isTrue();
-            assertThat(new MarkerVersion("epoch-1", 1, 0).isAbsent()).isFalse();
+        void equal_only_to_the_absent_value_when_absent() {
+            assertThat(MarkerVersion.absent()).isEqualTo(new MarkerVersion(null, 0, 0));
+            assertThat(MarkerVersion.absent()).isNotEqualTo(new MarkerVersion("epoch-1", 1, 0));
         }
 
         @Test
@@ -152,8 +152,8 @@ class DcbMarkerVersionsTest {
             DcbMarkerVersions versions = DcbMarkerVersions.of(CRITERIA, Map.of("type:T", FIRST, "typestripe:3:T", MarkerVersion.absent()));
 
             assertThat(versions.get("typestripe:3:T")).contains(MarkerVersion.absent());
-            assertThat(versions.get("typestripe:3:T").orElseThrow().isAbsent()).isTrue();
-            assertThat(versions.get("type:T").orElseThrow().isAbsent()).isFalse();
+            assertThat(versions.get("typestripe:3:T").orElseThrow()).isEqualTo(MarkerVersion.absent());
+            assertThat(versions.get("type:T").orElseThrow()).isNotEqualTo(MarkerVersion.absent());
             assertThat(versions).isEqualTo(DcbMarkerVersions.of(CRITERIA, Map.of("type:T", FIRST, "typestripe:3:T", new MarkerVersion(null, 0, 0))));
         }
 

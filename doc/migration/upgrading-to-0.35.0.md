@@ -980,7 +980,7 @@ appends of one type with different tags share a document only when they pick the
 - A conditional append on such an item compares all eight documents of each type and increments them, so it still
   conflicts with every append of the type.
 - The `DcbMarkerVersions` of such an item hold eight entries per type. An entry for a document that doesn't exist yet
-  has no epoch and version 0, and `MarkerVersion.isAbsent()` is true for it. Such a boundary reports versions before
+  has no epoch and version 0, and it equals `MarkerVersion.absent()`. Such a boundary reports versions before
   any event of its types was appended.
 - A criteria item with tags reads no type marker, as
   [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags) says, so none of this
