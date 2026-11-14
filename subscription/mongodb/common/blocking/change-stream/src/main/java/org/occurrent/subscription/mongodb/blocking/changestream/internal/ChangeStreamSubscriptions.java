@@ -98,11 +98,12 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * Every method that changes which subscriptions are known is called with the model's monitor held, the one
  * {@link #ChangeStreamSubscriptions the constructor} is given, except {@link #start(boolean)}, {@link #stop()} and
  * {@link #shutdown()}, which take it themselves. The threads that read the change streams take it only when a history
- * is lost, to see whether the run still holds the subscription and to pause one a listener takes over, and wait for no
- * action while they hold it. Nothing waits for an action to return, or for the executor to shut down, while it holds
- * the monitor or a lock of this class, since a virtual thread that waits in a monitor keeps its carrier thread on JDK 21
- * to 23. So a pause returns the wait for the running action to the model, which runs it once it has let go of its
- * monitor. A pause, a cancel and a shutdown still close the cursor with the monitor held.
+ * is lost and when a restart or a resume at the present gets no position, to see whether the run still holds the
+ * subscription and to pause one a listener takes over or one held without a position, and wait for no action while
+ * they hold it. Nothing waits for an action to return, or for the executor to shut down, while it holds the monitor
+ * or a lock of this class, since a virtual thread that waits in a monitor keeps its carrier thread on JDK 21 to 23. So
+ * a pause returns the wait for the running action to the model, which runs it once it has let go of its monitor. A
+ * pause, a cancel and a shutdown still close the cursor with the monitor held.
  */
 @NullMarked
 public final class ChangeStreamSubscriptions {
@@ -527,7 +528,7 @@ public final class ChangeStreamSubscriptions {
                 if (restartSubscriptionsOnChangeStreamHistoryLost) {
                     StartAt restartPosition = restartPositionAfterHistoryLost(subscriptionId, internalSubscription, e);
                     if (restartPosition != null) {
-                        internalSubscription.restartsAfterHistoryLossFrom(restartPosition);
+                        internalSubscription.movedUnlessReplacedTo(restartPosition);
                     }
                     throw e;
                 } else {
@@ -583,7 +584,7 @@ public final class ChangeStreamSubscriptions {
     // listeners were asked about a loss before the restart, and there is no position to tell them it restarts from. A
     // waiter for this run to start, such as the handle a resume returned, is told the refusal, since it never starts
     private void heldPausedWithoutAPosition(String subscriptionId, InternalSubscription internalSubscription, NoPositionAtThePresent noPosition) {
-        if (pausedAfterHistoryLoss(subscriptionId, internalSubscription)) {
+        if (pausedOnThisRun(subscriptionId, internalSubscription)) {
             internalSubscription.refusedWhileHeld(noPosition.refusalOf(subscriptionId, internalSubscription.currentStartAt.get()));
             log.error("Cannot open the change stream of subscription {} at the present: {} It is paused, and resuming it asks MongoDB again.", subscriptionId, noPosition.getMessage(), noPosition);
         } else {
@@ -686,7 +687,7 @@ public final class ChangeStreamSubscriptions {
         if (takeOver == null) {
             return false;
         }
-        if (!pausedAfterHistoryLoss(subscriptionId, internalSubscription)) {
+        if (!pausedOnThisRun(subscriptionId, internalSubscription)) {
             log.debug("There was not enough oplog to resume subscription {} from {}, and a listener took it over, but it was paused, resumed or cancelled meanwhile, so the takeover is dropped.",
                     subscriptionId, lostFrom.asString(), historyLost);
             return true;
@@ -710,7 +711,7 @@ public final class ChangeStreamSubscriptions {
     // Under the model's monitor, which every pause, resume and cancel holds, so the subscription is in one of the two
     // maps at every moment and a cancel can't come between the two steps. Only while it is still on this run, as for
     // forget(..). Closes the cursor as a pause does, and waits for no action while the monitor is held
-    private boolean pausedAfterHistoryLoss(String subscriptionId, InternalSubscription internalSubscription) {
+    private boolean pausedOnThisRun(String subscriptionId, InternalSubscription internalSubscription) {
         synchronized (monitor) {
             if (shutdown || !runningSubscriptions.remove(subscriptionId, internalSubscription)) {
                 return false;
@@ -745,7 +746,7 @@ public final class ChangeStreamSubscriptions {
                         subscriptionId, MongoCommons.CURRENT_OPERATION_TIME_COMMAND.toJson(), MongoCommons.OPERATION_TIME, reply.toJson(), historyLost);
                 return StartAt.now();
             }
-            log.warn("There was not enough oplog to resume subscription {}, and the reply to {} had no {}, so it is not restarted from a present that cannot be stored. Its retry strategy decides whether to try the restart again. Reply was: {}",
+            log.warn("There was not enough oplog to resume subscription {}. The reply to {} had no {}, and a listener stores the restart position of this subscription, so it is not restarted. Its retry strategy decides whether to try the restart again. Reply was: {}",
                     subscriptionId, MongoCommons.CURRENT_OPERATION_TIME_COMMAND.toJson(), MongoCommons.OPERATION_TIME, reply.toJson(), historyLost);
             return null;
         }
@@ -1609,19 +1610,8 @@ public final class ChangeStreamSubscriptions {
             }
         }
 
+        // A resume that replaced this run keeps the position it set
         void movedUnlessReplacedTo(StartAt position) {
-            lock.lock();
-            try {
-                if (!replaced) {
-                    currentStartAt.set(position);
-                }
-            } finally {
-                lock.unlock();
-            }
-        }
-
-        // Under the same lock as movedUnlessReplacedTo, so a resume that replaced this run keeps the position it set
-        void restartsAfterHistoryLossFrom(StartAt position) {
             lock.lock();
             try {
                 if (!replaced) {
