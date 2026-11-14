@@ -893,6 +893,10 @@ class StreamCatchupTakeoverLifecycleTest {
             public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
                 heldPausedReports.add(refusal);
             }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+            }
         });
         catchup.listenForCatchup(ID, new CatchupListener() {
             @Override

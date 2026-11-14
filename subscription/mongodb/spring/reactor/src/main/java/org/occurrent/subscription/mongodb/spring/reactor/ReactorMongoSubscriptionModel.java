@@ -639,7 +639,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             }
             return operationTimeAsOf(presentAt.get())
                     .flatMap(operationTime -> {
-                        StartAt pinned = MongoCommons.pinnedTo(tracked, operationTime);
+                        StartAt pinned = MongoCommons.pinnedTo(tracked, new MongoOperationTimeCheckpoint(operationTime));
                         if (record.test(tracked, pinned)) {
                             StartAt openingPosition = StartAt.checkpoint(new MongoOperationTimeCheckpoint(operationTime));
                             opened.accept(new OpenedAt(openingPosition, pinned));

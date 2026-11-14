@@ -48,7 +48,10 @@ public interface HistoryLossReportingSubscriptions extends SubscriptionModelCapa
      * While a listener whose {@link HistoryLossListener#storesRestartPositionOf(String)} answers {@code true} for a
      * subscription is added, a model whose reply to {@code ping} has no operation time doesn't restart that
      * subscription after its history was lost, and tries again as its {@code RetryStrategy} says. Every other
-     * subscription restarts from the present.
+     * subscription restarts from the present, which such a model then reads from its change stream. When that read
+     * gives no position, the model holds the subscription paused instead, and a resume reads again. A subscription
+     * that starts at the present on such a model is refused when that read gives no position, as
+     * {@link StartRefusalReportingSubscriptions} describes.
      *
      * @param listener The listener to add.
      */

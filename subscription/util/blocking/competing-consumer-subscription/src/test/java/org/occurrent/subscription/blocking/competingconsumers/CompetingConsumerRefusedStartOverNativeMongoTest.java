@@ -191,6 +191,10 @@ class CompetingConsumerRefusedStartOverNativeMongoTest {
             public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
                 throw new AssertionError("A MongoDB model never holds a subscription paused, but was asked to for " + subscriptionId, refusal);
             }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+            }
         };
     }
 

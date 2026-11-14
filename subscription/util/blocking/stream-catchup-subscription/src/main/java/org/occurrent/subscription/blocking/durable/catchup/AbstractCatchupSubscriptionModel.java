@@ -35,6 +35,7 @@ import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
@@ -1170,6 +1171,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
         return holdsTheReplayHeldFor(subscriptionId, refusal)
                || StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).map(liveDelegate -> liveDelegate.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
+    }
+
+    /**
+     * Answers what the live delegate answers, since only the live delegate holds a subscription paused for want of a
+     * position at the present, and the listener is passed on to it.
+     */
+    @Override
+    public boolean isHeldPausedFor(String subscriptionId, UnsupportedStartAtException refusal) {
+        return StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).map(liveDelegate -> liveDelegate.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
     }
 
     /**

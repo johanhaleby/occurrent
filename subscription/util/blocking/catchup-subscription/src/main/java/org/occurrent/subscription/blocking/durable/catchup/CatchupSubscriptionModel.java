@@ -527,6 +527,15 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     }
 
     /**
+     * Answers what the wrapped model answers, since only the wrapped model holds a subscription paused for want of a
+     * position at the present, and listeners are passed on to it.
+     */
+    @Override
+    public boolean isHeldPausedFor(String subscriptionId, UnsupportedStartAtException refusal) {
+        return StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(wrapped -> wrapped.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
+    }
+
+    /**
      * Answers what the wrapped model answers, since only the wrapped model refuses a start position after
      * {@code subscribe} has returned, and {@code false} when it doesn't report its refusals.
      */

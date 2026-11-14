@@ -2452,6 +2452,10 @@ class StreamCatchupSubscriptionModelTest {
         public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             heldPaused.add(refusal);
         }
+
+        @Override
+        public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+        }
     }
 
     /**
