@@ -69,7 +69,7 @@ class CatchupLifecyclePropertyTest {
         assertThat(run.notes).as(run.toString()).isEmpty();
     }
 
-    @Disabled("Unowned (nearest #1225, #1237): a cancel(b) overlapping subscribe(b) returned and b's action started afterwards, in about 1 of 50 runs. Shrunk composite start=300us [[subscribe(a), resume(a), cancel(b)], [subscribe(b), subscribe(a), subscribe(a)], [resume(a)]], seed 3712755869129851291")
+    @Disabled("#1515: a cancel(b) overlapping subscribe(b) returned and b's action started afterwards, in about 1 of 50 runs. Shrunk composite start=300us [[subscribe(a), resume(a), cancel(b)], [subscribe(b), subscribe(a), subscribe(a)], [resume(a)]], seed 3712755869129851291")
     @Property(tries = 200)
     void s2_without_pause_no_action_starts_after_a_cancel_or_a_stop_has_returned(@ForAll("mixedScenariosWithoutPause") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
@@ -90,7 +90,7 @@ class CatchupLifecyclePropertyTest {
         assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
     }
 
-    @Disabled("Unowned (nearest #1225, #1237): resume(b) after stop() returns ok while the model stays stopped and b parked, when the subscribe(b) it resumes overlapped the stop. Shrunk plain [[subscribe(b)], [stop, resume(b)]], seed 3464570091306833055")
+    @Disabled("#1516: resume(b) after stop() returns ok while the model stays stopped and b parked, when the subscribe(b) it resumes overlapped the stop. Shrunk plain [[subscribe(b)], [stop, resume(b)]], seed 3464570091306833055")
     @Property(tries = 200)
     void mixed_calls_without_pause_end_equal_to_some_serial_order(@ForAll("mixedScenariosWithoutPause") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);

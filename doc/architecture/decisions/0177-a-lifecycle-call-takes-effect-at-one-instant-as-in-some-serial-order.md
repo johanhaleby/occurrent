@@ -236,6 +236,16 @@ delivered, and a later catch-up gets the replay turn.
 A property the code breaks today stays in the harness, disabled with the number of the issue that owns it. The unit
 that fixes that issue enables it. The timeout results are not exercised, because the 10 second wait is a constant.
 
+These are disabled today:
+
+* [#1256](https://github.com/johanhaleby/occurrent/issues/1256), a pause during a replay that a subscribe started
+  returns and the replay goes live anyway. S2 with a pause, both serial-order properties with a pause, and 2 examples.
+* [#1515](https://github.com/johanhaleby/occurrent/issues/1515), a cancel that overlaps a subscribe of the same id
+  returns and the action starts afterwards. S2 without a pause.
+* [#1516](https://github.com/johanhaleby/occurrent/issues/1516), `resumeSubscription(id)` after `stop()` returns
+  normally and the model stays stopped. The serial-order property without a pause, and 1 example.
+* #893 item 32, a cancel before the marker step still writes the marker. 1 handover property and 1 example.
+
 The reactor harness comes with L3.
 
 ### Issues the rule closes
@@ -244,7 +254,7 @@ An issue closes by construction when any change that meets the rule and passes t
 
 | Unit | Closes by construction | Doesn't |
 | --- | --- | --- |
-| L2, blocking catch-up | [#1225](https://github.com/johanhaleby/occurrent/issues/1225), [#1226](https://github.com/johanhaleby/occurrent/issues/1226), [#1237](https://github.com/johanhaleby/occurrent/issues/1237), [#1252](https://github.com/johanhaleby/occurrent/issues/1252), [#1255](https://github.com/johanhaleby/occurrent/issues/1255), [#1256](https://github.com/johanhaleby/occurrent/issues/1256), [#1257](https://github.com/johanhaleby/occurrent/issues/1257), [#1258](https://github.com/johanhaleby/occurrent/issues/1258), [#1269](https://github.com/johanhaleby/occurrent/issues/1269), [#1271](https://github.com/johanhaleby/occurrent/issues/1271), [#1266](https://github.com/johanhaleby/occurrent/issues/1266) item 1 | [#946](https://github.com/johanhaleby/occurrent/issues/946) (javadoc), [#1272](https://github.com/johanhaleby/occurrent/issues/1272) (test gaps), #1266 items 2 to 5 |
+| L2, blocking catch-up | [#1225](https://github.com/johanhaleby/occurrent/issues/1225), [#1226](https://github.com/johanhaleby/occurrent/issues/1226), [#1237](https://github.com/johanhaleby/occurrent/issues/1237), [#1252](https://github.com/johanhaleby/occurrent/issues/1252), [#1255](https://github.com/johanhaleby/occurrent/issues/1255), [#1256](https://github.com/johanhaleby/occurrent/issues/1256), [#1257](https://github.com/johanhaleby/occurrent/issues/1257), [#1258](https://github.com/johanhaleby/occurrent/issues/1258), [#1269](https://github.com/johanhaleby/occurrent/issues/1269), [#1271](https://github.com/johanhaleby/occurrent/issues/1271), [#1515](https://github.com/johanhaleby/occurrent/issues/1515), [#1516](https://github.com/johanhaleby/occurrent/issues/1516), [#1266](https://github.com/johanhaleby/occurrent/issues/1266) item 1 | [#946](https://github.com/johanhaleby/occurrent/issues/946) (javadoc), [#1272](https://github.com/johanhaleby/occurrent/issues/1272) (test gaps), #1266 items 2 to 5 |
 | L3, reactor catch-up | [#1156](https://github.com/johanhaleby/occurrent/issues/1156), [#1239](https://github.com/johanhaleby/occurrent/issues/1239), [#1268](https://github.com/johanhaleby/occurrent/issues/1268), [#1270](https://github.com/johanhaleby/occurrent/issues/1270) | |
 | HO1, handover engines | #893 items 31, 32 and 33, [#1058](https://github.com/johanhaleby/occurrent/issues/1058), [#1062](https://github.com/johanhaleby/occurrent/issues/1062), [#1105](https://github.com/johanhaleby/occurrent/issues/1105), [#1134](https://github.com/johanhaleby/occurrent/issues/1134), [#1240](https://github.com/johanhaleby/occurrent/issues/1240), [#1278](https://github.com/johanhaleby/occurrent/issues/1278), [#1280](https://github.com/johanhaleby/occurrent/issues/1280), the `replayOpen` item of [#1107](https://github.com/johanhaleby/occurrent/issues/1107) | #893 item 29 (an API change), [#1057](https://github.com/johanhaleby/occurrent/issues/1057) (test timing), #893 item 11 (a test) |
 
