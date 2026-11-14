@@ -83,12 +83,7 @@ final class BoundTransactionOptions {
         }
         DcbAppendConditionCheck.restartAtOnePointInTime(running).ifPresent(restarted -> {
             session.abortTransaction();
-            try {
-                session.startTransaction(restarted);
-            } catch (RuntimeException e) {
-                // The append must not run outside a transaction, so it gets the options it had
-                session.startTransaction(running);
-            }
+            session.startTransaction(restarted);
         });
     }
 

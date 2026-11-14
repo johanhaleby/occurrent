@@ -87,14 +87,7 @@ final class BoundTransactionOptions {
                         return Mono.<Void>empty();
                     }
                     return DcbAppendConditionCheck.restartAtOnePointInTime(running)
-                            .map(restarted -> Mono.from(session.abortTransaction()).then(Mono.<Void>fromRunnable(() -> {
-                                try {
-                                    session.startTransaction(restarted);
-                                } catch (RuntimeException e) {
-                                    // The append must not run outside a transaction, so it gets the options it had
-                                    session.startTransaction(running);
-                                }
-                            })))
+                            .map(restarted -> Mono.from(session.abortTransaction()).then(Mono.<Void>fromRunnable(() -> session.startTransaction(restarted))))
                             .orElseGet(Mono::empty);
                 })
                 .onErrorResume(NoTransactionException.class, e -> Mono.empty());

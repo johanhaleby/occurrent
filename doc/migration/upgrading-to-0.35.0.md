@@ -833,6 +833,9 @@ options the transaction manager and the `MongoClient` gave it, at read concern `
 A `wtimeout`, a journal flag and a `maxCommitTime` set there still apply. The native `MongoEventStore` keeps them from
 its own `TransactionOptions`, or from the `MongoClient` when those have no write concern.
 
+On all three stores a conditional append through a mongos commits with `w` set to `majority`. A stronger `w`, such as
+`3` or a custom write concern name, applies only at `majority` there.
+
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
 Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with
 `withVersions()` doesn't when its stream reports `markerVersions()`, because it read both in one snapshot transaction.

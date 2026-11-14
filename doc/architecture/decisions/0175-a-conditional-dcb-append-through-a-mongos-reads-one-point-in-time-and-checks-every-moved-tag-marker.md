@@ -59,8 +59,11 @@ bound session runs, and gives the check one of three scopes.
 The Spring stores reach the bound session through a private subclass of `MongoTransactionManager` or
 `ReactiveMongoTransactionManager` that calls the protected `doGetTransaction`. That's an internal of Spring Data 5.1,
 kept in one class per store, `BoundTransactionOptions`. A test asserts what it returns, so an upgrade that changes it
-fails the build. At run time a cast that fails, a missing session, a transaction object of another class and any
-exception all leave the transaction as it began and give `MARKERS_ONLY`, never `SNAPSHOT_THROUGH_MONGOS`.
+fails the build. At run time a cast that fails, a missing session, a transaction object of another class or any
+exception while the store reads the options gives `MARKERS_ONLY`, never `SNAPSHOT_THROUGH_MONGOS`. The same failures
+while the store looks for the session whose transaction it starts again leave the transaction as it began. When the
+driver refuses to start the transaction again after the abort, the append fails with the driver's exception before it
+has written anything.
 
 The store starts a transaction again only when the transaction status says it's new and the status's transaction
 object holds the bound session. A caller's transaction that the append joins isn't new. A new transaction of another
@@ -94,7 +97,9 @@ An item without tags already worked this way on a replica set, and it does the s
   append joins the session it read in. Through a mongos the append then gets `MARKERS_ONLY` unless the client's defaults
   are `snapshot` and `majority`. That refuses more than it has to, and lets nothing through.
 - A conditional append through a mongos keeps the `wtimeout`, the journal flag and the other options of the
-  transaction manager or the client on all three stores.
+  transaction manager or the client on all three stores. Its `w` becomes `majority`, so a stronger `w`, such as `3` or
+  a custom write concern name, applies only at `majority` there. Keeping a stronger `w` would leave the check
+  `MARKERS_ONLY`, since it passes only at `majority`.
 - The type marker stripes of [ADR 162](0162-a-dcb-type-marker-is-split-into-stripes.md) change only the keys of an item
   without tags, which already select on every moved key in every scope. This ADR changes step 3 only for items with
   tags, whose keys the stripes don't touch. I checked this by reading the stripes change in
