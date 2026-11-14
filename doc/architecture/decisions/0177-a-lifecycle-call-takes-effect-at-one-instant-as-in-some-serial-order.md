@@ -25,7 +25,8 @@ could leave. Four examples:
   twice at once when `start(true)` follows a `stop()`.
 * [#893](https://github.com/johanhaleby/occurrent/issues/893) item 32: a stop that comes while a handover delivers what
   it buffered during the replay still lets the catch-up report success, and the reactive one delivers those events
-  after `stop()` returned.
+  after `stop()` returned. [#1293](https://github.com/johanhaleby/occurrent/issues/1293) lists the items of #893 that
+  are still open for 0.35.0, under the same numbers.
 
 The fixes so far each closed the window their issue found. On the blocking catch-up that added `lifecycleGeneration`,
 `liveDelegateResumes` and `stoppedByFailedStart` to `AbstractCatchupSubscriptionModel`, next to the per-id claim and
@@ -211,8 +212,8 @@ The catch-up marker is written in this order on both stacks:
 4. Write the marker.
 
 `ReactiveHandover` writes the marker before step 3 today
-([#893](https://github.com/johanhaleby/occurrent/issues/893) item 31). A stop or cancel that takes effect before step 4
-means no marker is written and the catch-up ends as stopped, not as done (#893 item 32). A failure is permanent, and
+([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 31). A stop or cancel that takes effect before step 4
+means no marker is written and the catch-up ends as stopped, not as done (#1293 item 32). A failure is permanent, and
 on `ReactiveHandover` it also forgets the marker. Keeping a late store write from bringing the marker back after that is
 [#1150](https://github.com/johanhaleby/occurrent/issues/1150)'s.
 
@@ -224,7 +225,7 @@ The engine's lock and its replay turn are the only locks the rule needs here. St
 checks under the engine lock that the turn is still its own. The blocking push model's `markerLocks` are replaced by
 that turn. On both push models the `synchronized(this)` monitor becomes a lock that nothing waits under, stores nothing
 and calls no engine method
-([#893](https://github.com/johanhaleby/occurrent/issues/893) item 33).
+([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 33).
 
 A `DomainEventFeed` registration is a lifecycle call on the feed's id. A failed engine leaves the failed phase only by a
 reset ([#1291](https://github.com/johanhaleby/occurrent/issues/1291)). A registrar `close()` takes effect before or
@@ -252,9 +253,11 @@ The reference model covers `subscribe`, `cancelSubscription`, `pauseSubscription
 `shutdown()`, `subscribePaused`, `resumeSubscription(id, startAt)`, a live start that is gone or a takeover, so the
 harness checks none of those rows yet.
 
-S1 and S2 are checked while the run is going, by a wrapper around the action. The S2 check skips a pause or a stop
-that a resume of the same id or a `start(true)` overlaps, because that call can take effect after it. The harness
-doesn't catch an action that starts in that window.
+S1 and S2 are checked while the run is going, by a wrapper around the action. A pause or a stop holds back only the
+subscriptions whose subscribe returned before it was called. The S2 check lifts it for a `resumeSubscription(X)` that
+returned normally or a `start(true)` that didn't fail before it took effect, when that call ended after the pause or
+the stop was called or hasn't ended yet, because it can take effect after the pause or the stop. The harness doesn't
+catch an action that starts in that window. A resume or a `start(true)` that failed without resuming lifts nothing.
 
 For `BlockingHandover`, a runner steps one replay thread through its history reads and the drain, and runs each accept
 call on a thread of its own. There is no reference model of the handover. Its properties check what holds in every
@@ -271,20 +274,30 @@ that fixes that issue enables it. The timeout results are not exercised, because
 
 These are disabled today:
 
+* [#1237](https://github.com/johanhaleby/occurrent/issues/1237), a `stop()` that overlaps a `start(..)` ends with the
+  model running and a replay parked. Both mixed serial-order properties.
 * [#1256](https://github.com/johanhaleby/occurrent/issues/1256), a pause during a replay that a subscribe started
-  returns, and the replay keeps delivering to the action until the handover. S2 with a pause, both serial-order
-  properties with a pause, and 2 examples.
+  returns, and the replay keeps delivering to the action until the handover. S2 with a pause, the mixed serial-order
+  property with a pause, and 1 example.
 * [#1515](https://github.com/johanhaleby/occurrent/issues/1515), an action starts after a cancel of its id returned,
   although the subscribe had returned before the cancel began. S2 without a pause.
 * [#1516](https://github.com/johanhaleby/occurrent/issues/1516), `resumeSubscription(id)` after `stop()` returns
-  normally and the model stays stopped, when the subscribe it resumes overlapped the stop. The serial-order property
-  without a pause, and 1 example.
+  normally and the model stays stopped, when the subscribe it resumes overlapped the stop. The mixed serial-order
+  property without a pause, and 1 example.
 * [#1517](https://github.com/johanhaleby/occurrent/issues/1517), a cancel returns while the action of the subscription
   it cancels still runs, and a new subscribe of the same id enters a second call to the action. S1.
 * [#1520](https://github.com/johanhaleby/occurrent/issues/1520), a `start(true)` whose wrapped model throws after it
   started keeps the parked replays parked. The serial property on scripts that can hold such a call, and 1 example.
-  The serial property on all other scripts stays enabled.
-* #893 item 32, a cancel before the marker step still writes the marker. 1 handover property and 1 example.
+* [#1524](https://github.com/johanhaleby/occurrent/issues/1524), a second `pauseSubscription(X)` during a replay that a
+  subscribe started returns normally instead of throwing `SubscriptionNotRunningException`. Both serial-order
+  properties with a pause, and 1 example.
+* [#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 32, a catch-up that is cancelled once its history
+  has been read still returns true and writes the marker. 2 handover properties and 2 examples.
+
+Each disabled property except S2 with a pause has an enabled copy that runs the same check on scripts without the
+calls its issues need, such as a second pause of one id, or a `stop()` in the same script as a `start(..)` or a
+resume. The copy's name says which calls it drops. S2 with a pause has no copy, because without the pause it checks
+nothing.
 
 The reactor harness comes with L3.
 
@@ -296,7 +309,7 @@ An issue closes by construction when any change that meets the rule and passes t
 | --- | --- | --- |
 | L2, blocking catch-up | [#1225](https://github.com/johanhaleby/occurrent/issues/1225), [#1226](https://github.com/johanhaleby/occurrent/issues/1226), [#1237](https://github.com/johanhaleby/occurrent/issues/1237), [#1252](https://github.com/johanhaleby/occurrent/issues/1252), [#1255](https://github.com/johanhaleby/occurrent/issues/1255), [#1256](https://github.com/johanhaleby/occurrent/issues/1256), [#1257](https://github.com/johanhaleby/occurrent/issues/1257), [#1258](https://github.com/johanhaleby/occurrent/issues/1258), [#1269](https://github.com/johanhaleby/occurrent/issues/1269), [#1271](https://github.com/johanhaleby/occurrent/issues/1271), [#1515](https://github.com/johanhaleby/occurrent/issues/1515), [#1516](https://github.com/johanhaleby/occurrent/issues/1516), [#1517](https://github.com/johanhaleby/occurrent/issues/1517), [#1520](https://github.com/johanhaleby/occurrent/issues/1520), [#1266](https://github.com/johanhaleby/occurrent/issues/1266) item 1 | [#946](https://github.com/johanhaleby/occurrent/issues/946) (javadoc), [#1272](https://github.com/johanhaleby/occurrent/issues/1272) (test gaps), #1266 items 2 to 5 |
 | L3, reactor catch-up | [#1156](https://github.com/johanhaleby/occurrent/issues/1156), [#1239](https://github.com/johanhaleby/occurrent/issues/1239), [#1268](https://github.com/johanhaleby/occurrent/issues/1268), [#1270](https://github.com/johanhaleby/occurrent/issues/1270) | |
-| HO1, handover engines | #893 items 31, 32 and 33, [#1058](https://github.com/johanhaleby/occurrent/issues/1058), [#1062](https://github.com/johanhaleby/occurrent/issues/1062), [#1105](https://github.com/johanhaleby/occurrent/issues/1105), [#1134](https://github.com/johanhaleby/occurrent/issues/1134), [#1240](https://github.com/johanhaleby/occurrent/issues/1240), [#1278](https://github.com/johanhaleby/occurrent/issues/1278), [#1280](https://github.com/johanhaleby/occurrent/issues/1280), the `replayOpen` item of [#1107](https://github.com/johanhaleby/occurrent/issues/1107) | #893 item 29 (an API change), [#1057](https://github.com/johanhaleby/occurrent/issues/1057) (test timing), #893 item 11 (a test) |
+| HO1, handover engines | #1293 items 31, 32 and 33, [#1058](https://github.com/johanhaleby/occurrent/issues/1058), [#1062](https://github.com/johanhaleby/occurrent/issues/1062), [#1105](https://github.com/johanhaleby/occurrent/issues/1105), [#1134](https://github.com/johanhaleby/occurrent/issues/1134), [#1240](https://github.com/johanhaleby/occurrent/issues/1240), [#1278](https://github.com/johanhaleby/occurrent/issues/1278), [#1280](https://github.com/johanhaleby/occurrent/issues/1280), the `replayOpen` item of [#1107](https://github.com/johanhaleby/occurrent/issues/1107) | #1293 item 29 (an API change), [#1057](https://github.com/johanhaleby/occurrent/issues/1057) (test timing), #1293 item 11 (a test) |
 
 Four more issues are owned outside these units and built against the rule. #1291 and #1032 are the feed's, #1262 is
 `ManualStartSubscriptionModel`'s ([#1262](https://github.com/johanhaleby/occurrent/issues/1262)), and #1264 uses the

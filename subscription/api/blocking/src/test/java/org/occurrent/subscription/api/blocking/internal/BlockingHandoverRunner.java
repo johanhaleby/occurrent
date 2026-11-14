@@ -249,7 +249,8 @@ final class BlockingHandoverRunner {
             notes.add("a later catch-up never returned, so the replay turn was not released");
             later.interrupt();
         }
-        if (!later.isAlive() && !"true".equals(clean.outcome) && !"false".equals(clean.outcome)) {
+        // A fold failure that the script armed and nothing consumed can still fire in this catch-up, and then it may throw
+        if (!later.isAlive() && !"true".equals(clean.outcome) && !"false".equals(clean.outcome) && clean.failuresFiredAt.isEmpty()) {
             notes.add("the later catch-up did not return, it gave " + clean.outcome);
         }
         replayed.addAll(clean.yielded);

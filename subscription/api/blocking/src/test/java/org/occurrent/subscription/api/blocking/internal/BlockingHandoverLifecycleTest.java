@@ -44,12 +44,39 @@ class BlockingHandoverLifecycleTest {
         return scripts(true);
     }
 
-    @Disabled("#893.32: the drain and the marker run after the last keepReplaying check, so a cancel before the marker step still writes the marker. Shrunk live [CATCH_UP, STEP, STEP, STEP, CATCH_UP, CATCH_UP, CANCEL]")
+    @Disabled("#1293 item 32: a catch-up that is cancelled or stopped once its history has been read still returns true and writes the marker. Shrunk live [CATCH_UP, STEP, STEP, STEP, CATCH_UP, CANCEL]")
     @Property(tries = 500)
     void the_marker_is_written_only_for_a_catch_up_nothing_cancelled(@ForAll("withoutFailures") Script script) {
         Trace trace = BlockingHandoverRunner.run(script);
         assertThat(BlockingHandoverSpec.markerViolations(trace)).as(script + " " + trace).isEmpty();
         assertThat(trace.notes()).as(script + " " + trace).isEmpty();
+    }
+
+    @Disabled("#1293 item 32: a catch-up that is cancelled or stopped once its history has been read still returns true. Shrunk live [CATCH_UP, STEP, STEP, STEP, CATCH_UP, CANCEL]")
+    @Property(tries = 500)
+    void a_catch_up_that_was_cancelled_before_it_returned_does_not_return_true(@ForAll("withoutFailures") Script script) {
+        Trace trace = BlockingHandoverRunner.run(script);
+        assertThat(BlockingHandoverSpec.stoppedCatchUpViolations(trace)).as(script + " " + trace).isEmpty();
+    }
+
+    @Disabled("#1293 item 32: the catch-up returns true although keepReplaying turned false before the drain")
+    @Example
+    void a_cancel_at_the_drain_does_not_let_the_catch_up_return_true() {
+        Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(CATCH_UP, STEP, STEP, STEP, CANCEL)));
+        assertThat(BlockingHandoverSpec.stoppedCatchUpViolations(trace)).isEmpty();
+    }
+
+    @Example
+    void a_catch_up_cancelled_before_it_returned_that_returned_true_is_a_violation() {
+        Trace trace = new Trace(BlockingHandoverRunner.HISTORY, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(new BlockingHandoverSpec.CatchUp("true", true)));
+        assertThat(BlockingHandoverSpec.stoppedCatchUpViolations(trace)).hasSize(1);
+    }
+
+    @Example
+    void an_applied_copy_of_the_history_that_delivered_nothing_is_a_violation() {
+        BlockingHandoverSpec.Offer applied = new BlockingHandoverSpec.Offer("h1", "accept", "applied", false);
+        Trace trace = new Trace(BlockingHandoverRunner.HISTORY, List.of(), List.of(applied), List.of(), List.of(), List.of(), List.of());
+        assertThat(BlockingHandoverSpec.deliveryViolations(trace)).hasSize(1).first().asString().contains("h1").contains("never delivered");
     }
 
     @Property(tries = 500)
@@ -58,7 +85,7 @@ class BlockingHandoverLifecycleTest {
         assertThat(BlockingHandoverSpec.deliveryViolations(trace)).as(script + " " + trace).isEmpty();
     }
 
-    @Disabled("#893.32: the marker is written although keepReplaying turned false before the drain")
+    @Disabled("#1293 item 32: the marker is written although keepReplaying turned false before the drain")
     @Example
     void a_cancel_at_the_drain_writes_no_marker() {
         Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(CATCH_UP, STEP, STEP, STEP, CANCEL)));

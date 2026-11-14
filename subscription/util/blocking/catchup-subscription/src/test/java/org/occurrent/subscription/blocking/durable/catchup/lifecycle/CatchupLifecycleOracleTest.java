@@ -3,6 +3,8 @@ package org.occurrent.subscription.blocking.durable.catchup.lifecycle;
 import io.cloudevents.CloudEvent;
 import net.jqwik.api.Example;
 import org.occurrent.subscription.blocking.durable.catchup.lifecycle.CatchupLifecycleSpec.Observed;
+import org.occurrent.subscription.blocking.durable.catchup.lifecycle.CatchupLifecycleSpec.Phase;
+import org.occurrent.subscription.blocking.durable.catchup.lifecycle.CatchupLifecycleSpec.Step;
 import org.occurrent.subscription.blocking.durable.catchup.lifecycle.CatchupLifecycleSpec.Timing;
 import org.occurrent.subscription.blocking.durable.catchup.lifecycle.LifecycleCall.Kind;
 import org.occurrent.subscription.blocking.durable.catchup.lifecycle.LifecycleCall.Scenario;
@@ -48,6 +50,14 @@ class CatchupLifecycleOracleTest {
         Timing overlapping = timing(new long[]{1}, new long[]{4}, new long[]{2}, new long[]{3});
         assertThat(CatchupLifecycleSpec.accepts(SUBSCRIBE_THEN_CANCEL, BOTH_OK, overlapping, A_IS_RUNNING, Set.of("a", "b")))
                 .as("a cancel that overlapped the subscribe can take effect first").isTrue();
+    }
+
+    @Example
+    void a_pause_of_a_replaying_subscription_holds_it_like_a_parked_one() {
+        Step paused = CatchupLifecycleSpec.apply(CatchupLifecycleSpec.initial().with("a", Phase.REPLAYING), call(Kind.PAUSE, "a"));
+        assertThat(paused.outcome()).isEqualTo(CatchupLifecycleSpec.OK);
+        assertThat(paused.next().subscriptions().get("a")).isEqualTo(Phase.PARKED);
+        assertThat(CatchupLifecycleSpec.apply(paused.next(), call(Kind.PAUSE, "a")).outcome()).isEqualTo(CatchupLifecycleSpec.NOT_RUNNING);
     }
 
     private static final LifecycleCall SUBSCRIBE_A = call(Kind.SUBSCRIBE, "a");

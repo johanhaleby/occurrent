@@ -9,6 +9,7 @@ import org.occurrent.subscription.blocking.durable.catchup.lifecycle.LifecycleCa
 import org.occurrent.subscription.blocking.durable.catchup.lifecycle.LifecycleCall.StartFailure;
 
 import java.util.List;
+import java.util.function.Predicate;
 
 /**
  * Scenarios of 2 to 3 threads with 1 to 3 calls each over the ids a and b. A scenario shrinks toward fewer threads, fewer
@@ -43,6 +44,45 @@ final class LifecycleScripts {
 
     static Arbitrary<List<LifecycleCall>> serialScriptsWithoutStartTrueAfterEffect() {
         return mixedCalls().filter(call -> !(call.kind() == Kind.START_TRUE && call.failure() == StartFailure.AFTER_EFFECT)).list().ofMinSize(1).ofMaxSize(6);
+    }
+
+    /** Without a scenario in which an id is cancelled and subscribed by two or more calls, the shape of #1517 */
+    static Arbitrary<Scenario> withoutAnIdCancelledAndSubscribedMoreThanOnce(Arbitrary<Scenario> scenarios) {
+        return scenarios.filter(scenario -> IDS.stream().noneMatch(id -> count(scenario, Kind.CANCEL, id) > 0 && count(scenario, Kind.SUBSCRIBE, id) > 1));
+    }
+
+    /** Without a cancel, since a cancel after the subscribe returned can see the replay deliver after it returned, the shape of #1515 */
+    static Arbitrary<Scenario> mixedScenariosWithoutPauseAndWithoutCancel() {
+        return scenarios(mixedCalls().filter(call -> call.kind() != Kind.PAUSE && call.kind() != Kind.CANCEL));
+    }
+
+    /** Without a scenario that has a stop() together with a start(..) or a resume of an id, the shape of #1516 */
+    static Arbitrary<Scenario> withoutAStopTogetherWithAStartOrAResume(Arbitrary<Scenario> scenarios) {
+        return scenarios.filter(scenario -> !(has(scenario, call -> call.kind() == Kind.STOP)
+                && has(scenario, call -> call.kind() == Kind.START_TRUE || call.kind() == Kind.START_FALSE || call.kind() == Kind.RESUME)));
+    }
+
+    /** Without a scenario that has a pause together with a start(true), since a pause during a replay takes effect at the handover and the start(true) finds nothing to run again, the shape of #1256 */
+    static Arbitrary<Scenario> withoutAPauseTogetherWithAStartTrue(Arbitrary<Scenario> scenarios) {
+        return scenarios.filter(scenario -> !(has(scenario, call -> call.kind() == Kind.PAUSE) && has(scenario, call -> call.kind() == Kind.START_TRUE)));
+    }
+
+    /** Without a scenario in which an id is paused by two or more calls, the shape of the second pause */
+    static Arbitrary<Scenario> withoutAnIdPausedMoreThanOnce(Arbitrary<Scenario> scenarios) {
+        return scenarios.filter(scenario -> IDS.stream().noneMatch(id -> count(scenario, Kind.PAUSE, id) > 1));
+    }
+
+    /** Without a start(true) that throws after the live model started, the shape of #1520 */
+    static Arbitrary<Scenario> withoutAStartTrueThatThrowsAfterItTookEffect(Arbitrary<Scenario> scenarios) {
+        return scenarios.filter(scenario -> !has(scenario, call -> call.kind() == Kind.START_TRUE && call.failure() == StartFailure.AFTER_EFFECT));
+    }
+
+    private static long count(Scenario scenario, Kind kind, String id) {
+        return scenario.threads().stream().flatMap(List::stream).filter(call -> call.kind() == kind && id.equals(call.id())).count();
+    }
+
+    private static boolean has(Scenario scenario, Predicate<LifecycleCall> predicate) {
+        return scenario.threads().stream().flatMap(List::stream).anyMatch(predicate);
     }
 
     private static Arbitrary<Scenario> scenarios(Arbitrary<LifecycleCall> calls) {

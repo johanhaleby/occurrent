@@ -25,7 +25,7 @@ class CatchupLifecycleExamplesTest {
         return LifecycleCall.of(kind, id);
     }
 
-    @Disabled("#1256: the second pause returns ok")
+    @Disabled("#1524: the second pause returns ok")
     @Example
     void a_second_pause_during_a_subscribe_started_replay_is_refused() throws Exception {
         Run run = plainRun();
