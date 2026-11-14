@@ -826,7 +826,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * opening. This model decides it from what it knows itself, since a live delegate can run a subscription before it
      * reports it as running. In 0.34.0 the live delegate was asked to resume it and threw its own exception. A
      * subscription paused while its {@code subscribe(..)} replay runs isn't refused, and the live delegate, which doesn't
-     * hold it yet, throws its own exception, as in 0.34.0.
+     * hold it yet, throws its own exception, as in 0.34.0. A subscription whose live delegate gave up restarting it after
+     * it went live still runs here, as it did on the MongoDB live delegates in 0.34.0. Pause it before you resume it at a
+     * position, or cancel it and subscribe it again.
      * <p>
      * A replay that {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
      * and ends once the live delegate has resumed the subscription, so the position given here wins over it. With
