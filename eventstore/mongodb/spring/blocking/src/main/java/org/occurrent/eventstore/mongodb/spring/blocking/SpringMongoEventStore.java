@@ -313,7 +313,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
-        // With synchronization active the template reads in the session bound to it, or binds one, so only a read with none is left
+        // With synchronization active the template reads in the session bound to it, or binds one, so only a read without synchronization needs a session of its own
         if (deployment == Deployment.MONGOS && !TransactionSynchronizationManager.isSynchronizationActive()) {
             return readInOwnSession(criteria, options);
         }

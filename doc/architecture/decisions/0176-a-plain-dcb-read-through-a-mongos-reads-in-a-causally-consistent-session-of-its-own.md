@@ -56,7 +56,7 @@ The Spring and reactor stores take the session from the template's database fact
 template bound to it, with session synchronization `NEVER`, as ADR 175's snapshot transaction does.
 
 A read with `withVersions()` that falls back to a plain read takes the same path when it runs outside a session of the
-caller's. That's a read with `resumeFromMarkerVersions(false)`, a read of `DcbCriteria.all()`, and a read whose snapshot
+caller's. That's a read from a store set up with `resumeFromMarkerVersions(false)`, a read of `DcbCriteria.all()`, and a read whose snapshot
 transaction failed and that passed no saved versions. In the Spring and reactor stores, the fallback that already read
 in a session of its own, so as not to bind a session to a Spring scope with no session bound yet, now asks for a
 causally consistent session too. The MongoDB driver already made a session causally consistent when its options didn't
@@ -70,8 +70,8 @@ The rest stays as it was.
 - On a replica set and on every other deployment, the read is the same as before.
 - There's no new setting and no way to turn this off. Each read keeps the read concern and the read preference the
   store used.
-- The native catch-up read scopes already read the token, the head and the events in one causally consistent session
-  at majority, and don't change.
+- The native catch-up read scopes already read the token, the head and the events in one causally consistent session,
+  and don't change.
 
 ## Consequences
 
@@ -81,9 +81,9 @@ The rest stays as it was.
   on the first shard, for `DcbCriteria.all()` after E was appended with an `all()` condition, and for criteria with a
   tag marker on each shard. All three returned no events before this change.
 - The token isn't one point in time. The markers read is the session's first operation and sends no
-  `afterClusterTime`, so a marker on the events' shard can be from before E. In the test with a tag marker on each
-  shard, that marker was at version 0 in all three stores while the read returned E, and the test asserts only the
-  events and the marker on the first shard.
+  `afterClusterTime`, so a marker on the events' shard can be from before E. In a run of the test with a tag marker on
+  each shard in each store, an assertion that this marker was at version 1 failed with version 0, so the test asserts
+  only the events and the marker on the first shard.
 - By my reading of `DcbAppendConditionCheck`, a conditional append through a mongos with such a token sees the marker
   from before E as moved, queries the events on that key in ADR 175's snapshot transaction, finds E and is refused,
   although the read returned E. That's the torn token ADR 175 refuses. The test that builds a torn token by hand covers

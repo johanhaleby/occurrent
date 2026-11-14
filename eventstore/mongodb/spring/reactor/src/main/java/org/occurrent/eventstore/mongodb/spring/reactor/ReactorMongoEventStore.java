@@ -354,7 +354,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         if (deployment != Deployment.MONGOS) {
             return readThroughTemplate(criteria, options);
         }
-        // With synchronization active the template reads in the session bound to it, or binds one, so only a read with none is left
+        // With synchronization active the template reads in the session bound to it, or binds one, so only a read without synchronization needs a session of its own
         return callerTransactionActive().zipWith(synchronization()).flatMap(state -> !state.getT1() && state.getT2() == Synchronization.INACTIVE
                 ? readWithoutMarkerVersionsOnSessionOfItsOwn(criteria, options)
                 : readThroughTemplate(criteria, options));
