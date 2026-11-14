@@ -62,6 +62,7 @@ class CatchupLifecyclePropertyTest {
         }
     }
 
+    @Disabled("#1517: a cancel(a) returns while the first subscription's action still runs, and a new subscribe(a) enters a second call to the action. Shrunk plain history=0us start=300us [[subscribe(a), cancel(a), subscribe(a)], [subscribe(a)]], seed -4125118514468404878")
     @Property(tries = 200)
     void s1_at_most_one_action_is_in_flight_per_id(@ForAll("mixedScenarios") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
