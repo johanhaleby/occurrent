@@ -156,7 +156,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * The budget runs from the first time an event failed, not from its latest failure. So an event whose earlier
      * failure the instance still records, from longer ago than the budget, quarantines the instance the first time it
      * fails again. Replaying a parked event, turning quarantine on for an event that failed while it was off, and
-     * repositioning a MongoDB subscription by hand all produce such an event.
+     * moving a MongoDB subscription back by hand to before a failed event all produce such an event.
      * <p>
      * Use {@link #disableQuarantine()} to turn quarantine off again.
      *
