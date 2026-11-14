@@ -879,7 +879,8 @@ class StreamCatchupHistoryLossOwnershipTest {
         Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
 
         // Then
-        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessage(HistoryLossMessages.historyLost(ID, TOKEN).getMessage());
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessage(HistoryLossMessages.historyLost(ID, TOKEN).getMessage())
+                .hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
         assertAll(
                 () -> assertThat(liveModel.resumeCalls).as("resumes of the live model").isEmpty(),
                 () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
@@ -1289,6 +1290,7 @@ class StreamCatchupHistoryLossOwnershipTest {
         // Then
         assertThat(thrown).as("thrown by the resume").isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessage(HistoryLossMessages.liveStartLostOnResume(ID, TOKEN).getMessage())
+                .hasMessageContaining(ID).hasMessageContaining(TOKEN.asString())
                 .hasMessageNotContaining("where it stopped");
         assertThat(errorsLogged()).as("errors logged").containsExactly(liveStartLostLog(ID, TOKEN));
     }
@@ -1454,6 +1456,25 @@ class StreamCatchupHistoryLossOwnershipTest {
     }
 
     @Test
+    void leaves_a_checkpoint_the_live_model_stored_as_it_was_when_a_resume_is_at_another_position() {
+        // Given
+        Checkpoint storedByTheLiveModel = new StringBasedCheckpoint("stored-by-the-live-model");
+        create();
+        catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
+        storage.save(ID, storedByTheLiveModel, CheckpointWriteCondition.any());
+        catchup.pauseSubscription(ID);
+
+        // When
+        catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN));
+
+        // Then
+        assertAll(
+                () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(storedByTheLiveModel),
+                () -> assertThat(liveModel.startOf(ID)).as("start of the live model").isInstanceOfSatisfying(StartAtCheckpoint.class, at -> assertThat(at.checkpoint).isEqualTo(LATER_TOKEN))
+        );
+    }
+
+    @Test
     void a_removed_start_refusal_listener_is_not_told_that_a_replay_is_held_for_a_lost_live_start() {
         // Given
         create();
@@ -1606,6 +1627,7 @@ class StreamCatchupHistoryLossOwnershipTest {
                 () -> assertThat(liveModel.subscribeCalls).as("running subscribes on the live model").isEmpty(),
                 () -> assertThat(catchThrowable(() -> catchup.resumeSubscription(ID))).as("thrown by a resume").isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessage(HistoryLossMessages.liveStartLostOnResume(ID, TOKEN).getMessage())
+                        .hasMessageContaining(ID).hasMessageContaining(TOKEN.asString())
         );
     }
 

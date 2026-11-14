@@ -43,6 +43,8 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
@@ -91,11 +93,13 @@ class StreamCatchupTakeoverLifecycleTest {
     private InMemoryCheckpointStorage storage;
     private final CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<String> signals = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<CatchupCannotResumeException> heldPausedReports = new CopyOnWriteArrayList<>();
     private final ConcurrentLinkedQueue<Throwable> failedOnTheirOwnThreads = new ConcurrentLinkedQueue<>();
     private final AtomicInteger deliveries = new AtomicInteger();
     private final CountDownLatch inTheTakeoverReplay = new CountDownLatch(1);
     private final CountDownLatch letTheTakeoverReplayGo = new CountDownLatch(1);
     private volatile boolean blocksInTheTakeoverReplay;
+    private volatile boolean failsEveryDelivery;
     // Once set, the next delivery waits as one in the takeover replay does
     private final AtomicBoolean blocksTheNextDelivery = new AtomicBoolean();
     private final Logger catchupLogger = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
@@ -821,6 +825,46 @@ class StreamCatchupTakeoverLifecycleTest {
         );
     }
 
+    @Test
+    @Timeout(60)
+    void is_not_held_paused_for_the_refusal_it_reported_once_the_held_replay_is_resumed_and_the_subscription_is_paused_while_that_replay_fails() {
+        // Given
+        CatchupCannotResumeException reported = heldTakeoverReplayWhoseRefusalWasReported();
+        failsEveryDelivery = true;
+        catchup.resumeSubscription(ID);
+
+        // When
+        catchup.pauseSubscription(ID);
+
+        // Then
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(catchup.hasParkedReplay(ID)).as("replay held for the pause").isTrue());
+        assertThat(catchup.isHeldPausedFor(ID, reported)).as("held paused for the refusal reported before the resume").isFalse();
+    }
+
+    @Test
+    @Timeout(60)
+    void is_not_held_paused_for_the_refusal_it_reported_once_the_held_replay_is_run_again_by_start_and_the_subscription_is_paused_while_that_replay_fails() {
+        // Given
+        CatchupCannotResumeException reported = heldTakeoverReplayWhoseRefusalWasReported();
+        failsEveryDelivery = true;
+        catchup.start(true);
+
+        // When
+        catchup.pauseSubscription(ID);
+
+        // Then
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(catchup.hasParkedReplay(ID)).as("replay held for the pause").isTrue());
+        assertThat(catchup.isHeldPausedFor(ID, reported)).as("held paused for the refusal reported before the start").isFalse();
+    }
+
+    private CatchupCannotResumeException heldTakeoverReplayWhoseRefusalWasReported() {
+        heldTakeoverReplayWithACatchupPositionStored();
+        assertThat(heldPausedReports).as("refusals the held replay reported").hasSize(1);
+        CatchupCannotResumeException reported = heldPausedReports.get(0);
+        assertThat(catchup.isHeldPausedFor(ID, reported)).as("held paused for the refusal reported").isTrue();
+        return reported;
+    }
+
     // A takeover replay from the beginning whose live start the live model loses at each open, held once the catch-up
     // made 4 replays, with the catch-up position it stored. The live model keeps every open after this returns
     private Checkpoint heldTakeoverReplayWithACatchupPositionStored() {
@@ -840,6 +884,16 @@ class StreamCatchupTakeoverLifecycleTest {
                 ? new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1))
                 : new CatchupSubscriptionModelConfig(100);
         catchup = new StreamCatchupSubscriptionModel(liveModel, eventStore, config);
+        catchup.addStartRefusalListener(new StartRefusalListener() {
+            @Override
+            public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+                heldPausedReports.add(refusal);
+            }
+        });
         catchup.listenForCatchup(ID, new CatchupListener() {
             @Override
             public void catchupStarted(Object episode) {
@@ -855,6 +909,9 @@ class StreamCatchupTakeoverLifecycleTest {
 
     private Consumer<CloudEvent> action() {
         return cloudEvent -> {
+            if (failsEveryDelivery) {
+                throw new IllegalStateException("the action fails");
+            }
             received.add(cloudEventConverter.toDomainEvent(cloudEvent));
             if ((blocksInTheTakeoverReplay && deliveries.incrementAndGet() == history.size() + 1) || blocksTheNextDelivery.compareAndSet(true, false)) {
                 inTheTakeoverReplay.countDown();

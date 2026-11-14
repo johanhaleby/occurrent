@@ -817,12 +817,22 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
      * and ends once the live delegate has resumed the subscription, so the position given here wins over it. With
      * checkpoint storage, when the position stored for the subscription is one a catch-up replays from, such as the one
-     * that replay stored, the checkpoint {@code startAt} gives replaces it before the live delegate resumes the
-     * subscription, so a {@link #resumeSubscription(String)} after a later pause doesn't replay from it. When it starts
-     * now, the position stored is the present position, read the way the paragraph below describes for a subscription
-     * held before it reached the live delegate, and the live delegate resumes the subscription from that position. When
-     * no position is answered then, this throws {@link IllegalStateException} and changes nothing. Any other start
-     * stores nothing. When
+     * that replay stored, it is replaced before the live delegate resumes the subscription, so a
+     * {@link #resumeSubscription(String)} after a later pause doesn't replay from it. It is replaced only by a position a
+     * restart starts reading at:
+     * <ul>
+     * <li>A checkpoint the live delegate answers {@code true} for in {@link RepositionableSubscriptions#restartsAt(Checkpoint)}
+     * is stored as given.</li>
+     * <li>A catch-up checkpoint with a live start, or one at the beginning, is stored as given.</li>
+     * <li>A catch-up time without a live start is stored with the present position as its live start.</li>
+     * <li>A start from now stores the present position by the first rule, and the live delegate then resumes the
+     * subscription from that position.</li>
+     * </ul>
+     * The present position is read the way a paragraph below describes for a subscription held before it reached the
+     * live delegate. When no position is answered then, this throws {@link IllegalStateException} and changes nothing.
+     * A global position above 0 without a live start, a checkpoint the live delegate doesn't restart at and any other
+     * start store nothing, and the position stored before stays. A dynamic {@code startAt} is asked once, and the live
+     * delegate resumes the subscription at what it answered. When
      * the live delegate throws, the position stored before is put back as for that subscription, a replay this held
      * runs again as it was, and this throws what the live delegate threw. When the replay is in the subscription's action or reads
      * history, this holds the replay and waits up to ten seconds for it to return before the live delegate resumes the
@@ -854,10 +864,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * A subscription is held before it reaches the live delegate when the replay its {@code subscribe(..)} started
      * lost the live start it would go live from. This then subscribes it from {@code startAt}, with the filter and
      * action it was made with, as a subscribe at {@code startAt} would, in place of resuming it in the live delegate.
-     * The replay it was held for doesn't run again. The position stored for the subscription is replaced by the checkpoint
-     * {@code startAt} gives, so a resume after a pause or a restart doesn't replay from where the held replay got to.
-     * When it starts now, the position stored is the live start the event store reports, or the live delegate's present
-     * position when the event store reports none, and the subscription goes live from that position, so an event that
+     * The replay it was held for doesn't run again. The position stored for the subscription is replaced by the rules
+     * above, whatever position it is, so a resume after a pause or a restart doesn't replay from where the held replay
+     * got to. A start that stores nothing by those rules keeps the position the held replay stored. When it starts now,
+     * the present position is the live start the event store reports, or the live delegate's present position when the
+     * event store reports none, and the subscription goes live from that position when it is stored, so an event that
      * commits between the store and the subscribe is delivered. When that subscribe throws, the loss stays recorded, so
      * a later {@link #resumeSubscription(String)} still refuses, and the position stored before is put back with the
      * write condition the replacing write had, so a position another lease holder stored since refuses it. When nothing
@@ -919,22 +930,27 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 @Nullable Checkpoint givenPosition = resumedAt(startAt);
                 try {
                     if (neverWentLive != null) {
-                        resumed = neverWentLive.subscribeInPlaceOfTheHeldReplay(startAt);
+                        resumed = neverWentLive.subscribeInPlaceOfTheHeldReplay(startAt, repositionable);
                     } else {
                         // A position a catch-up replays from makes a later resume replay from it, and the live delegate
-                        // may not store one of its own over it, so the position given here replaces it. A start from now
-                        // stores the present position and goes live from it, as the subscribe in place does. The child
+                        // may not store one of its own over it, so the position given here replaces it when a restart
+                        // starts from it. A start from now goes live from the present position it stores, as the
+                        // subscribe in place does. The child
                         // that made the subscription reads that position, since each child reads its own event store.
                         Subscribed owned = subscribed.get(subscriptionId);
                         AbstractCatchupSubscriptionModel owner = owned == null ? this : owned.owner();
+                        // A dynamic start is asked once here, and the live delegate resumes at what it answered, so
+                        // the position stored and the position resumed at are one answer. A wrapper is still asked
+                        // whether it starts at all, as at a subscribe.
                         StartAt answered = answeredForThisModel(startAt);
                         @Nullable StartAt forThisModel = answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered;
-                        replaced = owner.replaceTheStoredPosition(subscriptionId, forThisModel, true);
+                        replaced = owner.replaceTheStoredPosition(subscriptionId, forThisModel, true, repositionable);
                         Checkpoint present = replaced == null ? null : replaced.present;
-                        if (present != null) {
-                            givenPosition = present;
+                        StartAt liveStartAt = present != null ? StartAt.checkpoint(present) : forThisModel;
+                        if (liveStartAt != null) {
+                            givenPosition = resumedAt(liveStartAt);
                         }
-                        resumed = repositionable.resumeSubscription(subscriptionId, present == null ? startAt : goingLiveFrom(answered, StartAt.checkpoint(present)));
+                        resumed = repositionable.resumeSubscription(subscriptionId, liveStartAt == null ? startAt : goingLiveFrom(answered, liveStartAt));
                     }
                 } catch (Throwable e) {
                     // Throwable, since a live delegate written in Kotlin can throw a checked exception
@@ -970,8 +986,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     // Stores the checkpoint forThisModel gives, or the present position for a start from now, and null when it stores
     // nothing. With onlyOverACatchupPosition only over a position a catch-up replays from, since only that makes a later
-    // resume replay
-    private @Nullable StoredPositionReplaced replaceTheStoredPosition(String subscriptionId, @Nullable StartAt forThisModel, boolean onlyOverACatchupPosition) {
+    // resume replay. Stores only a position a restart starts from, as restartPosition decides
+    private @Nullable StoredPositionReplaced replaceTheStoredPosition(String subscriptionId, @Nullable StartAt forThisModel, boolean onlyOverACatchupPosition,
+                                                                      RepositionableSubscriptions liveDelegate) {
         boolean startsNow = forThisModel != null && forThisModel.isNow();
         if (!startsNow && !(forThisModel instanceof StartAt.StartAtCheckpoint)) {
             return null;
@@ -982,11 +999,33 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return null;
             }
             Checkpoint present = startsNow ? presentPositionToResumeAt(subscriptionId) : null;
-            Checkpoint position = forThisModel instanceof StartAt.StartAtCheckpoint given ? given.checkpoint : present;
+            Checkpoint given = forThisModel instanceof StartAt.StartAtCheckpoint at ? at.checkpoint : present;
+            Checkpoint position = restartPosition(subscriptionId, given, liveDelegate);
+            if (position == null) {
+                return null;
+            }
             CheckpointWriteCondition writeCondition = writeConditionFor(cfg, subscriptionId);
             cfg.storage().save(subscriptionId, position, writeCondition);
             return new StoredPositionReplaced(subscriptionId, cfg, previous, writeCondition, present);
         }).orElse(null);
+    }
+
+    // The position to store for a resume at given so a restart starts where the resume does, or null when none does.
+    // A position the live delegate doesn't restart at, and a global position above 0 without a live start, which a
+    // catch-up refuses to start after, are not stored, as in DurableSubscriptionModel. A time without a live start gets
+    // the present position as its live start, since a restart refuses a stored time without one.
+    private @Nullable Checkpoint restartPosition(String subscriptionId, Checkpoint given, RepositionableSubscriptions liveDelegate) {
+        if (!isCatchupCheckpoint(given)) {
+            return liveDelegate.restartsAt(given) ? given : null;
+        }
+        CatchupCheckpoints.Start start = CatchupCheckpoints.parse(given);
+        if (start.liveFrom() != null || originAfterTheBeginning(start) == null) {
+            return given;
+        }
+        if (start instanceof CatchupCheckpoints.Time time) {
+            return new StringBasedCheckpoint(CatchupCheckpoints.format(time.time(), time.replayOrigin(), presentPositionToResumeAt(subscriptionId)));
+        }
+        return null;
     }
 
     // Puts back what was stored before, with the condition the replacing write had, so a position another lease holder
@@ -3067,7 +3106,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // Subscribes the id from startAt with the filter and action it was made with, as a subscribe at startAt would,
         // in place of a resume of the live delegate. Under the handover lock, as a subscribe is, so a replay for the id
         // can't hand over or fail while it subscribes.
-        Subscription subscribeInPlaceOfTheHeldReplay(StartAt startAt) {
+        Subscription subscribeInPlaceOfTheHeldReplay(StartAt startAt, RepositionableSubscriptions liveDelegate) {
             try (HandoverLock ignored = lockHandover(subscriptionId)) {
                 Subscribed made = subscribed.get(subscriptionId);
                 if (held == null || made == null || made.owner() != AbstractCatchupSubscriptionModel.this || parkedReplays.get(subscriptionId) != held) {
@@ -3075,12 +3114,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 }
                 StartAt answered = answeredForThisModel(startAt);
                 // The held replay stored the position it replayed to, and a resume after a pause or a restart would
-                // replay from there again. The position given here replaces it. A start from now stores the present
-                // position and goes live from it, as a durable model's resume at now does, so an event that commits
+                // replay from there again. The position given here replaces it when a restart starts from it. A start
+                // from now goes live from the present position it stores, as a durable model's resume at now does, so an event that commits
                 // between the store and the subscribe is delivered. A dynamic start is decided by what it answers this
                 // model, which answered holds, so its function doesn't run again here.
                 @Nullable StartAt forThisModel = answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered;
-                StoredPositionReplaced replaced = replaceTheStoredPosition(subscriptionId, forThisModel, false);
+                StoredPositionReplaced replaced = replaceTheStoredPosition(subscriptionId, forThisModel, false, liveDelegate);
                 // Cleared before the subscribe, so a loss the replay it starts records is kept, whether the subscribe
                 // records it on this thread or the replay records it once this lets go of the handover lock
                 HistoryLost.Cleared cleared = made.historyLost().clearUntilPutBack(resumedAt(startAt));

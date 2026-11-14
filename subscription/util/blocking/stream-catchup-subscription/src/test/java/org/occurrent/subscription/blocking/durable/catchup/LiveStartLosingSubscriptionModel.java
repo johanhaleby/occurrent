@@ -82,6 +82,7 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     private final Map<String, Held> runningWhereItWasHeld = new ConcurrentHashMap<>();
     private final AtomicInteger liveStartsRead = new AtomicInteger();
     private final Set<Checkpoint> lost = ConcurrentHashMap.newKeySet();
+    private final Set<Checkpoint> opensElsewhere = ConcurrentHashMap.newKeySet();
     private final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
     private final Map<String, Held> paused = new ConcurrentHashMap<>();
 
@@ -103,6 +104,19 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     LiveStartLosingSubscriptionModel losingEveryOpen() {
         losesEveryOpen = true;
+        return this;
+    }
+
+    // Positions it opens somewhere else than at, as a MongoDB model does with a resume token it can't read
+    LiveStartLosingSubscriptionModel notRestartingAt(Checkpoint checkpoint) {
+        opensElsewhere.add(checkpoint);
+        return this;
+    }
+
+    // The next open keeps its live start too, which it otherwise loses once, as the first open of a model made after a restart
+    LiveStartLosingSubscriptionModel neverLosingAnOpen() {
+        losesTheNextOpen.set(false);
+        losesEveryOpen = false;
         return this;
     }
 
@@ -297,6 +311,12 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     public boolean canResumeFrom(Checkpoint checkpoint) {
         resumeProbes.add(checkpoint);
         return !lost.contains(checkpoint);
+    }
+
+    // As the MongoDB models answer: it opens at any checkpoint but a catch-up's position, which it doesn't recognize
+    @Override
+    public boolean restartsAt(Checkpoint checkpoint) {
+        return !AbstractCatchupSubscriptionModel.isCatchupCheckpoint(checkpoint) && !opensElsewhere.contains(checkpoint);
     }
 
     @Override
