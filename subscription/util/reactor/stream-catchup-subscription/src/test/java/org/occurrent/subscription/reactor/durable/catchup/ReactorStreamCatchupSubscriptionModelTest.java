@@ -662,6 +662,129 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
     @Test
     @Timeout(30)
+    void a_cancel_after_a_replay_a_stop_and_a_start_replaced_failed_fails_the_start_the_subscribe_returned_as_cancelled_before_it_started() {
+        // Given a first replay that reads one event, whose action stops the model and starts it again so a second replay
+        // runs on the same state, and that then fails. The second replay reads nothing more, so it is the one in flight.
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        AtomicInteger reads = new AtomicInteger();
+        AtomicReference<ReactorStreamCatchupSubscriptionModel> model = new AtomicReference<>();
+        UnscopedPositionOrderedReader reader = new ThreeEventReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                if (reads.incrementAndGet() == 1) {
+                    return super.readInPositionOrder(filter, range).take(1).concatWith(Flux.error(() -> new IllegalStateException("The first replay failed.")));
+                }
+                return Flux.never();
+            }
+        };
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        model.set(catchup);
+        AtomicBoolean replaced = new AtomicBoolean();
+        try (WarningsLogged warnings = new WarningsLogged()) {
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+                if (replaced.compareAndSet(false, true)) {
+                    model.get().stop();
+                    model.get().start(true);
+                }
+                return Mono.empty();
+            });
+            assertThat(replaced).as("the first replay was replaced").isTrue();
+            assertThat(reads.get()).as("reads, which a second replay made").isGreaterThan(1);
+            assertThat(warnings.messages()).as("warnings logged").anyMatch(message -> message.contains("ran a newer replay, which keeps running"));
+
+            // When
+            catchup.cancelSubscription("sub").block(Duration.ofSeconds(5));
+
+            // Then
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOf(IllegalStateException.class).hasMessage("Subscription sub was cancelled before it started."))
+                    .verify(Duration.ofSeconds(5));
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_cancel_after_a_replay_a_resume_of_a_held_replay_ran_was_replaced_by_a_stop_and_a_start_and_failed_fails_the_start_that_resume_returned_as_cancelled_before_it_started() {
+        // Given a first replay that loses its live start and is held, which fails the start the subscribe returned, and a
+        // resume that gives the state a start of its own and runs a second replay. That replay reads one event, whose
+        // action stops the model and starts it again so a third replay runs on the same state, and then fails. The third
+        // replay reads nothing more, so it is the one in flight.
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        AtomicInteger reads = new AtomicInteger();
+        AtomicReference<ReactorStreamCatchupSubscriptionModel> model = new AtomicReference<>();
+        UnscopedPositionOrderedReader reader = new ThreeEventReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                int read = reads.incrementAndGet();
+                if (read == 1) {
+                    return Flux.error(() -> HistoryLossMessages.liveStartLost("The live start was lost.", GlobalCheckpoint.of(3), true));
+                }
+                if (read == 2) {
+                    return super.readInPositionOrder(filter, range).take(1).concatWith(Flux.error(() -> new IllegalStateException("The second replay failed.")));
+                }
+                return Flux.never();
+            }
+        };
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        model.set(catchup);
+        AtomicBoolean replaced = new AtomicBoolean();
+        try (WarningsLogged warnings = new WarningsLogged()) {
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+                if (replaced.compareAndSet(false, true)) {
+                    model.get().stop();
+                    model.get().start(true);
+                }
+                return Mono.empty();
+            });
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOf(CatchupCannotResumeException.class).hasMessage("The live start was lost."))
+                    .verify(Duration.ofSeconds(5));
+            Subscription resumed = catchup.resumeSubscription("sub");
+            assertThat(replaced).as("the second replay was replaced").isTrue();
+            assertThat(reads.get()).as("reads, which a third replay made").isGreaterThan(2);
+            assertThat(warnings.messages()).as("warnings logged").anyMatch(message -> message.contains("ran a newer replay, which keeps running"));
+
+            // When
+            catchup.cancelSubscription("sub").block(Duration.ofSeconds(5));
+
+            // Then
+            StepVerifier.create(resumed.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOf(IllegalStateException.class).hasMessage("Subscription sub was cancelled before it started."))
+                    .verify(Duration.ofSeconds(5));
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    // The warnings NamedCatchupSupport logs from when this is created until it is closed
+    private static final class WarningsLogged implements AutoCloseable {
+        private final Logger logger = (Logger) LoggerFactory.getLogger(NamedCatchupSupport.class);
+        private final ch.qos.logback.core.read.ListAppender<ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+
+        WarningsLogged() {
+            appender.start();
+            logger.addAppender(appender);
+        }
+
+        List<String> messages() {
+            synchronized (appender) {
+                return appender.list.stream()
+                        .filter(event -> event.getLevel().equals(ch.qos.logback.classic.Level.WARN))
+                        .map(ILoggingEvent::getFormattedMessage)
+                        .toList();
+            }
+        }
+
+        @Override
+        public void close() {
+            logger.detachAppender(appender);
+        }
+    }
+
+    @Test
+    @Timeout(30)
     void a_resume_that_read_no_loss_before_it_waited_for_the_lock_of_the_id_while_a_replay_from_above_the_beginning_recorded_its_loss_refuses_instead_of_returning_the_failed_start() throws InterruptedException {
         // Given a replay in flight from above the beginning, whose live start the model has when it starts, and loses by the end
         NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
