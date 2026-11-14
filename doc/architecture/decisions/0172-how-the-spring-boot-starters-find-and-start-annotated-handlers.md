@@ -72,13 +72,33 @@ So `on(E event)` on `Base<E>` subscribes to `Placed` on a class that extends `Ba
 `E` a type, as a raw `extends Base` doesn't, a handler gets the erasure of `E` as before, and a factory whose state type
 is a type variable fails at startup with the error it gave before.
 
-The scan reads the class behind a proxy, so a bean behind a JDK interface proxy is scanned through the proxy's target
-class. A bean with a scoped proxy has two bean definitions, the proxy's and its target's under the `scopedTarget.`
-name. The scan skips the proxy's, so the handlers register once, under the target's name. A bean in request or
-session scope still fails at startup, because the scan builds its target then, outside a request. A handler found on
-the target class runs through the proxy, so advice such as `@Transactional` still applies. When the proxy doesn't have
-that method, because the class overrides a generic interface method with a concrete parameter type, the handler runs
-through the interface method it overrides.
+The scan reads the class behind a proxy it can unwrap, as in 0.34.0. A handler found on that class runs through the
+proxy, so advice such as `@Transactional` still applies. When a JDK interface proxy doesn't have that method, because
+the class overrides a generic interface method with a concrete parameter type, the handler runs through the interface
+method it overrides.
+
+A proxy whose target source isn't a fixed singleton can't be unwrapped. A CGLIB proxy like that is scanned as the class
+it subclasses, and a JDK interface proxy like that as its own proxy class, both as in 0.34.0. So when such a JDK
+proxy is the bean, as when a `@Bean` method or a `FactoryBean` returns it, only the annotations on the proxy's
+interfaces count, a handler annotated only on the class behind it doesn't run, and a handler declared on a generic
+interface subscribes to the type variable's bound. Reading the class behind such a JDK proxy instead would register a
+handler twice when the proxy's target is a bean of its own, such as the target of a `LazyInitTargetSource` or a
+`HotSwappableTargetSource`, since the scan also finds that bean under its own name.
+
+When a post-processor wraps the bean in such a JDK proxy instead, the startup scan reads the class the bean had before
+the proxy wrapped it. A handler the proxy doesn't implement then fails startup with
+`SubscriptionHandlerNotInvocableException`, as in 0.34.0, and so does a handler that overrides a generic interface
+method with a concrete parameter type. A prototype that the post-processor only wraps after startup is scanned as the
+proxy class, so a generic interface handler has another signature than the one the startup scan registered, and
+building that instance fails with `DuplicateSubscriptionIdException`. In 0.34.0 that bean failed startup with the same
+exception.
+
+A bean with a scoped proxy has two bean definitions, the proxy's and its target's under the `scopedTarget.` name. The
+scan skips the proxy's, so the handlers register once, under the target's name. They run on the target instance the
+scan built, not through the scoped proxy. In a scope that replaces its instance, such as a refresh scope, a handler
+keeps running on the instance the scan built.
+[#1492](https://github.com/johanhaleby/occurrent/issues/1492) changes that, so a handler runs through the scoped proxy
+as Spring's `@EventListener` does.
 
 The key that tells whether a handler is already registered is the bean name, the method's name and its parameter
 types, as in 0.34.0, and each key records the methods registered under it. A later pass of the scan over the same bean
@@ -93,9 +113,10 @@ whose class overrides the method, since that runs code the scan didn't read. Two
 target, because their target source isn't a fixed singleton:
 
 - A JDK interface proxy runs the factory through the proxy when one of the proxy's interfaces declares the method the
-  scan read from the class behind it, and refuses any other method, since the proxy doesn't implement it. It doesn't
-  check that the target the proxy reaches runs the method the scan read. 0.34.0 refused at startup a factory it read
-  from the class behind such a proxy.
+  scan read, and refuses any other method, since the proxy doesn't implement it. When the proxy is the bean, the scan
+  reads the proxy's own class, so the factory it reads comes from one of the proxy's interfaces. When a post-processor
+  wrapped the bean, the scan reads the class the bean had before, so a factory only that class declares is refused.
+  It doesn't check that the target the proxy reaches runs the method the scan read.
 - A CGLIB proxy refuses a package-private factory method declared in another package than the class it subclasses.
   The proxy can't override such a method, so invoking it would run the method's body on the proxy instance.
 
@@ -117,11 +138,13 @@ I rejected three smaller changes:
 
 ## Consequences
 
-- **A handler that never ran starts running after the upgrade.** It starts from its own start settings, and nothing is
-  stored for its id. So `startAt = BEGINNING`, or `startAt = BEGINNING_OF_TIME` on `@StreamSubscription`, replays the
+- **A handler that never ran starts running after the upgrade.** It starts from its own start settings. When nothing
+  is stored for its id, `startAt = BEGINNING`, or `startAt = BEGINNING_OF_TIME` on `@StreamSubscription`, replays the
   whole history on the first start, and so does a `@Snapshot`, whose `startAt` is `BEGINNING` by default. A
   `@Projection` or `@Saga` with `source = PUSH` replays the event store's history before it goes live, unless it sets
-  `catchup = NONE`. A handler that a public class inherits as a public method from a superclass that isn't public
+  `catchup = NONE`. When a handler with that id ran before, for example before the method moved into a superclass,
+  its position is stored, and under the default `resumeBehavior` it resumes from there, so it gets every event written
+  since that handler last ran. A handler that a public class inherits as a public method from a superclass that isn't public
   isn't one of them. 0.34.0 registered the bridge the compiler adds for it, so it keeps its id and its checkpoint.
 - **Two beans that run one annotated handler without overriding it fail at startup with
   `DuplicateSubscriptionIdException`.** They are two subclasses of the class that declares it, or that class and a

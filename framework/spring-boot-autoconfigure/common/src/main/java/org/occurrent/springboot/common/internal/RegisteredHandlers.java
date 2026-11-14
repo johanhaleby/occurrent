@@ -35,9 +35,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * two in one class tree, such as a private handler of A and a handler of the same signature that its subclass B
  * declares.
  * <p>
- * Every scan reads {@link HandlerScan#implementationClassOf}, which for a proxy is the class its target source names,
- * so a later instance behind a proxy whose target source names the bean's class keys its handlers the way a scan of the
- * plain instance did. A JDK proxy whose target source names no class is scanned as the proxy's own class, where a
+ * Every scan reads {@link HandlerScan#implementationClassOf}, so a later instance behind a proxy that is unwrapped, or
+ * behind a CGLIB proxy, keys its handlers the way a scan of the plain instance did. A JDK proxy whose target source
+ * isn't a fixed singleton is not unwrapped and is scanned as the proxy's own class, where a
  * generic interface handler has the erased parameter type, so that handler gets another signature than the class
  * method a scan of the plain instance found. Internal to the Spring Boot starters, not an API.
  */

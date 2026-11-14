@@ -55,7 +55,11 @@ import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.mockito.Answers;
 import org.springframework.aop.TargetSource;
 import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.aop.framework.ProxyFactoryBean;
+import org.springframework.aop.target.HotSwappableTargetSource;
+import org.springframework.aop.target.LazyInitTargetSource;
 import org.springframework.beans.factory.ObjectFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -980,8 +984,8 @@ class InheritedHandlerRegistrationTest {
     // ------------------------------------------------------------------------------------------------------
 
     // The startup scan reads the handler off the bean's class. A prototype built after startup is wrapped by a JDK
-    // proxy whose target source names that class, so the later scan reads the same class as the startup scan. It is
-    // the same handler, so the later scan must not register it again.
+    // proxy whose target source is not fixed, so the later scan reads the proxy class. The interface method has the
+    // same signature as the class method the startup scan found, so it is the same handler and registers once.
     @Test
     void a_handler_registers_once_when_a_later_instance_arrives_as_a_jdk_proxy_whose_target_source_names_its_class() {
         AtomicBoolean proxying = new AtomicBoolean();
@@ -1021,7 +1025,7 @@ class InheritedHandlerRegistrationTest {
     }
 
     @Test
-    void a_generic_interface_handler_registers_once_when_a_later_instance_arrives_as_a_jdk_proxy_whose_target_source_names_its_class() {
+    void a_generic_interface_handler_is_a_duplicate_id_when_a_later_instance_arrives_as_a_jdk_proxy_whose_target_source_is_not_fixed() {
         AtomicBoolean proxying = new AtomicBoolean();
         runner.withBean(JdkProxyingPostProcessor.class, () -> new JdkProxyingPostProcessor(proxying))
                 .withUserConfiguration(PrototypeGenericHandlerConfiguration.class)
@@ -1029,10 +1033,9 @@ class InheritedHandlerRegistrationTest {
                     assertThat(context).hasNotFailed();
                     proxying.set(true);
 
-                    Object[] second = new Object[1];
-                    assertThatCode(() -> second[0] = context.getBean("prototypeGenericHandler")).doesNotThrowAnyException();
-
-                    assertThat(Proxy.isProxyClass(second[0].getClass())).describedAs("the second instance reached the scan as a JDK proxy").isTrue();
+                    assertThatThrownBy(() -> context.getBean("prototypeGenericHandler"))
+                            .describedAs("the proxy class is scanned, so the interface method is a handler of its own, keyed apart from the class method the first instance registered")
+                            .hasMessageContaining("Duplicate subscription/projection id 'proxied-generic-handler'");
                     verify(context.getBean(Subscriptions.class), times(1))
                             .subscribe(eq("proxied-generic-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
                 });
@@ -1177,21 +1180,20 @@ class InheritedHandlerRegistrationTest {
     // A generic interface handler a bean overrides, behind a JDK proxy that is not a fixed singleton
     // ------------------------------------------------------------------------------------------------------
 
-    // The scan reads the class behind the proxy, so it finds the override and its id, and not the interface method
-    // under the interface's id. Reading the proxy's class would register the interface method as a second handler.
+    // The startup scan reads the class the bean had before the post-processor wrapped it, finds the override, and the
+    // proxy implements only the interface method.
     @Test
-    void a_generic_interface_handler_overridden_with_its_own_annotation_registers_once_behind_a_jdk_proxy_and_receives_the_event() {
+    void a_generic_interface_handler_overridden_by_the_bean_behind_a_jdk_proxy_that_is_not_a_fixed_singleton_fails_startup_as_the_proxy_does_not_implement_the_override() {
         List<String> bodies = new CopyOnWriteArrayList<>();
         jdkProxyingNonSingleton(GenericInterfaceOverrider.class, new AtomicInteger())
                 .withBean("subscriber", GenericInterfaceOverrider.class, () -> new GenericInterfaceOverrider(bodies))
                 .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    assertThat(Proxy.isProxyClass(context.getBean("subscriber").getClass())).describedAs("the bean is a JDK proxy").isTrue();
-                    Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
-
-                    assertThat(subscribedIds(subscriptions)).containsExactly("overriding-generic-handler");
-                    anyHandlerFor(subscriptions, "overriding-generic-handler").invoke(null, new Placed());
-                    assertThat(bodies).containsExactly("overrider-body");
+                    assertThat(context).describedAs("the context started although the proxy does not implement the override").hasFailed();
+                    assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
+                            .hasMessageContaining("GenericInterfaceOverrider.on")
+                            .hasMessageContaining("The proxy does not implement it");
+                    assertThat(bodies).isEmpty();
                 });
     }
 
@@ -1211,23 +1213,6 @@ class InheritedHandlerRegistrationTest {
 
                     anyHandlerFor(context.getBean(Subscriptions.class), "proxied-interface-handler").invoke(null, new TestEvent());
 
-                    assertThat(adviceCalls).hasValue(1);
-                });
-    }
-
-    @Test
-    void a_generic_interface_handler_overridden_by_the_bean_runs_through_the_advice_of_a_jdk_proxy_by_the_interface_method() {
-        List<String> bodies = new CopyOnWriteArrayList<>();
-        AtomicInteger adviceCalls = new AtomicInteger();
-        jdkProxyingNonSingleton(GenericInterfaceOverrider.class, adviceCalls)
-                .withBean("subscriber", GenericInterfaceOverrider.class, () -> new GenericInterfaceOverrider(bodies))
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    adviceCalls.set(0);
-
-                    anyHandlerFor(context.getBean(Subscriptions.class), "overriding-generic-handler").invoke(null, new Placed());
-
-                    assertThat(bodies).containsExactly("overrider-body");
                     assertThat(adviceCalls).hasValue(1);
                 });
     }
@@ -2109,6 +2094,98 @@ class InheritedHandlerRegistrationTest {
         @Subscription(id = "subclass-private-handler")
         private void on(TestEvent event) {
             invocations.bodies().add("subclass-private-body");
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // A JDK proxy over a target source that is not a fixed singleton, whose target is a bean of its own
+    // ------------------------------------------------------------------------------------------------------
+
+    @Test
+    void a_handler_the_interface_does_not_declare_registers_once_behind_a_jdk_proxy_over_a_lazy_init_target_source_naming_its_bean() {
+        runner.withUserConfiguration(LazyInitTargetSourceConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(subscribedIds(context.getBean(Subscriptions.class))).containsExactly("real");
+        });
+    }
+
+    @Test
+    void a_handler_the_interface_does_not_declare_registers_once_behind_a_jdk_proxy_over_a_hot_swappable_target_source_around_a_bean() {
+        runner.withUserConfiguration(HotSwappableTargetSourceConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(subscribedIds(context.getBean(Subscriptions.class))).containsExactly("real");
+        });
+    }
+
+    public interface TargetSourceService {
+        String name();
+    }
+
+    public static class TargetSourceReal implements TargetSourceService {
+        @Override
+        public String name() {
+            return "real";
+        }
+
+        @Subscription(id = "real")
+        public void on(TestEvent event) {
+        }
+    }
+
+    static class TargetSourceConsumer {
+        TargetSourceConsumer(TargetSourceService service) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class LazyInitTargetSourceConfiguration {
+        @Bean
+        @Lazy
+        TargetSourceReal real() {
+            return new TargetSourceReal();
+        }
+
+        @Bean
+        LazyInitTargetSource realTargetSource() {
+            LazyInitTargetSource targetSource = new LazyInitTargetSource();
+            targetSource.setTargetBeanName("real");
+            return targetSource;
+        }
+
+        @Bean
+        ProxyFactoryBean service(LazyInitTargetSource realTargetSource) throws ClassNotFoundException {
+            ProxyFactoryBean proxy = new ProxyFactoryBean();
+            proxy.setTargetSource(realTargetSource);
+            proxy.setInterfaces(TargetSourceService.class);
+            return proxy;
+        }
+
+        @Bean
+        TargetSourceConsumer consumer(@Qualifier("service") TargetSourceService service) {
+            return new TargetSourceConsumer(service);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class HotSwappableTargetSourceConfiguration {
+        @Bean
+        TargetSourceReal real() {
+            return new TargetSourceReal();
+        }
+
+        @Bean
+        TargetSourceService service(TargetSourceReal real) {
+            ProxyFactory proxyFactory = new ProxyFactory();
+            proxyFactory.addInterface(TargetSourceService.class);
+            proxyFactory.setTargetSource(new HotSwappableTargetSource(real));
+            return (TargetSourceService) proxyFactory.getProxy(TargetSourceReal.class.getClassLoader());
+        }
+
+        @Bean
+        TargetSourceConsumer consumer(@Qualifier("service") TargetSourceService service) {
+            return new TargetSourceConsumer(service);
         }
     }
 

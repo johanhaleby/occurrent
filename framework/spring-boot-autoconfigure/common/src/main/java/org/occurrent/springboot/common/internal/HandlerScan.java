@@ -23,7 +23,6 @@ import org.occurrent.annotation.StreamVersion;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameterKind;
-import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.aop.scope.ScopedProxyUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.config.BeanDefinitionHolder;
@@ -136,20 +135,20 @@ public final class HandlerScan {
     }
 
     /**
-     * The class whose code runs when a handler or factory is invoked on {@code bean}: the user class,
-     * {@link ClassUtils#getUserClass}, of the target class {@link AopProxyUtils#ultimateTargetClass} reads from
-     * {@link SubscriptionAnnotations#ultimateTarget}. A proxy whose target source is not a fixed singleton is not unwrapped. When its target
-     * source names the class it hands out, a JDK interface proxy like that answers with that class, and when the
-     * target source names no class, with the proxy's own class. Both annotation post-processors scan this class, and handler and factory generics are read
-     * against it, so the two agree on one {@link Method} per handler.
+     * The class whose code runs when a handler or factory is invoked on {@code bean}, which is the user class,
+     * {@link ClassUtils#getUserClass}, of the object {@link SubscriptionAnnotations#ultimateTarget} unwraps
+     * {@code bean} to. A proxy whose target source is not a fixed singleton is not unwrapped, so a CGLIB proxy like
+     * that answers with the class it subclasses, and a JDK interface proxy like that with its own proxy class, as in
+     * 0.34.0. Both annotation post-processors scan this class, and handler and factory generics are read against it,
+     * so the two agree on one {@link Method} per handler.
      *
      * @param bean the (possibly proxied) bean
      * @return the class a bean is scanned for handlers in, and a handler's or factory's generic types are read against
      */
     public static Class<?> implementationClassOf(Object bean) {
-        // ultimateTargetClass answers with the proxy's own class when the target source names no target class, so
-        // such a bean still scans the proxy class and its handlers are keyed by the interface method
-        return ClassUtils.getUserClass(AopProxyUtils.ultimateTargetClass(SubscriptionAnnotations.ultimateTarget(bean)));
+        // The target of a JDK proxy that isn't unwrapped can be a bean of its own, scanned under its own name, so the
+        // proxy class is read instead of the class its target source names, or the handlers would register twice
+        return ClassUtils.getUserClass(SubscriptionAnnotations.ultimateTarget(bean).getClass());
     }
 
     /**
