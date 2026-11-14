@@ -333,7 +333,9 @@ public final class ChangeStreamSubscriptions {
         try {
             executeWithRetry(() -> pinThePresent(currentStartAt, present), RETRYABLE.and(__ -> !cancelled.getAsBoolean() && !Thread.currentThread().isInterrupted()), retryStrategy).run();
         } catch (NoPositionAtThePresent e) {
-            // Logged by the run that waits for the answer, if it refuses
+            // Recorded here and not by the run that waits, since a run paused while it waits returns without the answer,
+            // and the run after it would then ask again. Logged by the run that waits for the answer, if it refuses
+            present.gaveNoPosition(e);
             throw e;
         } catch (RuntimeException e) {
             if (cancelled.getAsBoolean() || shutdown || e instanceof MongoInterruptedException || Thread.currentThread().isInterrupted()) {
@@ -418,7 +420,6 @@ public final class ChangeStreamSubscriptions {
         try {
             return internalSubscription.presentAtSubscribe.awaitedBy(internalSubscription);
         } catch (NoPositionAtThePresent e) {
-            internalSubscription.presentAtSubscribe.gaveNoPosition(e);
             StartAt position = internalSubscription.currentStartAt.get();
             if (position.isDynamic() || !internalSubscription.presentAtSubscribe.isUsedAt(position)) {
                 return true;
@@ -1217,7 +1218,8 @@ public final class ChangeStreamSubscriptions {
     }
 
     // The question to MongoDB for the position that fixes where a subscription started at the present opens.
-    // One question shared by every run of the subscription, asked again after the retry strategy gives up on it. It's
+    // One question shared by every run of the subscription, asked again after the retry strategy gives up on it, but not
+    // after MongoDB gave no position, since a later answer would skip what was written since the subscribe. It's
     // asked on the executor right after subscribe(..) on a stopped model, or by the first run that gets to it. A pause
     // doesn't stop it.
     private static final class PresentAtSubscribe {
@@ -1228,7 +1230,7 @@ public final class ChangeStreamSubscriptions {
         private volatile boolean cancelled;
         // Set by the first run to get here, whether it waits for the answer or not
         private volatile boolean reached;
-        // Set when a run found that the read gave no position
+        // Set when the read gave no position, and kept, so the question isn't asked again
         private volatile @Nullable NoPositionAtThePresent noPosition;
 
         PresentAtSubscribe(StartAt subscribedAt, BiConsumer<PresentAtSubscribe, BooleanSupplier> question) {
@@ -1280,10 +1282,15 @@ public final class ChangeStreamSubscriptions {
         // on without it. False when the run was closed or the question cancelled first. When the retry strategy gives
         // up, or MongoDB gives no position, its error is thrown to the open run waiting for the answer, or to the first
         // run of all when the give-up came before it, as when the strategy gives up opening the change stream. Any
-        // later run that finds the question given up asks again.
+        // later run that finds the question given up asks again. A run that comes after MongoDB gave no position gets
+        // that answer thrown, also when no run was there to take it.
         boolean awaitedBy(InternalSubscription run) {
             boolean anEarlierRunReached = reached;
             reached = true;
+            NoPositionAtThePresent given = noPosition;
+            if (given != null) {
+                throw given;
+            }
             FutureTask<Void> current = asking;
             if (anEarlierRunReached && current.state() == Future.State.FAILED) {
                 askAgainAfter(current);
@@ -1307,8 +1314,10 @@ public final class ChangeStreamSubscriptions {
                     if (run.isIntentionallyClosed()) {
                         return false;
                     }
-                    askAgainAfter(current);
                     Throwable gaveUpOn = e.getCause();
+                    if (!(gaveUpOn instanceof NoPositionAtThePresent)) {
+                        askAgainAfter(current);
+                    }
                     if (gaveUpOn instanceof RuntimeException runtimeException) {
                         throw runtimeException;
                     } else if (gaveUpOn instanceof Error error) {
