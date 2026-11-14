@@ -1606,11 +1606,6 @@ public final class ChangeStreamSubscriptions {
             startedLatch.countDown();
         }
 
-        // Also true once a refused start has released its waiters
-        boolean hasStarted() {
-            return startedLatch.getCount() == 0;
-        }
-
         // Only for a run that is still in the map, so a pause or a resume can't come after it. A handle that has already
         // answered it started keeps that answer.
         void recordFailureToStart(UnsupportedStartAtException failure) {
