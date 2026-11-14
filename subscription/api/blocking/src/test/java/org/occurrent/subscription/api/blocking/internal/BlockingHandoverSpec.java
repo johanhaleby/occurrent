@@ -14,7 +14,7 @@ final class BlockingHandoverSpec {
     record Offer(String payload, String call, String answer) {
     }
 
-    record Trace(List<String> history, List<String> delivered, List<Offer> offers, List<String> markerFindings, List<String> notes, int replayPasses) {
+    record Trace(List<String> history, List<String> delivered, List<Offer> offers, List<String> markerFindings, List<String> notes, List<String> replayed, boolean failuresInjected) {
     }
 
     private BlockingHandoverSpec() {
@@ -25,14 +25,19 @@ final class BlockingHandoverSpec {
         return trace.markerFindings();
     }
 
+    /**
+     * acceptReportingDelivery reports a buffered payload before the drain applies it, so a failed fold or a failed
+     * catch-up after that can lose it. acceptIfLive reports true only for a payload that landed.
+     */
     static List<String> deliveryViolations(Trace trace) {
         List<String> violations = new ArrayList<>(trace.notes());
-        // A catch-up that was stopped replays the whole history again on the next one, so history repeats once per pass, and a live copy of it may repeat it too
+        // Each replay that reads an item may deliver it, and a live copy of it may too
         for (String item : trace.history()) {
             long times = trace.delivered().stream().filter(item::equals).count();
+            long replays = trace.replayed().stream().filter(item::equals).count();
             long liveCopies = trace.offers().stream().filter(offer -> offer.payload().equals(item)).count();
-            if (times > trace.replayPasses() + liveCopies) {
-                violations.add(item + " was delivered " + times + " times by " + trace.replayPasses() + " replay passes, in " + trace.delivered());
+            if (times > replays + liveCopies) {
+                violations.add(item + " was delivered " + times + " times by " + replays + " replay reads and " + liveCopies + " live copies, in " + trace.delivered());
             }
         }
         Set<String> seen = new LinkedHashSet<>();
@@ -44,13 +49,20 @@ final class BlockingHandoverSpec {
         for (Offer offer : trace.offers()) {
             if (offer.answer() == null) {
                 violations.add(offer.payload() + " offered through " + offer.call() + " got no answer");
-            } else if (offer.call().equals("accept") && !trace.history().contains(offer.payload())) {
+            } else if (!trace.history().contains(offer.payload())) {
                 boolean delivered = trace.delivered().contains(offer.payload());
-                if (offer.answer().equals("applied") && !delivered) {
-                    violations.add(offer.payload() + " was answered as applied but never delivered");
+                boolean refused = offer.answer().startsWith("refused");
+                if (refused && delivered) {
+                    violations.add(offer.payload() + " was refused by " + offer.call() + " but delivered");
                 }
-                if (offer.answer().startsWith("refused") && delivered) {
-                    violations.add(offer.payload() + " was refused but delivered");
+                if (offer.call().equals("accept")) {
+                    if (offer.answer().equals("applied") && !delivered) {
+                        violations.add(offer.payload() + " was answered as applied but never delivered");
+                    }
+                } else if (offer.answer().equals("reported:true") && !delivered && (offer.call().equals("acceptIfLive") || !trace.failuresInjected())) {
+                    violations.add(offer.payload() + " was reported delivered or buffered by " + offer.call() + " but never delivered");
+                } else if (offer.answer().equals("reported:false") && delivered) {
+                    violations.add(offer.payload() + " was reported not delivered by " + offer.call() + " but delivered");
                 }
             }
         }

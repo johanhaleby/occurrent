@@ -6,7 +6,6 @@ import org.occurrent.subscription.blocking.durable.catchup.lifecycle.LifecycleCa
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -51,16 +50,12 @@ final class ExclusiveAction {
     private int startTrueInFlight;
     private long clock;
     private final ThreadLocal<Long> beganAt = ThreadLocal.withInitial(() -> 0L);
-    private volatile int actionMicros = 20;
+    private static final long ACTION_NANOS = 20_000L;
     final List<String> s1Violations = new CopyOnWriteArrayList<>();
     final List<String> s2Violations = new CopyOnWriteArrayList<>();
 
     ExclusiveAction(Set<String> ids) {
         this.ids = ids;
-    }
-
-    void actionMicros(int micros) {
-        this.actionMicros = micros;
     }
 
     Generation newGeneration(String id) {
@@ -76,7 +71,7 @@ final class ExclusiveAction {
             enter(generation);
             try {
                 generation.received.add(event.getId());
-                LockSupport.parkNanos(actionMicros * 1000L);
+                LockSupport.parkNanos(ACTION_NANOS);
             } finally {
                 exit(generation);
             }
@@ -174,14 +169,6 @@ final class ExclusiveAction {
     @Nullable Generation currentGeneration(String id) {
         synchronized (lock) {
             return generations.stream().filter(g -> g.id.equals(id) && g.subscribedOk && !g.cancelled).max((a, b) -> Long.compare(a.returnedAt, b.returnedAt)).orElse(null);
-        }
-    }
-
-    Set<String> idsWithGenerations() {
-        synchronized (lock) {
-            Set<String> result = new HashSet<>();
-            generations.forEach(g -> result.add(g.id));
-            return result;
         }
     }
 }

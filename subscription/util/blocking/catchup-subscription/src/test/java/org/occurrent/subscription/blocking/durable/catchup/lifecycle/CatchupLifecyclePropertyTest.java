@@ -56,6 +56,7 @@ class CatchupLifecyclePropertyTest {
                 assertThat(outcome).as("outcome of %s after %s", call, script).isEqualTo(step.outcome());
                 assertThat(InterleavingRunner.observe(run)).as("state after %s in %s", call, script).isEqualTo(expected);
             }
+            assertThat(run.notes).as("notes of %s", script).isEmpty();
         } finally {
             run.model.shutdown();
         }
@@ -65,6 +66,7 @@ class CatchupLifecyclePropertyTest {
     void s1_at_most_one_action_is_in_flight_per_id(@ForAll("mixedScenarios") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
         assertThat(run.monitor.s1Violations).as(run.toString()).isEmpty();
+        assertThat(run.notes).as(run.toString()).isEmpty();
     }
 
     @Disabled("Unowned (nearest #1225, #1237): a cancel(b) overlapping subscribe(b) returned and b's action started afterwards, in about 1 of 50 runs. Shrunk composite start=300us [[subscribe(a), resume(a), cancel(b)], [subscribe(b), subscribe(a), subscribe(a)], [resume(a)]], seed 3712755869129851291")
@@ -84,6 +86,7 @@ class CatchupLifecyclePropertyTest {
     @Property(tries = 200)
     void per_id_calls_without_pause_end_equal_to_some_serial_order(@ForAll("perIdScenariosWithoutPause") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
+        assertThat(run.notes).as(run.toString()).isEmpty();
         assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
     }
 
@@ -112,6 +115,6 @@ class CatchupLifecyclePropertyTest {
     void every_subscription_still_subscribed_gets_the_history_and_a_later_live_event_once_after_a_recovery(@ForAll("mixedScenarios") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, true);
         assertThat(run.receivedAfterRecovery.values()).as(run.toString()).allSatisfy(received -> assertThat(received).containsExactly("1", "2", "L"));
-        assertThat(run.notes).as(run.toString()).noneMatch(note -> note.contains("does not run in the live model") || note.contains("did not quiesce"));
+        assertThat(run.notes).as(run.toString()).isEmpty();
     }
 }

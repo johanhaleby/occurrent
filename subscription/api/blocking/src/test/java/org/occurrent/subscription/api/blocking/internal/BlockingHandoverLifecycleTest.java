@@ -44,7 +44,7 @@ class BlockingHandoverLifecycleTest {
         return scripts(true);
     }
 
-    @Disabled("#893.32: the drain and the marker run after the last keepReplaying check, so a cancel before the marker step still writes the marker. Shrunk: live [CATCH_UP, STEP, STEP, STEP, CATCH_UP, CATCH_UP, CANCEL]")
+    @Disabled("#893.32: the drain and the marker run after the last keepReplaying check, so a cancel before the marker step still writes the marker. Shrunk live [CATCH_UP, STEP, STEP, STEP, CATCH_UP, CATCH_UP, CANCEL]")
     @Property(tries = 500)
     void the_marker_is_written_only_for_a_catch_up_nothing_cancelled(@ForAll("withoutFailures") Script script) {
         Trace trace = BlockingHandoverRunner.run(script);

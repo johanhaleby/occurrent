@@ -120,9 +120,11 @@ final class BlockingHandoverRunner {
                 }
             }
         }
-        finish(replays, helpers, handover, marker, notes, markerFindings);
+        List<String> replayed = new ArrayList<>();
+        finish(replays, helpers, handover, marker, notes, markerFindings, replayed);
         List<Offer> offers = helpers.stream().map(helper -> new Offer(helper.payload(), helper.call(), helper.answer().get())).toList();
-        return new Trace(HISTORY, List.copyOf(delivered), offers, List.copyOf(markerFindings), List.copyOf(notes), replays.size() + 1);
+        return new Trace(HISTORY, List.copyOf(delivered), offers, List.copyOf(markerFindings), List.copyOf(notes), replayed,
+                script.actions().stream().anyMatch(action -> action == Action.FAIL_FOLD || action == Action.FAIL_CALLBACK || action == Action.INTERRUPT));
     }
 
     private static String offer(BlockingHandover<String, String> handover, String call, String payload) {
@@ -163,7 +165,7 @@ final class BlockingHandoverRunner {
         }
     }
 
-    private static void finish(List<Replay> replays, List<Helper> helpers, BlockingHandover<String, String> handover, AtomicBoolean marker, List<String> notes, List<String> markerFindings) {
+    private static void finish(List<Replay> replays, List<Helper> helpers, BlockingHandover<String, String> handover, AtomicBoolean marker, List<String> notes, List<String> markerFindings, List<String> replayed) {
         for (Replay replay : replays) {
             replay.source().openAllGates();
             join(replay.thread(), 5_000);
@@ -171,6 +173,7 @@ final class BlockingHandoverRunner {
                 notes.add("a replay never returned");
                 replay.thread().interrupt();
             }
+            replayed.addAll(replay.source().yielded);
             String result = replay.result().get();
             if (replay.source().markedWhileCancelled) {
                 markerFindings.add("the marker was written after the replay was cancelled");
@@ -205,6 +208,7 @@ final class BlockingHandoverRunner {
             notes.add("a later catch-up never returned, so the replay turn was not released");
             later.interrupt();
         }
+        replayed.addAll(clean.yielded);
     }
 
     private static void join(Thread thread, long millis) {

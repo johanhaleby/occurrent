@@ -21,6 +21,7 @@ import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.concurrent.locks.LockSupport;
 
 import static org.occurrent.subscription.blocking.durable.catchup.lifecycle.GatedHistory.cloudEvent;
@@ -89,13 +90,14 @@ final class InterleavingRunner {
     private static void runThreads(Run run) {
         CountDownLatch go = new CountDownLatch(1);
         List<Thread> threads = new ArrayList<>();
+        List<AtomicReferenceArray<String>> slots = new ArrayList<>();
         for (List<LifecycleCall> script : run.scenario.threads()) {
-            List<String> outcomes = new CopyOnWriteArrayList<>();
-            run.outcomes.add(outcomes);
+            AtomicReferenceArray<String> slot = new AtomicReferenceArray<>(script.size());
+            slots.add(slot);
             threads.add(Thread.ofPlatform().start(() -> {
                 await(go);
-                for (LifecycleCall call : script) {
-                    outcomes.add(execute(run, call));
+                for (int i = 0; i < script.size(); i++) {
+                    slot.set(i, execute(run, script.get(i)));
                 }
             }));
         }
@@ -107,13 +109,21 @@ final class InterleavingRunner {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-            if (thread.isAlive()) {
-                run.notes.add("thread " + t + " did not return from " + run.scenario.threads().get(t).get(run.outcomes.get(t).size()));
+            List<LifecycleCall> script = run.scenario.threads().get(t);
+            List<String> outcomes = new ArrayList<>();
+            int firstHung = -1;
+            for (int i = 0; i < script.size(); i++) {
+                String outcome = slots.get(t).get(i);
+                if (outcome == null && firstHung < 0) {
+                    firstHung = i;
+                }
+                outcomes.add(outcome == null ? "hung" : outcome);
+            }
+            if (firstHung >= 0) {
+                run.notes.add("thread " + t + " did not return from " + script.get(firstHung));
                 thread.interrupt();
             }
-            while (run.outcomes.get(t).size() < run.scenario.threads().get(t).size()) {
-                run.outcomes.get(t).add("hung");
-            }
+            run.outcomes.add(outcomes);
         }
     }
 

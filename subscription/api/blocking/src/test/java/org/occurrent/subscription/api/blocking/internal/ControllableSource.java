@@ -4,6 +4,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Spliterators;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -21,6 +22,8 @@ final class ControllableSource implements BlockingHandover.Source<String> {
     private final Semaphore toReplay = new Semaphore(0);
     final Semaphore toScheduler = new Semaphore(0);
     private volatile boolean open;
+    /** What the replay yielded, so a pass that read nothing counts for nothing */
+    final List<String> yielded = new CopyOnWriteArrayList<>();
     volatile boolean cancelled;
     volatile boolean failCallback;
     volatile boolean markedWhileCancelled;
@@ -73,7 +76,9 @@ final class ControllableSource implements BlockingHandover.Source<String> {
                 if (!it.hasNext()) {
                     throw new NoSuchElementException();
                 }
-                return it.next();
+                String item = it.next();
+                yielded.add(item);
+                return item;
             }
         };
         return StreamSupport.stream(Spliterators.spliteratorUnknownSize(gated, 0), false);
