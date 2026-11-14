@@ -386,11 +386,13 @@ class ActionThatOutlivesItsRunTest {
         // And once the read is answered, the slow event is handled by the run the pause closed and then by the resumed run
         answer.countDown();
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(first.eventId(), slow.eventId(), slow.eventId()));
+        String afterTheSlowEvent = resumeTokenOf(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(handled.getLast()));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(resumeTokenOf(storage.read("declining"))).as("stored checkpoint once the slow event was handled").isGreaterThanOrEqualTo(afterTheSlowEvent));
         eventStore.write("declined", serialize(declined));
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).last().isEqualTo(declined.eventId()));
         String declinedAt = resumeTokenOf(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(handled.getLast()));
         await().during(Duration.ofSeconds(1)).atMost(2, SECONDS).untilAsserted(() -> assertThat(resumeTokenOf(storage.read("declining")))
-                .as("stored checkpoint stays before the declined event while it is the last one the resumed run delivered").isLessThan(declinedAt));
+                .as("stored checkpoint stays between the slow event and the declined event while it is the last one the resumed run delivered").isGreaterThanOrEqualTo(afterTheSlowEvent).isLessThan(declinedAt));
     }
 
     @ParameterizedTest
@@ -560,11 +562,13 @@ class ActionThatOutlivesItsRunTest {
         releaseTheSlowAction.countDown();
         await().atMost(5, SECONDS).untilTrue(firstDeliveryOfTheSlowEventReturned);
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(first.eventId(), slow.eventId(), slow.eventId()));
+        String afterTheSlowEvent = resumeTokenOf(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(handled.getLast()));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(resumeTokenOf(storage.read("declining"))).as("stored checkpoint once the slow event was handled").isGreaterThanOrEqualTo(afterTheSlowEvent));
         eventStore.write("declined", serialize(declined));
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).last().isEqualTo(declined.eventId()));
         String declinedAt = resumeTokenOf(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(handled.getLast()));
         await().during(Duration.ofSeconds(1)).atMost(2, SECONDS).untilAsserted(() -> assertThat(resumeTokenOf(storage.read("declining")))
-                .as("stored checkpoint stays before the declined event while it is the last one delivered").isLessThan(declinedAt));
+                .as("stored checkpoint stays between the slow event and the declined event while it is the last one delivered").isGreaterThanOrEqualTo(afterTheSlowEvent).isLessThan(declinedAt));
     }
 
     // Resume tokens of one change stream order by their hex data, so a position is before an event when its token is lower
