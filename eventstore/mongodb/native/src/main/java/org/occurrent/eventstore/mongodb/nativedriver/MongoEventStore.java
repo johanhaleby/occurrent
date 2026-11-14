@@ -44,6 +44,8 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
@@ -119,6 +121,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final MongoClient mongoClient;
     private final TimeRepresentation timeRepresentation;
     private final TransactionOptions transactionOptions;
+    // The options a conditional DCB append's own transaction runs with, read concern snapshot and write concern majority
+    // through a mongos (ADR 175)
+    private final TransactionOptions conditionalAppendTransactionOptions;
     private final Function<FindIterable<Document>, FindIterable<Document>> queryOptions;
     private final Set<EventStoreCapability> eventStoreCapabilities;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
@@ -126,7 +131,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final boolean requireBackfilledPosition;
     private final boolean resumeFromMarkerVersions;
     private final boolean spreadTypeMarkerWrites;
-    private final boolean runsOnReplicaSet;
+    private final Deployment deployment;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
@@ -181,7 +186,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
-        this.runsOnReplicaSet = dcbEnabled && DcbAppendConditionCheck.runsOnReplicaSet(database::runCommand);
+        this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(database::runCommand) : Deployment.OTHER;
+        this.conditionalAppendTransactionOptions = deployment == Deployment.MONGOS ? DcbAppendConditionCheck.snapshotThroughMongos(transactionOptions) : transactionOptions;
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -465,7 +471,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             if (!options.firstOperationOfTransaction() || !ambientSession.hasActiveTransaction()) {
                 return markerVersionsUnavailable(criteria, options, "The read runs inside a session or transaction the caller owns, whose writes may still abort", null);
             }
-            if (runsOnReplicaSet) {
+            if (deployment == Deployment.REPLICA_SET) {
                 return readMarkerVersionsInSession(ambientSession, criteria, options);
             }
             // Off a replica set nothing has run in the caller's transaction yet, so a snapshot of the store's own misses none of its writes
@@ -672,7 +678,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
         return executeWithTransientRetry(() -> {
             try (ClientSession clientSession = mongoClient.startSession()) {
-                return clientSession.withTransaction(() -> appendInSession(clientSession, streamId, eventsToAppend, condition, firstPosition, lastPosition, appendId), transactionOptions);
+                return clientSession.withTransaction(() -> appendInSession(clientSession, streamId, eventsToAppend, condition, firstPosition, lastPosition, appendId), condition == null ? transactionOptions : conditionalAppendTransactionOptions);
             }
         });
     }
@@ -714,6 +720,20 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return documents;
     }
 
+    // The session's options, not the store's, so an executor's transaction the append joined gives that executor's options
+    private Scope appendCheckScope(ClientSession clientSession) {
+        if (deployment != Deployment.MONGOS) {
+            return Scope.of(deployment, null);
+        }
+        TransactionOptions options;
+        try {
+            options = clientSession.hasActiveTransaction() ? clientSession.getTransactionOptions() : null;
+        } catch (RuntimeException e) {
+            options = null;
+        }
+        return Scope.of(deployment, options);
+    }
+
     private Map<String, Document> enforceAppendCondition(ClientSession clientSession, DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition, int stripe) {
         Optional<DcbConsistencyToken> expectedToken = condition.consistencyToken();
         final boolean conflict;
@@ -725,7 +745,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             // append transaction at commit, not when positions are reserved.
             Map<String, Document> markers = queryMarkers(clientSession, condition.criteria());
             Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
-            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, runsOnReplicaSet)) {
+            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, appendCheckScope(clientSession))) {
                 case DcbAppendConditionCheck.Pass ignored -> false;
                 case DcbAppendConditionCheck.Refuse ignored -> true;
                 case DcbAppendConditionCheck.QueryEvents query -> eventCollection.find(clientSession, or(query.items().stream()

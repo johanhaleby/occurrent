@@ -222,16 +222,6 @@ public final class DcbAppendConditionCheck {
         return items.isEmpty() ? new Pass() : new QueryEvents(items);
     }
 
-    // Keeps the stores' current calls compiling until they pass a Scope, and goes with that change
-    public static Outcome check(DcbConsistencyToken token, DcbCriteria criteria, Map<String, MarkerObservation> current, boolean runsOnReplicaSet) {
-        return check(token, criteria, current, runsOnReplicaSet ? Scope.REPLICA_SET : Scope.MARKERS_ONLY);
-    }
-
-    // Keeps the stores' current calls compiling until they call deployment, and goes with that change
-    public static boolean runsOnReplicaSet(Function<Document, Document> runCommand) {
-        return deployment(runCommand) == Deployment.REPLICA_SET;
-    }
-
     /**
      * The deployment the store runs on, asked once when the store is created. A mongos answers {@code msg} isdbgrid, also
      * through a load balancer, and a replica set member answers a {@code setName}. Every failure except a server that

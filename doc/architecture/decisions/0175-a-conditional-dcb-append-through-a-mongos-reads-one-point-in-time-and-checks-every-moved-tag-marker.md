@@ -68,6 +68,8 @@ An item without tags already worked this way on a replica set, and it does the s
 ## Consequences
 
 - Through a mongos, the three cases of #1476 pass when the store runs its own transaction.
+- A test on two shards for each store checks the three cases of #1476, a torn token built by hand, a token read while
+  a matching event had committed on one shard and not the other, and an append in a caller's transaction.
 - A conditional append through a mongos costs a transaction at read concern `snapshot` and write concern `majority`.
 - An append that joins a caller's transaction gets the caller's options. Unless the caller started it at `snapshot` and
   `majority`, the check is `MARKERS_ONLY` and refuses as it did before.

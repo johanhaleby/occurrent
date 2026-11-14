@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.dcb.DcbConsistencyToken.MarkerObservation;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.ItemQuery;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.KeySelection;
@@ -60,8 +61,8 @@ class DcbAppendConditionCheckScopeTest {
     private static final String KEY_A = "tag:a:1";
     private static final String KEY_B = "tag:b:1";
     private static final String KEY_Z = "tag:z:1";
-    private static final String KEY_X = "type:X";
-    private static final String KEY_Y = "type:Y";
+    private static final String KEY_X = DcbMarkerVersionsSupport.stripeKey("X", 0);
+    private static final String KEY_Y = DcbMarkerVersionsSupport.stripeKey("Y", 0);
     private static final DcbCriterion TAGS_A_AND_B = DcbCriteria.tags(Tag.of("a", "1"), Tag.of("b", "1"));
     private static final DcbCriterion TAGS_Z = DcbCriteria.tags(Tag.of("z", "1"));
     private static final DcbCriterion TYPES_X_AND_Y = DcbCriteria.types("X", "Y");
@@ -297,8 +298,8 @@ class DcbAppendConditionCheckScopeTest {
 
     @Test
     void an_item_without_tags_is_checked_the_same_on_a_replica_set_as_when_the_transaction_snapshots_through_a_mongos_when_one_type_marker_moved() {
-        Map<String, MarkerObservation> read = markers(KEY_X, version(1), KEY_Y, version(1));
-        Map<String, MarkerObservation> now = markers(KEY_X, version(2), KEY_Y, version(1));
+        Map<String, MarkerObservation> read = typeMarkers(version(1));
+        Map<String, MarkerObservation> now = with(read, KEY_X, version(2));
 
         Outcome onReplicaSet = check(TYPES_X_AND_Y, read, now, Scope.REPLICA_SET);
         Outcome throughMongos = check(TYPES_X_AND_Y, read, now, Scope.SNAPSHOT_THROUGH_MONGOS);
@@ -309,7 +310,7 @@ class DcbAppendConditionCheckScopeTest {
 
     @Test
     void an_item_without_tags_is_checked_the_same_on_a_replica_set_as_when_the_transaction_snapshots_through_a_mongos_when_no_marker_moved() {
-        Map<String, MarkerObservation> read = markers(KEY_X, version(1), KEY_Y, version(1));
+        Map<String, MarkerObservation> read = typeMarkers(version(1));
 
         assertThat(check(TYPES_X_AND_Y, read, read, Scope.REPLICA_SET)).isEqualTo(new Pass());
         assertThat(check(TYPES_X_AND_Y, read, read, Scope.SNAPSHOT_THROUGH_MONGOS)).isEqualTo(new Pass());
@@ -317,41 +318,14 @@ class DcbAppendConditionCheckScopeTest {
 
     @Test
     void an_item_without_tags_is_checked_the_same_on_a_replica_set_as_when_the_transaction_snapshots_through_a_mongos_when_both_type_markers_moved() {
-        Map<String, MarkerObservation> read = markers(KEY_X, version(1), KEY_Y, version(1));
-        Map<String, MarkerObservation> now = markers(KEY_X, version(2), KEY_Y, version(2));
+        Map<String, MarkerObservation> read = typeMarkers(version(1));
+        Map<String, MarkerObservation> now = with(with(read, KEY_X, version(2)), KEY_Y, version(2));
 
         Outcome onReplicaSet = check(TYPES_X_AND_Y, read, now, Scope.REPLICA_SET);
         Outcome throughMongos = check(TYPES_X_AND_Y, read, now, Scope.SNAPSHOT_THROUGH_MONGOS);
 
         assertThat(onReplicaSet).isInstanceOf(QueryEvents.class);
         assertThat(throughMongos).isEqualTo(onReplicaSet);
-    }
-
-    @Test
-    void the_boolean_check_with_true_for_runsOnReplicaSet_checks_as_REPLICA_SET() {
-        Map<String, MarkerObservation> read = markers(KEY_A, version(1), KEY_B, version(1));
-        Map<String, MarkerObservation> now = markers(KEY_A, version(2), KEY_B, version(1));
-        DcbConsistencyToken token = tokenOf(TAGS_A_AND_B, read);
-
-        assertThat(DcbAppendConditionCheck.check(token, TAGS_A_AND_B, now, true)).isEqualTo(DcbAppendConditionCheck.check(token, TAGS_A_AND_B, now, Scope.REPLICA_SET));
-        assertThat(DcbAppendConditionCheck.check(token, TAGS_A_AND_B, now, true)).as("a torn token passes on a replica set").isEqualTo(new Pass());
-    }
-
-    @Test
-    void the_boolean_check_with_false_for_runsOnReplicaSet_checks_as_MARKERS_ONLY() {
-        Map<String, MarkerObservation> read = markers(KEY_A, version(1), KEY_B, version(1));
-        Map<String, MarkerObservation> now = markers(KEY_A, version(2), KEY_B, version(1));
-        DcbConsistencyToken token = tokenOf(TAGS_A_AND_B, read);
-
-        assertThat(DcbAppendConditionCheck.check(token, TAGS_A_AND_B, now, false)).isEqualTo(DcbAppendConditionCheck.check(token, TAGS_A_AND_B, now, Scope.MARKERS_ONLY));
-        assertThat(DcbAppendConditionCheck.check(token, TAGS_A_AND_B, now, false)).isEqualTo(new Refuse());
-    }
-
-    @Test
-    void runsOnReplicaSet_is_true_only_for_a_replica_set() {
-        assertThat(DcbAppendConditionCheck.runsOnReplicaSet(command -> new Document("setName", "rs0"))).isTrue();
-        assertThat(DcbAppendConditionCheck.runsOnReplicaSet(command -> new Document("msg", "isdbgrid"))).isFalse();
-        assertThat(DcbAppendConditionCheck.runsOnReplicaSet(command -> new Document())).isFalse();
     }
 
     private static Outcome check(DcbCriteria criteria, Map<String, MarkerObservation> read, Map<String, MarkerObservation> now, Scope scope) {
@@ -371,6 +345,22 @@ class DcbAppendConditionCheckScopeTest {
         for (int i = 0; i < keysAndObservations.length; i += 2) {
             map.put((String) keysAndObservations[i], (MarkerObservation) keysAndObservations[i + 1]);
         }
+        return map;
+    }
+
+    // Every stripe key of X and of Y, which a token for an item without tags holds since type markers are striped (ADR 162)
+    private static Map<String, MarkerObservation> typeMarkers(MarkerObservation observation) {
+        Map<String, MarkerObservation> map = new LinkedHashMap<>();
+        for (int stripe = 0; stripe < DcbMarkerVersionsSupport.STRIPES; stripe++) {
+            map.put(DcbMarkerVersionsSupport.stripeKey("X", stripe), observation);
+            map.put(DcbMarkerVersionsSupport.stripeKey("Y", stripe), observation);
+        }
+        return map;
+    }
+
+    private static Map<String, MarkerObservation> with(Map<String, MarkerObservation> observed, String key, MarkerObservation observation) {
+        Map<String, MarkerObservation> map = new LinkedHashMap<>(observed);
+        map.put(key, observation);
         return map;
     }
 

@@ -58,6 +58,8 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
@@ -160,6 +162,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final String dcbCheckpointCollectionName;
     private final TimeRepresentation timeRepresentation;
     private final TransactionTemplate transactionTemplate;
+    // The template a conditional DCB append runs in, with labels for read concern snapshot and write concern majority
+    // through a mongos (ADR 175)
+    private final TransactionTemplate conditionalAppendTransactionTemplate;
+    private final BoundTransactionOptions boundTransactionOptions;
     private final Function<Query, Query> queryOptions;
     private final Function<Query, Query> readOptions;
     private final Set<EventStoreCapability> eventStoreCapabilities;
@@ -167,7 +173,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final boolean streamPositionEnabled;
     private final boolean resumeFromMarkerVersions;
     private final boolean spreadTypeMarkerWrites;
-    private final boolean runsOnReplicaSet;
+    private final Deployment deployment;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
@@ -207,7 +213,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
-        this.runsOnReplicaSet = dcbEnabled && DcbAppendConditionCheck.runsOnReplicaSet(mongoTemplate::executeCommand);
+        this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(mongoTemplate::executeCommand) : Deployment.OTHER;
+        this.conditionalAppendTransactionTemplate = deployment == Deployment.MONGOS && transactionManager != null
+                ? new LabelledTransactionTemplate(transactionTemplate, DcbAppendConditionCheck.SNAPSHOT_THROUGH_MONGOS_LABELS)
+                : transactionTemplate;
+        this.boundTransactionOptions = new BoundTransactionOptions(mongoTemplate.getMongoDatabaseFactory());
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, streamPositionEnabled, mongoTemplate);
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -376,7 +386,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
             }
             // Off a replica set nothing has run in the caller's transaction yet, so a snapshot of the store's own misses none of its writes
-            return runsOnReplicaSet ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
+            return deployment == Deployment.REPLICA_SET ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
         }
         Object boundSession = TransactionSynchronizationManager.isSynchronizationActive() ? TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) : null;
         if (boundSession != null && BOUND_SESSIONS_WRITTEN_IN.contains(boundSession)) {
@@ -387,7 +397,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
         }
         if (options.confirmsAppendBeforeSaving() && TransactionSynchronizationManager.isSynchronizationActive()) {
-            if (runsOnReplicaSet) {
+            if (deployment == Deployment.REPLICA_SET) {
                 return readMarkerVersionsWith(mongoTemplate, criteria, options);
             }
             DcbEventStream eventStream = readInOwnTransaction(criteria, options);
@@ -850,7 +860,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private DcbAppendResult appendDcbInTransaction(String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition, AppendId appendId) {
-        return requireNonNull(transactionTemplate.execute(transactionStatus -> {
+        TransactionTemplate template = condition == null ? transactionTemplate : conditionalAppendTransactionTemplate;
+        return requireNonNull(template.execute(transactionStatus -> {
             long currentStreamVersion = currentStreamVersion(streamId);
             // The same stripe for every event and every attempt of this append, since the append id is created once
             int stripe = DcbMarkerModel.stripeOf(appendId, spreadTypeMarkerWrites);
@@ -969,7 +980,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             // append transaction at commit, not when positions are reserved.
             Map<String, Document> markers = queryMarkers(condition.criteria(), mongoTemplate);
             Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
-            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, runsOnReplicaSet)) {
+            // Read inside the append's transaction, so a caller's transaction the append joined gives the caller's options
+            Scope scope = Scope.of(deployment, deployment == Deployment.MONGOS ? boundTransactionOptions.current() : null);
+            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, scope)) {
                 case DcbAppendConditionCheck.Pass ignored -> false;
                 case DcbAppendConditionCheck.Refuse ignored -> true;
                 case DcbAppendConditionCheck.QueryEvents query -> mongoTemplate.exists(new Query(new Criteria().orOperator(query.items().stream()

@@ -32,17 +32,19 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.ItemQuery;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.KeySelection;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Pass;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.QueryEvents;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Refuse;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -241,7 +243,7 @@ class DcbAppendConditionCheckTest {
     void throws_IllegalArgumentException_when_the_token_holds_no_markers_for_a_criteria_with_marker_keys_although_the_markers_are_unchanged() {
         DcbConsistencyToken token = DcbConsistencyToken.of(TAGS_A, 0);
 
-        Throwable thrown = catchThrowable(() -> DcbAppendConditionCheck.check(token, TAGS_A, read(KEY_A, MarkerObservation.absent()), true));
+        Throwable thrown = catchThrowable(() -> DcbAppendConditionCheck.check(token, TAGS_A, read(KEY_A, MarkerObservation.absent()), Scope.REPLICA_SET));
 
         assertThat(thrown).isExactlyInstanceOf(IllegalArgumentException.class);
     }
@@ -251,17 +253,17 @@ class DcbAppendConditionCheckTest {
         Map<String, MarkerObservation> read = read(KEY_A, observation(E1, 1));
         Map<String, MarkerObservation> now = read(KEY_A, observation(E1, 2));
 
-        DcbAppendConditionCheck.Outcome outcome = check(TAGS_A, read, now, false);
+        DcbAppendConditionCheck.Outcome outcome = check(TAGS_A, read, now, Scope.MARKERS_ONLY);
 
-        assertThat(outcome).as("with the flag set this is a query of the events above version 1, so without it the check can only refuse").isEqualTo(new Refuse());
+        assertThat(outcome).as("on a replica set this is a query of the events above version 1, so with only the markers to compare the check can only refuse").isEqualTo(new Refuse());
     }
 
     @Test
     void passes_when_no_marker_moved_whether_or_not_the_store_may_query_the_events() {
         Map<String, MarkerObservation> read = read(KEY_A, observation(E1, 1), KEY_B, observation(E2, 4));
 
-        assertThat(check(TAGS_A_AND_B, read, read, false)).as("nothing moved, so nothing needs the events").isEqualTo(new Pass());
-        assertThat(check(TAGS_A_AND_B, read, read, true)).isEqualTo(new Pass());
+        assertThat(check(TAGS_A_AND_B, read, read, Scope.MARKERS_ONLY)).as("nothing moved, so nothing needs the events").isEqualTo(new Pass());
+        assertThat(check(TAGS_A_AND_B, read, read, Scope.REPLICA_SET)).isEqualTo(new Pass());
     }
 
     @Test
@@ -269,10 +271,10 @@ class DcbAppendConditionCheckTest {
         Map<String, MarkerObservation> read = read(KEY_A, observation(E1, 4), KEY_Z, observation(E2, 1));
         Map<String, MarkerObservation> now = read(KEY_A, observation(E1, 4), KEY_Z, observation(E2, 2));
 
-        assertThat(check(TAGS_A_AND_Z, read, now, false))
+        assertThat(check(TAGS_A_AND_Z, read, now, Scope.MARKERS_ONLY))
                 .as("A read that can tear holds tag a from after a matching event and tag z from before it, so an unmoved marker of a doesn't rule the event out")
                 .isEqualTo(new Refuse());
-        assertThat(check(TAGS_A_AND_Z, read, now, true))
+        assertThat(check(TAGS_A_AND_Z, read, now, Scope.REPLICA_SET))
                 .as("Where the read can't tear, the unmoved marker of a rules the item out")
                 .isEqualTo(new Pass());
     }
@@ -281,36 +283,36 @@ class DcbAppendConditionCheckTest {
     void refuses_what_step_one_refuses_whether_or_not_the_store_may_query_the_events() {
         Map<String, MarkerObservation> read = read(KEY_A, observation(E1, 2));
 
-        assertThat(check(TAGS_A, read, read(KEY_A, observation(E2, 2)), false)).as("the epoch changed").isEqualTo(new Refuse());
-        assertThat(check(TAGS_A, read, read(KEY_A, MarkerObservation.absent()), false)).as("the marker is missing").isEqualTo(new Refuse());
-        assertThat(check(TAGS_A, read, read(KEY_A, observation(E1, 1)), false)).as("the version is lower").isEqualTo(new Refuse());
+        assertThat(check(TAGS_A, read, read(KEY_A, observation(E2, 2)), Scope.MARKERS_ONLY)).as("the epoch changed").isEqualTo(new Refuse());
+        assertThat(check(TAGS_A, read, read(KEY_A, MarkerObservation.absent()), Scope.MARKERS_ONLY)).as("the marker is missing").isEqualTo(new Refuse());
+        assertThat(check(TAGS_A, read, read(KEY_A, observation(E1, 1)), Scope.MARKERS_ONLY)).as("the version is lower").isEqualTo(new Refuse());
     }
 
     @Test
-    void allows_the_query_for_an_answer_with_a_replica_set_name() {
-        assertThat(DcbAppendConditionCheck.runsOnReplicaSet(answering(new Document("setName", "rs0")))).isTrue();
+    void deployment_is_REPLICA_SET_for_an_answer_with_a_replica_set_name() {
+        assertThat(DcbAppendConditionCheck.deployment(answering(new Document("setName", "rs0")))).isEqualTo(Deployment.REPLICA_SET);
     }
 
     @Test
-    void refuses_the_query_for_an_answer_from_a_mongos() {
-        assertThat(DcbAppendConditionCheck.runsOnReplicaSet(answering(new Document("msg", "isdbgrid")))).isFalse();
+    void deployment_is_MONGOS_for_an_answer_from_a_mongos() {
+        assertThat(DcbAppendConditionCheck.deployment(answering(new Document("msg", "isdbgrid")))).isEqualTo(Deployment.MONGOS);
     }
 
     @Test
-    void refuses_the_query_for_an_answer_with_a_replica_set_name_that_comes_from_a_mongos() {
-        assertThat(DcbAppendConditionCheck.runsOnReplicaSet(answering(new Document("setName", "rs0").append("msg", "isdbgrid")))).isFalse();
+    void deployment_is_MONGOS_for_an_answer_with_a_replica_set_name_that_comes_from_a_mongos() {
+        assertThat(DcbAppendConditionCheck.deployment(answering(new Document("setName", "rs0").append("msg", "isdbgrid")))).isEqualTo(Deployment.MONGOS);
     }
 
     @Test
-    void refuses_the_query_for_an_answer_without_a_replica_set_name() {
-        assertThat(DcbAppendConditionCheck.runsOnReplicaSet(answering(new Document()))).as("a standalone server has no setName").isFalse();
+    void deployment_is_OTHER_for_an_answer_without_a_replica_set_name() {
+        assertThat(DcbAppendConditionCheck.deployment(answering(new Document()))).as("a standalone server has no setName").isEqualTo(Deployment.OTHER);
     }
 
     @Test
     void asks_hello_and_nothing_else_when_the_server_knows_it() {
         List<Document> sent = new ArrayList<>();
 
-        DcbAppendConditionCheck.runsOnReplicaSet(command -> {
+        DcbAppendConditionCheck.deployment(command -> {
             sent.add(command);
             return new Document("setName", "rs0");
         });
@@ -321,30 +323,30 @@ class DcbAppendConditionCheckTest {
     @Test
     void falls_back_to_isMaster_when_hello_fails_with_command_not_found_and_uses_its_answer() {
         List<Document> sent = new ArrayList<>();
-        AtomicBoolean allowed = new AtomicBoolean();
+        AtomicReference<Deployment> deployment = new AtomicReference<>();
 
-        assertThatCode(() -> allowed.set(DcbAppendConditionCheck.runsOnReplicaSet(oldServerAnswering(sent, new Document("setName", "rs0")))))
+        assertThatCode(() -> deployment.set(DcbAppendConditionCheck.deployment(oldServerAnswering(sent, new Document("setName", "rs0")))))
                 .as("MongoDB 4.2.0 to 4.2.9 answer hello with code 59, and creating the store must not fail on that")
                 .doesNotThrowAnyException();
 
         assertThat(sent).containsExactly(new Document("hello", 1), new Document("isMaster", 1));
-        assertThat(allowed).as("the isMaster answer has a setName").isTrue();
+        assertThat(deployment).as("the isMaster answer has a setName").hasValue(Deployment.REPLICA_SET);
     }
 
     @Test
-    void falls_back_to_isMaster_when_hello_fails_with_command_not_found_and_refuses_the_query_for_a_mongos() {
-        AtomicBoolean allowed = new AtomicBoolean(true);
+    void falls_back_to_isMaster_when_hello_fails_with_command_not_found_and_answers_MONGOS_for_a_mongos() {
+        AtomicReference<Deployment> deployment = new AtomicReference<>();
 
-        assertThatCode(() -> allowed.set(DcbAppendConditionCheck.runsOnReplicaSet(oldServerAnswering(new ArrayList<>(), new Document("msg", "isdbgrid")))))
+        assertThatCode(() -> deployment.set(DcbAppendConditionCheck.deployment(oldServerAnswering(new ArrayList<>(), new Document("msg", "isdbgrid")))))
                 .doesNotThrowAnyException();
 
-        assertThat(allowed).as("the isMaster answer is from a mongos").isFalse();
+        assertThat(deployment).as("the isMaster answer is from a mongos").hasValue(Deployment.MONGOS);
     }
 
     @Test
     void falls_back_to_isMaster_when_command_not_found_is_the_cause_of_the_exception_hello_throws() {
         List<Document> sent = new ArrayList<>();
-        AtomicBoolean allowed = new AtomicBoolean();
+        AtomicReference<Deployment> deployment = new AtomicReference<>();
         Function<Document, Document> server = command -> {
             sent.add(command);
             if (command.containsKey("hello")) {
@@ -353,12 +355,12 @@ class DcbAppendConditionCheckTest {
             return new Document("setName", "rs0");
         };
 
-        assertThatCode(() -> allowed.set(DcbAppendConditionCheck.runsOnReplicaSet(server)))
+        assertThatCode(() -> deployment.set(DcbAppendConditionCheck.deployment(server)))
                 .as("a template wraps the driver's exception, so the code is looked for in the causes and not only in the exception thrown")
                 .doesNotThrowAnyException();
 
         assertThat(sent).containsExactly(new Document("hello", 1), new Document("isMaster", 1));
-        assertThat(allowed).isTrue();
+        assertThat(deployment).hasValue(Deployment.REPLICA_SET);
     }
 
     @Test
@@ -366,7 +368,7 @@ class DcbAppendConditionCheckTest {
         MongoCommandException unauthorized = commandFailed(13);
         List<Document> sent = new ArrayList<>();
 
-        assertThatThrownBy(() -> DcbAppendConditionCheck.runsOnReplicaSet(command -> {
+        assertThatThrownBy(() -> DcbAppendConditionCheck.deployment(command -> {
             sent.add(command);
             throw unauthorized;
         })).as("only a server that doesn't know hello gets the fallback, any other failure must stop the store from being created")
@@ -379,7 +381,7 @@ class DcbAppendConditionCheckTest {
     void propagates_a_failure_of_hello_that_is_not_a_command_exception() {
         IllegalStateException failure = new IllegalStateException("The server is unreachable");
 
-        assertThatThrownBy(() -> DcbAppendConditionCheck.runsOnReplicaSet(command -> {
+        assertThatThrownBy(() -> DcbAppendConditionCheck.deployment(command -> {
             throw failure;
         })).isSameAs(failure);
     }
@@ -388,19 +390,19 @@ class DcbAppendConditionCheckTest {
     void propagates_command_not_found_from_isMaster() {
         MongoCommandException notFoundAgain = commandFailed(59);
 
-        assertThatThrownBy(() -> DcbAppendConditionCheck.runsOnReplicaSet(command -> {
+        assertThatThrownBy(() -> DcbAppendConditionCheck.deployment(command -> {
             throw command.containsKey("hello") ? commandFailed(59) : notFoundAgain;
         })).as("a server that knows neither command has nothing left to ask")
                 .isSameAs(notFoundAgain);
     }
 
     private static DcbAppendConditionCheck.Outcome check(DcbCriteria criteria, Map<String, MarkerObservation> read, Map<String, MarkerObservation> now) {
-        return check(criteria, read, now, true);
+        return check(criteria, read, now, Scope.REPLICA_SET);
     }
 
-    private static DcbAppendConditionCheck.Outcome check(DcbCriteria criteria, Map<String, MarkerObservation> read, Map<String, MarkerObservation> now, boolean runsOnReplicaSet) {
+    private static DcbAppendConditionCheck.Outcome check(DcbCriteria criteria, Map<String, MarkerObservation> read, Map<String, MarkerObservation> now, Scope scope) {
         DcbConsistencyToken token = DcbConsistencyToken.of(criteria, read.values().stream().mapToLong(MarkerObservation::version).sum(), read);
-        return DcbAppendConditionCheck.check(token, criteria, now, runsOnReplicaSet);
+        return DcbAppendConditionCheck.check(token, criteria, now, scope);
     }
 
     private static Function<Document, Document> answering(Document answer) {

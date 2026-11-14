@@ -74,8 +74,10 @@ public enum DcbAppendConditionModel {
      *     {@link DcbAppendCondition#wholeStoreLock()} already documents, and the reason it is correct only for a single
      *     writer or a bootstrap append that races only with other bootstrap appends (ADR 30).</li>
      * </ul>
-     * On anything but a replica set, such as a sharded cluster, a MongoDB store doesn't query, and refuses when a marker
-     * of the criteria moved. That is the {@link #TAG_MARKER} answer to the first question, and the suite doesn't assert
+     * Through a mongos a MongoDB store queries too when the append's transaction runs at read concern snapshot and write
+     * concern majority, as it does when the store starts it. In a transaction at another read concern or write concern,
+     * such as a caller's at the default read concern, it doesn't query, and refuses when a marker of the criteria moved.
+     * That is the {@link #TAG_MARKER} answer to the first question, and the suite doesn't assert
      * it for this model.
      */
     MARKERS_THEN_EVENTS,

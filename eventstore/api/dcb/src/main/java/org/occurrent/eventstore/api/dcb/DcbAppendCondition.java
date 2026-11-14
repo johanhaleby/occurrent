@@ -31,9 +31,11 @@ import static java.util.Objects.requireNonNull;
  * MongoDB stores, a tag-scoped or type-scoped append committed after a read with {@link DcbCriteria#all()} doesn't make
  * it fail (see {@link #wholeStoreLock(DcbConsistencyToken)}). A store may also make it fail when no matching event was
  * committed. The MongoDB stores can do that on a replica set, for example when a marker document was deleted after the
- * read or a 0.34 node appended after it. On anything else, such as a sharded cluster, they do that whenever a marker of
- * {@code criteria} moved after the read, for example for an event that shares a tag with {@code criteria} but doesn't
- * match it, or for another conditional append on the same criteria, whatever events it appended. The MongoDB stores
+ * read or a 0.34 node appended after it. Through a mongos they do the same when the store runs the append's transaction
+ * itself. In a transaction that doesn't run at read concern snapshot and write concern majority, such as one of the
+ * caller's at the default read concern, they do that whenever a marker of {@code criteria} moved after the read, for
+ * example for an event that shares a tag with {@code criteria} but doesn't match it, or for another conditional append
+ * on the same criteria, whatever events it appended. The MongoDB stores
  * rely on a marker document being deleted only in a transaction that also finds no event with its tag or type, at read
  * concern snapshot on a sharded cluster, and not while a 0.34 node can still append, since 0.34 recreates a deleted
  * marker with no epoch and restarts its version at 1.

@@ -54,7 +54,8 @@ final class BoundTransactionOptions {
     Mono<Optional<TransactionOptions>> current() {
         return TransactionSynchronizationManager.forCurrentTransaction()
                 .map(synchronization -> Optional.ofNullable(read(synchronization)))
-                .onErrorResume(e -> Mono.just(Optional.empty()));
+                .onErrorResume(e -> Mono.just(Optional.empty()))
+                .defaultIfEmpty(Optional.empty());
     }
 
     // Reactor rethrows a LinkageError from map instead of signalling it, so it's caught here
