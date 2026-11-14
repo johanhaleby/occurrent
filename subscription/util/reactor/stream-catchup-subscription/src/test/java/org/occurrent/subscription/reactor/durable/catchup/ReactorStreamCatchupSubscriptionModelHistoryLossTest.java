@@ -384,7 +384,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
         ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
         Checkpoint lostLiveStart = new StringBasedCheckpoint("stored live start");
-        try (LoggedByTheCatchup errors = new LoggedByTheCatchup()) {
+        try (LoggedByTheCatchup logged = new LoggedByTheCatchup()) {
             Subscription subscription = catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(2, lostLiveStart, 2, 3)),
                     cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
             subscription.waitUntilStarted().block(Duration.ofSeconds(5));
@@ -403,7 +403,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
                             .hasMessageContaining("catch-up subscription " + ID + ",")
                             .hasMessageContaining("\"" + lostLiveStart.asString() + "\"")
                             .hasMessageContaining("the live start its replay would go live from"),
-                    () -> assertThat(errors.errors()).as("errors logged").containsExactly(MessageFormatter.arrayFormat(HistoryLossMessages.LIVE_START_LOST_LOG,
+                    () -> assertThat(logged.errors()).as("errors logged").containsExactly(MessageFormatter.arrayFormat(HistoryLossMessages.LIVE_START_LOST_LOG,
                             new Object[]{ID, lostLiveStart.asString(), lostLiveStart.asString()}).getMessage()),
                     () -> assertThat(received).as("nothing delivered by the takeover replay").containsExactly("e3"),
                     () -> assertThat(wrapped.resumedAt).as("resumed at a position").isEmpty(),

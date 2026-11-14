@@ -126,7 +126,7 @@ class CompetingConsumerHoldsALostLiveStartOverCatchupTest {
     }
 
     @Test
-    void holds_a_consumer_paused_with_one_error_that_says_a_resume_is_refused_again_when_the_catchup_model_holds_its_replay_from_after_the_beginning_paused_because_the_live_start_is_lost() {
+    void holds_a_consumer_paused_with_one_error_that_says_a_resume_is_refused_again_and_how_to_recover_when_the_catchup_model_holds_its_replay_from_after_the_beginning_paused_because_the_live_start_is_lost() {
         // Given
         strategy.grantOnRegister = true;
         OffsetDateTime afterTheBeginning = OffsetDateTime.of(2020, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
@@ -146,6 +146,7 @@ class CompetingConsumerHoldsALostLiveStartOverCatchupTest {
         await().atMost(EVENTUALLY).untilAsserted(() ->
                 assertThat(logged.errors()).as("errors logged").singleElement().asString()
                         .contains("is refused again when this node gets it")
+                        .contains("Otherwise cancel the subscription and subscribe it again from the beginning or from a checkpoint the application kept")
                         .doesNotContain("replays the subscription from the beginning again"));
     }
 

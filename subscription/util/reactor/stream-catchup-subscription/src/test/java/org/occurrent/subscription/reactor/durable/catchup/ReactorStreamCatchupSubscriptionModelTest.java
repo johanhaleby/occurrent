@@ -631,7 +631,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
         model.set(catchup);
         AtomicBoolean replaced = new AtomicBoolean();
-        try (LoggedByTheCatchup errors = new LoggedByTheCatchup()) {
+        try (LoggedByTheCatchup logged = new LoggedByTheCatchup()) {
             // When
             Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
                 if (replaced.compareAndSet(false, true)) {
@@ -641,10 +641,14 @@ class ReactorStreamCatchupSubscriptionModelTest {
                 return Mono.empty();
             });
 
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                assertThat(replaced).as("the first replay was replaced").isTrue();
+                assertThat(reads.get()).as("reads, which a second replay made").isGreaterThan(1);
+                assertThat(logged.warnings()).as("warnings logged").anyMatch(message -> message.contains("ran a newer replay, which keeps running"));
+            });
+
             // Then the failure of the first replay holds nothing, and records nothing
-            assertThat(replaced).as("the first replay was replaced").isTrue();
-            assertThat(reads.get()).as("reads, which a second replay made").isGreaterThan(1);
-            assertThat(errors.errors()).as("errors logged").noneMatch(message -> message.contains("held paused"));
+            assertThat(logged.errors()).as("errors logged").noneMatch(message -> message.contains("held paused"));
             assertThat(catchup.isPaused("sub")).as("paused").isFalse();
             assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
 
