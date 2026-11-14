@@ -158,6 +158,22 @@ class InheritedDescriptorFactoryTest {
     }
 
     @Test
+    void a_snapshot_factory_with_a_bounded_type_variable_inherited_through_a_raw_supertype_keeps_the_state_type_error() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(SnapshotCollaboratorsConfiguration.class)
+                .withBean(RecordingSnapshotStoreProvider.class, () -> new RecordingSnapshotStoreProvider(new CopyOnWriteArrayList<>()))
+                .withBean(RawBoundedSnapshotFactory.class, RawBoundedSnapshotFactory::new)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("@Snapshot 'generic-snapshot'")
+                            .hasMessageContaining("with a concrete state type");
+                });
+    }
+
+    @Test
     void a_snapshot_factory_declared_with_a_type_variable_behind_a_jdk_proxy_over_a_target_source_that_is_not_fixed_gives_the_default_store_the_state_type_the_proxys_interface_binds() {
         new ApplicationContextRunner()
                 .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
@@ -259,6 +275,19 @@ class InheritedDescriptorFactoryTest {
         RawSnapshotFactory() {
             super(null);
         }
+    }
+
+    abstract static class GenericBoundedSnapshotFactory<S extends ViewState> {
+        @Snapshot(id = "generic-snapshot", startAt = StartPosition.NOW)
+        SnapshotView<S, TestEvent> snapshot() {
+            return SnapshotView.<S, TestEvent>builder(null)
+                    .on(TestEvent.class, (state, event) -> state)
+                    .build();
+        }
+    }
+
+    @SuppressWarnings("rawtypes")
+    static class RawBoundedSnapshotFactory extends GenericBoundedSnapshotFactory {
     }
 
     // No store bean of any kind, so the factory's state type is what the zero-config default store is created for

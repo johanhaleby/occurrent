@@ -218,6 +218,11 @@ class InheritedDescriptorFactoryTest {
     }
 
     @Test
+    void a_projection_factory_with_a_bounded_type_variable_inherited_through_a_raw_supertype_keeps_the_state_type_error() {
+        assertProjectionStateTypeRefused(RawBoundedProjectionFactory.class);
+    }
+
+    @Test
     void a_projection_factory_whose_state_type_the_bean_leaves_unbound_keeps_the_state_type_error() {
         assertProjectionStateTypeRefused(UnboundProjectionFactory.class);
     }
@@ -388,6 +393,20 @@ class InheritedDescriptorFactoryTest {
         RawProjectionFactory() {
             super(null);
         }
+    }
+
+    abstract static class GenericBoundedProjectionFactory<S extends ViewState> {
+        @Projection(id = "generic-projection", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<S, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<S, TestEvent, String>builder(null)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state)
+                    .build();
+        }
+    }
+
+    @SuppressWarnings("rawtypes")
+    static class RawBoundedProjectionFactory extends GenericBoundedProjectionFactory {
     }
 
     static class UnboundProjectionFactory<T> extends GenericProjectionFactory<T> {

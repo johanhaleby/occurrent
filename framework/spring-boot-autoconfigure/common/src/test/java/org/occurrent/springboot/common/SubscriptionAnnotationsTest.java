@@ -1760,6 +1760,16 @@ class SubscriptionAnnotationsTest {
     static class BindsMyView extends FactoryBaseOfS<MyView> {
     }
 
+    static class FactoryBaseOfBoundedS<S extends MyView> {
+        Pair<S, String> stateFirst() {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("rawtypes")
+    static class RawSubclassOfBounded extends FactoryBaseOfBoundedS {
+    }
+
     @SuppressWarnings("rawtypes")
     static class RawSubclass extends FactoryBaseOfS {
     }
@@ -1848,6 +1858,11 @@ class SubscriptionAnnotationsTest {
     @Test
     void returnTypeArgument_is_null_when_the_implementation_extends_the_generic_class_raw() throws Exception {
         assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateFirst"), RawSubclass.class, 0)).isNull();
+    }
+
+    @Test
+    void returnTypeArgument_is_null_and_not_the_bound_when_the_implementation_extends_a_class_with_a_bounded_type_variable_raw() throws Exception {
+        assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfBoundedS.class, "stateFirst"), RawSubclassOfBounded.class, 0)).isNull();
     }
 
     @Test
