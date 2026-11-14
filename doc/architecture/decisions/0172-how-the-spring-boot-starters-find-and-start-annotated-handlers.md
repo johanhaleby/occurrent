@@ -90,10 +90,15 @@ method it overrides.
 A proxy whose target source isn't a fixed singleton can't be unwrapped. A CGLIB proxy like that is scanned as the class
 it subclasses, and a JDK interface proxy like that as its own proxy class, both as in 0.34.0. So when such a JDK
 proxy is the bean, as when a `@Bean` method or a `FactoryBean` returns it, only the annotations on the proxy's
-interfaces count, a handler annotated only on the class behind it doesn't run, and a handler declared on a generic
-interface subscribes to the type variable's bound. Reading the class behind such a JDK proxy instead would register a
-handler twice when the proxy's target is a bean of its own, such as the target of a `LazyInitTargetSource` or a
-`HotSwappableTargetSource`, since the scan also finds that bean under its own name.
+interfaces count, and a handler annotated only on the class behind it doesn't run. Reading the class behind such a
+JDK proxy instead would register a handler twice when the proxy's target is a bean of its own, such as the target of a
+`LazyInitTargetSource` or a `HotSwappableTargetSource`, since the scan also finds that bean under its own name.
+
+A handler declared with a type variable on a generic interface of such a JDK proxy takes its types from what the
+proxy's interfaces bind. When `Handler<E extends OrderEvent>` declares it and the proxy implements
+`PlacedHandler extends Handler<Placed>`, it subscribes to `Placed`. Only a proxy that implements `Handler` itself
+subscribes to the bound, `OrderEvent`. 0.34.0 read the proxy class's own method, which has only the erased types, so it
+subscribed to the bound in both cases. A factory method's state type is read through the same binding.
 
 When a post-processor wraps the bean in such a JDK proxy instead, the startup scan reads the class the bean had before
 the proxy wrapped it. A handler the proxy doesn't implement then fails startup with
@@ -191,6 +196,10 @@ I rejected three smaller changes:
   class gives the variable or a subtype of it, startup now fails with an `IllegalStateException`. A factory method of
   that kind found no state type in 0.34.0, so it failed at startup unless it named its store or the application had
   one bean of the store type. It keeps that store, and where it failed, it now gets the zero-config store.
+- A handler declared with a type variable on a generic interface of a JDK proxy that can't be unwrapped subscribes to
+  the type the proxy's interfaces give the variable, where 0.34.0 subscribed it to the bound. Only a proxy that
+  implements the generic interface itself still gets the bound. When its `eventTypes` lists a type that isn't the one
+  the interfaces give the variable or a subtype of it, startup now fails with an `IllegalStateException`.
 - A static method that hides an annotated static superclass method ran under that method's annotation in 0.34.0. Now
   the application fails at startup when the hiding method has no annotation of its own, and registers both when it
   repeats the annotation. A hidden static subscription handler, refused before too, now fails with the scan's

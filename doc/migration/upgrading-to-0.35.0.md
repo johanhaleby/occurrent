@@ -169,8 +169,11 @@ other sections compile fine and behave differently, so read them first.
   startup instead of running in that method's place. A method that repeats the handler annotation of such a method, or
   of a private superclass method, runs together with it, and with the same id the application fails at startup. A
   static method that hides an annotated static factory method of a superclass fails at startup the same way. A
-  handler declared with a type variable gets only the type the bean's class gives it, which narrows the one kind of
+  handler declared with a type variable gets only the type the bean's class gives it, which can narrow both kinds of
   inherited handler that ran in 0.34.0. Compiles unchanged.
+- [`SubscriptionAnnotations` reads handlers as the bean's class sees them](#subscriptionannotations-reads-handlers-as-the-beans-class-sees-them).
+  Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly sees the changes
+  the starters make to find inherited handlers. Compiles unchanged.
 
 ### Brokers
 
@@ -2119,9 +2122,14 @@ didn't override it, and nothing was logged. Both starters now register it. Two k
 public class inherits a public annotated method from a superclass that isn't public, the compiler adds a bridge
 method to the class that calls the inherited method and has its annotation, and 0.34.0 found that bridge. Such a
 handler keeps running under the same id. When it is declared with a type variable, its types now come from the bean's
-class, see What changes below. The other is an annotated interface default method on a bean behind a JDK proxy whose
-target can't be unwrapped. 0.34.0 read the proxy's class, which declares every method of its interfaces, so it found
-that method, and it still does.
+class, see What changes below. The other is an annotated interface method, default or abstract, on a bean behind a
+JDK proxy whose target can't be unwrapped. 0.34.0 read the proxy's class, which declares every method of its
+interfaces, so it found that method, and both starters still register it. When it is declared with a type variable,
+its types now come from what the proxy's interfaces bind, see What changes below.
+
+When a superclass or interface of the bean has a method that names a class missing at runtime, such as a type from an
+optional dependency, both starters still read only the methods the bean's class declares, as 0.34.0 did, and log at
+debug level that they skip the inherited ones.
 
 This covers `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@SynchronousSubscription`, `@Projection` and
 `@Snapshot`, and `@Saga` on the blocking starter. An inherited `@Projection`, `@Snapshot` or `@Saga` factory method,
@@ -2149,6 +2157,8 @@ Applications on either starter with one of these:
   superclass
 - a bean whose class inherits a handler or factory method of the bridge kind above that is declared with a type
   variable
+- a bean that is a JDK proxy of the kind above with a handler or factory method declared with a type variable on a
+  generic interface, when one of the proxy's interfaces binds that variable
 
 ### What changes
 
@@ -2168,6 +2178,13 @@ Applications on either starter with one of these:
   where 0.34.0 subscribed it to those types. Such a factory method found no state type, so it failed at startup
   unless it named its store or the application had one bean of the store type. It keeps that store, and where it
   failed, it now gets the zero-config store.
+- The JDK proxy kind above takes its types from what the proxy's interfaces bind. 0.34.0 read them from the proxy
+  class's own method, which has only the erased types. So when `Handler<E extends OrderEvent>` declares the handler
+  and the proxy implements `PlacedHandler extends Handler<Placed>`, the handler subscribed to `OrderEvent` and now
+  subscribes to `Placed` only, under the same id. A proxy that implements `Handler` itself still subscribes to
+  `OrderEvent`. When the annotation's `eventTypes` lists a type that isn't `Placed` or a subtype of it, such as
+  another subtype of `OrderEvent`, the application now fails at startup with an `IllegalStateException`. A factory
+  method of that kind reads its state type through the same binding.
 - Two beans that run one annotated method register two handlers with the same id, so the application fails at
   startup with `DuplicateSubscriptionIdException`. That holds when both inherit it, and when one of them is a bean of
   the class that declares it. The id is the key the subscription's checkpoint is stored under,
@@ -2244,10 +2261,11 @@ methods. For each one a bean inherits without overriding it:
   the same name and parameters, the application fails at startup, or registers both when that method repeats the
   annotation. To run the subclass's method, which is what ran before, put the annotation on it and remove it from the
   superclass method. To run the superclass method instead, rename the subclass's method.
-- If it's a handler of the bridge kind above declared with a type variable, check that the type the bean's class gives
-  the variable is the one it should get, since events of the bound's other types stop reaching it. Remove from its
-  `eventTypes` the types that aren't that type or a subtype of it, or the application fails at startup. A factory
-  method of that kind keeps the store it named, or the one bean of the store type it got.
+- If it's a handler of either kind above declared with a type variable, check that the type the bean's class, or the
+  proxy's interfaces, give the variable is the one it should get, since events of the bound's other types stop
+  reaching it. Remove from its `eventTypes` the types that aren't that type or a subtype of it, or the application
+  fails at startup. A factory method of the bridge kind keeps the store it named, or the one bean of the store type it
+  got.
 - If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
   A bean of the class that declares it keeps the original id. If the method is private, or package-private and
   declared in another package than a subclass, the subclasses can't override it, so first make it protected or public,
@@ -2257,6 +2275,38 @@ The code compiles unchanged. An inherited handler that starts running writes wha
 checkpoint and, for a `@Projection`, `@Snapshot` or `@Saga`, its state. There is no OpenRewrite recipe, because nothing in the code
 says whether an inherited handler was meant to run. See
 [ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md).
+
+## `SubscriptionAnnotations` reads handlers as the bean's class sees them
+
+Both Spring Boot starters read a bean's handlers through `SubscriptionAnnotations`, in the module they share. Three of
+its public methods change so that the starters find inherited handlers, see
+[A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered).
+
+### Who is affected
+
+Code outside the starters that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter`.
+
+### What changes
+
+- `invokeDescriptorFactory` runs a factory method that the class of the unwrapped bean inherits unchanged, where
+  0.34.0 refused every factory method that class didn't declare itself. Behind a CGLIB proxy whose target can't be
+  unwrapped, it refuses an inherited factory method the proxy can't override, such as a private or final one. Behind
+  a JDK interface proxy whose target can't be unwrapped, it runs the factory through the proxy by the method of the
+  proxy's interface that runs it, where 0.34.0 ran only a method the proxy class itself declares.
+- `runsImplementationOf` decides whether the bean's class overrides the method by the JVM's rules. Say `Base` in
+  package `a` declares a package-private `on(Placed)`, `Mid` in package `b` extends it and declares `on(Placed)` too,
+  and `Leaf` in package `a` extends `Mid`. `Mid.on` doesn't override `Base.on`, so a `Leaf` runs `Base.on`, and the
+  method now answers `true` for `Base.on` on a `Leaf`, where 0.34.0 answered `false`.
+- `resolveTypeFilter` reads the handler's parameter types as the bean's class sees them, so `on(E event)` on `Base<E>`
+  subscribes a bean of a class that extends `Base<Placed>` to `Placed`, where 0.34.0 read the bound of `E`. Handed a
+  bridge method, it reads the types of the method the bridge calls. `analyzeParameters` still reads the types as the
+  method declares them.
+
+### What to do
+
+The code compiles unchanged. Where you call one of the three methods, check what your code does with the new answer
+for an inherited factory method, a package-private method declared again in another package, or a handler declared
+with a type variable.
 
 ## `ComposedDefaultStartPosition` and its bean are removed
 
