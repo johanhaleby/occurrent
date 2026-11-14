@@ -169,8 +169,8 @@ other sections compile fine and behave differently, so read them first.
   startup instead of running in that method's place. A method that repeats the handler annotation of such a method, or
   of a private superclass method, runs together with it, and with the same id the application fails at startup. A
   static method that hides an annotated static factory method of a superclass fails at startup the same way. A
-  handler declared with a type variable gets only the type the bean's class gives it, which can narrow both kinds of
-  inherited handler that ran in 0.34.0. Compiles unchanged.
+  handler declared with a type variable gets only the type the bean's class gives it, which can narrow a handler that
+  ran in 0.34.0, one of the bridge kind or one on a JDK proxy that can't be unwrapped. Compiles unchanged.
 - [`SubscriptionAnnotations` reads handlers as the bean's class sees them](#subscriptionannotations-reads-handlers-as-the-beans-class-sees-them).
   Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly sees the changes
   the starters make to find inherited handlers. Compiles unchanged.
