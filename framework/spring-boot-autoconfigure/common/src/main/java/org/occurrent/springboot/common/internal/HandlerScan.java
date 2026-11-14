@@ -67,6 +67,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -959,20 +960,22 @@ public final class HandlerScan {
     }
 
     /**
-     * Asks the container for the target of the scoped bean whose proxy is {@code beanName}, the instance its scope
-     * holds now, which the scan reads the bean's handlers and descriptors from. A scope that isn't active at startup,
+     * Resolves the target of the scoped bean whose proxy is {@code beanName}, which the scan reads the bean's handlers
+     * and descriptors from. At startup {@code beanResolver} asks the container, so the target is the instance its scope
+     * holds now. For a target built after startup it answers with that instance. A scope that isn't active at startup,
      * such as request or session scope, fails the scan with an exception that names the bean, instead of Spring's own,
      * which advises adding the scoped proxy the bean already has. Internal to the Spring Boot starters.
      *
-     * @param beanFactory the bean factory that defines {@code beanName}
-     * @param beanName    the name of the scoped proxy
-     * @param targetName  the name of its target, {@link ScopedProxyUtils#getTargetBeanName} of {@code beanName}
-     * @return the instance the target's scope holds now
+     * @param beanResolver resolves a bean by name, the container at startup and the instance in hand for a target
+     *                     built after startup
+     * @param beanName     the name of the scoped proxy
+     * @param targetName   the name of its target, {@link ScopedProxyUtils#getTargetBeanName} of {@code beanName}
+     * @return the target the scan reads the handlers and descriptors from
      * @throws IllegalStateException when the target's scope isn't active, with Spring's exception as its cause
      */
-    public static Object scopedTargetToRegister(BeanFactory beanFactory, String beanName, String targetName) {
+    public static Object scopedTargetToRegister(Function<String, Object> beanResolver, String beanName, String targetName) {
         try {
-            return beanFactory.getBean(targetName);
+            return beanResolver.apply(targetName);
         } catch (ScopeNotActiveException e) {
             throw new IllegalStateException(("Bean '%s' has a scoped proxy, and the scan asks for its scoped target '%s' at startup to read its Occurrent handlers, but the target's scope isn't active then. "
                     + "The scan asks when the target's class shows an Occurrent annotation or can't be predicted. "

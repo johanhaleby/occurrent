@@ -142,11 +142,15 @@ asks when neither class is known, as for a lazy scoped proxy whose target defini
 registers its handlers or fails startup instead of being passed over. A scoped proxy that isn't lazy already fails
 startup when its target's class is unknown, since Spring needs that class to create the proxy. Once every handler of
 the target's class is registered the scan doesn't ask again, so a prototype bean with a scoped proxy builds one target
-at startup and then one per delivery. A bean that is only named `scopedTarget.` plus another bean's name, with no
+at startup and then one per delivery. When the predicted class shows no annotation, as for a `@Bean` method declared
+to return an interface or a base class while the class it returns declares a handler, the scan doesn't ask at startup.
+The handlers register when the target is first built, by a call through the proxy or by the scope, under the proxy's
+name and from that instance. Until something builds the target its handlers don't run, as for a lazy bean whose
+predicted class shows no annotation. A bean that is only named `scopedTarget.` plus another bean's name, with no
 scoped proxy decorating it, is scanned as any other bean. With `ScopedProxyMode.INTERFACES` the proxy implements only the bean's interfaces, so a handler that only the class declares
-fails startup with `SubscriptionHandlerNotInvocableException`, as for any JDK proxy. A `@Projection`, `@Saga` or
-`@Snapshot` factory method runs once, on the instance the scan asked the scope for, so a refresh doesn't change its
-descriptor ([#1492](https://github.com/johanhaleby/occurrent/issues/1492)).
+is refused with `SubscriptionHandlerNotInvocableException`, as for any JDK proxy. I've tested that refusal at startup,
+not for a target the scan didn't ask for. A `@Projection`, `@Saga` or `@Snapshot` factory method runs once, on the
+instance the scan asked the scope for or on the first target built, so a refresh doesn't change its descriptor ([#1492](https://github.com/johanhaleby/occurrent/issues/1492)).
 
 A prototype bean without a scoped proxy runs every delivery on the one instance the scan asked for, as in 0.34.0.
 Asking the container per delivery, as `@EventListener` does, would build the bean and its collaborators for each event

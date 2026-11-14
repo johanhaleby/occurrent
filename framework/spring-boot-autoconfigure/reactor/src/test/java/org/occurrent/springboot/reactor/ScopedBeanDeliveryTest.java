@@ -252,6 +252,25 @@ class ScopedBeanDeliveryTest {
         });
     }
 
+    @Test
+    void a_scoped_proxy_declared_as_an_unannotated_interface_registers_the_handler_its_class_declares_once_a_call_through_the_proxy_builds_the_target() {
+        runner.withUserConfiguration(UnannotatedInterfaceConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(InstanceCounter.class).count()).hasValue(0);
+            UnannotatedPort proxy = context.getBean(UnannotatedPort.class);
+
+            assertThat(proxy.name()).isEqualTo("instance-1");
+            assertThat(proxy.name()).isEqualTo("instance-2");
+
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            assertThat(subscribedIds(subscriptions)).containsExactly("unannotated-interface-handler");
+            Function2<EventMetadata, TestEvent, Mono<Void>> handler = handlerFor(subscriptions, "unannotated-interface-handler");
+            handler.invoke(null, new TestEvent()).block();
+            assertThat(context.getBean(Deliveries.class).ranOn()).hasSize(1);
+        });
+    }
+
     private static List<Throwable> causeChain(Throwable failure) {
         List<Throwable> chain = new ArrayList<>();
         for (Throwable cause = failure; cause != null && !chain.contains(cause); cause = cause.getCause()) {
@@ -410,6 +429,42 @@ class ScopedBeanDeliveryTest {
         @Subscription(id = "scoped-prototype-handler", startupMode = StartupMode.BACKGROUND)
         public void on(TestEvent event) {
             deliveries.ranOn().add(name);
+        }
+    }
+
+    interface UnannotatedPort {
+        void on(TestEvent event);
+
+        String name();
+    }
+
+    static class UnannotatedPortHandler implements UnannotatedPort {
+        private final String name;
+        private final Deliveries deliveries;
+
+        UnannotatedPortHandler(String name, Deliveries deliveries) {
+            this.name = name;
+            this.deliveries = deliveries;
+        }
+
+        @Override
+        @Subscription(id = "unannotated-interface-handler", startupMode = StartupMode.BACKGROUND)
+        public void on(TestEvent event) {
+            deliveries.ranOn().add(name);
+        }
+
+        @Override
+        public String name() {
+            return name;
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class UnannotatedInterfaceConfiguration {
+        @Bean
+        @Scope(value = "prototype", proxyMode = ScopedProxyMode.INTERFACES)
+        UnannotatedPort unannotatedPortHandler(InstanceCounter counter, Deliveries deliveries) {
+            return new UnannotatedPortHandler(counter.nextName(), deliveries);
         }
     }
 

@@ -212,14 +212,31 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // sees the flag set. Registering it twice is not possible, since both check the same RegisteredHandlers.
         if (startupScanComplete && beanFactory.containsBeanDefinition(beanName)) {
             boolean singleton = beanFactory.isSingleton(beanName);
-            // The class of the instance this callback received, never a second lookup by name. Two threads
-            // building the same prototype share the recorded entry, so a lookup here can answer with the other
-            // one's class and this bean would be scanned for methods its own class does not declare.
-            ScanType userClass = new ScanType(userClassOf(bean), true);
-            scan(new String[]{beanName}, name -> userClass, name -> bean,
-                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved, false, false);
+            scanBuiltAfterStartup(beanFactory, beanName, bean, singleton, false, false);
         }
         return bean;
+    }
+
+    // Scans one bean the container built after the startup scan, or while it ran on another thread. The class is the
+    // instance's own, never a second lookup by name. Two threads building the same prototype share the recorded
+    // entry, so a lookup can answer with the other one's class and this bean would be scanned for methods its own
+    // class does not declare.
+    //
+    // A scoped target is scanned under its proxy's name, the name the startup scan registers its handlers under and
+    // every delivery goes through. The startup scan passes over a target whose predicted class shows no annotation,
+    // such as one a @Bean method declares as an interface, and building it is what shows its class, so it registers
+    // here. The scan reads the target in hand rather than asking its scope, which for a prototype would build another
+    // target and run this callback again. Its subscriptions never block for a replay, since a replay through the
+    // proxy asks the scope for the target this callback is still building.
+    private void scanBuiltAfterStartup(ConfigurableListableBeanFactory beanFactory, String beanName, Object bean, boolean singleton, boolean mayBlock, boolean mayBlockForReplay) {
+        ScanType userClass = new ScanType(userClassOf(bean), true);
+        Function<String, ScanType> typeResolver = name -> name.equals(beanName) ? userClass : resolveScanType(name);
+        Function<String, Object> beanResolver = name -> name.equals(beanName) ? bean : applicationContext.getBean(name);
+        boolean scopedTarget = HandlerScan.isScopedTarget(beanFactory, beanName);
+        String scanName = scopedTarget ? ScopedProxyUtils.getOriginalBeanName(beanName) : beanName;
+        scan(new String[]{scanName}, typeResolver, beanResolver,
+                (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved,
+                mayBlock, mayBlockForReplay && !scopedTarget);
     }
 
     private static Class<?> userClassOf(Object bean) {
@@ -294,14 +311,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 continue;
             }
             boolean singleton = beanFactory.isSingleton(beanName);
-            ScanType userClass = new ScanType(userClassOf(bean), true);
             // One condition answers both, so a blocking replay cannot deliver anywhere the supplier would not have
-            // sent it. Asked once here for the whole registration, and again per delivery below, since creation
-            // finishing between the two only turns a replay this declined to block for into deliveries that do
-            // resolve the published bean.
-            scan(new String[]{beanName}, name -> userClass, name -> bean,
-                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved,
-                    true, publishedBeanIsResolvable(beanFactory, beanName, singleton));
+            // sent it. Asked once here for the whole registration, and again per delivery, since creation finishing
+            // between the two only turns a replay this declined to block for into deliveries that do resolve the
+            // published bean.
+            scanBuiltAfterStartup(beanFactory, beanName, bean, singleton, true, publishedBeanIsResolvable(beanFactory, beanName, singleton));
         }
     }
 
@@ -357,7 +371,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 String targetName = ScopedProxyUtils.getTargetBeanName(beanName);
                 ScanType targetType;
                 try {
-                    targetType = resolveScanType(targetName);
+                    targetType = typeResolver.apply(targetName);
                 } catch (RuntimeException e) {
                     targetType = null;
                 }
@@ -371,7 +385,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
                 // The class comes from the target, since a proxy of ScopedProxyMode.INTERFACES has only the
                 // interfaces' methods
-                Object scopedTarget = HandlerScan.scopedTargetToRegister(applicationContext, beanName, targetName);
+                Object scopedTarget = HandlerScan.scopedTargetToRegister(beanResolver, beanName, targetName);
                 scopedTargets.put(beanName, scopedTarget);
                 scanType = new ScanType(userClassOf(scopedTarget), true);
             } else {

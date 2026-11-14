@@ -97,7 +97,7 @@ class HandlerScanScopedProxyTest {
         Object target = new Object();
         beanFactory.registerSingleton(ScopedProxyUtils.getTargetBeanName("x"), target);
 
-        assertThat(HandlerScan.scopedTargetToRegister(beanFactory, "x", ScopedProxyUtils.getTargetBeanName("x"))).isSameAs(target);
+        assertThat(HandlerScan.scopedTargetToRegister(beanFactory::getBean, "x", ScopedProxyUtils.getTargetBeanName("x"))).isSameAs(target);
     }
 
     @Test
@@ -107,7 +107,7 @@ class HandlerScanScopedProxyTest {
         targetDefinition.setScope("inactive");
         beanFactory.registerBeanDefinition(ScopedProxyUtils.getTargetBeanName("x"), targetDefinition);
 
-        assertThatThrownBy(() -> HandlerScan.scopedTargetToRegister(beanFactory, "x", ScopedProxyUtils.getTargetBeanName("x")))
+        assertThatThrownBy(() -> HandlerScan.scopedTargetToRegister(beanFactory::getBean, "x", ScopedProxyUtils.getTargetBeanName("x")))
                 .isExactlyInstanceOf(IllegalStateException.class)
                 .hasMessageStartingWith("Bean 'x' has a scoped proxy, and the scan asks for its scoped target 'scopedTarget.x' at startup to read its Occurrent handlers, but the target's scope isn't active then.")
                 .hasCauseInstanceOf(ScopeNotActiveException.class);
@@ -115,7 +115,7 @@ class HandlerScanScopedProxyTest {
 
     @Test
     void scopedTargetToRegister_lets_another_beans_exception_through_unwrapped() {
-        assertThatThrownBy(() -> HandlerScan.scopedTargetToRegister(beanFactory, "x", ScopedProxyUtils.getTargetBeanName("x")))
+        assertThatThrownBy(() -> HandlerScan.scopedTargetToRegister(beanFactory::getBean, "x", ScopedProxyUtils.getTargetBeanName("x")))
                 .isExactlyInstanceOf(NoSuchBeanDefinitionException.class);
     }
 
