@@ -94,7 +94,7 @@ own bean. A `SagaRunner` built without one still records skipped inputs, and `re
 `EventStoreQueries`.
 
 Release returns what it did. The instance is released and `ACTIVE`, or it is still releasing because an input failed
-again, or it is quarantined again because a recorded input's event is missing from the store, or it isn't
+again, or it is quarantined again because the event of K or of a recorded input is missing from the store, or it isn't
 quarantined, or no instance has that id. The refusals in point 4 throw instead.
 
 ### 4. What release refuses
@@ -125,11 +125,20 @@ When the budget runs out, the instance is quarantined again. The input that fail
 and is removed from the list in that write, `releasedAt` is cleared, and the entries after it stay in the list in
 order. A later release replays the failed input first and then those entries.
 
-When release reads an input and its event no longer exists in the store, the instance is quarantined again with that
-input as the failure record's input, the same way as when an input's budget runs out. The input moves from the list to
-the failure record, so nothing is lost. To go on, restore the event in the store and release the instance again, or take
-one of the two ways out in point 4. When the read itself fails, the release throws and the instance stays releasing. On
-a store that answers the poller's query, the poller tries again on its next poll.
+When release reads K or a recorded input and its event no longer exists in the store, the instance is quarantined again
+at once, with no budget, since retrying doesn't bring a deleted event back. That input becomes the failure record's
+input, a recorded input is removed from the list in the same write, `releasedAt` is cleared, and the entries after it
+stay in the list in order, so nothing is lost. The failure record's type and message say that the event is missing from
+the store.
+
+To go on, restore the event in the store and release the instance again, or delete the instance with
+`SagaStateStore.delete(sagaId)`. When K is the missing input, the failure record keeps K's position, so the restart from
+`SagaFailure.position` in point 4 is open too. A recorded input has no position on the failure record, since the
+position is read from the event. When the event is in the store and release was given an `EventStoreQueries` for another
+store, fix the configuration and release the instance again.
+
+When the read itself fails, the release throws and the instance stays releasing. On a store that answers the poller's
+query, the poller tries again on its next poll.
 
 ### 6. Timers stay held until the instance is ACTIVE
 
@@ -184,8 +193,8 @@ continues it after an upgrade again.
   for each until the list is full.
 - An instance that receives more than the record limit while quarantined can't be released, and the operator is back to
   a subscription restart or a delete. A longer quarantine needs a higher limit.
-- An instance whose recorded input refers to an event that was deleted from the store stays quarantined until the
-  event is restored, the saga's subscription is restarted, or the instance is deleted.
+- An instance whose K or recorded input refers to an event that was deleted from the store stays quarantined until the
+  event is restored or the instance is deleted. When K is the missing input, the restart in point 4 is open too.
 - A rolling upgrade from 0.34.0 that follows the upgrade guide takes two deploys, one with quarantine off and one that
   turns it on.
 - An application that never configured quarantine starts quarantining on upgrade. The changelog and the upgrade guide
