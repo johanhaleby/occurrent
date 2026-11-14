@@ -19,6 +19,7 @@ package org.occurrent.subscription.blocking.durable.catchup;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.ThrowableProxy;
 import ch.qos.logback.core.AppenderBase;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
@@ -1353,6 +1354,7 @@ class StreamCatchupResumeReplayMongoTest {
         String heldLog = MessageFormatter.arrayFormat(HistoryLossMessages.LIVE_START_LOST_LOG, new Object[]{subscriptionId, LiveStartLosingModel.LOST, LiveStartLosingModel.LOST}).getMessage();
         await("the loss is logged once").during(2, SECONDS).atMost(6, SECONDS)
                 .untilAsserted(() -> assertThat(errorLog.messagesAbout(subscriptionId)).containsExactly(heldLog));
+        assertThat(errorLog.thrown).as("the throwable of the held replay").singleElement().isInstanceOf(CatchupCannotResumeException.class);
         assertThat(errorLog.failures).as("the failure of the held replay").singleElement().asString()
                 .contains(subscriptionId).contains("from the beginning again");
         assertThat(storage.read(subscriptionId)).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());
@@ -3171,6 +3173,7 @@ class StreamCatchupResumeReplayMongoTest {
     private static final class ErrorLog extends AppenderBase<ILoggingEvent> {
         private final CopyOnWriteArrayList<String> messages = new CopyOnWriteArrayList<>();
         private final CopyOnWriteArrayList<String> failures = new CopyOnWriteArrayList<>();
+        private final CopyOnWriteArrayList<Throwable> thrown = new CopyOnWriteArrayList<>();
 
         @Override
         protected void append(ILoggingEvent event) {
@@ -3178,6 +3181,9 @@ class StreamCatchupResumeReplayMongoTest {
                 messages.add(event.getFormattedMessage());
                 if (event.getThrowableProxy() != null) {
                     failures.add(event.getThrowableProxy().getClassName() + ": " + event.getThrowableProxy().getMessage());
+                    if (event.getThrowableProxy() instanceof ThrowableProxy proxy) {
+                        thrown.add(proxy.getThrowable());
+                    }
                 }
             }
         }
