@@ -382,7 +382,7 @@ public final class SubscriptionAnnotations {
     // scan reads the handler from that bridge
     private static boolean runsUnchanged(Class<?> implementation, Method method) {
         return method.getDeclaringClass().isAssignableFrom(implementation)
-                && HandlerScan.methodTheJvmRuns(method, implementation).equals(BridgeMethodResolver.findBridgedMethod(method));
+                && HandlerScan.methodTheJvmRuns(method, implementation).equals(HandlerScan.bridgedMethod(method));
     }
 
     /**

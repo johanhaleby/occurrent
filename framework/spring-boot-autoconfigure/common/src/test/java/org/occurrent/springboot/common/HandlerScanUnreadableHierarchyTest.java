@@ -16,6 +16,7 @@
 
 package org.occurrent.springboot.common;
 
+import org.assertj.core.api.AbstractThrowableAssert;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -26,6 +27,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
+import java.net.URL;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
@@ -38,8 +40,9 @@ import static org.assertj.core.api.SoftAssertions.assertSoftly;
 
 /**
  * A class a method names can be missing at runtime, such as an optional dependency. When a superclass or an interface
- * has such a method, the scan of a class reads only the methods the class declares, so an inherited handler is not
- * found and one the class declares is. It fails when the class itself declares such a method, as in 0.34.0.
+ * has such a method and declares no handler, the scan of a class reads only the methods the class declares. When it
+ * declares a handler, or its class file can't be read to tell, the scan fails, since the handler would never register.
+ * It also fails when the class itself declares such a method, as in 0.34.0.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class HandlerScanUnreadableHierarchyTest {
@@ -141,12 +144,97 @@ class HandlerScanUnreadableHierarchyTest {
         }
     }
 
+    public static class GrandchildOfUnreadableSuperclass extends ChildOfUnreadableSuperclass {
+    }
+
+    public interface InterfaceExtendingUnreadableInterface extends UnreadableInterface {
+    }
+
+    public static class ImplementsInterfaceExtendingUnreadableInterface implements InterfaceExtendingUnreadableInterface {
+    }
+
+    public static class UnreadableSuperclassWithoutHandler {
+        @SuppressWarnings("unused")
+        public void uses(AbsentType absent) {
+        }
+    }
+
+    public static class ChildOfUnreadableSuperclassWithoutHandler extends UnreadableSuperclassWithoutHandler {
+    }
+
+    public static class DeclaresHandlerAndExtendsUnreadableSuperclassWithoutHandler extends UnreadableSuperclassWithoutHandler {
+        @Subscription(id = "own-handler")
+        public void own(Integer event) {
+        }
+    }
+
+    // A static method of an interface is no handler, so the handler annotation on it does not fail the scan
+    public interface UnreadableInterfaceWithStaticAnnotatedMethod {
+        @SuppressWarnings("unused")
+        default void uses(AbsentType absent) {
+        }
+
+        @Subscription(id = "static-interface-method")
+        static void on(String event) {
+        }
+    }
+
+    public static class ChildOfUnreadableInterfaceWithStaticAnnotatedMethod implements UnreadableInterfaceWithStaticAnnotatedMethod {
+    }
+
+    public abstract static class UnreadableGenericSuperclassWithHandler<T> {
+        @SuppressWarnings("unused")
+        public void uses(AbsentType absent) {
+        }
+
+        @Subscription(id = "generic-handler")
+        public abstract void on(T event);
+    }
+
+    public static class ReAnnotatesGenericHandlerOfUnreadableSuperclass extends UnreadableGenericSuperclassWithHandler<String> {
+        @Subscription(id = "generic-handler")
+        @Override
+        public void on(String event) {
+        }
+    }
+
+    public static class OverridesUnreadableHandlerWithoutAnnotation extends UnreadableSuperclass {
+        @Override
+        public void on(String event) {
+        }
+    }
+
+    public static class UnreadableSuperclassWithPrivateHandler {
+        @SuppressWarnings("unused")
+        public void uses(AbsentType absent) {
+        }
+
+        @SuppressWarnings("unused")
+        @Subscription(id = "private-handler")
+        private void on(String event) {
+        }
+    }
+
+    public static class DeclaresHandlerOfTheSignatureOfAnUnreadablePrivateHandler extends UnreadableSuperclassWithPrivateHandler {
+        @Subscription(id = "own-handler")
+        public void on(String event) {
+        }
+    }
+
     private static final List<Class<?>> FIXTURES = List.of(UnreadableSuperclass.class, ChildOfUnreadableSuperclass.class,
             UnreadableInterface.class, ChildOfUnreadableInterface.class, DeclaresUnreadableMethod.class,
             DeclaresHandlerAndExtendsUnreadableSuperclass.class, DeclaresHandlerAndImplementsUnreadableInterface.class,
             UnreadableGenericInterface.class, DeclaresBridgedHandlerAndImplementsUnreadableInterface.class,
             UnreadableGenericSuperclass.class, DeclaresBridgeAndHandlerAndExtendsUnreadableSuperclass.class,
-            UnreadableOnlyByItsPrivateMethod.class, PublicLeafDeclaringOnlyTheVisibilityBridge.class, PackagePrivateUnreadableHierarchyBase.class);
+            UnreadableOnlyByItsPrivateMethod.class, PublicLeafDeclaringOnlyTheVisibilityBridge.class, PackagePrivateUnreadableHierarchyBase.class,
+            GrandchildOfUnreadableSuperclass.class, InterfaceExtendingUnreadableInterface.class, ImplementsInterfaceExtendingUnreadableInterface.class,
+            UnreadableSuperclassWithoutHandler.class, ChildOfUnreadableSuperclassWithoutHandler.class, DeclaresHandlerAndExtendsUnreadableSuperclassWithoutHandler.class,
+            UnreadableInterfaceWithStaticAnnotatedMethod.class, ChildOfUnreadableInterfaceWithStaticAnnotatedMethod.class,
+            LeafOverUnreadablePackagePrivateBase.class, UnreadablePackagePrivateBase.class,
+            LeafOverUnreadableBaseWithPackagePrivateOverload.class, UnreadableBaseWithPackagePrivateOverload.class,
+            LeafOverReadablePackagePrivateBelowUnreadableTop.class, ReadablePackagePrivateBelowUnreadableTop.class, UnreadableTop.class,
+            UnreadableGenericSuperclassWithHandler.class, ReAnnotatesGenericHandlerOfUnreadableSuperclass.class,
+            OverridesUnreadableHandlerWithoutAnnotation.class, UnreadableSuperclassWithPrivateHandler.class, DeclaresHandlerOfTheSignatureOfAnUnreadablePrivateHandler.class);
 
     @Test
     void handlerMethods_finds_the_handler_of_a_class_inheriting_it_when_every_class_the_hierarchy_names_is_present() {
@@ -157,33 +245,135 @@ class HandlerScanUnreadableHierarchyTest {
     }
 
     @Test
-    void handlerMethods_is_empty_when_a_superclass_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
+    void handlerMethods_throws_naming_the_handler_when_a_superclass_declares_a_handler_and_a_method_naming_a_class_missing_at_runtime() throws Exception {
         Class<?> child = new LoaderWithoutAbsentType().loadClass(ChildOfUnreadableSuperclass.class.getName());
 
-        assertThat(scanWithoutThrowing(child)).isEmpty();
+        assertRefusedForUnreadableHandler(child, UnreadableSuperclass.class);
     }
 
     @Test
-    void handlerMethods_is_empty_when_an_interface_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
+    void handlerMethods_throws_naming_the_handler_when_an_interface_declares_a_default_handler_and_a_method_naming_a_class_missing_at_runtime() throws Exception {
         Class<?> child = new LoaderWithoutAbsentType().loadClass(ChildOfUnreadableInterface.class.getName());
 
+        assertRefusedForUnreadableHandler(child, UnreadableInterface.class);
+    }
+
+    @Test
+    void handlerMethods_throws_for_the_inherited_handler_although_the_class_declares_a_handler_of_its_own_when_a_superclass_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(DeclaresHandlerAndExtendsUnreadableSuperclass.class.getName());
+
+        assertRefusedForUnreadableHandler(child, UnreadableSuperclass.class);
+    }
+
+    @Test
+    void handlerMethods_throws_for_the_inherited_handler_although_the_class_declares_a_handler_of_its_own_when_an_interface_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(DeclaresHandlerAndImplementsUnreadableInterface.class.getName());
+
+        assertRefusedForUnreadableHandler(child, UnreadableInterface.class);
+    }
+
+    @Test
+    void handlerMethods_throws_when_the_unreadable_superclass_with_a_handler_is_a_grandparent_of_the_class() throws Exception {
+        Class<?> grandchild = new LoaderWithoutAbsentType().loadClass(GrandchildOfUnreadableSuperclass.class.getName());
+
+        assertRefusedForUnreadableHandler(grandchild, UnreadableSuperclass.class);
+    }
+
+    @Test
+    void handlerMethods_throws_when_the_unreadable_interface_with_a_default_handler_is_a_super_interface_of_an_interface_the_class_implements() throws Exception {
+        Class<?> implementor = new LoaderWithoutAbsentType().loadClass(ImplementsInterfaceExtendingUnreadableInterface.class.getName());
+
+        assertRefusedForUnreadableHandler(implementor, UnreadableInterface.class);
+    }
+
+    @Test
+    void handlerMethods_throws_naming_the_missing_class_when_the_class_file_of_a_superclass_declaring_a_method_naming_it_can_not_be_read() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType(UnreadableSuperclass.class).loadClass(ChildOfUnreadableSuperclass.class.getName());
+
+        assertRefusedForUnreadableClassFile(child, UnreadableSuperclass.class);
+    }
+
+    @Test
+    void handlerMethods_throws_naming_the_missing_class_when_the_class_file_of_an_interface_declaring_a_method_naming_it_can_not_be_read() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType(UnreadableInterface.class).loadClass(ChildOfUnreadableInterface.class.getName());
+
+        assertRefusedForUnreadableClassFile(child, UnreadableInterface.class);
+    }
+
+    @Test
+    void handlerMethods_is_empty_when_a_superclass_declares_no_handler_and_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(ChildOfUnreadableSuperclassWithoutHandler.class.getName());
+
         assertThat(scanWithoutThrowing(child)).isEmpty();
     }
 
     @Test
-    void handlerMethods_returns_only_the_handler_the_class_declares_when_a_superclass_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
-        Class<?> child = new LoaderWithoutAbsentType().loadClass(DeclaresHandlerAndExtendsUnreadableSuperclass.class.getName());
+    void handlerMethods_returns_the_handler_the_class_declares_when_a_superclass_declares_no_handler_and_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(DeclaresHandlerAndExtendsUnreadableSuperclassWithoutHandler.class.getName());
 
         assertThat(scanWithoutThrowing(child)).extracting(Method::getName, method -> method.getDeclaringClass().getName())
                 .containsExactly(tuple("own", child.getName()));
     }
 
     @Test
-    void handlerMethods_returns_only_the_handler_the_class_declares_when_an_interface_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
-        Class<?> child = new LoaderWithoutAbsentType().loadClass(DeclaresHandlerAndImplementsUnreadableInterface.class.getName());
+    void handlerMethods_is_empty_when_an_interface_declares_a_static_method_with_a_handler_annotation_and_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(ChildOfUnreadableInterfaceWithStaticAnnotatedMethod.class.getName());
 
-        assertThat(scanWithoutThrowing(child)).extracting(Method::getName, method -> method.getDeclaringClass().getName())
-                .containsExactly(tuple("own", child.getName()));
+        assertThat(scanWithoutThrowing(child)).isEmpty();
+    }
+
+    @Test
+    void handlerMethods_returns_the_visibility_bridge_carrying_the_handler_annotation_when_the_package_private_superclass_declaring_the_handler_can_not_be_read() throws Exception {
+        Class<?> leaf = new LoaderWithoutAbsentType().loadClass(LeafOverUnreadablePackagePrivateBase.class.getName());
+
+        assertThat(leaf.getDeclaredMethods()).describedAs("the class declares only the visibility bridge")
+                .extracting(Method::getName, Method::isBridge).containsExactly(tuple("on", true));
+        assertThat(scanWithoutThrowing(leaf)).extracting(Method::getName, Method::isBridge, method -> method.getDeclaringClass().getName(), method -> List.of(method.getParameterTypes()))
+                .containsExactly(tuple("on", true, leaf.getName(), List.of(String.class)));
+    }
+
+    @Test
+    void handlerMethods_throws_naming_the_overload_that_has_no_visibility_bridge_when_the_package_private_superclass_declaring_it_can_not_be_read() throws Exception {
+        Class<?> leaf = new LoaderWithoutAbsentType().loadClass(LeafOverUnreadableBaseWithPackagePrivateOverload.class.getName());
+
+        assertThat(leaf.getDeclaredMethods()).describedAs("the class declares a bridge for on(String) only")
+                .extracting(Method::getName, Method::isBridge, method -> List.of(method.getParameterTypes())).containsExactly(tuple("on", true, List.of(String.class)));
+        assertRefusedForUnreadableHandler(leaf, UnreadableBaseWithPackagePrivateOverload.class, "on(java.lang.Integer)")
+                .hasMessageNotContaining("on(java.lang.String)");
+    }
+
+    @Test
+    void handlerMethods_throws_naming_the_handler_of_the_unreadable_top_class_although_a_visibility_bridge_runs_a_handler_of_the_same_name_below_it() throws Exception {
+        Class<?> leaf = new LoaderWithoutAbsentType().loadClass(LeafOverReadablePackagePrivateBelowUnreadableTop.class.getName());
+
+        assertThat(leaf.getDeclaredMethods()).describedAs("the class declares the visibility bridge")
+                .extracting(Method::getName, Method::isBridge, method -> List.of(method.getParameterTypes())).containsExactly(tuple("on", true, List.of(String.class)));
+        assertRefusedForUnreadableHandler(leaf, UnreadableTop.class, "on(java.lang.Integer)")
+                .hasMessageNotContaining("on(java.lang.String)");
+    }
+
+    @Test
+    void handlerMethods_returns_only_the_handler_the_class_declares_and_not_its_generic_bridge_when_it_re_annotates_a_handler_of_an_unreadable_generic_superclass() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(ReAnnotatesGenericHandlerOfUnreadableSuperclass.class.getName());
+
+        assertThat(child.getDeclaredMethods()).describedAs("the class declares the generic bridge beside the handler")
+                .extracting(Method::getName, Method::isBridge).containsExactlyInAnyOrder(tuple("on", false), tuple("on", true));
+        assertThat(scanWithoutThrowing(child)).extracting(Method::getName, Method::isBridge, method -> method.getDeclaringClass().getName(), method -> List.of(method.getParameterTypes()))
+                .containsExactly(tuple("on", false, child.getName(), List.of(String.class)));
+    }
+
+    @Test
+    void handlerMethods_throws_naming_the_handler_of_an_unreadable_superclass_when_the_class_overrides_it_without_a_handler_annotation() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(OverridesUnreadableHandlerWithoutAnnotation.class.getName());
+
+        assertRefusedForUnreadableHandler(child, UnreadableSuperclass.class);
+    }
+
+    @Test
+    void handlerMethods_throws_naming_the_private_handler_of_an_unreadable_superclass_although_the_class_declares_a_handler_with_the_same_signature() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(DeclaresHandlerOfTheSignatureOfAnUnreadablePrivateHandler.class.getName());
+
+        assertRefusedForUnreadableHandler(child, UnreadableSuperclassWithPrivateHandler.class);
     }
 
     @Test
@@ -223,6 +413,33 @@ class HandlerScanUnreadableHierarchyTest {
         assertThatThrownBy(() -> HandlerScan.handlerMethods(declaring, HANDLER_ANNOTATIONS)).isInstanceOf(NoClassDefFoundError.class);
     }
 
+    private static void assertRefusedForUnreadableHandler(Class<?> type, Class<?> unreadable) {
+        assertRefusedForUnreadableHandler(type, unreadable, "on(java.lang.String)");
+    }
+
+    private static AbstractThrowableAssert<?, ? extends Throwable> assertRefusedForUnreadableHandler(Class<?> type, Class<?> unreadable, String handler) {
+        String missing = AbsentType.class.getName();
+
+        return assertThatThrownBy(() -> HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("The methods of " + unreadable.getName() + " can't be read")
+                .hasMessageContaining("since " + missing + " is missing at runtime")
+                .hasMessageContaining("its Occurrent handler " + unreadable.getName() + "#" + handler + " would never register")
+                .hasMessageContaining("Put " + missing + " on the classpath.")
+                .hasCauseInstanceOf(NoClassDefFoundError.class);
+    }
+
+    private static void assertRefusedForUnreadableClassFile(Class<?> type, Class<?> unreadable) {
+        String missing = AbsentType.class.getName();
+
+        assertThatThrownBy(() -> HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("The methods of " + unreadable.getName() + " can't be read")
+                .hasMessageContaining("since " + missing + " is missing at runtime, and neither can its class file")
+                .hasMessageContaining("Put " + missing + " on the classpath.")
+                .hasCauseInstanceOf(NoClassDefFoundError.class);
+    }
+
     private static Set<Method> scanWithoutThrowing(Class<?> type) {
         AtomicReference<Set<Method>> scanned = new AtomicReference<>();
         Throwable thrown = catchThrowable(() -> scanned.set(HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS)));
@@ -231,10 +448,29 @@ class HandlerScanUnreadableHierarchyTest {
         return scanned.get();
     }
 
-    // Defines the fixtures itself so the methods that name AbsentType are read through it, and refuses to load AbsentType
+    // Defines the fixtures itself so the methods that name AbsentType are read through it, and refuses to load AbsentType.
+    // It can also hide the class file of a fixture it still defines
     private static final class LoaderWithoutAbsentType extends ClassLoader {
+        private final String hiddenResource;
+
         LoaderWithoutAbsentType() {
             super(HandlerScanUnreadableHierarchyTest.class.getClassLoader());
+            this.hiddenResource = null;
+        }
+
+        LoaderWithoutAbsentType(Class<?> fixtureWithHiddenClassFile) {
+            super(HandlerScanUnreadableHierarchyTest.class.getClassLoader());
+            this.hiddenResource = fixtureWithHiddenClassFile.getName().replace('.', '/') + ".class";
+        }
+
+        @Override
+        public URL getResource(String name) {
+            return name.equals(hiddenResource) ? null : super.getResource(name);
+        }
+
+        @Override
+        public InputStream getResourceAsStream(String name) {
+            return name.equals(hiddenResource) ? null : super.getResourceAsStream(name);
         }
 
         @Override

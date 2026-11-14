@@ -27,6 +27,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.aop.scope.ScopedProxyUtils;
 import org.springframework.aop.support.AopUtils;
+import org.springframework.asm.AnnotationVisitor;
+import org.springframework.asm.ClassReader;
+import org.springframework.asm.ClassVisitor;
+import org.springframework.asm.MethodVisitor;
+import org.springframework.asm.Opcodes;
+import org.springframework.asm.SpringAsmInfo;
 import org.springframework.beans.factory.config.BeanDefinitionHolder;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.support.RootBeanDefinition;
@@ -39,6 +45,9 @@ import org.springframework.core.annotation.MergedAnnotations;
 import org.springframework.core.annotation.MergedAnnotations.SearchStrategy;
 import org.springframework.util.ClassUtils;
 
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -46,8 +55,10 @@ import java.lang.reflect.Parameter;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -83,7 +94,7 @@ public final class HandlerScan {
     public static List<HandlerParameter> analyzeParameters(Method method, Class<?> implementation, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
         // The bridge javac adds to a public class for a public method it inherits from a superclass that isn't public
         // has the erased parameter types and no generic signature, so the types are read from the method it bridges
-        return classifyParameters(method, BridgeMethodResolver.findBridgedMethod(method), implementation, isMetadataParameter, supportsStreamAccessors);
+        return classifyParameters(method, bridgedMethod(method), implementation, isMetadataParameter, supportsStreamAccessors);
     }
 
     /**
@@ -217,7 +228,7 @@ public final class HandlerScan {
             return false;
         }
         Class<?> implementation = implementationClassOf(bean);
-        return java.lang.reflect.Proxy.isProxyClass(implementation) || AopUtils.getMostSpecificMethod(selected, implementation).equals(BridgeMethodResolver.findBridgedMethod(method));
+        return java.lang.reflect.Proxy.isProxyClass(implementation) || AopUtils.getMostSpecificMethod(selected, implementation).equals(bridgedMethod(method));
     }
 
     // Compares method as the method it bridges, for the reason selectionRuns does
@@ -226,7 +237,7 @@ public final class HandlerScan {
             return null;
         }
         Class<?> implementation = implementationClassOf(bean);
-        Method bridged = BridgeMethodResolver.findBridgedMethod(method);
+        Method bridged = bridgedMethod(method);
         for (Class<?> proxiedInterface : bean.getClass().getInterfaces()) {
             for (Method interfaceMethod : proxiedInterface.getMethods()) {
                 if (!Modifier.isStatic(interfaceMethod.getModifiers()) && interfaceMethod.getName().equals(method.getName())
@@ -271,7 +282,7 @@ public final class HandlerScan {
      */
     public static @Nullable Class<?> returnTypeArgument(Method method, Class<?> implementation, int index) {
         // A bridge has the raw return type, so it is read from the method the bridge calls, as analyzeParameters does
-        if (!(BridgeMethodResolver.findBridgedMethod(method).getGenericReturnType() instanceof ParameterizedType returnType) || returnType.getActualTypeArguments().length <= index) {
+        if (!(bridgedMethod(method).getGenericReturnType() instanceof ParameterizedType returnType) || returnType.getActualTypeArguments().length <= index) {
             return null;
         }
         Type argument = returnType.getActualTypeArguments()[index];
@@ -324,10 +335,12 @@ public final class HandlerScan {
      * @param type            the concrete class the scan reads
      * @param annotationTypes the handler annotations to look for, searched with {@link SearchStrategy#TYPE_HIERARCHY}
      * @return the matching methods, empty if there are none. When a method of a superclass or interface of
-     * {@code type} names a class missing at runtime, only the methods {@code type} declares are matched, which is
-     * logged at debug level
+     * {@code type} names a class missing at runtime and the class file of that superclass or interface has no handler
+     * annotation, only the methods {@code type} declares are matched, which is logged at debug level
      * @throws NoClassDefFoundError  when a method {@code type} declares names a class missing at runtime, as in 0.34.0
-     * @throws IllegalStateException when a method has an annotation Spring reads from a method it does not override
+     * @throws IllegalStateException when a method has an annotation Spring reads from a method it does not override,
+     *                               or when a superclass or interface whose methods name a class missing at runtime
+     *                               declares a handler, or has a class file that can't be read
      * @throws IllegalArgumentException when {@code type} is a JDK proxy and two of its interfaces declare a method of
      *                                  the same name and parameter types with different handler annotations
      */
@@ -390,10 +403,11 @@ public final class HandlerScan {
             if (!isReadFailure(e)) {
                 throw e;
             }
-            // When a superclass or interface method names a class missing at runtime, the scan reads only the methods
-            // type declares itself, as 0.34.0 did
+            // When a superclass or interface method names a class missing at runtime, the scan reads only the methods type
+            // declares itself, as 0.34.0 did, and fails when one of those classes declares a handler none of them runs
             log.debug("Reading only the methods {} declares in the search for Occurrent handler annotations, since its superclasses and interfaces can't be read", type.getName(), e);
-            handlers = declaredHandlerMethods(type, handlerLookup);
+            handlers = declaredHandlerMethods(type, handlerLookup, annotationTypes);
+            refuseHandlersOfUnreadableClasses(type, annotationTypes, handlers);
         }
         return java.lang.reflect.Proxy.isProxyClass(type) ? firstOfEachSignature(type, handlers, annotationTypes) : handlers;
     }
@@ -404,10 +418,185 @@ public final class HandlerScan {
         return e instanceof LinkageError || e.getCause() instanceof LinkageError;
     }
 
+    /**
+     * The method a bridge calls, as {@link BridgeMethodResolver#findBridgedMethod(Method)} finds it, or the bridge
+     * itself when finding it means reading a class missing at runtime. The scan returns a bridge like that when a public
+     * class inherits a handler as a public method from a superclass that isn't public and whose methods name a class
+     * missing at runtime, as 0.34.0 did. The bridge has the parameter and return types of the method it calls, erased.
+     *
+     * @param method the method, a bridge or not
+     * @return the method the bridge calls, or {@code method} when it isn't a bridge or the method it calls can't be read
+     */
+    public static Method bridgedMethod(Method method) {
+        try {
+            return BridgeMethodResolver.findBridgedMethod(method);
+        } catch (IllegalStateException | LinkageError e) {
+            if (!isReadFailure(e)) {
+                throw e;
+            }
+            return method;
+        }
+    }
+
+    // A handler declared by a superclass or interface whose methods can't be read would never register, so the class
+    // file of each such class is read without loading it, and a handler annotation found there fails the scan, unless
+    // a method type declares and the scan returns runs that handler
+    private static void refuseHandlersOfUnreadableClasses(Class<?> type, List<Class<? extends Annotation>> annotationTypes, Set<Method> handlers) {
+        for (Class<?> candidate : superclassesAndInterfacesOf(type)) {
+            LinkageError unreadable;
+            try {
+                candidate.getDeclaredMethods();
+                continue;
+            } catch (LinkageError e) {
+                unreadable = e;
+            }
+            String missing = unreadable instanceof NoClassDefFoundError && unreadable.getMessage() != null ? unreadable.getMessage().replace('/', '.') : unreadable.toString();
+            Set<ClassFileMethod> annotated;
+            try {
+                annotated = annotatedMethodsInClassFile(candidate, annotationTypes);
+            } catch (IOException | IllegalArgumentException e) {
+                IllegalStateException failure = new IllegalStateException(("The methods of %s can't be read, since %s is missing at runtime, and neither can its class file, so the scan can't tell "
+                        + "whether it declares an Occurrent handler. Put %s on the classpath.").formatted(candidate.getName(), missing, missing), unreadable);
+                failure.addSuppressed(e);
+                throw failure;
+            }
+            Set<String> neverRegistered = new LinkedHashSet<>();
+            for (ClassFileMethod method : annotated) {
+                // handlerMethods doesn't return a static method an interface declares
+                if (candidate.isInterface() && method.isStatic()) {
+                    continue;
+                }
+                if (!runByAHandlerTypeDeclares(type, candidate, method, handlers)) {
+                    neverRegistered.add(candidate.getName() + "#" + method);
+                }
+            }
+            if (!neverRegistered.isEmpty()) {
+                throw new IllegalStateException(("The methods of %s can't be read, since %s is missing at runtime, so its Occurrent handler %s would never register. "
+                        + "Put %s on the classpath.").formatted(candidate.getName(), missing, String.join(" and ", neverRegistered), missing), unreadable);
+            }
+        }
+    }
+
+    // A method of a class file, with its parameter types as its descriptor up to the closing parenthesis
+    private record ClassFileMethod(String name, String parameters, int access) {
+        boolean isStatic() {
+            return (access & Opcodes.ACC_STATIC) != 0;
+        }
+
+        // Such as on(java.lang.String)
+        @Override
+        public String toString() {
+            return Arrays.stream(org.springframework.asm.Type.getArgumentTypes(parameters + "V")).map(org.springframework.asm.Type::getClassName)
+                    .collect(Collectors.joining(", ", name + "(", ")"));
+        }
+    }
+
+    // The methods of the class file of candidate that have one of annotationTypes, directly or as a meta-annotation,
+    // read without loading candidate
+    private static Set<ClassFileMethod> annotatedMethodsInClassFile(Class<?> candidate, List<Class<? extends Annotation>> annotationTypes) throws IOException {
+        ClassLoader classLoader = candidate.getClassLoader() != null ? candidate.getClassLoader() : ClassUtils.getDefaultClassLoader();
+        String classFileName = ClassUtils.convertClassNameToResourcePath(candidate.getName()) + ClassUtils.CLASS_FILE_SUFFIX;
+        ClassReader reader;
+        try (InputStream classFile = classLoader == null ? null : classLoader.getResourceAsStream(classFileName)) {
+            if (classFile == null) {
+                throw new FileNotFoundException(classFileName);
+            }
+            reader = new ClassReader(classFile);
+        }
+        Set<ClassFileMethod> annotated = new LinkedHashSet<>();
+        reader.accept(new ClassVisitor(SpringAsmInfo.ASM_VERSION) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, @Nullable String signature, String @Nullable [] exceptions) {
+                return new MethodVisitor(SpringAsmInfo.ASM_VERSION) {
+                    @Override
+                    public @Nullable AnnotationVisitor visitAnnotation(String annotationDescriptor, boolean visible) {
+                        if (visible && isHandlerAnnotation(org.springframework.asm.Type.getType(annotationDescriptor).getClassName(), classLoader, annotationTypes)) {
+                            annotated.add(new ClassFileMethod(name, parametersOf(descriptor), access));
+                        }
+                        return null;
+                    }
+                };
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return annotated;
+    }
+
+    // The JVM ignores an annotation whose class is missing, so the scan does too
+    private static boolean isHandlerAnnotation(String className, @Nullable ClassLoader classLoader, List<Class<? extends Annotation>> annotationTypes) {
+        Class<?> annotationClass;
+        try {
+            annotationClass = ClassUtils.forName(className, classLoader);
+        } catch (ClassNotFoundException | LinkageError e) {
+            return false;
+        }
+        return annotationTypes.stream().anyMatch(annotationType -> annotationType == annotationClass
+                || annotationClass.isAnnotation() && MergedAnnotations.from(annotationClass).isPresent(annotationType));
+    }
+
+    private static String parametersOf(String descriptor) {
+        return descriptor.substring(0, descriptor.indexOf(')') + 1);
+    }
+
+    // Whether a method type declares runs method when it is invoked on an instance of type, and the scan returns that
+    // method or a method it bridges to. That is a method of the same name and parameter types that overrides it, or
+    // the visibility bridge javac adds for a public method of a superclass that isn't public. Only a method that isn't
+    // static or private, and is public, protected, or in type's package, is run that way
+    private static boolean runByAHandlerTypeDeclares(Class<?> type, Class<?> candidate, ClassFileMethod method, Set<Method> handlers) {
+        int access = method.access();
+        boolean overridable = !method.isStatic() && (access & Opcodes.ACC_PRIVATE) == 0
+                && ((access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_PROTECTED)) != 0 || inSameRuntimePackage(candidate, type));
+        if (!overridable) {
+            return false;
+        }
+        for (Method declared : type.getDeclaredMethods()) {
+            if (declared.getName().equals(method.name()) && parametersOf(org.springframework.asm.Type.getMethodDescriptor(declared)).equals(method.parameters())
+                    && (handlers.contains(declared) || handlers.stream().anyMatch(handler -> bridges(declared, handler)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Whether bridge is the bridge javac adds to the class of method when method overrides one whose parameter or return
+    // types are erased to other types, as against a visibility bridge, which calls an inherited method
+    private static boolean bridges(Method bridge, Method method) {
+        if (!bridge.isBridge() || method.isBridge() || method.getDeclaringClass() != bridge.getDeclaringClass() || !method.getName().equals(bridge.getName())
+                || method.getParameterCount() != bridge.getParameterCount() || !bridge.getReturnType().isAssignableFrom(method.getReturnType())) {
+            return false;
+        }
+        for (int i = 0; i < method.getParameterCount(); i++) {
+            if (!bridge.getParameterTypes()[i].isAssignableFrom(method.getParameterTypes()[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Every superclass and interface of type, up to and without Object
+    private static Set<Class<?>> superclassesAndInterfacesOf(Class<?> type) {
+        Set<Class<?>> classes = new LinkedHashSet<>();
+        Deque<Class<?>> pending = new ArrayDeque<>();
+        pending.add(type);
+        while (!pending.isEmpty()) {
+            Class<?> current = pending.removeFirst();
+            if (current == Object.class || !classes.add(current)) {
+                continue;
+            }
+            if (current.getSuperclass() != null) {
+                pending.add(current.getSuperclass());
+            }
+            pending.addAll(Arrays.asList(current.getInterfaces()));
+        }
+        classes.remove(type);
+        return classes;
+    }
+
     // The handlers among the methods type declares, for a type whose superclasses or interfaces can't be read. A bridge
-    // counts as the method it calls, as MethodIntrospector counts it. A method is left out when finding the method a
-    // bridge calls, or checking a method for a handler annotation, has to read a class missing at runtime
-    private static Set<Method> declaredHandlerMethods(Class<?> type, MethodIntrospector.MetadataLookup<Boolean> handlerLookup) {
+    // counts as the method it calls, as MethodIntrospector counts it. When finding the method a visibility bridge calls
+    // has to read a class missing at runtime, the bridge with a handler annotation javac copied to it is the handler, as
+    // in 0.34.0. Any other method is left out when finding the method a bridge calls, or checking a method for a
+    // handler annotation, has to read a class missing at runtime
+    private static Set<Method> declaredHandlerMethods(Class<?> type, MethodIntrospector.MetadataLookup<Boolean> handlerLookup, List<Class<? extends Annotation>> annotationTypes) {
         Set<Method> handlers = new LinkedHashSet<>();
         for (Method method : type.getDeclaredMethods()) {
             if (method.isSynthetic() && !method.isBridge()) {
@@ -421,6 +610,11 @@ public final class HandlerScan {
             } catch (IllegalStateException | LinkageError e) {
                 if (!isReadFailure(e)) {
                     throw e;
+                }
+                if (method.isBridge() && Arrays.stream(type.getDeclaredMethods()).noneMatch(declared -> bridges(method, declared))
+                        && annotationTypes.stream().anyMatch(method::isAnnotationPresent)) {
+                    handlers.add(method);
+                    continue;
                 }
                 log.debug("Skipping {} in the search for Occurrent handler annotations, since a class it depends on can't be read", method, e);
             }
@@ -501,21 +695,21 @@ public final class HandlerScan {
         if (declaringClass.isInterface() && java.lang.reflect.Proxy.isProxyClass(type)) {
             for (Class<?> proxiedInterface : type.getInterfaces()) {
                 if (declaringClass.isAssignableFrom(proxiedInterface)) {
-                    return BridgeMethodResolver.findBridgedMethod(AopUtils.getMostSpecificMethod(method, proxiedInterface));
+                    return bridgedMethod(AopUtils.getMostSpecificMethod(method, proxiedInterface));
                 }
             }
-            return BridgeMethodResolver.findBridgedMethod(method);
+            return bridgedMethod(method);
         }
         if (declaringClass.isInterface() || !declaringClass.isAssignableFrom(type)) {
-            return BridgeMethodResolver.findBridgedMethod(AopUtils.getMostSpecificMethod(method, type));
+            return bridgedMethod(AopUtils.getMostSpecificMethod(method, type));
         }
         for (Class<?> candidateClass = type; candidateClass != null && candidateClass != declaringClass; candidateClass = candidateClass.getSuperclass()) {
             Method candidate = declaredMethod(candidateClass, method);
             if (candidate != null && overrides(candidate, method)) {
-                return BridgeMethodResolver.findBridgedMethod(candidate);
+                return bridgedMethod(candidate);
             }
         }
-        return BridgeMethodResolver.findBridgedMethod(method);
+        return bridgedMethod(method);
     }
 
     // Whether overrider, declared in a subclass of overridden's declaring class, overrides it under the JVM's rules

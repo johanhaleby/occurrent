@@ -2128,8 +2128,13 @@ interfaces, so it found that method, and both starters still register it. When i
 its types now come from what the proxy's interfaces bind, see What changes below.
 
 When a superclass or interface of the bean has a method that names a class missing at runtime, such as a type from an
-optional dependency, both starters still read only the methods the bean's class declares, as 0.34.0 did, and log at
-debug level that they skip the inherited ones.
+optional dependency, both starters read that superclass's or interface's class file without loading it. When it
+declares a handler, the application now fails at startup with an `IllegalStateException` that names the class, the
+handler and the missing class, where 0.34.0 started. It doesn't fail when the bean's class declares a method that runs
+that handler, which is an override with a handler annotation, or the bridge method the compiler adds to a public class
+for a public handler it inherits from a superclass that isn't public. Both keep running as in 0.34.0. It fails the same
+way when that class file can't be read either. Put the missing class on the classpath. When it declares none, both starters read only the methods the bean's class
+declares, as 0.34.0 did, and log at debug level that they skip the inherited ones.
 
 This covers `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@SynchronousSubscription`, `@Projection` and
 `@Snapshot`, and `@Saga` on the blocking starter. An inherited `@Projection`, `@Snapshot` or `@Saga` factory method,
