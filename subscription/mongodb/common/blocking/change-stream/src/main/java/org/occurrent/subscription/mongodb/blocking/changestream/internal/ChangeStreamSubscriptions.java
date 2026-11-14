@@ -409,15 +409,17 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
-    // False when the run stops here, closed or refused. A dynamic position goes on without the present, since it can
-    // resolve to a checkpoint, and is refused as its change stream opens if it resolves to the present then
+    // False when the run stops here, closed or refused. Only a position that takes the answer is refused here. A dynamic
+    // position goes on without the present, since it can resolve to a checkpoint, and is refused as its change stream
+    // opens if it resolves to the present then. A position a resume gave, or a restart from the present after a loss of
+    // history, goes on and reads the present for itself as its change stream opens
     private boolean awaitedThePresent(String subscriptionId, InternalSubscription internalSubscription) {
         try {
             return internalSubscription.presentAtSubscribe.awaitedBy(internalSubscription);
         } catch (NoPositionAtThePresent e) {
+            internalSubscription.presentAtSubscribe.gaveNoPosition(e);
             StartAt position = internalSubscription.currentStartAt.get();
-            if (position.isDynamic()) {
-                internalSubscription.presentAtSubscribe.gaveNoPosition(e);
+            if (position.isDynamic() || !internalSubscription.presentAtSubscribe.isUsedAt(position)) {
                 return true;
             }
             refuseStart(subscriptionId, internalSubscription, e.refusalOf(subscriptionId, position));
@@ -1110,6 +1112,11 @@ public final class ChangeStreamSubscriptions {
             StartAt resolved = repositionTo.get(ctx);
             if (notAChangeStreamPosition(resolved) instanceof Checkpoint unreadable) {
                 logResumingFromTheTrackedPosition(subscriptionId, unreadable);
+                // Refused as the position the subscription was made with is, since it can't open at a later present
+                NoPositionAtThePresent noPosition = present.noPositionAt(tracked);
+                if (noPosition != null) {
+                    throw noPosition;
+                }
                 return present.pinnedIfSubscribedAt(tracked);
             }
             return resolved;
@@ -1213,7 +1220,7 @@ public final class ChangeStreamSubscriptions {
         private volatile boolean cancelled;
         // Set by the first run to get here, whether it waits for the answer or not
         private volatile boolean reached;
-        // Set when a run of a dynamic position found that the read gave no position
+        // Set when a run found that the read gave no position
         private volatile @Nullable NoPositionAtThePresent noPosition;
 
         PresentAtSubscribe(StartAt subscribedAt, BiConsumer<PresentAtSubscribe, BooleanSupplier> question) {
