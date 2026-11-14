@@ -79,7 +79,6 @@ final class InterleavingRunner {
             runThreads(run);
             quiesce(run);
             run.observed = observe(run);
-            if (recover) { for (String id : subscribedAndNeverCancelled(run)) { run.model.cancelSubscription(id); } }
             run.knownAtTheEnd.addAll(subscribedAndNeverCancelled(run));
             for (String id : run.knownAtTheEnd) {
                 if (staysNeitherRunningNorPaused(run, id)) {

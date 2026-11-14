@@ -124,7 +124,7 @@ class CatchupLifecyclePropertyTest {
         assertThat(run.monitor.s2Violations).as(run.toString()).isEmpty();
     }
 
-    @Disabled("#STOP-REPLAY-DELIVERY: a subscribe whose replay is still running delivers after stop() returned, with no start or resume in the scenario. Shrunk plain history=0us [[subscribe(b)], [subscribe(b), stop], [subscribe(a), subscribe(a)]], seed 6696418332374223471, first red on try 2068")
+    @Disabled("#1526: a subscribe whose replay is still running delivers after stop() returned, with no start or resume in the scenario. Shrunk plain history=0us [[subscribe(b)], [subscribe(b), stop], [subscribe(a), subscribe(a)]], seed 6696418332374223471, first red on try 2068")
     @Property(tries = 3000)
     void s2_with_only_subscribe_and_stop_calls_no_action_starts_after_a_stop_has_returned(@ForAll("subscribeAndStopScenarios") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
