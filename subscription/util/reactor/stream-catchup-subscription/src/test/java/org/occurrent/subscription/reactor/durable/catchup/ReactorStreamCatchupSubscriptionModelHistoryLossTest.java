@@ -417,6 +417,66 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     }
 
     @Test
+    void a_takeover_replay_a_stop_and_a_start_replaced_that_fails_with_a_lost_live_start_afterwards_leaves_the_subscription_resumable_and_delivering() throws InterruptedException {
+        // Given a takeover replay whose read fails with a lost live start after its first event, whose action stops and starts the model
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        AtomicInteger reads = new AtomicInteger();
+        UnscopedPositionOrderedReader failsTheTakeoverReplayRead = new UnscopedPositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                Flux<CloudEvent> read = reader.readInPositionOrder(filter, range);
+                return reads.incrementAndGet() == 2
+                        ? read.take(1).concatWith(Flux.error(() -> HistoryLossMessages.liveStartLost("The live start was lost.", GlobalCheckpoint.of(3), false)))
+                        : read;
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return reader.currentPosition();
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
+            }
+        };
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, failsTheTakeoverReplayRead);
+        AtomicBoolean replaced = new AtomicBoolean();
+        try (LoggedByTheCatchup logged = new LoggedByTheCatchup()) {
+            Subscription subscription = catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+                if (reads.get() == 2 && replaced.compareAndSet(false, true)) {
+                    catchup.stop();
+                    catchup.start(true);
+                }
+                return Mono.fromRunnable(() -> received.add(cloudEvent.getId()));
+            });
+            subscription.waitUntilStarted().block(Duration.ofSeconds(5));
+            reader.head = 4;
+
+            // When the takeover replay is replaced and then fails
+            wrapped.opensAndLosesTheLiveStart();
+            org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(logged.warnings()).as("warnings logged")
+                    .anyMatch(message -> message.contains("ran a newer replay, which keeps running")));
+            awaitNoReplayInFlight(catchup);
+
+            // Then a pause and a resume of the subscription succeed, and it delivers
+            Throwable resume = catchThrowable(() -> {
+                catchup.pauseSubscription(ID);
+                catchup.resumeSubscription(ID);
+            });
+            assertAll(
+                    () -> assertThat(resume).as("what the pause and the resume throw").isNull(),
+                    () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                    () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse()
+            );
+            wrapped.deliver(liveEvent("e5", 5));
+            assertThat(received).as("delivered once resumed").endsWith("e5");
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
     void a_live_start_lost_on_the_thread_of_the_handover_before_it_returns_is_taken_over_and_the_event_written_in_the_gap_is_delivered() {
         verifiesTheGapEventIsDeliveredWhenTheLiveStartIsLostBeforeTheHandOverReturns(LosingLiveStartModel.Loses.ON_THE_THREAD_OF_SUBSCRIBE);
     }
