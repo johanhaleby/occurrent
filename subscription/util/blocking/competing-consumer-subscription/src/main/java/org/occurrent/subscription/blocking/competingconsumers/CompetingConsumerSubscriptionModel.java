@@ -4734,7 +4734,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // Told as a refusal is, see startRefused, once the wrapped model holds a consumer paused because the history its
     // subscription would go live from is gone
     private void heldPausedInTheWrappedModel(String subscriptionId, CatchupCannotResumeException refused) {
-        actOnReport(subscriptionId, startRefusal -> startRefusal.heldPaused.set(refused));
+        actOnReport(subscriptionId, startRefusal -> startRefusal.heldPaused.add(refused));
     }
 
     private void actOnReport(String subscriptionId, Consumer<StartRefusal> report) {
@@ -4759,7 +4759,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             }
         }
         @Nullable StartRefusal startRefusal = startRefusals.get(key);
-        if (startRefusal != null && (startRefusal.reported.get() != null || startRefusal.heldPaused.get() != null)) {
+        if (startRefusal != null && (startRefusal.reported.get() != null || !startRefusal.heldPaused.isEmpty())) {
             reconcileLater(key, true);
         }
     }
@@ -4793,19 +4793,21 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // try that starts once it returns.
     private void holdIfTheWrappedModelHeldItPaused(SubscriptionIdAndSubscriberId key) {
         @Nullable StartRefusal startRefusal = startRefusals.get(key);
-        @Nullable CatchupCannotResumeException refused = startRefusal == null ? null : startRefusal.heldPaused.get();
-        if (startRefusal == null || refused == null) {
+        if (startRefusal == null || startRefusal.heldPaused.isEmpty()) {
             return;
         }
-        @Nullable CompetingConsumer cc = competingConsumers.get(key);
-        if (cc == null && isBeingMade(key)) {
+        if (competingConsumers.get(key) == null && isBeingMade(key)) {
             return;
         }
-        // Asked before the report is taken, so the next try still finds it when the wrapped model throws
-        boolean hold = cc != null && cc.isRunning() && isHeldPausedInTheWrappedModelFor(key.subscriptionId(), refused);
-        startRefusal.heldPaused.compareAndSet(refused, null);
-        if (hold && cc != null) {
-            holdTheRefusedStartPaused(key, cc.state, refused, Boolean.TRUE.equals(registrations.get(key)));
+        for (CatchupCannotResumeException refused : List.copyOf(startRefusal.heldPaused)) {
+            // Read again for each report, so once one holds it the others are taken without asking the wrapped model
+            @Nullable CompetingConsumer cc = competingConsumers.get(key);
+            // Asked before the report is taken, so the next try still finds it when the wrapped model throws
+            boolean hold = cc != null && cc.isRunning() && isHeldPausedInTheWrappedModelFor(key.subscriptionId(), refused);
+            startRefusal.heldPaused.remove(refused);
+            if (hold && cc != null) {
+                holdTheRefusedStartPaused(key, cc.state, refused, Boolean.TRUE.equals(registrations.get(key)));
+            }
         }
     }
 

@@ -53,6 +53,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -641,6 +642,76 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         ));
     }
 
+    @Test
+    void holds_a_running_consumer_paused_and_gives_up_the_lease_when_a_late_held_paused_report_for_an_earlier_hold_comes_after_the_report_for_the_current_hold_while_a_call_holds_the_lock() {
+        // Given a consumer that runs and holds the lease, and a call of its own that holds the subscription's lock
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+        CountDownLatch callHoldsTheLock = new CountDownLatch(1);
+        CountDownLatch letTheCallReturn = new CountDownLatch(1);
+        reporting.afterTheNextAnswerToIsRunning.set(() -> {
+            callHoldsTheLock.countDown();
+            awaitLatch(letTheCallReturn);
+        });
+        AtomicReference<@Nullable Throwable> callThrew = new AtomicReference<>();
+        Thread call = new Thread(() -> callThrew.set(catchThrowable(() -> model.resumeSubscription(ID))), "call-holding-the-lock");
+        call.start();
+        awaitLatch(callHoldsTheLock);
+        CatchupCannotResumeException earlierRefusal = HistoryLossMessages.liveStartLost("The live start is gone", (Checkpoint) () -> "live start", true);
+        CatchupCannotResumeException currentRefusal = HistoryLossMessages.liveStartLost("The live start is gone again", (Checkpoint) () -> "live start", true);
+
+        // When the wrapped model holds the subscription paused for the current refusal and tells, so the report waits for the lock
+        reporting.holdsPausedAndTells(ID, currentRefusal);
+        // And a late report for an earlier refusal, which it no longer holds the subscription for, comes after it
+        reporting.tellsOnly(ID, earlierRefusal);
+        letTheCallReturn.countDown();
+
+        // Then the consumer is held paused for the current refusal and has given up the lease
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(this::assertHeldPaused);
+        joinTheCall(call);
+        assertThat(callThrew.get()).as("thrown by the call").isInstanceOf(SubscriptionAlreadyRunningException.class);
+        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+    }
+
+    @Test
+    void holds_a_running_consumer_paused_once_when_the_wrapped_model_answers_that_it_holds_the_subscription_paused_for_two_reports_that_waited_for_the_lock() {
+        // Given a consumer that runs and holds the lease, and a call of its own that holds the subscription's lock
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+        CountDownLatch callHoldsTheLock = new CountDownLatch(1);
+        CountDownLatch letTheCallReturn = new CountDownLatch(1);
+        reporting.afterTheNextAnswerToIsRunning.set(() -> {
+            callHoldsTheLock.countDown();
+            awaitLatch(letTheCallReturn);
+        });
+        Thread call = new Thread(() -> catchThrowable(() -> model.resumeSubscription(ID)), "call-holding-the-lock");
+        call.start();
+        awaitLatch(callHoldsTheLock);
+        reporting.answersHeldPausedForEveryReport.set(true);
+
+        // When the wrapped model tells twice that it holds the subscription paused, so both reports wait for the lock
+        reporting.holdsPausedAndTells(ID, HistoryLossMessages.liveStartLost("The live start is gone", (Checkpoint) () -> "live start", true));
+        reporting.tellsOnly(ID, HistoryLossMessages.liveStartLost("The live start is gone again", (Checkpoint) () -> "live start", true));
+        letTheCallReturn.countDown();
+
+        // Then the consumer is held paused once and has given up the lease
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(this::assertHeldPaused);
+        joinTheCall(call);
+        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+    }
+
+    private static void joinTheCall(Thread call) {
+        try {
+            call.join(Duration.ofSeconds(10));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+        assertThat(call.isAlive()).as("call still running").isFalse();
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             if (!latch.await(30, TimeUnit.SECONDS)) {
@@ -899,6 +970,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         private final Map<String, CatchupCannotResumeException> heldFor = new ConcurrentHashMap<>();
         private final AtomicReference<@Nullable Runnable> afterTheNextAnswerToIsRunning = new AtomicReference<>();
         private final AtomicInteger heldPausedQueriesToFail = new AtomicInteger();
+        private final AtomicBoolean answersHeldPausedForEveryReport = new AtomicBoolean();
 
         @Override
         public void addStartRefusalListener(StartRefusalListener listener) {
@@ -913,6 +985,10 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         void holdsPausedAndTells(String subscriptionId, CatchupCannotResumeException refusal) {
             holdPaused(subscriptionId);
             heldFor.put(subscriptionId, refusal);
+            tellsOnly(subscriptionId, refusal);
+        }
+
+        void tellsOnly(String subscriptionId, CatchupCannotResumeException refusal) {
             listeners.forEach(listener -> listener.handleHeldPaused(subscriptionId, refusal));
         }
 
@@ -921,7 +997,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
             if (heldPausedQueriesToFail.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
                 throw new IllegalStateException("The wrapped model cannot tell whether it holds the subscription paused");
             }
-            return heldFor.get(subscriptionId) == refusal;
+            return answersHeldPausedForEveryReport.get() || heldFor.get(subscriptionId) == refusal;
         }
 
         // The answer is read before the hook runs, so a call that is held up there answers from before
