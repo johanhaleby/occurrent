@@ -37,6 +37,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -235,6 +236,49 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
         // event entirely (the guard this fallback exists for).
         await("A still receives what was published while it was stood down, despite never having checkpointed anything")
                 .atMost(5, SECONDS).untilAsserted(() -> assertThat(eventsA).extracting(CloudEvent::getId).contains("e1"));
+    }
+
+    @Test
+    void a_lease_regain_resumes_from_the_interim_holders_checkpoint_when_the_regaining_node_subscribed_at_a_start_of_its_own_while_an_earlier_run_had_stored_a_later_checkpoint() {
+        // Given an earlier run of the id that stored a checkpoint after e3
+        String subscriptionId = UUID.randomUUID().toString();
+        SpringMongoCheckpointStorage checkpointStorage = new SpringMongoCheckpointStorage(mongoTemplate, checkpointCollection);
+        CopyOnWriteArrayList<CloudEvent> earlierRunEvents = new CopyOnWriteArrayList<>();
+        DurableSubscriptionModel earlierRun = new DurableSubscriptionModel(springModel(), checkpointStorage);
+        Checkpoint checkpointAfterE1;
+        try {
+            earlierRun.subscribe(subscriptionId, earlierRunEvents::add).waitUntilStarted();
+            eventStore.write(streamId, serialize(new NameDefined("e1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "e1")));
+            eventStore.write(streamId, serialize(new NameWasChanged("e2", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "e2")));
+            eventStore.write(streamId, serialize(new NameWasChanged("e3", LocalDateTime.of(2026, 1, 1, 0, 0, 2), "name", "e3")));
+            await("the earlier run handles e1, e2 and e3").atMost(5, SECONDS).untilAsserted(() -> assertThat(earlierRunEvents).hasSize(3));
+            checkpointAfterE1 = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(earlierRunEvents.get(0));
+            String checkpointAfterE3 = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(earlierRunEvents.get(2)).asString();
+            await("the checkpoint after e3 is stored").atMost(5, SECONDS).until(() -> checkpointStorage.read(subscriptionId).asString().equals(checkpointAfterE3));
+        } finally {
+            earlierRun.shutdown();
+        }
+
+        // And node A replays the id from after e1 while node B holds the lease and handles what is written meanwhile
+        CopyOnWriteArrayList<CloudEvent> eventsA = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<CloudEvent> eventsB = new CopyOnWriteArrayList<>();
+        nodeA = new CompetingConsumerSubscriptionModel(new DurableSubscriptionModel(springModel(), checkpointStorage), strategy);
+        nodeB = new CompetingConsumerSubscriptionModel(new DurableSubscriptionModel(springModel(), checkpointStorage), strategy);
+        nodeA.subscribe("A", subscriptionId, null, StartAt.checkpoint(checkpointAfterE1), eventsA::add).waitUntilStarted();
+        await("A replays e2 and e3").atMost(5, SECONDS).untilAsserted(() -> assertThat(eventsA).extracting(CloudEvent::getId).containsExactly("e2", "e3"));
+        strategy.transferLease(subscriptionId, "A", "B");
+        nodeB.subscribe("B", subscriptionId, null, StartAt.subscriptionModelDefault(), eventsB::add).waitUntilStarted();
+        eventStore.write(streamId, serialize(new NameWasChanged("e4", LocalDateTime.of(2026, 1, 1, 0, 0, 3), "name", "e4")));
+        eventStore.write(streamId, serialize(new NameWasChanged("e5", LocalDateTime.of(2026, 1, 1, 0, 0, 4), "name", "e5")));
+        await("B handles e4 and e5").atMost(5, SECONDS).untilAsserted(() -> assertThat(eventsB).extracting(CloudEvent::getId).containsExactly("e4", "e5"));
+
+        // When A regains the lease and e6 is written
+        strategy.transferLease(subscriptionId, "B", "A");
+        eventStore.write(streamId, serialize(new NameWasChanged("e6", LocalDateTime.of(2026, 1, 1, 0, 0, 5), "name", "e6")));
+
+        // Then A resumes from the checkpoint B stored, so it delivers e6 and neither e4 nor e5
+        await("A delivers e6").atMost(5, SECONDS).until(() -> eventsA.stream().anyMatch(e -> e.getId().equals("e6")));
+        assertThat(eventsA).extracting(CloudEvent::getId).containsExactly("e2", "e3", "e6");
     }
 
     @Test

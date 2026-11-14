@@ -834,9 +834,25 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 return StartAt.checkpoint(checkpoint);
             });
         } else {
+            registration.ownStartAfter(storedBeforeOwnStart(subscriptionId));
             startAtToUse = originalStartAt;
         }
         return startAtToUse;
+    }
+
+    // Read before the wrapped model gets the subscription, so a checkpoint this run stores later can't be taken for one
+    // stored before it. After a failed read, a plain resume goes on from the wrapped model's own position, which can
+    // deliver an event twice but never skips one
+    private StoredBefore storedBeforeOwnStart(String subscriptionId) {
+        try {
+            Checkpoint stored = storage.read(subscriptionId);
+            return new StoredBefore(true, stored == null ? null : stored.asString());
+        } catch (Throwable e) {
+            // Throwable, since a storage written in Kotlin can throw a checked exception
+            log.warn("Could not read the checkpoint stored for subscription {} before it starts at a position of its own, so a resume " +
+                     "goes on from the position the wrapped model has read to, also once another node has stored a later checkpoint for it.", subscriptionId, e);
+            return new StoredBefore(false, null);
+        }
     }
 
     @Override
@@ -880,6 +896,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * reason a MongoDB model resumes from its own tracked position when the stored checkpoint is one it cannot open
      * its change stream at, such as the position a catch-up stores while it replays.
      * <p>
+     * A subscription subscribed at a {@code StartAt} of its own, such as a replay, also goes on from the wrapped model's
+     * own position while the checkpoint stored for the id is the one that was stored when it was subscribed. That
+     * checkpoint can come from an earlier run of the id and lie after the replay's start, so resuming there would skip
+     * the events in between. Once a different checkpoint is stored, such as the checkpoint of one of its events or one
+     * another node stored, it resumes there. When the checkpoint couldn't be read at subscribe, it always goes on from
+     * the wrapped model's own position, which can deliver an event again but never skips one.
+     * <p>
      * A subscribe of the id on another thread whose {@code StartAt.dynamic} function is still being asked is waited
      * for. If that function doesn't return within 10 seconds, this throws {@link IllegalStateException} and changes
      * nothing.
@@ -898,7 +921,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel());
             if (repositionable.isPresent()) {
                 Checkpoint checkpoint = storage.read(subscriptionId);
-                if (checkpoint != null) {
+                CheckpointRegistration registration = registrations.get(subscriptionId);
+                if (checkpoint != null && (registration == null || !registration.resumesFromTheWrappedModelsOwnPosition(checkpoint))) {
                     return repositionable.get().resumeSubscription(subscriptionId, StartAt.checkpoint(checkpoint));
                 }
             }
@@ -1098,21 +1122,21 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     /**
-     * {@code false}. A plain {@link #resumeSubscription(String)}, and a {@link #resumeSubscription(String, StartAt)} at
-     * {@link StartAt#subscriptionModelDefault()}, resume at the checkpoint stored for the id. A subscription started
-     * at a {@code StartAt} of its own stores nothing until the checkpoint of one of its events is saved, so a
-     * checkpoint an earlier run of the id stored after that position makes the resume skip the events in between.
-     * <a href="https://github.com/johanhaleby/occurrent/issues/1490">Issue 1490</a> tracks fixing that.
+     * What the wrapped model answers, and {@code false} when it doesn't implement {@link CommitOrderedSubscriptions}.
+     * A plain {@link #resumeSubscription(String)}, and a {@link #resumeSubscription(String, StartAt)} at
+     * {@link StartAt#subscriptionModelDefault()}, of a subscription started at a {@code StartAt} of its own go on from
+     * the position the wrapped model has read to, as long as the checkpoint stored for the id is still the one stored
+     * when the subscription started. A checkpoint an earlier run of the id stored after that position therefore doesn't
+     * make the resume skip the events in between.
      * <p>
-     * With {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turned on, the answer
-     * stays {@code false} after that fix. A subscription that starts with no position recorded opens where the wrapped
-     * model's default points, and each time the wrapped model evaluates its start position again before the first
-     * checkpoint is stored, it starts from wherever the feed has reached by then and skips the events written in
-     * between.
+     * With {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turned on, this answers
+     * {@code false}. A subscription that starts with no position recorded opens where the wrapped model's default
+     * points, and each time the wrapped model evaluates its start position again before the first checkpoint is stored,
+     * it starts from wherever the feed has reached by then and skips the events written in between.
      */
     @Override
     public boolean deliversEveryEventInCommitOrder() {
-        return false;
+        return !config.startWhenNoStartPositionCanBeRecorded && CommitOrderedSubscriptions.findIn(subscriptionModel).map(CommitOrderedSubscriptions::deliversEveryEventInCommitOrder).orElse(false);
     }
 
     /**
@@ -1258,8 +1282,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private record Settled(@Nullable Checkpoint recorded) {
     }
 
+    // The checkpoint stored for an id when a subscribe at a StartAt of the caller's own read it, or that the read failed
+    private record StoredBefore(boolean known, @Nullable String checkpoint) {
+    }
+
     // One for each subscribe of an id this model stores checkpoints for
     private static final class CheckpointRegistration {
+        // Set only for a subscribe at a StartAt of the caller's own, before the wrapped model gets the subscription
+        private volatile @Nullable StoredBefore storedBeforeOwnStart;
         // When a checkpoint was last written for the id, as System.nanoTime(). Starts now, so the first quiet position
         // is saved one interval after the subscribe
         final AtomicLong lastWrite = new AtomicLong(System.nanoTime());
@@ -1296,6 +1326,17 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
         void reading() {
             lastReadOnThisThread.set(reads.incrementAndGet());
+        }
+
+        void ownStartAfter(StoredBefore storedBefore) {
+            storedBeforeOwnStart = storedBefore;
+        }
+
+        // A checkpoint stored before a start of the caller's own may lie after that start, so a resume there could skip
+        // events. Compared by asString, since a Checkpoint promises no equals
+        boolean resumesFromTheWrappedModelsOwnPosition(Checkpoint stored) {
+            StoredBefore before = storedBeforeOwnStart;
+            return before != null && (!before.known() || stored.asString().equals(before.checkpoint()));
         }
 
         // A position of the subscription is stored, so before the first event a quiet save moves that position on and
