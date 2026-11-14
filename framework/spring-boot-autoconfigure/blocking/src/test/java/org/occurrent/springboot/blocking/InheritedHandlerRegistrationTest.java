@@ -34,7 +34,11 @@ import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.blocking.bridged.BridgedGenericHandlerPort;
+import org.occurrent.springboot.blocking.bridged.BridgedHandlerPort;
 import org.occurrent.springboot.blocking.bridged.PublicBridgedSubscriber;
+import org.occurrent.springboot.blocking.bridged.PublicSubscriberImplementingGenericPort;
+import org.occurrent.springboot.blocking.bridged.PublicSubscriberImplementingPort;
 import org.occurrent.springboot.blocking.bridged.PublicSubscriberBindingPlaced;
 import org.occurrent.springboot.blocking.bridged.PublicSubscriberBindingTheBound;
 import org.occurrent.springboot.blocking.bridged.PublicSubscriberThroughRawSupertype;
@@ -624,6 +628,32 @@ class InheritedHandlerRegistrationTest {
         List<String> bodies = new CopyOnWriteArrayList<>();
         runner.withBean("subscriber", PublicBridgedSubscriber.class, () -> new PublicBridgedSubscriber(bodies)).run(context -> {
             assertThat(context).hasNotFailed();
+
+            anyHandlerFor(context.getBean(Subscriptions.class), "bridged-handler").invoke(null, new CrossPackageEvent());
+
+            assertThat(bodies).containsExactly("bridged-body");
+        });
+    }
+
+    @Test
+    void a_public_handler_inherited_from_a_package_private_class_behind_a_jdk_proxy_over_a_fixed_target_registers_and_runs_when_an_interface_declares_its_signature() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", BridgedHandlerPort.class, () -> jdkProxyOverFixedTarget(new PublicSubscriberImplementingPort(bodies), BridgedHandlerPort.class)).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(Proxy.isProxyClass(context.getBean("subscriber").getClass())).describedAs("the bean is a JDK proxy").isTrue();
+
+            anyHandlerFor(context.getBean(Subscriptions.class), "bridged-handler").invoke(null, new CrossPackageEvent());
+
+            assertThat(bodies).containsExactly("bridged-body");
+        });
+    }
+
+    @Test
+    void a_public_handler_inherited_from_a_package_private_class_behind_a_jdk_proxy_over_a_fixed_target_registers_and_runs_when_a_generic_interface_declares_the_method_erased() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        runner.withBean("subscriber", BridgedGenericHandlerPort.class, () -> jdkProxyOverFixedTarget(new PublicSubscriberImplementingGenericPort(bodies), BridgedGenericHandlerPort.class)).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(Proxy.isProxyClass(context.getBean("subscriber").getClass())).describedAs("the bean is a JDK proxy").isTrue();
 
             anyHandlerFor(context.getBean(Subscriptions.class), "bridged-handler").invoke(null, new CrossPackageEvent());
 

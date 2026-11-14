@@ -209,25 +209,29 @@ public final class HandlerScan {
 
     // selectInvocableMethod falls back to a method of the same signature on the proxy's interfaces, which runs method
     // only when method implements it. An interface method is public, so a private or package-private method never
-    // does. The class behind a proxy that isn't unwrapped can't be read, so there only the modifiers decide
+    // does. The class behind a proxy that isn't unwrapped can't be read, so there only the modifiers decide.
+    // getMostSpecificMethod answers the method a bridge calls, and the scan can hand over the bridge javac adds to a
+    // public class for a public method of a package-private superclass, so method is compared as the method it bridges
     private static boolean selectionRuns(Object bean, Method selected, Method method) {
         if (!Modifier.isPublic(method.getModifiers())) {
             return false;
         }
         Class<?> implementation = implementationClassOf(bean);
-        return java.lang.reflect.Proxy.isProxyClass(implementation) || AopUtils.getMostSpecificMethod(selected, implementation).equals(method);
+        return java.lang.reflect.Proxy.isProxyClass(implementation) || AopUtils.getMostSpecificMethod(selected, implementation).equals(BridgeMethodResolver.findBridgedMethod(method));
     }
 
+    // Compares method as the method it bridges, for the reason selectionRuns does
     private static @Nullable Method proxyInterfaceMethodRunning(Object bean, Method method) {
         if (!java.lang.reflect.Proxy.isProxyClass(bean.getClass())) {
             return null;
         }
         Class<?> implementation = implementationClassOf(bean);
+        Method bridged = BridgeMethodResolver.findBridgedMethod(method);
         for (Class<?> proxiedInterface : bean.getClass().getInterfaces()) {
             for (Method interfaceMethod : proxiedInterface.getMethods()) {
                 if (!Modifier.isStatic(interfaceMethod.getModifiers()) && interfaceMethod.getName().equals(method.getName())
                         && interfaceMethod.getParameterCount() == method.getParameterCount()
-                        && AopUtils.getMostSpecificMethod(interfaceMethod, implementation).equals(method)) {
+                        && AopUtils.getMostSpecificMethod(interfaceMethod, implementation).equals(bridged)) {
                     return interfaceMethod;
                 }
             }
@@ -336,8 +340,8 @@ public final class HandlerScan {
                 return null;
             }
             MergedAnnotations annotations = MergedAnnotations.from(method, SearchStrategy.TYPE_HIERARCHY);
-            // MethodIntrospector can hand over a bridge method and keeps the method it bridges instead, so that is the
-            // method the checks below compare against
+            // MethodIntrospector can hand over a bridge method, and keeps either the bridge or the method it bridges, so
+            // the checks below compare against the method it bridges
             Method bridged = BridgeMethodResolver.findBridgedMethod(method);
             boolean annotated = false;
             for (Class<? extends Annotation> annotationType : annotationTypes) {
