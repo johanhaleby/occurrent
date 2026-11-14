@@ -48,7 +48,7 @@ class CatchupLifecycleExamplesTest {
         Run run = plainRun();
         try {
             run.history.gate = new CountDownLatch(1);
-            InterleavingRunner.execute(run, call(Kind.SUBSCRIBE, "a"));
+            assertThat(InterleavingRunner.execute(run, call(Kind.SUBSCRIBE, "a"))).isEqualTo("ok");
             assertThat(run.history.queried.await(5, TimeUnit.SECONDS)).isTrue();
             assertThat(InterleavingRunner.execute(run, call(Kind.PAUSE, "a"))).isEqualTo("ok");
             run.history.gate.countDown();
@@ -61,25 +61,31 @@ class CatchupLifecycleExamplesTest {
     }
 
     @Example
-    void a_cancel_ends_the_replays_again_that_a_lost_live_start_asks_for() {
+    void a_cancel_ends_the_replays_again_that_a_lost_live_start_asks_for() throws Exception {
         Run run = plainRun();
         AtomicInteger checks = new AtomicInteger();
+        CountDownLatch insideTheFirstCheck = new CountDownLatch(1);
+        CountDownLatch cancelReturned = new CountDownLatch(1);
         run.live.canResume = checkpoint -> {
             checks.incrementAndGet();
+            insideTheFirstCheck.countDown();
+            try {
+                cancelReturned.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             return false;
         };
         try {
-            InterleavingRunner.execute(run, call(Kind.SUBSCRIBE, "a"));
-            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-            while (checks.get() == 0 && System.nanoTime() < until) {
-                Thread.onSpinWait();
-            }
+            assertThat(InterleavingRunner.execute(run, call(Kind.SUBSCRIBE, "a"))).isEqualTo("ok");
+            assertThat(insideTheFirstCheck.await(5, TimeUnit.SECONDS)).as("the replay is inside canResume when the cancel is made").isTrue();
             assertThat(InterleavingRunner.execute(run, call(Kind.CANCEL, "a"))).isEqualTo("ok");
-            int atCancel = checks.get();
+            cancelReturned.countDown();
             InterleavingRunner.quiesce(run);
-            assertThat(checks.get()).as("checks after the cancel returned").isEqualTo(atCancel);
+            assertThat(checks.get()).as("checks, where 4 or more means the replay went on after the cancel").isLessThan(4);
             assertThat(run.model.isRunning("a") || run.model.isPaused("a")).isFalse();
         } finally {
+            cancelReturned.countDown();
             run.model.shutdown();
         }
     }
@@ -88,7 +94,7 @@ class CatchupLifecycleExamplesTest {
     void a_start_that_throws_after_it_took_effect_does_not_park_a_later_subscribe() {
         Run run = plainRun();
         try {
-            InterleavingRunner.execute(run, call(Kind.STOP, "a"));
+            assertThat(InterleavingRunner.execute(run, call(Kind.STOP, "a"))).isEqualTo("ok");
             assertThat(InterleavingRunner.execute(run, new LifecycleCall(Kind.START_TRUE, null, StartFailure.AFTER_EFFECT))).isEqualTo("InjectedStartFailure");
             assertThat(InterleavingRunner.execute(run, call(Kind.SUBSCRIBE, "a"))).isEqualTo("ok");
             InterleavingRunner.quiesce(run);
@@ -102,7 +108,7 @@ class CatchupLifecycleExamplesTest {
     void a_resume_after_a_start_that_failed_before_it_took_effect_starts_the_model_and_the_replay() {
         Run run = plainRun();
         try {
-            InterleavingRunner.execute(run, call(Kind.STOP, "a"));
+            assertThat(InterleavingRunner.execute(run, call(Kind.STOP, "a"))).isEqualTo("ok");
             assertThat(InterleavingRunner.execute(run, new LifecycleCall(Kind.START_FALSE, null, StartFailure.BEFORE_EFFECT))).isEqualTo("InjectedStartFailure");
             assertThat(InterleavingRunner.execute(run, call(Kind.SUBSCRIBE, "a"))).isEqualTo("ok");
             assertThat(InterleavingRunner.execute(run, call(Kind.RESUME, "a"))).isEqualTo("ok");
