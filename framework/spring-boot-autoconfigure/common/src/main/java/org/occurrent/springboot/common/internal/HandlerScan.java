@@ -925,8 +925,9 @@ public final class HandlerScan {
 
     /**
      * Answers whether {@code beanName} names the proxy of a scoped bean, a definition that decorates its target's
-     * definition under {@link ScopedProxyUtils#getTargetBeanName}. Both annotation post-processors skip such a name,
-     * so a scoped bean's handlers register once, under its target's name. Internal to the Spring Boot starters.
+     * definition under {@link ScopedProxyUtils#getTargetBeanName}. Both annotation post-processors register a scoped
+     * bean's handlers under this name and deliver through the proxy, so each delivery reaches the instance the scope
+     * holds at that moment. Internal to the Spring Boot starters.
      *
      * @param beanFactory the bean factory that defines {@code beanName}
      * @param beanName    the bean name the scan is about to read
@@ -939,6 +940,20 @@ public final class HandlerScan {
         String targetBeanName = ScopedProxyUtils.getTargetBeanName(beanName);
         BeanDefinitionHolder decorated = beanFactory.getMergedBeanDefinition(beanName) instanceof RootBeanDefinition root ? root.getDecoratedDefinition() : null;
         return decorated != null && decorated.getBeanName().equals(targetBeanName) && beanFactory.containsBeanDefinition(targetBeanName);
+    }
+
+    /**
+     * Answers whether {@code beanName} names the target of a scoped bean, the {@code scopedTarget.} definition a
+     * scoped proxy decorates. Both annotation post-processors skip such a name, since the scoped bean's handlers
+     * register under its proxy's name. A bean that is only named {@code scopedTarget.} plus another bean's name, with
+     * no scoped proxy decorating it, is not a target. Internal to the Spring Boot starters.
+     *
+     * @param beanFactory the bean factory that defines {@code beanName}
+     * @param beanName    the bean name the scan is about to read
+     * @return {@code true} when a scoped proxy that {@link #isScopedProxy} recognizes decorates {@code beanName}
+     */
+    public static boolean isScopedTarget(ConfigurableListableBeanFactory beanFactory, String beanName) {
+        return ScopedProxyUtils.isScopedTarget(beanName) && isScopedProxy(beanFactory, ScopedProxyUtils.getOriginalBeanName(beanName));
     }
 
     private static IllegalStateException annotationFromAMethodNotOverridden(Method method, Method declaration, MergedAnnotation<? extends Annotation> annotation) {

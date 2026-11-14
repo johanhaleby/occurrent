@@ -29,6 +29,7 @@ import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.springframework.aop.scope.ScopedProxyUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.FactoryBean;
@@ -44,6 +45,7 @@ import org.springframework.util.ClassUtils;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -311,17 +313,41 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // Beans whose class is only predicted and whose prediction shows an annotation. Built at the end of this
         // pass so the next one can read their real class.
         Set<String> beansToBuild = new LinkedHashSet<>();
+        // The instance each scoped proxy's scope held when this pass read it, which is what a descriptor factory runs on
+        Map<String, Object> scopedTargets = new HashMap<>();
+        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         for (String beanName : beanNames) {
             // A scoped proxy and its target are two definitions of one bean, so its handlers register once, under the
-            // target's name
-            if (HandlerScan.isScopedProxy(((ConfigurableApplicationContext) applicationContext).getBeanFactory(), beanName)) {
+            // proxy's name, and every delivery goes through the proxy to the instance the scope holds then
+            if (HandlerScan.isScopedTarget(beanFactory, beanName)) {
                 continue;
             }
             ScanType scanType;
-            try {
-                scanType = typeResolver.apply(beanName);
-            } catch (RuntimeException e) {
-                continue;
+            if (HandlerScan.isScopedProxy(beanFactory, beanName)) {
+                // The target is built only when its predicted class shows an annotation, the way a predicted type is
+                // built below, so a scoped bean without handlers is never asked for at startup
+                String targetName = ScopedProxyUtils.getTargetBeanName(beanName);
+                Class<?> predicted;
+                try {
+                    predicted = applicationContext.getType(targetName);
+                } catch (RuntimeException e) {
+                    continue;
+                }
+                if (predicted == null || !declaresAnyOccurrentAnnotation(ClassUtils.getUserClass(predicted))) {
+                    continue;
+                }
+                // Outside the catch above, so a scope that isn't active now, such as request or session scope at
+                // startup, fails the scan instead of hiding the bean's handlers. The class comes from the target,
+                // since a proxy of ScopedProxyMode.INTERFACES has only the interfaces' methods
+                Object scopedTarget = applicationContext.getBean(targetName);
+                scopedTargets.put(beanName, scopedTarget);
+                scanType = new ScanType(userClassOf(scopedTarget), true);
+            } else {
+                try {
+                    scanType = typeResolver.apply(beanName);
+                } catch (RuntimeException e) {
+                    continue;
+                }
             }
             if (scanType == null) {
                 continue;
@@ -404,6 +430,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (mayBlockForReplay) {
             CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
         }
+        // A descriptor is read once, so a scoped bean's factory runs on the instance its scope held when this pass read
+        // it, and invokeDescriptorFactory checks that instance's class, never a call through the scoped proxy
+        Function<String, Object> descriptorSources = name -> scopedTargets.containsKey(name) ? scopedTargets.get(name) : beanResolver.apply(name);
         for (Object[] pm : projectionMethods) {
             String beanName = (String) pm[0];
             HandlerMethod handler = (HandlerMethod) pm[1];
@@ -412,7 +441,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (registeredHandlers.markRegistered(beanName, handler)) {
                 registerDescriptor(beanName, handler, projection.id(),
                         "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(projection.id(), method.getDeclaringClass().getName(), method.getName()),
-                        () -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply(beanName), method, projection));
+                        () -> projectionRegistrar.processProjectionAnnotation(descriptorSources.apply(beanName), method, projection));
             }
         }
         // Catch up each domain-push feed once, after all its projections are registered.
@@ -425,7 +454,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (registeredHandlers.markRegistered(beanName, handler)) {
                 registerDescriptor(beanName, handler, snapshot.id(),
                         "Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(snapshot.id(), method.getDeclaringClass().getName(), method.getName()),
-                        () -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply(beanName), method, snapshot));
+                        () -> snapshotRegistrar.processSnapshotAnnotation(descriptorSources.apply(beanName), method, snapshot));
             }
         }
         for (Object[] gm : sagaMethods) {
@@ -436,7 +465,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (registeredHandlers.markRegistered(beanName, handler)) {
                 registerDescriptor(beanName, handler, saga.id(),
                         "Duplicate subscription/projection/snapshot/saga id '%s' (used by @Saga on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(saga.id(), method.getDeclaringClass().getName(), method.getName()),
-                        () -> sagaRegistrar.processSagaAnnotation(beanResolver.apply(beanName), method, saga));
+                        () -> sagaRegistrar.processSagaAnnotation(descriptorSources.apply(beanName), method, saga));
             }
         }
         for (String beanName : beansToBuild) {
