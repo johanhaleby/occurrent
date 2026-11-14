@@ -383,8 +383,8 @@ public final class HandlerScan {
     }
 
     // The handlers among the methods type declares, for a type whose superclasses or interfaces can't be read. A bridge
-    // counts as the method it calls, as MethodIntrospector counts it. A method whose check has to read a class that
-    // can't be read is left out, since its annotation comes from a superclass or interface method
+    // counts as the method it calls, as MethodIntrospector counts it. A method is left out when finding the method a
+    // bridge calls, or checking a method for a handler annotation, has to read a class missing at runtime
     private static Set<Method> declaredHandlerMethods(Class<?> type, MethodIntrospector.MetadataLookup<Boolean> handlerLookup) {
         Set<Method> handlers = new LinkedHashSet<>();
         for (Method method : type.getDeclaredMethods()) {

@@ -2249,7 +2249,9 @@ methods. For each one a bean inherits without overriding it:
   `eventTypes` the types that aren't that type or a subtype of it, or the application fails at startup. A factory
   method of that kind keeps the store it named, or the one bean of the store type it got.
 - If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
-  A bean of the class that declares it keeps the original id.
+  A bean of the class that declares it keeps the original id. If the method is private, or package-private and
+  declared in another package than a subclass, the subclasses can't override it, so first make it protected or public,
+  or move its annotation to the subclass methods.
 
 The code compiles unchanged. An inherited handler that starts running writes what a new handler writes, such as its
 checkpoint and, for a `@Projection`, `@Snapshot` or `@Saga`, its state. There is no OpenRewrite recipe, because nothing in the code
