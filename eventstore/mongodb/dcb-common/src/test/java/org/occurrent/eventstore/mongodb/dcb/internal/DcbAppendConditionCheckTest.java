@@ -309,6 +309,11 @@ class DcbAppendConditionCheckTest {
     }
 
     @Test
+    void deployment_is_OTHER_for_an_answer_with_other_fields_and_neither_msg_isdbgrid_nor_a_setName() {
+        assertThat(DcbAppendConditionCheck.deployment(answering(new Document("isWritablePrimary", true)))).isEqualTo(Deployment.OTHER);
+    }
+
+    @Test
     void asks_hello_and_nothing_else_when_the_server_knows_it() {
         List<Document> sent = new ArrayList<>();
 
@@ -335,11 +340,13 @@ class DcbAppendConditionCheckTest {
 
     @Test
     void falls_back_to_isMaster_when_hello_fails_with_command_not_found_and_answers_MONGOS_for_a_mongos() {
+        List<Document> sent = new ArrayList<>();
         AtomicReference<Deployment> deployment = new AtomicReference<>();
 
-        assertThatCode(() -> deployment.set(DcbAppendConditionCheck.deployment(oldServerAnswering(new ArrayList<>(), new Document("msg", "isdbgrid")))))
+        assertThatCode(() -> deployment.set(DcbAppendConditionCheck.deployment(oldServerAnswering(sent, new Document("msg", "isdbgrid")))))
                 .doesNotThrowAnyException();
 
+        assertThat(sent).containsExactly(new Document("hello", 1), new Document("isMaster", 1));
         assertThat(deployment).as("the isMaster answer is from a mongos").hasValue(Deployment.MONGOS);
     }
 

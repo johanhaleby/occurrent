@@ -41,7 +41,6 @@ import org.occurrent.eventstore.api.dcb.DcbMarkerVersions;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
-import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
@@ -74,9 +73,9 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEventWithId;
 
 /**
- * What the reactor store answers to a conditional append when it runs against a mongos with one shard.
- * The store runs its own conditional append in a transaction at read concern snapshot and write concern majority, so
- * when a marker of the criteria moved it asks the events above that marker instead of refusing (ADR 175).
+ * What the reactor store answers to a conditional append through a mongos with one shard.
+ * When a marker of the criteria moved and the markers can't settle the condition, the store reads the markers again in a read-only snapshot transaction on a second session and queries the events there (ADR 175).
+ * The tests check which appends pass and which are refused, and the marker versions of a read that is the first operation of a transaction and of a read that confirms an append before saving.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -94,6 +93,7 @@ class ReactorMongoEventStoreDcbShardedClusterTest {
                     .withSharding()
                     .withEnv("GLIBC_TUNABLES", "glibc.pthread.rseq=1");
 
+    private ReactorMongoEventStoreConformanceFixture fixture;
     private DcbEventStore eventStore;
     private MongoClient transactionalClient;
     private SimpleReactiveMongoDatabaseFactory databaseFactory;
@@ -106,6 +106,8 @@ class ReactorMongoEventStoreDcbShardedClusterTest {
     void create_the_event_store() {
         String database = "sharded_" + UUID.randomUUID().toString().replace("-", "");
         assertThat(hello(database).get("msg")).as("The container must be a mongos, or nothing below tests the sharded case").isEqualTo("isdbgrid");
+        fixture = new ReactorMongoEventStoreConformanceFixture(new ConnectionString(mongos.getConnectionString() + "/" + database + ".events"));
+        eventStore = fixture.dcbEventStore();
         CommandListener commandRecorder = new CommandListener() {
             @Override
             public void commandStarted(CommandStartedEvent event) {
@@ -126,13 +128,12 @@ class ReactorMongoEventStoreDcbShardedClusterTest {
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .eventStoreCapabilities(STREAM, DCB)
                 .build());
-        // The template and the transaction manager share one factory, so the store's own transaction binds the session its template reads
-        eventStore = BlockingEventStoreOverReactive.of(transactionalStore);
     }
 
     @AfterEach
     void close_the_event_store() {
         transactionalClient.close();
+        fixture.close();
     }
 
     @Test

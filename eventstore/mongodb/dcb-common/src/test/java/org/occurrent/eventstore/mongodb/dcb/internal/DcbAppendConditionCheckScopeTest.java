@@ -16,12 +16,6 @@
 
 package org.occurrent.eventstore.mongodb.dcb.internal;
 
-import com.mongodb.MongoCommandException;
-import com.mongodb.ServerAddress;
-import org.bson.BsonDocument;
-import org.bson.BsonInt32;
-import org.bson.BsonString;
-import org.bson.Document;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -41,7 +35,6 @@ import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Que
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Refuse;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -134,44 +127,6 @@ class DcbAppendConditionCheckScopeTest {
 
         assertThat(thrown).as("a key the snapshot didn't read is answered, not dereferenced").isNull();
         assertThat(holds[0]).as("a marker the snapshot has no observation of").isFalse();
-    }
-
-    // deployment
-
-    @Test
-    void deployment_is_MONGOS_for_an_answer_with_msg_isdbgrid() {
-        assertThat(DcbAppendConditionCheck.deployment(command -> new Document("msg", "isdbgrid"))).isEqualTo(Deployment.MONGOS);
-    }
-
-    @Test
-    void deployment_is_MONGOS_for_an_answer_with_msg_isdbgrid_and_a_setName() {
-        assertThat(DcbAppendConditionCheck.deployment(command -> new Document("msg", "isdbgrid").append("setName", "rs0"))).isEqualTo(Deployment.MONGOS);
-    }
-
-    @Test
-    void deployment_is_REPLICA_SET_for_an_answer_with_a_setName() {
-        assertThat(DcbAppendConditionCheck.deployment(command -> new Document("setName", "rs0"))).isEqualTo(Deployment.REPLICA_SET);
-    }
-
-    @Test
-    void deployment_is_OTHER_for_an_answer_with_neither_msg_isdbgrid_nor_a_setName() {
-        assertThat(DcbAppendConditionCheck.deployment(command -> new Document("isWritablePrimary", true))).isEqualTo(Deployment.OTHER);
-    }
-
-    @Test
-    void deployment_falls_back_to_isMaster_when_hello_fails_with_command_not_found() {
-        List<Document> sent = new ArrayList<>();
-
-        Deployment deployment = DcbAppendConditionCheck.deployment(command -> {
-            sent.add(command);
-            if (command.containsKey("hello")) {
-                throw commandFailed(59);
-            }
-            return new Document("msg", "isdbgrid");
-        });
-
-        assertThat(sent).containsExactly(new Document("hello", 1), new Document("isMaster", 1));
-        assertThat(deployment).as("the isMaster answer is from a mongos").isEqualTo(Deployment.MONGOS);
     }
 
     // check
@@ -319,12 +274,5 @@ class DcbAppendConditionCheckScopeTest {
         Map<String, MarkerObservation> map = new LinkedHashMap<>(observed);
         map.put(key, observation);
         return map;
-    }
-
-    private static MongoCommandException commandFailed(int code) {
-        BsonDocument response = new BsonDocument("ok", new BsonInt32(0))
-                .append("errmsg", new BsonString("command failed"))
-                .append("code", new BsonInt32(code));
-        return new MongoCommandException(response, new ServerAddress());
     }
 }

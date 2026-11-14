@@ -54,9 +54,8 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.tag;
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEventWithId;
 
 /**
- * The transaction options the reactor store runs a conditional append with on a replica set. Only a mongos needs the
- * snapshot read concern and the majority write concern that ADR 175 gives the store's own conditional append, so a
- * replica set keeps what the transaction manager was configured with.
+ * The transaction the reactor store runs a conditional append in on a replica set.
+ * The store keeps the read concern and write concern the transaction manager was configured with, because the snapshot check of ADR 175 runs only through a mongos, on a second session of its own.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)

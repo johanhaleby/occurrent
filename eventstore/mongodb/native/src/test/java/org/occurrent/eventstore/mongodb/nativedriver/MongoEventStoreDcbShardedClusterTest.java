@@ -64,9 +64,9 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEventWithId;
 
 /**
- * What the native store answers to a conditional append when it runs against a mongos with one shard.
- * The store runs its own conditional append in a transaction at read concern snapshot and write concern majority, so
- * when a marker of the criteria moved it asks the events above that marker instead of refusing (ADR 175).
+ * What the native store answers to a conditional append through a mongos with one shard.
+ * When a marker of the criteria moved and the markers can't settle the condition, the store reads the markers again in a read-only snapshot transaction on a second session and queries the events there (ADR 175).
+ * The tests check which appends pass and which are refused, and the marker versions of a read that is the first operation of a transaction.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
