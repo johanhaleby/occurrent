@@ -2282,7 +2282,10 @@ with no deadline, until that call returns, before it calls the action again.
 
 ### Who is affected
 
-Code that pauses or stops one of these models while an action can run for longer than a second, and then resumes it. A
+Code that pauses or stops one of these models while an action can run for longer than a second, and then resumes it.
+An action that pauses and resumes its own subscription is affected however short it is, since a pause from inside the
+action returns at once. The resumed subscription calls the action again only once that call returns, so an action that
+then waits until its subscription delivers never returns. In 0.34.0 it got the event. A
 `CompetingConsumerSubscriptionModel` over one of them pauses and resumes its subscriptions as its lease moves, so it is
 affected too.
 
