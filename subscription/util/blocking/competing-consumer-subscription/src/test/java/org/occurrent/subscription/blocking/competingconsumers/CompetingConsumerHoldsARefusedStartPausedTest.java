@@ -703,6 +703,44 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(errorsLogged()).as("errors logged").hasSize(1));
     }
 
+    @Test
+    void holds_a_consumer_paused_with_one_error_and_gives_up_the_lease_once_the_subscribe_returns_when_the_wrapped_model_tells_that_it_holds_the_subscription_paused_while_the_subscribe_makes_it() {
+        // Given a wrapped model that holds the subscription paused and tells, from inside the subscribe that makes it
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        reporting.aResumeLeavesItHeld.set(true);
+        reporting.insideTheNextSubscribe.set(() ->
+                reporting.holdsPausedAndTells(ID, HistoryLossMessages.liveStartLost("The live start is gone", (Checkpoint) () -> "live start", true)));
+
+        // When
+        subscribe(false);
+
+        // Then the report was kept for the try that starts once the subscribe returned
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(this::assertHeldPaused);
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(errorsLogged()).as("errors logged").singleElement().asString().contains("replays the subscription from the beginning again"));
+    }
+
+    @Test
+    void leaves_a_consumer_the_user_paused_paused_by_the_user_and_logs_no_error_when_the_wrapped_model_tells_that_it_holds_the_subscription_paused() {
+        // Given a consumer the user paused
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+        model.pauseSubscription(ID);
+        assertHeldPaused();
+        int callsBefore = wrapped.calls.get();
+
+        // When the wrapped model tells that it holds the subscription paused
+        reporting.holdsPausedAndTells(ID, HistoryLossMessages.liveStartLost("The live start is gone", (Checkpoint) () -> "live start", true));
+
+        // Then it stays as the user left it
+        await().during(NO_FURTHER_CALLS_FOR).atMost(NO_FURTHER_CALLS_FOR.plusSeconds(5)).untilAsserted(() ->
+                assertThat(errorsLogged()).as("errors logged").isEmpty());
+        assertHeldPaused();
+        assertThat(wrapped.calls.get()).as("calls into the wrapped model after the report").isEqualTo(callsBefore);
+    }
+
     private static void joinTheCall(Thread call) {
         try {
             call.join(Duration.ofSeconds(10));
@@ -972,6 +1010,9 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         private final AtomicReference<@Nullable Runnable> afterTheNextAnswerToIsRunning = new AtomicReference<>();
         private final AtomicInteger heldPausedQueriesToFail = new AtomicInteger();
         private final AtomicBoolean answersHeldPausedForEveryReport = new AtomicBoolean();
+        private final AtomicReference<@Nullable Runnable> insideTheNextSubscribe = new AtomicReference<>();
+        // A resume that returns while the subscription is held, which keeps it held, as one a catch-up has not applied yet
+        private final AtomicBoolean aResumeLeavesItHeld = new AtomicBoolean();
 
         @Override
         public void addStartRefusalListener(StartRefusalListener listener) {
@@ -1012,20 +1053,34 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
             return running;
         }
 
+        private void tellsInsideTheNextSubscribe() {
+            @Nullable Runnable inside = insideTheNextSubscribe.getAndSet(null);
+            if (inside != null) {
+                inside.run();
+            }
+        }
+
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             heldFor.remove(subscriptionId);
-            return super.subscribe(subscriptionId, filter, startAt, action);
+            Subscription made = super.subscribe(subscriptionId, filter, startAt, action);
+            tellsInsideTheNextSubscribe();
+            return made;
         }
 
         @Override
         public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             heldFor.remove(subscriptionId);
-            return super.subscribePaused(subscriptionId, filter, startAt, action);
+            Subscription made = super.subscribePaused(subscriptionId, filter, startAt, action);
+            tellsInsideTheNextSubscribe();
+            return made;
         }
 
         @Override
         public Subscription resumeSubscription(String subscriptionId) {
+            if (aResumeLeavesItHeld.get() && heldFor.containsKey(subscriptionId)) {
+                return new WrappedSubscription(subscriptionId);
+            }
             heldFor.remove(subscriptionId);
             return super.resumeSubscription(subscriptionId);
         }
