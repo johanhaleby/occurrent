@@ -2115,7 +2115,10 @@ for how to recover it.
 
 Both Spring Boot starters used to read a bean's handlers only from the methods its class declares. An annotated method
 that the class inherits from a superclass, or gets as an interface default method, never registered when the class
-didn't override it, and nothing was logged. Both starters now register it.
+didn't override it, and nothing was logged. Both starters now register it. One kind did register in 0.34.0. When a
+public class inherits a public annotated method from a superclass that isn't public, the compiler adds a bridge
+method to the class that calls the inherited method and has its annotation, and 0.34.0 found that bridge. Such a
+handler keeps running as before, under the same id.
 
 This covers `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@SynchronousSubscription`, `@Projection` and
 `@Snapshot`, and `@Saga` on the blocking starter. An inherited `@Projection`, `@Snapshot` or `@Saga` factory method,
@@ -2128,7 +2131,8 @@ annotation, and when it repeats the annotation, it uses its own.
 
 Applications on either starter with one of these:
 
-- a bean whose class inherits an annotated method from a superclass and doesn't override it
+- a bean whose class inherits an annotated method from a superclass and doesn't override it, other than the bridge
+  kind above
 - a bean whose class implements an interface with an annotated default method and doesn't override it
 - two or more beans that run one annotated method without overriding it, either two subclasses of the class that
   declares it, or that class and a subclass, each a bean
@@ -2137,11 +2141,11 @@ Applications on either starter with one of these:
 
 ### What changes
 
-- An inherited handler starts running on the first start after the upgrade, from its own start settings. It never
-  ran, so nothing is stored for its id. With `startAt = BEGINNING`, or `startAt = BEGINNING_OF_TIME` on
-  `@StreamSubscription`, it replays the whole history. So does a `@Snapshot`, whose `startAt` is `BEGINNING` by
-  default, and a `@Projection` or `@Saga` with `source = PUSH`, which replays the event store's history before it
-  goes live unless it sets `catchup = NONE`.
+- An inherited handler, other than the bridge kind above, starts running on the first start after the upgrade, from
+  its own start settings. It never ran, so nothing is stored for its id. With `startAt = BEGINNING`, or
+  `startAt = BEGINNING_OF_TIME` on `@StreamSubscription`, it replays the whole history. So does a `@Snapshot`, whose
+  `startAt` is `BEGINNING` by default, and a `@Projection` or `@Saga` with `source = PUSH`, which replays the event
+  store's history before it goes live unless it sets `catchup = NONE`.
 - A handler declared with a type variable, such as `on(E event)` on `Base<E>`, takes its event type from the bean's
   class. A class that extends `Base<Placed>` subscribes to `Placed`. An inherited factory method declared with a type
   variable reads its state type the same way.
@@ -2182,7 +2186,8 @@ methods. For each one a bean inherits without overriding it:
 
 - If the handler should run, check where its `startAt` starts it. `BEGINNING` replays the history it missed, and
   `NOW` starts at the present.
-- If it shouldn't run on any bean, remove the annotation from the method.
+- If it shouldn't run on any bean, remove the annotation from the method. A handler of the bridge kind above needs
+  no change, since it ran in 0.34.0 and removing its annotation stops a subscription that has a stored checkpoint.
 - If only some of the classes that inherit it should run it, move the annotation off the superclass method. Then
   override the method in each class that should run it and repeat the annotation there. An override without the
   annotation runs under the annotation of the method it overrides, so leaving the annotation on the superclass keeps
@@ -2216,7 +2221,7 @@ Applications on either starter with a `FactoryBean` whose product is such a prox
 
 - a handler declared on a generic interface with a type variable, such as `on(E event)` on
   `Handler<E extends OrderEvent>`, that the product's class implements as `Handler<Placed>`
-- a handler annotation on the product's class that its interface doesn't have
+- a handler or factory annotation on the product's class that its interface doesn't have
 
 A target source whose `getTargetClass()` returns `null` names no class, so the starters still read the proxy class,
 as before.
@@ -2228,13 +2233,16 @@ as before.
   longer reach it.
 - A handler annotated only on the class never registered, and now does. When the proxy's interfaces don't declare it,
   creating the bean fails with `SubscriptionHandlerNotInvocableException`, since the proxy can't run it.
+- A `@Projection`, `@Snapshot` or `@Saga` factory method annotated only on the class is found too. When the proxy's
+  interfaces don't declare it, the application fails at startup with an `IllegalStateException` that says the proxy
+  does not implement the class that declares the factory.
 
 ### What to do
 
 - If the generic handler should still get every type under the bound, implement the interface with the bound, as in
   `Handler<OrderEvent>`.
-- If a handler annotated only on the class shouldn't run, remove the annotation. If it should, declare the method on
-  one of the proxy's interfaces.
+- If a handler or factory method annotated only on the class shouldn't run, remove the annotation, since it never ran
+  in 0.34.0. If it should, declare the method on one of the proxy's interfaces.
 
 The code compiles unchanged, and nothing stored changes.
 

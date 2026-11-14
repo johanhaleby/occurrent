@@ -40,7 +40,7 @@ state type has the same problem.
 
 ### 1. A handler is an annotated method the bean's class runs, wherever it is declared
 
-Both post-processors call `SubscriptionAnnotations.handlerMethods`, which finds handlers by using Spring's
+Both post-processors call `HandlerScan.handlerMethods`, which finds handlers by using Spring's
 `MethodIntrospector.selectMethods`. It reads the bean's class, its superclasses and its interfaces, and gives each
 method as the one the bean's class actually runs:
 
@@ -49,17 +49,21 @@ method as the one the bean's class actually runs:
 - An override without an annotation of its own is one handler. It runs the override under the overridden method's
   annotation.
 - An override that repeats the annotation is one handler under its own annotation.
-- Bridge methods are left out, so a generic handler is one handler.
+- The bridge method the compiler adds for an override of a generic method is left out, so a generic handler is one
+  handler. The bridge the compiler adds to a public class for a public method it inherits from a superclass that isn't
+  public is the handler, since it has the method's annotation and calls the inherited method. 0.34.0 registered
+  that bridge too.
 - Overriding follows the JVM's rules. A package-private method is overridden by a method in its own package, and by a
   method in any package that overrides such a method.
 - A method that only shares its name and parameters with an annotated method it doesn't override is refused at
   startup. That happens when the annotated method is package-private and a superclass in another package declares it,
   since Spring's annotation search ignores packages and gives the subclass's method that annotation. When the bean's
   class, or a superclass below that method, declares a method of the same signature, that method is checked instead.
-- The scan misses this case. When the bean's class is in the package of a package-private annotated method, Spring
-  takes the first method of the same signature up from the bean's class as the one it runs, even a method in another
-  package that doesn't override it. When that method is private, or has a handler annotation of its own, the annotated
-  method isn't found, though the JVM runs it.
+- When the bean's class is in the package of a package-private annotated method, Spring takes the first method of the
+  same signature up from the bean's class as the one it runs, even a method in another package that doesn't override
+  it. The scan also reads each package-private method Spring replaces this way, so the annotated method is found, as
+  the JVM runs it. When the method in between is public or protected, a CGLIB proxy of the bean's class runs that
+  method instead, so such a handler is refused at startup on a bean behind one.
 - A static method an interface declares is left out, since a class doesn't inherit it. A static method a superclass
   declares is a handler, and it's refused the way a static method the bean's class declares is.
 
@@ -71,14 +75,18 @@ is a type variable fails at startup with the error it gave before.
 The scan reads the class behind a proxy, so a bean behind a JDK interface proxy is scanned through the proxy's target
 class. A bean with a scoped proxy has two bean definitions, the proxy's and its target's under the `scopedTarget.`
 name. The scan skips the proxy's, so the handlers register once, under the target's name. A bean in request or
-session scope still fails at startup, because the scan builds its target then, outside a request.
-The key that tells whether a handler is already registered is the bean name, the method's
-name and its parameter types, as in 0.34.0. When the method is private or package-private and a superclass declares
-it, the key also has that superclass. So a private method on the bean's class and a private method of the same
-signature on a superclass get two keys, and they register as two handlers. A later pass of the scan over the same bean
-finds the same keys and skips those handlers. A handler found on the target class runs through the proxy, so
-advice such as `@Transactional` still applies. When the proxy doesn't have that method, because the class overrides a
-generic interface method with a concrete parameter type, the handler runs through the interface method it overrides.
+session scope still fails at startup, because the scan builds its target then, outside a request. A handler found on
+the target class runs through the proxy, so advice such as `@Transactional` still applies. When the proxy doesn't have
+that method, because the class overrides a generic interface method with a concrete parameter type, the handler runs
+through the interface method it overrides.
+
+The key that tells whether a handler is already registered is the bean name, the method's name and its parameter
+types, as in 0.34.0, and each key records the methods registered under it. A later pass of the scan over the same bean
+skips a recorded method. A method of the same signature that isn't recorded counts as the same handler, as in 0.34.0,
+unless the scan that found it also found a recorded method of that signature. So a prototype whose factory returns two
+unrelated classes, each with a private handler of one signature, registers the handler of the first class only. A
+private method on a superclass and a private method of the same signature on the bean's class register as two
+handlers, since a scan of the bean's class finds both.
 
 `invokeDescriptorFactory` runs a factory method that the bean's class declares or inherits unchanged. It refuses a bean
 whose class overrides the method, since that runs code the scan didn't read. Two proxies can't be unwrapped to their
@@ -113,7 +121,8 @@ I rejected three smaller changes:
   stored for its id. So `startAt = BEGINNING`, or `startAt = BEGINNING_OF_TIME` on `@StreamSubscription`, replays the
   whole history on the first start, and so does a `@Snapshot`, whose `startAt` is `BEGINNING` by default. A
   `@Projection` or `@Saga` with `source = PUSH` replays the event store's history before it goes live, unless it sets
-  `catchup = NONE`.
+  `catchup = NONE`. A handler that a public class inherits as a public method from a superclass that isn't public
+  isn't one of them. 0.34.0 registered the bridge the compiler adds for it, so it keeps its id and its checkpoint.
 - **Two beans that run one annotated handler without overriding it fail at startup with
   `DuplicateSubscriptionIdException`.** They are two subclasses of the class that declares it, or that class and a
   subclass, each a bean. Both handlers have the same id, and the id is the key a subscription's
