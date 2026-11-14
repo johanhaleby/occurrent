@@ -454,12 +454,7 @@ public final class ChangeStreamSubscriptions {
             internalSubscription.started();
             // After started(), so a resume called from inside the previous run's action, or a start(true) that waits
             // for the run to start, doesn't wait for that action
-            if (!internalSubscription.waitForThePreviousRuns()) {
-                if (internalSubscription.isIntentionallyClosed()) {
-                    log.debug("Subscription {} was paused or cancelled while it waited for the action of a run it replaced, so this run stops.", subscriptionId);
-                } else {
-                    log.warn("Subscription {} was interrupted while it waited for the action of a run it replaced, so this run stops and delivers nothing until it's paused and resumed.", subscriptionId);
-                }
+            if (!waitedForThePreviousRuns(subscriptionId, internalSubscription)) {
                 return;
             }
 
@@ -510,6 +505,11 @@ public final class ChangeStreamSubscriptions {
                 // the function with another position, and those restart like any other failure
                 refuseStart(subscriptionId, internalSubscription, unsupportedStartAt);
             } else if (isChangeStreamHistoryLost(e)) {
+                // A loss reported as the change stream opens comes before the wait above, and a listener that takes
+                // the subscription over can call the action, as a catch-up replay does
+                if (!waitedForThePreviousRuns(subscriptionId, internalSubscription)) {
+                    return;
+                }
                 if (takenOverAfterHistoryLoss(subscriptionId, internalSubscription, openedAt, e)) {
                     return;
                 }
@@ -624,6 +624,19 @@ public final class ChangeStreamSubscriptions {
         if (internalSubscription.movedWhileOpenTo(StartAt.checkpoint(quietPosition))) {
             quietPositionConsumers.forEach(consumer -> consumer.accept(quietPosition));
         }
+    }
+
+    // False when the run stops instead, closed or interrupted while it waited
+    private boolean waitedForThePreviousRuns(String subscriptionId, InternalSubscription internalSubscription) {
+        if (internalSubscription.waitForThePreviousRuns(subscriptionId)) {
+            return true;
+        }
+        if (internalSubscription.isIntentionallyClosed()) {
+            log.debug("Subscription {} was paused or cancelled while it waited for the action of a run it replaced, so this run stops.", subscriptionId);
+        } else {
+            log.warn("Subscription {} was interrupted while it waited for the action of a run it replaced, so this run stops and delivers nothing until it's paused and resumed.", subscriptionId);
+        }
+        return false;
     }
 
     // Asks the listeners in the order they were added, and the first that takes the subscription over gets it. A
@@ -1406,9 +1419,15 @@ public final class ChangeStreamSubscriptions {
         // replaced once its wait succeeds. A run closed while it waits keeps them, so each pause and resume while one
         // call stays stuck adds a run to the chain until a wait succeeds. False when this run is closed while it
         // waits, so a pause or a cancel frees its thread, or when interrupted, and the interrupt is set again
-        boolean waitForThePreviousRuns() {
+        boolean waitForThePreviousRuns(String subscriptionId) {
+            // Set when the wait first finds a call still running, so the wait is logged once
+            @Nullable Long waitingSince = null;
             try {
                 for (InternalSubscription run = previous; run != null; run = run.previous) {
+                    if (waitingSince == null && run.isDelivering()) {
+                        waitingSince = System.nanoTime();
+                        log.warn("Subscription {} waits for an action call of a run it replaced to return before it goes on. The call hasn't returned since the subscription was paused. It waits with no deadline, and a pause or a cancel of the subscription ends the wait.", subscriptionId);
+                    }
                     if (!run.awaitNotDeliveringUnlessClosed(this)) {
                         return false;
                     }
@@ -1418,7 +1437,19 @@ public final class ChangeStreamSubscriptions {
                 return false;
             }
             previous = null;
+            if (waitingSince != null) {
+                log.warn("Subscription {} waited {} ms for an action call of a run it replaced to return, and goes on.", subscriptionId, Duration.ofNanos(System.nanoTime() - waitingSince).toMillis());
+            }
             return true;
+        }
+
+        private boolean isDelivering() {
+            lock.lock();
+            try {
+                return delivering != null;
+            } finally {
+                lock.unlock();
+            }
         }
 
         // The waiter's flag is read under this run's lock, and close() of the waiter signals under it after setting
