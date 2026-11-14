@@ -614,6 +614,44 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
     }
 
     @Test
+    void a_held_subscription_made_at_a_checkpoint_is_held_paused_again_when_it_is_resumed_and_the_read_of_the_change_stream_still_gives_no_position() {
+        // Given: a subscription made at a checkpoint, held paused after its history was lost as it first opened
+        MongoOperationTimeCheckpoint checkpoint = new MongoOperationTimeCheckpoint(requireNonNull(MongoCommons.operationTimeAfter(database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND))));
+        presentRead.set(() -> cursorReading(null, null));
+        historyLostWhenOpening.set(true);
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        List<String> refused = new CopyOnWriteArrayList<>();
+        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.checkpoint(checkpoint), cloudEvent -> handled.add(cloudEvent.getId()));
+        waitAtMostFor(TEN_SECONDS, () -> presentReads.get() > 0 && subscriptionModel.isPaused(subscriptionId));
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("held paused before the resume").isTrue();
+        int readsBeforeTheResume = presentReads.get();
+
+        // When: it is resumed without a position and the server still gives none
+        subscriptionModel.resumeSubscription(subscriptionId);
+        waitAtMostFor(TEN_SECONDS, () -> presentReads.get() > readsBeforeTheResume);
+        waitAtMostFor(TEN_SECONDS, () -> subscriptionModel.isPaused(subscriptionId) || refused.contains(subscriptionId));
+
+        // Then
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+        assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isFalse();
+        assertThat(subscriptionModel.subscriptionIds()).as("known subscriptions").contains(subscriptionId);
+        assertThat(refused).as("start refusals told").isEmpty();
+        assertThat(presentReads.get() - readsBeforeTheResume).as("reads of the change stream that records the present for the resume, the read at the opening and none by the question").isEqualTo(1);
+
+        // And when it is resumed once the server gives a position again
+        presentRead.set(null);
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+        NameDefined e1 = nameDefined("name1");
+        mongoEventStore.write("1", 0, serialize(e1));
+        waitAtMostFor(TEN_SECONDS, () -> handled.contains(e1.eventId()));
+        assertThat(handled).as("events handled").containsExactly(e1.eventId());
+        assertThat(refused).as("start refusals told").isEmpty();
+    }
+
+    @Test
     void a_held_subscription_resumed_at_the_present_is_refused_when_the_read_of_the_change_stream_still_gives_no_position() {
         // Given: a subscription held paused after its history was lost while the server gave no position
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));

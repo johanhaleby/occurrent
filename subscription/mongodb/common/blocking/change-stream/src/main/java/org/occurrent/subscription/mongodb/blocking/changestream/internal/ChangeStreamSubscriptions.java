@@ -349,9 +349,10 @@ public final class ChangeStreamSubscriptions {
 
     // Records the present for a dynamic position without evaluating it, so it's evaluated once, when the change stream
     // opens, and answers the recorded present if it resolves to the present then. A supplier that writes, such as
-    // the one saving a durable subscription's first checkpoint, then writes once
+    // the one saving a durable subscription's first checkpoint, then writes once. Nothing is read for a position the
+    // answer can't change, which asks MongoDB as its change stream opens
     private void pinThePresent(AtomicReference<StartAt> currentStartAt, PresentAtSubscribe present) {
-        if (!needsThePresent(currentStartAt.get())) {
+        if (!present.isUsedAt(currentStartAt.get())) {
             return;
         }
         Checkpoint position = currentPosition();
@@ -1204,6 +1205,13 @@ public final class ChangeStreamSubscriptions {
         StartAt pinnedIfSubscribedAt(StartAt position) {
             Checkpoint present = answer;
             return position == subscribedAt && present != null && needsThePresent(position) ? MongoCommons.pinnedTo(position, present) : position;
+        }
+
+        // Whether the answer can change where a run at position opens. Only the position the subscription was made with
+        // takes it, as it is or as what a dynamic position a resume gave falls back to. A resume's own position and a
+        // restart from the present after a loss of history don't
+        boolean isUsedAt(StartAt position) {
+            return needsThePresent(subscribedAt) && (position == subscribedAt || position.isDynamic());
         }
 
         // Without an interrupt, since the question runs on an executor thread that a later task reuses, and some
