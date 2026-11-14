@@ -55,6 +55,11 @@ What counts as outside a session of the caller's differs per store.
 The Spring and reactor stores take the session from the template's database factory and read through a copy of the
 template bound to it, with session synchronization `NEVER`, as ADR 175's snapshot transaction does.
 
+In the reactor store, a template whose `withSession` returns something other than a `ReactiveMongoTemplate` gives the
+store no copy it can set `NEVER` on. The read then goes through the store's template as before, without the causally
+consistent session, so through a mongos it can still miss E. `ReactiveMongoTemplate.withSession` in spring-data-mongodb
+5.1.0 returns a `ReactiveMongoTemplate`, so only a subclass that overrides it takes this path. No test covers it.
+
 A read with `withVersions()` that falls back to a plain read takes the same path when it runs outside a session of the
 caller's. That's a read from a store set up with `resumeFromMarkerVersions(false)`, a read of `DcbCriteria.all()`, and a read whose snapshot
 transaction failed and that passed no saved versions. In the Spring and reactor stores, the fallback that already read

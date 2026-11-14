@@ -581,6 +581,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     ReactiveMongoOperations template = mongoTemplate.withSession(clientSession);
                     if (!(template instanceof ReactiveMongoTemplate sessionTemplate)) {
                         // NEVER can't be set on it, so the read goes through the template and may bind a session rather than fail
+                        // That read isn't causally consistent, so through a mongos it can still miss an event whose commit is in flight on the events' shard
+                        // Only a subclass whose withSession returns another type gets here, since ReactiveMongoTemplate.withSession returns a ReactiveMongoTemplate
                         return readThroughTemplate(criteria, options);
                     }
                     sessionTemplate.setSessionSynchronization(NEVER);

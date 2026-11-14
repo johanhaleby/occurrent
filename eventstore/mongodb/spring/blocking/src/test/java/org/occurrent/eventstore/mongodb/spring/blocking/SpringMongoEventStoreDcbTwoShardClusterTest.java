@@ -235,6 +235,43 @@ class SpringMongoEventStoreDcbTwoShardClusterTest {
     }
 
     @Test
+    void refuses_an_append_with_a_token_whose_marker_on_the_events_shard_was_read_before_a_matching_event_the_read_returned() throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        DcbEventStream read;
+        try {
+            Future<?> matching = null;
+            try (Hold hold = cluster.holdCommitsOnSecondShard()) {
+                matching = executor.submit(() -> eventStore.append(List.of(taggedEventWithId("matching", ENROLLED, COURSE_C1, STUDENT_S1))));
+                awaitMarkerOnTheFirstShard(COURSE_C1_KEY);
+                Future<DcbEventStream> reading = executor.submit(() -> eventStore.read(ENROLLMENTS_OF_S1_IN_C1));
+                // Gives the read a fair chance to return or to block on the held commit
+                try {
+                    reading.get(2, TimeUnit.SECONDS);
+                } catch (TimeoutException blockedOnTheHeldCommit) {
+                    // Released below
+                }
+                hold.close();
+                // A read that never returns would hang the test, so it gets a bound
+                read = reading.get(10, TimeUnit.SECONDS);
+            } finally {
+                awaitSettled(matching);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThat(read.events()).as("The read returns the matching event").extracting(CloudEvent::getId).containsExactly("matching");
+        assertThat(read.consistencyToken().markers().get(COURSE_C1_KEY).version()).as("The token holds the marker of tag course:c1 the matching event created").isEqualTo(1);
+        assertThat(read.consistencyToken().markers().get(STUDENT_S1_KEY).version()).as("The token holds the marker of tag student:s1 from before the matching event").isZero();
+
+        Throwable thrown = catchThrowable(() -> eventStore.append(List.of(taggedEventWithId("second", ENROLLED, COURSE_C1, STUDENT_S1)), failIfEventsMatch(read.consistencyToken())));
+
+        assertThat(thrown)
+                .as("The marker of tag student:s1 in the token moved, and the store asks the events above it, where the matching event is")
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        assertThat(eventStore.read(ENROLLMENTS_OF_S1_IN_C1).events()).extracting(CloudEvent::getId).containsExactly("matching");
+    }
+
+    @Test
     void returns_a_matching_event_whose_commit_was_in_flight_on_the_events_shard_when_the_read_began() throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         DcbEventStream read;
