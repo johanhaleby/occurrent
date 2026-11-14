@@ -30,6 +30,7 @@ import org.occurrent.springboot.common.overriding.elsewhere.MidInAnotherPackage;
 import org.occurrent.springboot.common.overriding.leaf.LeafOverMidInAnotherPackage;
 import org.occurrent.springboot.common.overriding.leaf.LeafOverUnreadableMidInTheDeclaringPackage;
 import org.occurrent.springboot.common.overriding.leaf.LeafOverMidInTheDeclaringPackage;
+import org.springframework.core.annotation.AnnotationUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -252,7 +253,40 @@ class HandlerScanUnreadableHierarchyTest {
         }
     }
 
-    private static final List<Class<?>> FIXTURES = List.of(UnreadableSuperclass.class, ChildOfUnreadableSuperclass.class,
+    // javac adds a visibility bridge to the leaf that runs the handler of this package-private class, and the bridge has a copy of its annotation
+    static class PackagePrivateMidWithHandler {
+        @Subscription(id = "mid")
+        public void on(String event) {
+        }
+    }
+
+    public interface UnreadableInterfaceWithDefaultHandlerOfTheSignatureOfTheMid {
+        @SuppressWarnings("unused")
+        private void uses(AbsentType absent) {
+        }
+
+        @Subscription(id = "iface")
+        default void on(String event) {
+        }
+    }
+
+    public static class LeafOverMidAndUnreadableInterface extends PackagePrivateMidWithHandler implements UnreadableInterfaceWithDefaultHandlerOfTheSignatureOfTheMid {
+    }
+
+    public interface ReadableInterfaceWithDefaultHandlerOfTheSignatureOfTheMid {
+        @Subscription(id = "iface")
+        default void on(String event) {
+        }
+    }
+
+    public static class LeafOverMidAndReadableInterfaceAndUnreadableInterface extends PackagePrivateMidWithHandler
+            implements ReadableInterfaceWithDefaultHandlerOfTheSignatureOfTheMid, UnreadableOnlyByItsPrivateMethod {
+    }
+
+    private static final List<Class<?>> FIXTURES = List.of(PackagePrivateMidWithHandler.class,
+            UnreadableInterfaceWithDefaultHandlerOfTheSignatureOfTheMid.class, LeafOverMidAndUnreadableInterface.class,
+            ReadableInterfaceWithDefaultHandlerOfTheSignatureOfTheMid.class, LeafOverMidAndReadableInterfaceAndUnreadableInterface.class,
+            UnreadableSuperclass.class, ChildOfUnreadableSuperclass.class,
             ReadableInterfaceWithStaticAnnotatedMethod.class, ExtendsUnreadableSuperclassAndImplementsReadableInterfaceWithStaticAnnotatedMethod.class,
             ReadableHandlerClassAboveUnreadableSuperclass.class, ExtendsReadableHandlerClassAboveUnreadableSuperclass.class,
             UnreadableInterface.class, ChildOfUnreadableInterface.class, DeclaresUnreadableMethod.class,
@@ -465,6 +499,20 @@ class HandlerScanUnreadableHierarchyTest {
     }
 
     @Test
+    void handlerMethods_returns_the_visibility_bridge_when_it_runs_the_superclass_handler_but_resolves_to_a_default_handler_of_an_interface_that_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> leaf = new LoaderWithoutAbsentType().loadClass(LeafOverMidAndUnreadableInterface.class.getName());
+
+        assertScansToTheVisibilityBridgeCarryingTheHandlerOfTheMid(leaf);
+    }
+
+    @Test
+    void handlerMethods_returns_the_visibility_bridge_when_it_runs_the_superclass_handler_but_resolves_to_a_default_handler_of_a_readable_interface_and_another_interface_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> leaf = new LoaderWithoutAbsentType().loadClass(LeafOverMidAndReadableInterfaceAndUnreadableInterface.class.getName());
+
+        assertScansToTheVisibilityBridgeCarryingTheHandlerOfTheMid(leaf);
+    }
+
+    @Test
     void handlerMethods_returns_the_overload_and_the_visibility_bridge_for_the_handler_of_the_package_private_superclass_when_the_class_declares_an_annotated_overload_and_the_superclass_can_not_be_read() throws Exception {
         Class<?> leaf = new LoaderWithoutAbsentType().loadClass(LeafOverloadingAnUnreadableBaseHandler.class.getName());
 
@@ -533,6 +581,15 @@ class HandlerScanUnreadableHierarchyTest {
                 .hasMessageContaining("since " + missing + " is missing at runtime, and neither can its class file")
                 .hasMessageContaining("Put " + missing + " on the classpath.")
                 .hasCauseInstanceOf(NoClassDefFoundError.class);
+    }
+
+    private static void assertScansToTheVisibilityBridgeCarryingTheHandlerOfTheMid(Class<?> leaf) {
+        assertThat(leaf.getDeclaredMethods()).describedAs("the class declares only the visibility bridge")
+                .extracting(Method::getName, Method::isBridge).containsExactly(tuple("on", true));
+        Set<Method> scanned = scanWithoutThrowing(leaf);
+        assertThat(scanned).extracting(Method::getName, Method::isBridge, method -> method.getDeclaringClass().getName(), method -> List.of(method.getParameterTypes()))
+                .containsExactly(tuple("on", true, leaf.getName(), List.of(String.class)));
+        assertThat(scanned).extracting(method -> AnnotationUtils.findAnnotation(method, Subscription.class).id()).containsExactly("mid");
     }
 
     private static Set<Method> scanWithoutThrowing(Class<?> type) {

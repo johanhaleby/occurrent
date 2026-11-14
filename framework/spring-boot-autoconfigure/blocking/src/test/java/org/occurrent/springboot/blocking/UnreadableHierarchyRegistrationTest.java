@@ -237,6 +237,21 @@ class UnreadableHierarchyRegistrationTest {
     }
 
     @Test
+    void an_eager_bean_registers_and_runs_the_visibility_bridge_for_the_superclass_handler_when_it_resolves_to_a_default_handler_of_an_interface_that_can_not_be_read() throws Exception {
+        Class<?> product = new LoaderWithoutAbsentType().loadClass(LeafOverMidAndUnreadableInterface.class.getName());
+        AtomicInteger constructed = new AtomicInteger();
+
+        runner.withBean("products", ProductFactoryBean.class, () -> new ProductFactoryBean(product, constructed, true)).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+
+            assertThat(subscribedIds(subscriptions)).containsExactly("mid");
+            handlerFor(subscriptions, "mid").invoke(null, new TestEvent());
+            assertThat(ranBodies(product)).containsExactly("mid-body");
+        });
+    }
+
+    @Test
     void an_eager_bean_fails_the_context_naming_the_overload_that_has_no_visibility_bridge_when_the_package_private_superclass_declaring_it_can_not_be_read() throws Exception {
         Class<?> product = new LoaderWithoutAbsentType().loadClass(LeafOverUnreadableBaseWithPackagePrivateOverload.class.getName());
 
@@ -514,7 +529,8 @@ class UnreadableHierarchyRegistrationTest {
     public static class ExtendsReadableHandlerClassAboveUnreadableSuperclass extends ReadableHandlerClassAboveUnreadableSuperclass {
     }
 
-    private static final List<Class<?>> FIXTURES = List.of(UnreadableSuperclass.class, ChildOfUnreadableSuperclass.class,
+    private static final List<Class<?>> FIXTURES = List.of(LeafOverMidAndUnreadableInterface.class, PackagePrivateMidWithHandler.class, UnreadableInterfaceWithDefaultHandler.class,
+            UnreadableSuperclass.class, ChildOfUnreadableSuperclass.class,
             ReadableHandlerClassAboveUnreadableSuperclass.class, ExtendsReadableHandlerClassAboveUnreadableSuperclass.class,
             UnreadableInterface.class, ChildOfUnreadableInterface.class,
             DeclaresHandlerAndExtendsUnreadableSuperclass.class, DeclaresHandlerAndImplementsUnreadableInterface.class,

@@ -699,7 +699,8 @@ public final class HandlerScan {
     }
 
     // The handlers among the methods type declares, for a type whose superclasses or interfaces can't be read. A bridge
-    // counts as the method it calls, as MethodIntrospector counts it. When finding the method a bridge calls has to
+    // counts as the method it calls, as MethodIntrospector counts it, and a visibility bridge that Spring resolves to a
+    // method its code doesn't call counts as itself. When finding the method a bridge calls has to
     // read a class missing at runtime, the bridge's code says it. A bridge that calls a method of type is left out, since
     // that method is checked on its own. Any other bridge with a handler annotation javac copied to it is the handler,
     // as in 0.34.0, and so is one whose class file can't be read. Any other method is left out when checking it for a
@@ -713,6 +714,18 @@ public final class HandlerScan {
             }
             try {
                 Method candidate = BridgeMethodResolver.findBridgedMethod(method);
+                if (candidate != method) {
+                    if (bridgeCalls == null) {
+                        bridgeCalls = bridgeCallsOf(type);
+                    }
+                    // Spring can resolve a visibility bridge to a default method of an interface when a superclass that
+                    // isn't public declares the method the bridge calls with the same signature. The bridge runs the
+                    // superclass method, so the bridge itself is the handler, as in the full scan and in 0.34.0
+                    BridgeCall call = bridgeCalls.get(method.getName() + org.springframework.asm.Type.getMethodDescriptor(method));
+                    if (call != null && !call.callsAMethodOf(type) && !call.calls(type, candidate)) {
+                        candidate = method;
+                    }
+                }
                 if (Boolean.TRUE.equals(handlerLookup.inspect(candidate))) {
                     handlers.add(candidate);
                 }
