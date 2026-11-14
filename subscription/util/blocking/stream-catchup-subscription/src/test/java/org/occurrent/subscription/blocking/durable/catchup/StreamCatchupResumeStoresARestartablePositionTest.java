@@ -18,6 +18,7 @@ package org.occurrent.subscription.blocking.durable.catchup;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -35,7 +36,12 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
@@ -49,6 +55,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -74,6 +81,7 @@ class StreamCatchupResumeStoresARestartablePositionTest {
     private InMemoryEventStore eventStore;
     private InMemoryCheckpointStorage storage;
     private LiveStartLosingSubscriptionModel liveModel;
+    private ReadingNoPresentPosition liveModelReadingNoPresentPosition;
     private StreamCatchupSubscriptionModel catchup;
     private StreamCatchupSubscriptionModel restarted;
 
@@ -135,6 +143,24 @@ class StreamCatchupResumeStoresARestartablePositionTest {
     }
 
     @Test
+    void throws_an_IllegalStateException_naming_the_time_and_stores_nothing_when_a_resume_at_a_time_without_a_live_start_over_a_stored_catch_up_position_finds_no_present_position() {
+        // Given
+        Checkpoint storedBefore = heldTakeoverReplayWithACatchupPositionStored(ReadingNoPresentPosition::new);
+        liveModelReadingNoPresentPosition.answeringNothingForTheCurrentPosition();
+        Checkpoint resumedAt = TimeBasedCheckpoint.from(OffsetDateTime.now().minusHours(1));
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(resumedAt)));
+
+        // Then
+        assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(ID)
+                .hasMessageContaining(resumedAt.asString())
+                .hasMessageNotContaining("StartAt.now()");
+        assertThat(storage.read(ID)).as("stored position").isEqualTo(storedBefore);
+    }
+
+    @Test
     void leaves_the_stored_position_when_a_resume_is_at_a_token_the_live_model_does_not_restart_at() {
         // Given
         Checkpoint storedBefore = heldTakeoverReplayWithACatchupPositionStored();
@@ -189,9 +215,18 @@ class StreamCatchupResumeStoresARestartablePositionTest {
     // A takeover replay from the beginning whose live start the live model loses at each open, held once the catch-up
     // made 4 replays, with the catch-up position it stored. The live model keeps every open after this returns
     private Checkpoint heldTakeoverReplayWithACatchupPositionStored() {
+        return heldTakeoverReplayWithACatchupPositionStored(Function.<CheckpointAwareSubscriptionModel>identity()::apply);
+    }
+
+    // As above, with the catch-up over what wrap makes of the live model
+    private <M extends CheckpointAwareSubscriptionModel> Checkpoint heldTakeoverReplayWithACatchupPositionStored(Function<LiveStartLosingSubscriptionModel, M> wrap) {
         liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> {
         }).losingEveryOpen();
-        catchup = new StreamCatchupSubscriptionModel(liveModel, eventStore, config());
+        M wrapped = wrap.apply(liveModel);
+        if (wrapped instanceof ReadingNoPresentPosition reading) {
+            liveModelReadingNoPresentPosition = reading;
+        }
+        catchup = new StreamCatchupSubscriptionModel(wrapped, eventStore, config());
         HeldPausedReports reports = new HeldPausedReports();
         catchup.addStartRefusalListener(reports);
         catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
@@ -227,6 +262,95 @@ class StreamCatchupResumeStoresARestartablePositionTest {
 
     private Consumer<CloudEvent> action() {
         return cloudEvent -> received.add(cloudEventConverter.toDomainEvent(cloudEvent));
+    }
+
+    // The live model, which answers nothing when asked for its current position once told to
+    private static final class ReadingNoPresentPosition implements CheckpointAwareSubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions {
+        private final LiveStartLosingSubscriptionModel delegate;
+        private volatile boolean answersNothingForTheCurrentPosition;
+
+        private ReadingNoPresentPosition(LiveStartLosingSubscriptionModel delegate) {
+            this.delegate = delegate;
+        }
+
+        void answeringNothingForTheCurrentPosition() {
+            answersNothingForTheCurrentPosition = true;
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            return answersNothingForTheCurrentPosition ? null : delegate.globalCheckpoint();
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return delegate.resumeSubscription(subscriptionId, startAt);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return delegate.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void addHistoryLossListener(HistoryLossListener listener) {
+            delegate.addHistoryLossListener(listener);
+        }
+
+        @Override
+        public void removeHistoryLossListener(HistoryLossListener listener) {
+            delegate.removeHistoryLossListener(listener);
+        }
+
+        @Override
+        public boolean canResumeFrom(Checkpoint checkpoint) {
+            return delegate.canResumeFrom(checkpoint);
+        }
+
+        @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return delegate.restartsAt(checkpoint);
+        }
+
+        @Override
+        public void stop() {
+            delegate.stop();
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            delegate.start(resumeSubscriptionsAutomatically);
+        }
+
+        @Override
+        public boolean isRunning() {
+            return delegate.isRunning();
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return delegate.isRunning(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return delegate.isPaused(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            delegate.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            delegate.cancelSubscription(subscriptionId);
+        }
     }
 
     private static final class HeldPausedReports implements StartRefusalListener {

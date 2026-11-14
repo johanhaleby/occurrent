@@ -831,8 +831,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * The present position is read the way a paragraph below describes for a subscription held before it reached the
      * live delegate. When no position is answered then, this throws {@link IllegalStateException} and changes nothing.
      * A global position above 0 without a live start, a checkpoint the live delegate doesn't restart at and any other
-     * start store nothing, and the position stored before stays. A dynamic {@code startAt} is asked once, and the live
-     * delegate resumes the subscription at what it answered. When
+     * start store nothing, and the position stored before stays. A dynamic {@code startAt} is asked once for this
+     * model, and the live delegate resumes the subscription at the position it answered. When it answers nothing for
+     * this model, the live delegate asks it for itself. When
      * the live delegate throws, the position stored before is put back as for that subscription, a replay this held
      * runs again as it was, and this throws what the live delegate threw. When the replay is in the subscription's action or reads
      * history, this holds the replay and waits up to ten seconds for it to return before the live delegate resumes the
@@ -939,9 +940,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                         // that made the subscription reads that position, since each child reads its own event store.
                         Subscribed owned = subscribed.get(subscriptionId);
                         AbstractCatchupSubscriptionModel owner = owned == null ? this : owned.owner();
-                        // A dynamic start is asked once here, and the live delegate resumes at what it answered, so
-                        // the position stored and the position resumed at are one answer. A wrapper is still asked
-                        // whether it starts at all, as at a subscribe.
+                        // A dynamic start is asked once here, and both the position stored and the position the live
+                        // delegate resumes at come from what it answered. A wrapper is still asked whether it starts at
+                        // all, as at a subscribe. When it answers nothing here, the live delegate asks it for itself.
                         StartAt answered = answeredForThisModel(startAt);
                         @Nullable StartAt forThisModel = answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered;
                         replaced = owner.replaceTheStoredPosition(subscriptionId, forThisModel, true, repositionable);
@@ -998,7 +999,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (onlyOverACatchupPosition && (previous == null || !isCatchupCheckpoint(previous))) {
                 return null;
             }
-            Checkpoint present = startsNow ? presentPositionToResumeAt(subscriptionId) : null;
+            Checkpoint present = startsNow ? presentPositionToResumeAt(subscriptionId, "StartAt.now()") : null;
             Checkpoint given = forThisModel instanceof StartAt.StartAtCheckpoint at ? at.checkpoint : present;
             Checkpoint position = restartPosition(subscriptionId, given, liveDelegate);
             if (position == null) {
@@ -1023,7 +1024,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             return given;
         }
         if (start instanceof CatchupCheckpoints.Time time) {
-            return new StringBasedCheckpoint(CatchupCheckpoints.format(time.time(), time.replayOrigin(), presentPositionToResumeAt(subscriptionId)));
+            return new StringBasedCheckpoint(CatchupCheckpoints.format(time.time(), time.replayOrigin(), presentPositionToResumeAt(subscriptionId, given.asString())));
         }
         return null;
     }
@@ -1064,7 +1065,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     // The live start the event store reports, as a replay reads it, or the live delegate's present position when the
     // event store reports none
-    private Checkpoint presentPositionToResumeAt(String subscriptionId) {
+    private Checkpoint presentPositionToResumeAt(String subscriptionId, String resumedAt) {
         String liveStart;
         try (ReplayScope<?> scope = openScope(null)) {
             liveStart = scope.liveStart();
@@ -1072,7 +1073,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         Checkpoint present = liveStart == null ? subscriptionModel.globalCheckpoint() : new StringBasedCheckpoint(liveStart);
         if (present == null) {
             throw new IllegalStateException("The live subscription model " + subscriptionModel.getClass().getName() + " answered nothing when asked for the current position, so subscription "
-                                            + subscriptionId + " can't be resumed at StartAt.now() with the position stored. " + NOTHING_CHANGED);
+                                            + subscriptionId + " can't be resumed at " + resumedAt + " with the position stored. " + NOTHING_CHANGED);
         }
         return present;
     }
