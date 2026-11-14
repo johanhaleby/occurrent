@@ -566,7 +566,8 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         // Then the report is still there for the retry
         await().atMost(Duration.ofSeconds(20)).untilAsserted(this::assertHeldPaused);
         assertThat(reporting.heldPausedQueriesToFail.get()).as("failures left to throw").isZero();
-        assertThat(errorsLogged()).as("errors logged").singleElement().asString().contains("replays the subscription from the beginning again");
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(errorsLogged()).as("errors logged").singleElement().asString().contains("replays the subscription from the beginning again"));
     }
 
     @Test
@@ -671,7 +672,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         await().atMost(Duration.ofSeconds(10)).untilAsserted(this::assertHeldPaused);
         joinTheCall(call);
         assertThat(callThrew.get()).as("thrown by the call").isInstanceOf(SubscriptionAlreadyRunningException.class);
-        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(errorsLogged()).as("errors logged").hasSize(1));
     }
 
     @Test
@@ -699,7 +700,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         // Then the consumer is held paused once and has given up the lease
         await().atMost(Duration.ofSeconds(10)).untilAsserted(this::assertHeldPaused);
         joinTheCall(call);
-        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(errorsLogged()).as("errors logged").hasSize(1));
     }
 
     private static void joinTheCall(Thread call) {

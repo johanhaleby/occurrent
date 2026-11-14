@@ -117,7 +117,8 @@ class CompetingConsumerHoldsALostLiveStartOverCatchupTest {
                 () -> assertThat(strategy.registrations).as("registered with the strategy").isEmpty(),
                 () -> assertThat(strategy.holders).as("holding the lease").isEmpty()
         ));
-        assertThat(logged.errors()).as("errors logged").singleElement().asString().contains("replays the subscription from the beginning again");
+        await().atMost(EVENTUALLY).untilAsserted(() ->
+                assertThat(logged.errors()).as("errors logged").singleElement().asString().contains("replays the subscription from the beginning again"));
     }
 
     @Test
