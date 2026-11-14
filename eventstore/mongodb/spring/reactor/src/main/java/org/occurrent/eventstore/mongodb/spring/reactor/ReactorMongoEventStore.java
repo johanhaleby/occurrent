@@ -351,6 +351,16 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private Mono<DcbEventStream> readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
+        if (deployment != Deployment.MONGOS) {
+            return readThroughTemplate(criteria, options);
+        }
+        // With synchronization active the template reads in the session bound to it, or binds one, so only a read with none is left
+        return callerTransactionActive().zipWith(synchronization()).flatMap(state -> !state.getT1() && state.getT2() == Synchronization.INACTIVE
+                ? readWithoutMarkerVersionsOnSessionOfItsOwn(criteria, options)
+                : readThroughTemplate(criteria, options));
+    }
+
+    private Mono<DcbEventStream> readThroughTemplate(DcbCriteria criteria, DcbReadOptions options) {
         return readWithoutMarkerVersions(criteria, options, consistencyToken(criteria, mongoTemplate), currentPosition(), mongoTemplate, queryOptions);
     }
 
@@ -565,12 +575,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private Mono<DcbEventStream> readWithoutMarkerVersionsOnSessionOfItsOwn(DcbCriteria criteria, DcbReadOptions options) {
-        return Mono.usingWhen(mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build()),
+        // Causally consistent so the events read waits on a commit still prepared on their shard that the markers read already shows
+        return Mono.usingWhen(mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().causallyConsistent(true).build()),
                 clientSession -> Mono.defer(() -> {
                     ReactiveMongoOperations template = mongoTemplate.withSession(clientSession);
                     if (!(template instanceof ReactiveMongoTemplate sessionTemplate)) {
                         // NEVER can't be set on it, so the read goes through the template and may bind a session rather than fail
-                        return readWithoutMarkerVersions(criteria, options);
+                        return readThroughTemplate(criteria, options);
                     }
                     sessionTemplate.setSessionSynchronization(NEVER);
                     Mono<Long> position = sessionTemplate.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName)

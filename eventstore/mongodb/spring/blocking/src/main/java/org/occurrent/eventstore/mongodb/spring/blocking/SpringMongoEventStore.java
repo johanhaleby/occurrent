@@ -313,7 +313,20 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
+        // With synchronization active the template reads in the session bound to it, or binds one, so only a read with none is left
+        if (deployment == Deployment.MONGOS && !TransactionSynchronizationManager.isSynchronizationActive()) {
+            return readInOwnSession(criteria, options);
+        }
         return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(criteria, mongoTemplate), this::currentPosition, mongoTemplate, queryOptions);
+    }
+
+    private DcbEventStream readInOwnSession(DcbCriteria criteria, DcbReadOptions options) {
+        // Causally consistent so the events read waits on a commit still prepared on their shard that the markers read already shows
+        try (ClientSession session = mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().causallyConsistent(true).build())) {
+            MongoTemplate sessionTemplate = mongoTemplate.withSession(session);
+            sessionTemplate.setSessionSynchronization(NEVER);
+            return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(criteria, sessionTemplate), () -> positionOf(sessionTemplate), sessionTemplate, queryOptions);
+        }
     }
 
     // The token, the head, the template and the query options are passed in so a catch-up read scope can read all of them
@@ -496,11 +509,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (!readWouldBindASession) {
             return readWithoutMarkerVersions(criteria, options);
         }
-        try (ClientSession session = mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build())) {
-            MongoTemplate sessionTemplate = mongoTemplate.withSession(session);
-            sessionTemplate.setSessionSynchronization(NEVER);
-            return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(criteria, sessionTemplate), () -> positionOf(sessionTemplate), sessionTemplate, queryOptions);
-        }
+        return readInOwnSession(criteria, options);
     }
 
     @Override

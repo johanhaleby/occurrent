@@ -69,6 +69,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -96,6 +97,7 @@ class SpringMongoEventStoreDcbTwoShardClusterTest {
     private static final String COURSE_C1 = "course:c1";
     private static final String STUDENT_S1 = "student:s1";
     private static final DcbCriteria TICKETS_OF_K1 = DcbCriteria.type(TICKET_SOLD).tags(tag(CONCERT_K1));
+    private static final DcbCriteria ENROLLMENTS_IN_C1 = DcbCriteria.type(ENROLLED).tags(tag(COURSE_C1));
     private static final DcbCriteria ENROLLMENTS_OF_S1_IN_C1 = DcbCriteria.type(ENROLLED).tags(tag(COURSE_C1), tag(STUDENT_S1));
     private static final String COURSE_C1_KEY = DcbMarkerVersionsSupport.tagKey(tag(COURSE_C1));
     private static final String STUDENT_S1_KEY = DcbMarkerVersionsSupport.tagKey(tag(STUDENT_S1));
@@ -203,33 +205,92 @@ class SpringMongoEventStoreDcbTwoShardClusterTest {
     }
 
     @Test
-    void refuses_an_append_with_a_token_read_while_a_matching_event_had_committed_on_the_first_shard_and_not_on_the_second() throws Exception {
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        DcbEventStream readWhileHalfCommitted;
+    void returns_a_matching_event_with_a_tag_marker_on_each_shard_whose_commit_was_in_flight_on_the_events_shard_when_the_read_began() throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        DcbEventStream read;
         try {
             Future<?> matching = null;
-            try (Hold ignored = cluster.holdCommitsOnSecondShard()) {
+            try (Hold hold = cluster.holdCommitsOnSecondShard()) {
                 matching = executor.submit(() -> eventStore.append(List.of(taggedEventWithId("matching", ENROLLED, COURSE_C1, STUDENT_S1))));
                 awaitMarkerOnTheFirstShard(COURSE_C1_KEY);
-                // A read that waited for the second shard would hang the test, so it gets a bound
-                readWhileHalfCommitted = CompletableFuture.supplyAsync(() -> eventStore.read(ENROLLMENTS_OF_S1_IN_C1)).get(10, TimeUnit.SECONDS);
+                Future<DcbEventStream> reading = executor.submit(() -> eventStore.read(ENROLLMENTS_OF_S1_IN_C1));
+                // Gives the read a fair chance to return or to block on the held commit
+                try {
+                    reading.get(2, TimeUnit.SECONDS);
+                } catch (TimeoutException blockedOnTheHeldCommit) {
+                    // Released below
+                }
+                hold.close();
+                // A read that never returns would hang the test, so it gets a bound
+                read = reading.get(10, TimeUnit.SECONDS);
             } finally {
                 awaitSettled(matching);
             }
         } finally {
             executor.shutdownNow();
         }
-        assertThat(readWhileHalfCommitted.events()).as("the read must miss the matching event, or the token isn't torn").isEmpty();
-        assertThat(readWhileHalfCommitted.consistencyToken().markers().get(COURSE_C1_KEY).version()).as("the read saw the marker of course c1 the matching event created").isEqualTo(1);
-        assertThat(readWhileHalfCommitted.consistencyToken().markers().get(STUDENT_S1_KEY).version()).as("the read saw no marker of student s1 yet").isZero();
+        // The marker of tag student:s1 lives on the events' shard and is read before the events wait for the commit, so it can be at either version
+        assertThat(read.events()).as("The read returns the matching event once its commit on the events shard is visible").extracting(CloudEvent::getId).containsExactly("matching");
+        assertThat(read.consistencyToken().markers().get(COURSE_C1_KEY).version()).as("The marker of tag course:c1 in the token is at the version the matching event created").isEqualTo(1);
+    }
 
-        Throwable thrown = catchThrowable(() -> eventStore.append(List.of(taggedEventWithId("second", ENROLLED, COURSE_C1, STUDENT_S1)), failIfEventsMatch(readWhileHalfCommitted.consistencyToken())));
+    @Test
+    void returns_a_matching_event_whose_commit_was_in_flight_on_the_events_shard_when_the_read_began() throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        DcbEventStream read;
+        try {
+            Future<?> matching = null;
+            try (Hold hold = cluster.holdCommitsOnSecondShard()) {
+                matching = executor.submit(() -> eventStore.append(List.of(taggedEventWithId("matching", ENROLLED, COURSE_C1))));
+                awaitMarkerOnTheFirstShard(COURSE_C1_KEY);
+                Future<DcbEventStream> reading = executor.submit(() -> eventStore.read(ENROLLMENTS_IN_C1));
+                // Gives the read a fair chance to return or to block on the held commit
+                try {
+                    reading.get(2, TimeUnit.SECONDS);
+                } catch (TimeoutException blockedOnTheHeldCommit) {
+                    // Released below
+                }
+                hold.close();
+                // A read that never returns would hang the test, so it gets a bound
+                read = reading.get(10, TimeUnit.SECONDS);
+            } finally {
+                awaitSettled(matching);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThat(read.events()).as("The read returns the matching event once its commit on the events shard is visible").extracting(CloudEvent::getId).containsExactly("matching");
+        assertThat(read.consistencyToken().markers().get(COURSE_C1_KEY).version()).as("The marker of tag course:c1 in the token is at the version the matching event created").isEqualTo(1);
+    }
 
-        assertThat(thrown)
-                .as("The read saw the marker of course c1 after the matching event and the marker of student s1 before it, and missed the event. "
-                        + "Only the marker of student s1 moved, and the store finds the event above it")
-                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
-        assertThat(eventStore.read(ENROLLMENTS_OF_S1_IN_C1).events()).extracting(CloudEvent::getId).containsExactly("matching");
+    @Test
+    void returns_a_whole_store_read_event_whose_commit_was_in_flight_on_the_events_shard_when_the_read_began() throws Exception {
+        DcbConsistencyToken emptyStoreToken = eventStore.read(DcbCriteria.all()).consistencyToken();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        DcbEventStream read;
+        try {
+            Future<?> matching = null;
+            try (Hold hold = cluster.holdCommitsOnSecondShard()) {
+                matching = executor.submit(() -> eventStore.append(List.of(taggedEventWithId("matching", ENROLLED, COURSE_C1)), failIfEventsMatch(emptyStoreToken)));
+                awaitMarkerOnTheFirstShard(DcbMarkerVersionsSupport.MATCH_ALL_MARKER_KEY);
+                Future<DcbEventStream> reading = executor.submit(() -> eventStore.read(DcbCriteria.all()));
+                // Gives the read a fair chance to return or to block on the held commit
+                try {
+                    reading.get(2, TimeUnit.SECONDS);
+                } catch (TimeoutException blockedOnTheHeldCommit) {
+                    // Released below
+                }
+                hold.close();
+                // A read that never returns would hang the test, so it gets a bound
+                read = reading.get(10, TimeUnit.SECONDS);
+            } finally {
+                awaitSettled(matching);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThat(read.events()).as("The read returns the event of the whole-store lock append once its commit on the events shard is visible").extracting(CloudEvent::getId).containsExactly("matching");
+        assertThat(read.consistencyToken().markers().get(DcbMarkerVersionsSupport.MATCH_ALL_MARKER_KEY).version()).as("The match-all marker in the token is at the version the whole-store lock append created").isEqualTo(1);
     }
 
     @Test

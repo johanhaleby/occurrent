@@ -408,6 +408,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
+        if (deployment == Deployment.MONGOS && ClientSessionHolder.get() == null) {
+            // Causally consistent so the events read waits on a commit still prepared on their shard that the markers read already shows
+            try (ClientSession session = mongoClient.startSession(ClientSessionOptions.builder().causallyConsistent(true).build())) {
+                return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(session, criteria), () -> currentPosition(session), query -> eventCollection.find(session, query));
+            }
+        }
         return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(null, criteria), this::currentPosition, this::findEvents);
     }
 
