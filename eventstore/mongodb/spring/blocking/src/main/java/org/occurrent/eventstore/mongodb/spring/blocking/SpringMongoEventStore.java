@@ -329,8 +329,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
     }
 
-    // The token, the head, the template and the query options are passed in so a catch-up read scope can read all of them
-    // through its own session
+    // The token, the head, the template and the query options are passed in so a catch-up read scope, or a read in a session
+    // the store opened, can read all of them through that session
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Supplier<DcbConsistencyToken> consistencyToken, LongSupplier currentPosition, MongoTemplate template, Function<Query, Query> readQueryOptions) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a

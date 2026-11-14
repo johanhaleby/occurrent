@@ -364,8 +364,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return readWithoutMarkerVersions(criteria, options, consistencyToken(criteria, mongoTemplate), currentPosition(), mongoTemplate, queryOptions);
     }
 
-    // The token, the head, the template and the query options are passed in so a catch-up read scope can read all of them
-    // through its own session
+    // The token, the head, the template and the query options are passed in so a catch-up read scope, or a read in a session
+    // the store opened, can read all of them through that session
     private Mono<DcbEventStream> readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Mono<DcbConsistencyToken> consistencyToken, Mono<Long> currentPosition, ReactiveMongoOperations template, Function<Query, Query> readQueryOptions) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads,
         // the events may include it while the token does not, which only makes a later conditional append
