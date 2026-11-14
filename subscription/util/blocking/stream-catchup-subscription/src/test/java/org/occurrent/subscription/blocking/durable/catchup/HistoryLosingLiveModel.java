@@ -167,6 +167,15 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         reportLoss(subscriptionId, open, lostFrom);
     }
 
+    // The run a pause stopped reports late that its position is gone, as a change stream does that fails after the pause
+    void losesTheHistoryOfTheRunPaused(String subscriptionId, Checkpoint lostFrom) {
+        Open open = paused.get(subscriptionId);
+        if (open == null) {
+            throw new IllegalStateException("Subscription " + subscriptionId + " is not paused");
+        }
+        reportLoss(subscriptionId, open, lostFrom);
+    }
+
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         subscribeCalls.add(subscriptionId);

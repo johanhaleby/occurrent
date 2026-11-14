@@ -351,12 +351,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      *                                until {@link AbstractCatchupSubscriptionModel#resumeSubscription(String, StartAt)}
      *                                resumes it at a position the live delegate still has the history from.
      */
+    // didNotGoLive is set once a replay its subscribe started ended before the live delegate got the subscription, at
+    // its handover too, and cleared once a replay hands it over, so a resume at a given position doesn't refuse it as
+    // running
     private record Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action,
                               CompletableFuture<Void> cancelledReplayReturned, AtomicReference<@Nullable Checkpoint> lostLiveStart,
-                              HistoryLost historyLost) {
+                              HistoryLost historyLost, AtomicBoolean didNotGoLive) {
 
         private Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            this(owner, filter, startAt, action, CompletableFuture.completedFuture(null), new AtomicReference<>(), new HistoryLost());
+            this(owner, filter, startAt, action, CompletableFuture.completedFuture(null), new AtomicReference<>(), new HistoryLost(), new AtomicBoolean());
         }
     }
 
@@ -815,12 +818,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * replays, also not at a position a catch-up stores. The live delegate handles such a position as one it cannot open
      * its live feed at. A subscription held before it reached the live delegate is the exception, described below.
      * <p>
-     * A subscription this model made that isn't paused, and that no replay a {@link #resumeSubscription(String)} started
-     * runs for, is refused with {@link SubscriptionAlreadyRunningException} before anything is stored and before a
-     * dynamic {@code startAt} is asked. That includes one whose {@code subscribe(..)} replay still runs and one the live
-     * delegate is still opening. This model decides it from what it knows itself, since a live delegate can run a
-     * subscription before it reports it as running. In 0.34.0 the live delegate was asked to resume it and threw its own
-     * exception.
+     * A subscription this model made that runs is refused with {@link SubscriptionAlreadyRunningException} before
+     * anything is stored and before a dynamic {@code startAt} is asked. It runs when it isn't paused, the replay its
+     * {@code subscribe(..)} started didn't end before the live delegate got it, and no replay that
+     * {@link #resumeSubscription(String)} started runs for it or is about to start to take over a live start the live
+     * delegate lost. That includes one whose {@code subscribe(..)} replay still runs and one the live delegate is still
+     * opening. This model decides it from what it knows itself, since a live delegate can run a subscription before it
+     * reports it as running. In 0.34.0 the live delegate was asked to resume it and threw its own exception. A
+     * subscription paused while its {@code subscribe(..)} replay runs isn't refused, and the live delegate, which doesn't
+     * hold it yet, throws its own exception, as in 0.34.0.
      * <p>
      * A replay that {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
      * and ends once the live delegate has resumed the subscription, so the position given here wins over it. With
@@ -899,28 +905,29 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-        return resumeSubscription(subscriptionId, startAt, List.of(this), () -> isRunning(subscriptionId) && !isPaused(subscriptionId), () -> isPaused(subscriptionId));
+        return resumeSubscription(subscriptionId, startAt, List.of(this), () -> isRunning(subscriptionId), () -> isPaused(subscriptionId));
     }
 
     /**
      * Resumes {@code subscriptionId} at {@code startAt} as {@link #resumeSubscription(String, StartAt)} describes, ending
      * a replay in the way on any of {@code models}, which are this model or every child of the dispatcher this model is
-     * a child of. They share the claim, the live delegate and what runs a resume at a given position. {@code runs} tells
-     * whether the subscription reads as running and not paused on the model the caller called, and {@code paused}
-     * whether it reads as paused there.
+     * a child of. They share the claim, the live delegate and what runs a resume at a given position. {@code running}
+     * and {@code paused} tell whether the subscription reads as running and as paused on the model the caller called.
      */
-    Subscription resumeSubscription(String subscriptionId, StartAt startAt, List<AbstractCatchupSubscriptionModel> models, BooleanSupplier runs, BooleanSupplier paused) {
+    Subscription resumeSubscription(String subscriptionId, StartAt startAt, List<AbstractCatchupSubscriptionModel> models, BooleanSupplier running, BooleanSupplier paused) {
         SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
         RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(liveDelegate)
                 .orElseThrow(() -> new UnsupportedOperationException(liveDelegate.getClass().getSimpleName() + " is not repositionable"));
         try (Claim ignored = claim(subscriptionId)) {
+            boolean readsAsPaused = paused.getAsBoolean();
             // Decided here and not by the live delegate, which can run the subscription before it reports it as running,
             // as one that opens after its subscribe returned does
-            if (subscribed.containsKey(subscriptionId) && !paused.getAsBoolean() && !isReplayingToResume(subscriptionId)) {
+            Subscribed known = subscribed.get(subscriptionId);
+            if (known != null && !known.didNotGoLive().get() && !readsAsPaused && !isReplayingToResume(subscriptionId)) {
                 throw new SubscriptionAlreadyRunningException(subscriptionId);
             }
             // Only one that runs, so an unknown or paused one reads as it did, also when this fails
-            boolean marked = runs.getAsBoolean() && repositioning.add(subscriptionId);
+            boolean marked = !readsAsPaused && running.getAsBoolean() && repositioning.add(subscriptionId);
             try {
                 List<ReplayInTheWay> inTheWay = new ArrayList<>();
                 try {
@@ -1374,14 +1381,23 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (currentAttempt.remove(subscriptionId, attempt)) {
                 runningCatchupSubscriptions.remove(subscriptionId);
             }
+            wentLive(subscriptionId);
             live.complete(resumed);
             return attempt.replay.handle;
         }
         Subscription subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAtToUse, liveConsumer);
         attempt.wentLive = true;
+        wentLive(subscriptionId);
         live.complete(subscription);
         applyPendingPauseIfAny(subscriptionId);
         return attempt.replay.handle;
+    }
+
+    private void wentLive(String subscriptionId) {
+        Subscribed made = subscribed.get(subscriptionId);
+        if (made != null) {
+            made.didNotGoLive().set(false);
+        }
     }
 
     /**
@@ -1401,6 +1417,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     // Asked for the subscription the live delegate didn't get, so it goes with it. Still under the lock
                     // the pause was recorded under, so no later subscription for the id has asked for one yet.
                     pauseRequestedDuringCatchup.remove(subscriptionId);
+                    Subscribed made = subscribed.get(subscriptionId);
+                    if (made != null && !attempt.wentLive) {
+                        made.didNotGoLive().set(true);
+                    }
                 }
                 attempt.decidedFailure = new DecidedFailure(failure, runAgainAfter(subscriptionId, attempt, failure));
                 throw failure;
@@ -2986,7 +3006,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (made != null) {
                 // Before the cancel under way is removed, so one of them always has the replay. Kept in place, also when
                 // a cancel the live delegate's cancel made for the same id on this thread went through.
-                Subscribed kept = new Subscribed(made.owner(), made.filter(), made.startAt(), made.action(), current.replaysReturned, made.lostLiveStart(), made.historyLost());
+                Subscribed kept = new Subscribed(made.owner(), made.filter(), made.startAt(), made.action(), current.replaysReturned, made.lostLiveStart(), made.historyLost(), made.didNotGoLive());
                 if (subscribed.compute(subscriptionId, (id, now) -> now == null || now == made ? kept : now) == kept) {
                     current.kept = kept;
                 }
@@ -3770,6 +3790,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 currentAttempt.remove(subscriptionId, attempt);
                 runningCatchupSubscriptions.remove(subscriptionId);
                 pauseRequestedDuringCatchup.remove(subscriptionId);
+                Subscribed made = subscribed.get(subscriptionId);
+                if (made != null && !attempt.replay.resuming && !attempt.wentLive && !attempt.parked && !attempt.abandoned()) {
+                    made.didNotGoLive().set(true);
+                }
             }
             // Logged as well as reported, since a caller that never calls waitUntilStarted, such as the Spring Boot
             // starter by default for a subscription that replays history, would otherwise lose the subscription

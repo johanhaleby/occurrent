@@ -521,10 +521,11 @@ class StreamCatchupHistoryLossOwnershipTest {
         liveModel.beforeTheNextResumeAt(() -> {
             throw sneaky(liveFailure);
         });
+        catchup.pauseSubscription(ID);
         Throwable resumeAtFailure = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(TOKEN)));
 
         // When the live model loses the history from that live start
-        liveModel.losesTheHistoryOf(ID, new StringBasedCheckpoint("live-start-1"));
+        liveModel.losesTheHistoryOfTheRunPaused(ID, new StringBasedCheckpoint("live-start-1"));
 
         // Then the catch-up takes the loss over instead of pausing the subscription for good
         assertThat(resumeAtFailure).as("thrown by the resume at a checkpoint").isSameAs(liveFailure);
@@ -686,9 +687,10 @@ class StreamCatchupHistoryLossOwnershipTest {
         // Given a subscription whose old run reports the loss of its token inside a resume at a kept checkpoint, before the live model resumes
         create();
         catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action());
-        liveModel.beforeTheNextResumeAt(() -> liveModel.losesTheHistoryOf(ID, TOKEN));
+        liveModel.beforeTheNextResumeAt(() -> liveModel.losesTheHistoryOfTheRunPaused(ID, TOKEN));
 
-        // When the subscription is resumed at the kept checkpoint, paused and resumed
+        // When the subscription is paused, resumed at the kept checkpoint, paused and resumed
+        catchup.pauseSubscription(ID);
         Throwable repositioning = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN)));
         catchup.pauseSubscription(ID);
         Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID));
