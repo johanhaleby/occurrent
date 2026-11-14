@@ -631,7 +631,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
         model.set(catchup);
         AtomicBoolean replaced = new AtomicBoolean();
-        try (ErrorsLoggedByTheCatchup errors = new ErrorsLoggedByTheCatchup()) {
+        try (LoggedByTheCatchup errors = new LoggedByTheCatchup()) {
             // When
             Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
                 if (replaced.compareAndSet(false, true)) {
@@ -680,7 +680,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
         model.set(catchup);
         AtomicBoolean replaced = new AtomicBoolean();
-        try (WarningsLogged warnings = new WarningsLogged()) {
+        try (LoggedByTheCatchup logged = new LoggedByTheCatchup()) {
             Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
                 if (replaced.compareAndSet(false, true)) {
                     model.get().stop();
@@ -688,9 +688,11 @@ class ReactorStreamCatchupSubscriptionModelTest {
                 }
                 return Mono.empty();
             });
-            assertThat(replaced).as("the first replay was replaced").isTrue();
-            assertThat(reads.get()).as("reads, which a second replay made").isGreaterThan(1);
-            assertThat(warnings.messages()).as("warnings logged").anyMatch(message -> message.contains("ran a newer replay, which keeps running"));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                assertThat(replaced).as("the first replay was replaced").isTrue();
+                assertThat(reads.get()).as("reads, which a second replay made").isGreaterThan(1);
+                assertThat(logged.warnings()).as("warnings logged").anyMatch(message -> message.contains("ran a newer replay, which keeps running"));
+            });
 
             // When
             catchup.cancelSubscription("sub").block(Duration.ofSeconds(5));
@@ -730,7 +732,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
         model.set(catchup);
         AtomicBoolean replaced = new AtomicBoolean();
-        try (WarningsLogged warnings = new WarningsLogged()) {
+        try (LoggedByTheCatchup logged = new LoggedByTheCatchup()) {
             Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
                 if (replaced.compareAndSet(false, true)) {
                     model.get().stop();
@@ -742,9 +744,11 @@ class ReactorStreamCatchupSubscriptionModelTest {
                     .expectErrorSatisfies(throwable -> assertThat(throwable).isInstanceOf(CatchupCannotResumeException.class).hasMessage("The live start was lost."))
                     .verify(Duration.ofSeconds(5));
             Subscription resumed = catchup.resumeSubscription("sub");
-            assertThat(replaced).as("the second replay was replaced").isTrue();
-            assertThat(reads.get()).as("reads, which a third replay made").isGreaterThan(2);
-            assertThat(warnings.messages()).as("warnings logged").anyMatch(message -> message.contains("ran a newer replay, which keeps running"));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                assertThat(replaced).as("the second replay was replaced").isTrue();
+                assertThat(reads.get()).as("reads, which a third replay made").isGreaterThan(2);
+                assertThat(logged.warnings()).as("warnings logged").anyMatch(message -> message.contains("ran a newer replay, which keeps running"));
+            });
 
             // When
             catchup.cancelSubscription("sub").block(Duration.ofSeconds(5));
@@ -755,31 +759,6 @@ class ReactorStreamCatchupSubscriptionModelTest {
                     .verify(Duration.ofSeconds(5));
         } finally {
             catchup.shutdown();
-        }
-    }
-
-    // The warnings NamedCatchupSupport logs from when this is created until it is closed
-    private static final class WarningsLogged implements AutoCloseable {
-        private final Logger logger = (Logger) LoggerFactory.getLogger(NamedCatchupSupport.class);
-        private final ch.qos.logback.core.read.ListAppender<ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
-
-        WarningsLogged() {
-            appender.start();
-            logger.addAppender(appender);
-        }
-
-        List<String> messages() {
-            synchronized (appender) {
-                return appender.list.stream()
-                        .filter(event -> event.getLevel().equals(ch.qos.logback.classic.Level.WARN))
-                        .map(ILoggingEvent::getFormattedMessage)
-                        .toList();
-            }
-        }
-
-        @Override
-        public void close() {
-            logger.detachAppender(appender);
         }
     }
 

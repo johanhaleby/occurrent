@@ -384,7 +384,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
         ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
         Checkpoint lostLiveStart = new StringBasedCheckpoint("stored live start");
-        try (ErrorsLoggedByTheCatchup errors = new ErrorsLoggedByTheCatchup()) {
+        try (LoggedByTheCatchup errors = new LoggedByTheCatchup()) {
             Subscription subscription = catchup.subscribe(ID, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(2, lostLiveStart, 2, 3)),
                     cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
             subscription.waitUntilStarted().block(Duration.ofSeconds(5));

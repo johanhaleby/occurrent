@@ -80,7 +80,7 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
     private final LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
     private final CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
     private final AtomicInteger catchupsStarted = new AtomicInteger();
-    private final ErrorsLoggedByTheCatchup logged = new ErrorsLoggedByTheCatchup();
+    private final LoggedByTheCatchup logged = new LoggedByTheCatchup();
     private ReactorStreamCatchupSubscriptionModel catchup;
 
     @BeforeEach
