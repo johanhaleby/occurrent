@@ -42,6 +42,7 @@ import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
@@ -51,8 +52,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationContext;
 
 import java.lang.reflect.Method;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.BiConsumer;
@@ -98,7 +97,7 @@ class SnapshotAnnotationRegistrar {
         if (everyNEvents < 1) {
             throw new IllegalArgumentException("@Snapshot '%s' everyNEvents must be at least 1, but was %d.".formatted(id, everyNEvents));
         }
-        SnapshotStore<S> store = resolveSnapshotStore(annotation, method, id);
+        SnapshotStore<S> store = resolveSnapshotStore(annotation, method, HandlerScan.implementationClassOf(bean), id);
 
         if (descriptor instanceof DcbSnapshotView<?, ?> rawDcb) {
             processDcbSnapshot(id, annotation, synchronous, converter, (DcbSnapshotView<S, E>) rawDcb, store, everyNEvents);
@@ -226,7 +225,7 @@ class SnapshotAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <S> SnapshotStore<S> resolveSnapshotStore(org.occurrent.annotation.Snapshot annotation, Method factoryMethod, String id) {
+    private <S> SnapshotStore<S> resolveSnapshotStore(org.occurrent.annotation.Snapshot annotation, Method factoryMethod, Class<?> implementation, String id) {
         Class<?> storeType = annotation.store();
         String storeName = annotation.storeName();
         boolean typeSet = storeType != Void.class;
@@ -247,7 +246,7 @@ class SnapshotAnnotationRegistrar {
         }
         // The state type is reflected first, so a factory that declares none reports that (the actionable fix) rather
         // than a missing provider.
-        Class<S> stateType = (Class<S>) reflectSnapshotStateType(factoryMethod, id);
+        Class<S> stateType = (Class<S>) reflectSnapshotStateType(factoryMethod, implementation, id);
         // getIfAvailable() applies @Primary and @Fallback resolution and only throws when the container genuinely
         // cannot pick, so an ambiguous seam is reported with the annotation id rather than as a bare Spring failure.
         final DefaultSnapshotStoreProvider provider;
@@ -290,19 +289,10 @@ class SnapshotAnnotationRegistrar {
         }
     }
 
-    private static Class<?> reflectSnapshotStateType(Method factoryMethod, String id) {
-        Type returnType = factoryMethod.getGenericReturnType();
-        if (returnType instanceof ParameterizedType parameterizedType) {
-            Type[] arguments = parameterizedType.getActualTypeArguments();
-            if (arguments.length >= 1) {
-                Type stateArgument = arguments[0];
-                if (stateArgument instanceof Class<?> stateClass) {
-                    return stateClass;
-                }
-                if (stateArgument instanceof ParameterizedType stateParameterized && stateParameterized.getRawType() instanceof Class<?> rawState) {
-                    return rawState;
-                }
-            }
+    private static Class<?> reflectSnapshotStateType(Method factoryMethod, Class<?> implementation, String id) {
+        Class<?> stateType = HandlerScan.returnTypeArgument(factoryMethod, implementation, 0);
+        if (stateType != null) {
+            return stateType;
         }
         throw new IllegalArgumentException(("@Snapshot '%s' needs a snapshot store: either name one with store or storeName (a SnapshotStore bean), " +
                 "or declare the factory return type with a concrete state type (for example SnapshotView<MyState, MyEvent>) so the snapshot can use the store's zero-config default.").formatted(id));

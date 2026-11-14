@@ -19,18 +19,27 @@ package org.occurrent.springboot.blocking;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-
+import org.occurrent.springboot.common.internal.HandlerMethod;
+import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -51,6 +60,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * another file. What is left here is somebody putting an {@code ArrayList} or a {@code HashSet} back, which is a
  * smaller regression than a drain that clears.
  * <p>
+ * The one place the interleaving can be staged is the handler registry itself, because it needs no bean factory.
+ * {@code concurrent_registrations_of_one_handler_register_it_once} races its atomic add directly.
+ * <p>
  * The handoff assertion is a different shape. It reads a type rather than a style, and the type is the whole
  * argument: a handoff carrying only names cannot register a bean whose thread is still creating it, so it has to
  * drop it, and the bean is never scanned. Naming that here keeps the next reader from simplifying the record away.
@@ -59,13 +71,71 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LateRegistrationConcurrencyContractTest {
 
     @Test
-    void the_coordinators_registries_are_concurrent_sets() throws Exception {
+    void the_coordinators_id_and_scan_registries_are_concurrent_sets() throws Exception {
         OccurrentBlockingAnnotationBeanPostProcessor coordinator = new OccurrentBlockingAnnotationBeanPostProcessor();
-        for (String fieldName : new String[]{"registeredIds", "registeredHandlers", "alreadyBuiltToBeScanned"}) {
+        for (String fieldName : new String[]{"registeredIds", "alreadyBuiltToBeScanned"}) {
             assertThat(valueOf(coordinator, fieldName))
                     .describedAs(fieldName)
                     .isInstanceOf(Set.class)
                     .isInstanceOf(ConcurrentHashMap.KeySetView.class);
+        }
+    }
+
+    @Test
+    void the_handler_registry_keeps_its_registered_methods_in_a_concurrent_map() throws Exception {
+        Object registeredHandlers = valueOf(new OccurrentBlockingAnnotationBeanPostProcessor(), "registeredHandlers");
+
+        assertThat(valueOf(registeredHandlers, "registered")).isInstanceOf(ConcurrentMap.class);
+    }
+
+    // Of the threads that ask to register one handler at the same moment, only one may be told it registered it, since
+    // a second would register the same subscription id again. Every round is a fresh bean name and a barrier releases
+    // all threads together, so a check followed by an add finds the handler free for more than one of them.
+    @Test
+    void concurrent_registrations_of_one_handler_register_it_once() throws Exception {
+        RegisteredHandlers registeredHandlers = (RegisteredHandlers) valueOf(new OccurrentBlockingAnnotationBeanPostProcessor(), "registeredHandlers");
+        HandlerMethod[] sameHandler = {
+                new HandlerMethod(RegisteringHandler.class.getDeclaredMethod("on", String.class), RegisteringHandler.class),
+                new HandlerMethod(OverridingRegisteringHandler.class.getDeclaredMethod("on", String.class), OverridingRegisteringHandler.class)
+        };
+        int threads = 16;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            for (int round = 0; round < 500; round++) {
+                String beanName = "bean-" + round;
+                CyclicBarrier together = new CyclicBarrier(threads);
+                List<Future<Boolean>> registrations = new ArrayList<>();
+                for (int thread = 0; thread < threads; thread++) {
+                    HandlerMethod handler = sameHandler[thread % sameHandler.length];
+                    registrations.add(pool.submit(() -> {
+                        together.await();
+                        return registeredHandlers.markRegistered(beanName, handler);
+                    }));
+                }
+                int registered = 0;
+                for (Future<Boolean> registration : registrations) {
+                    registered += registration.get(30, TimeUnit.SECONDS) ? 1 : 0;
+                }
+
+                assertThat(registered).describedAs("threads told they registered the handler of %s", beanName).isEqualTo(1);
+                for (HandlerMethod handler : sameHandler) {
+                    assertThat(registeredHandlers.isRegistered(beanName, handler)).isTrue();
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    static class RegisteringHandler {
+        @SuppressWarnings("unused")
+        void on(String event) {
+        }
+    }
+
+    static class OverridingRegisteringHandler extends RegisteringHandler {
+        @Override
+        void on(String event) {
         }
     }
 

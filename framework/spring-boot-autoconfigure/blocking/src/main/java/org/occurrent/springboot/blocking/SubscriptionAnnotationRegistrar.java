@@ -30,11 +30,12 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.HandlerMethod;
+import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
-import org.springframework.aop.support.AopUtils;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
@@ -78,10 +79,10 @@ class SubscriptionAnnotationRegistrar {
     //
     // A JDK interface proxy (spring.aop.proxy-target-class=false) may not implement the handler method at all, when
     // the method was declared on the concrete class rather than an interface. A final handler method is never
-    // overridden by a CGLIB proxy either, but that is only a problem once a CGLIB proxy is actually somewhere in the
-    // chain: a final method on a bean nothing proxies runs directly, with no advice to lose. Both proxy cases leave
-    // no way to invoke the method through the proxy at all, so both are refused rather than silently invoked on the
-    // raw bean with no advice applied.
+    // overridden by a CGLIB proxy either, and neither is a package-private one a superclass in another package
+    // declares, but that is only a problem once a CGLIB proxy is actually somewhere in the chain. Such a method on a
+    // bean nothing proxies runs directly, with no advice to lose. Both proxy cases leave no way to invoke the method
+    // through the proxy at all, so both are refused rather than silently invoked on the raw bean with no advice applied.
     //
     // Checking bean itself for a CGLIB proxy is not enough: a JDK interface proxy forwards reflectively using the
     // interface's Method, so Java's own virtual dispatch resolves it against whatever bean wraps, a nested CGLIB
@@ -105,16 +106,39 @@ class SubscriptionAnnotationRegistrar {
         requireImplementationOf(method, bean);
         Method invocableMethod;
         try {
-            invocableMethod = AopUtils.selectInvocableMethod(method, bean.getClass());
+            invocableMethod = HandlerScan.invocableMethodOn(bean, method);
         } catch (IllegalStateException e) {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The proxy does not implement it. Either the method is private, so a CGLIB proxy cannot override it, or the bean is a JDK interface proxy implementing none of the interfaces the method is declared on. Make the method non-private, expose it on an interface, or set spring.aop.proxy-target-class=true so a CGLIB proxy is used instead.");
         }
-        if (Modifier.isFinal(method.getModifiers()) && SubscriptionAnnotations.anyProxyLayerIsCglib(bean)) {
+        refuseWhatACglibProxyCannotOverride(method, bean);
+        return new HandlerInvocation(handlerTarget, method, invocableMethod, bean.getClass());
+    }
+
+    // A CGLIB proxy cannot override a final method, or a package-private one declared outside the package of the class
+    // it subclasses, so invoking either on the proxy runs the method's own body on the proxy instance with no advice.
+    // For a package-private method that a public or protected method of another package shadows without overriding
+    // it, the proxy overrides the shadowing method, and invoking the package-private one runs that method's body
+    private static void refuseWhatACglibProxyCannotOverride(Method method, Object bean) {
+        if (!SubscriptionAnnotations.anyProxyLayerIsCglib(bean)) {
+            return;
+        }
+        if (Modifier.isFinal(method.getModifiers())) {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The method is final, so a CGLIB proxy in the chain cannot override it. Remove final from the method.");
         }
-        return new HandlerInvocation(handlerTarget, method, invocableMethod, bean.getClass());
+        Class<?> implementation = HandlerScan.implementationClassOf(bean);
+        if (HandlerScan.isPackagePrivateOutsidePackageOf(method, implementation)) {
+            throw new SubscriptionHandlerNotInvocableException(method,
+                    "The method is package-private and declared in package %s, so a CGLIB proxy in the chain, which subclasses %s in package %s, cannot override it. Make the method public or protected.".formatted(
+                            method.getDeclaringClass().getPackageName(), implementation.getName(), implementation.getPackageName()));
+        }
+        Method runInstead = HandlerScan.methodACglibProxyRunsInsteadOf(method, implementation);
+        if (runInstead != null) {
+            throw new SubscriptionHandlerNotInvocableException(method,
+                    "The method is package-private and %s declares %s of the same name and parameter types without overriding it, so a CGLIB proxy in the chain, which subclasses %s, runs that method instead. Rename one of the two methods.".formatted(
+                            runInstead.getDeclaringClass().getName(), Modifier.isPublic(runInstead.getModifiers()) ? "a public method" : "a protected method", implementation.getName()));
+        }
     }
 
     private static void requireImplementationOf(Method method, Object bean) {
@@ -156,19 +180,17 @@ class SubscriptionAnnotationRegistrar {
             requireImplementationOf(declaredMethod, target);
             Method method;
             try {
-                method = AopUtils.selectInvocableMethod(declaredMethod, targetClass);
+                method = HandlerScan.invocableMethodOn(target, declaredMethod);
             } catch (IllegalStateException e) {
                 throw new SubscriptionHandlerNotInvocableException(declaredMethod,
                         "The proxy does not implement it. Either the method is private, so a CGLIB proxy cannot override it, or the bean is a JDK interface proxy implementing none of the interfaces the method is declared on. Make the method non-private, expose it on an interface, or set spring.aop.proxy-target-class=true so a CGLIB proxy is used instead.");
             }
-            // The same guard registration ran, against the object actually in hand. A CGLIB proxy added after
-            // registration cannot override a final method, so selecting one succeeds while invoking it reaches the
-            // inherited method directly and every layer's advice is skipped. Refusing here is the only place left
-            // to catch that, since the proxy did not exist when the guards first ran.
-            if (Modifier.isFinal(declaredMethod.getModifiers()) && SubscriptionAnnotations.anyProxyLayerIsCglib(target)) {
-                throw new SubscriptionHandlerNotInvocableException(declaredMethod,
-                        "The method is final, so a CGLIB proxy in the chain cannot override it. Remove final from the method.");
-            }
+            // The same checks registration ran, against the object actually in hand. A CGLIB proxy added after
+            // registration cannot override a final method, or a package-private one from another package, so
+            // selecting one succeeds while invoking it reaches the inherited method directly and every layer's
+            // advice is skipped. Refusing here is the only place left to catch that, since the proxy did not exist
+            // when the checks first ran.
+            refuseWhatACglibProxyCannotOverride(declaredMethod, target);
             resolution = new Resolution(targetClass, method);
             return method;
         }
@@ -190,9 +212,9 @@ class SubscriptionAnnotationRegistrar {
     // A replay on its own thread can still deliver before creation finishes, which is the race the coordinator and
     // ADR 127 both describe. It also matches what WAIT_UNTIL_STARTED means, which is finishing before the
     // application is up, and the application is already up by the time a lazily built bean is asked for.
-    void registerSubscriptions(Object bean, List<Method> methods, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
-                               Predicate<Method> reserveHandler, Consumer<String> claimId,
-                               Consumer<Method> releaseHandler, Consumer<String> releaseId) {
+    void registerSubscriptions(Object bean, List<HandlerMethod> handlers, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
+                               Predicate<HandlerMethod> reserveHandler, Consumer<String> claimId,
+                               Consumer<HandlerMethod> releaseHandler, Consumer<String> releaseId) {
         // Tracked apart, because a call can hold a handler reservation without holding the id. claimId throws when
         // the id belongs to another registration, and at that moment this call has reserved the handler and
         // acquired nothing else, so releasing the id here would hand away what that other registration owns and
@@ -201,10 +223,10 @@ class SubscriptionAnnotationRegistrar {
         List<PendingRegistration> claimedIds = new ArrayList<>();
         List<ResolvedRegistration> resolved = new ArrayList<>();
         try {
-            claimAndResolve(bean, methods, handlerTarget, mayBlockForReplay, reserveHandler, claimId, resolved, reservedHandlers, claimedIds);
+            claimAndResolve(bean, handlers, handlerTarget, mayBlockForReplay, reserveHandler, claimId, resolved, reservedHandlers, claimedIds);
         } catch (RuntimeException | Error e) {
             claimedIds.forEach(h -> releaseId.accept(h.id()));
-            reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
+            reservedHandlers.forEach(h -> releaseHandler.accept(h.handler()));
             throw e;
         }
         for (ResolvedRegistration registration : resolved) {
@@ -212,7 +234,7 @@ class SubscriptionAnnotationRegistrar {
                 registration.subscribe().run();
             } catch (RuntimeException | Error e) {
                 claimedIds.forEach(h -> releaseId.accept(h.id()));
-                reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
+                reservedHandlers.forEach(h -> releaseHandler.accept(h.handler()));
                 throw e;
             }
             claimedIds.remove(registration.claim());
@@ -227,10 +249,11 @@ class SubscriptionAnnotationRegistrar {
     // stays outside this is a failure from subscribe itself, a store refusing for example. Undoing that would mean
     // cancelling the subscriptions already started, and cancelling one deletes its stored checkpoint, so a
     // subscription that had resumed from an existing checkpoint would lose it.
-    private void claimAndResolve(Object bean, List<Method> methods, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
-                                 Predicate<Method> reserveHandler, Consumer<String> claimId, List<ResolvedRegistration> resolved,
+    private void claimAndResolve(Object bean, List<HandlerMethod> handlers, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
+                                 Predicate<HandlerMethod> reserveHandler, Consumer<String> claimId, List<ResolvedRegistration> resolved,
                                  List<PendingRegistration> reservedHandlers, List<PendingRegistration> claimedIds) {
-        for (Method method : methods) {
+        for (HandlerMethod handler : handlers) {
+            Method method = handler.method();
             StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
             DcbSubscription dcbSubscription = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
@@ -242,7 +265,7 @@ class SubscriptionAnnotationRegistrar {
             // Reserving is a single atomic add rather than a check followed by an add, so two threads building
             // the same prototype cannot both find the handler free. The one that loses the reservation skips it
             // instead of going on to the id claim and failing its bean's creation as a duplicate.
-            if (annotationCount == 0 || !reserveHandler.test(method)) {
+            if (annotationCount == 0 || !reserveHandler.test(handler)) {
                 continue;
             }
             // The id comes from the annotation this loop actually read, never from one a caller resolved earlier
@@ -252,7 +275,7 @@ class SubscriptionAnnotationRegistrar {
                     : subscription != null ? subscription.id()
                     : dcbSubscription != null ? dcbSubscription.id()
                     : synchronousSubscription.id();
-            PendingRegistration reserved = new PendingRegistration(method, id);
+            PendingRegistration reserved = new PendingRegistration(handler, id);
             reservedHandlers.add(reserved);
             claimId.accept(id);
             claimedIds.add(reserved);
@@ -270,7 +293,7 @@ class SubscriptionAnnotationRegistrar {
         }
     }
 
-    private record PendingRegistration(Method method, String id) {
+    private record PendingRegistration(HandlerMethod handler, String id) {
     }
 
     private record ResolvedRegistration(PendingRegistration claim, Runnable subscribe) {
@@ -361,7 +384,7 @@ class SubscriptionAnnotationRegistrar {
         final List<SubscriptionAnnotations.HandlerParameter> parameters;
         if (method.getParameterCount() >= 1) {
             CloudEventConverter<E> cloudEventConverter = applicationContext.getBean(CloudEventConverter.class);
-            parameters = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations::isDcbMetadataParameter, false);
+            parameters = HandlerScan.analyzeParameters(method, HandlerScan.implementationClassOf(bean), SubscriptionAnnotations::isDcbMetadataParameter, false);
             Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameters);
             List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, annotation.eventTypes(), "@DcbSubscription");
             List<String> cloudEventTypes = domainEventTypesToSubscribeTo.stream().map(cloudEventConverter::getCloudEventType).toList();

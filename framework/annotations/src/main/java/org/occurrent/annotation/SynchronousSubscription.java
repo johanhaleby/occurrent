@@ -71,6 +71,11 @@ import java.lang.annotation.*;
  * As with {@link Subscription}, the handler may declare a {@link org.occurrent.cloudevents.EventMetadata}
  * parameter in addition to the event parameter to receive the metadata of the delivered event.
  * </p>
+ * <p>
+ * The Spring Boot starter finds this annotation on a method the bean's class declares, inherits from a superclass, or
+ * gets as an interface default method. An override without an annotation of its own runs under the overridden
+ * method's annotation, and an override that repeats the annotation uses its own.
+ * </p>
  */
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
