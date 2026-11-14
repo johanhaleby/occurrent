@@ -111,9 +111,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * read returns neither, the subscription can't start at the present. {@code subscribe(..)} still returns without
      * waiting for MongoDB, and {@code waitUntilStarted(..)} and {@code start(true)} throw an
      * {@code UnsupportedStartAtException}. A resume at {@link StartAt#now()} records its own position the same way, when
-     * its change stream opens. A {@code StartAt.dynamic(..)} start does that read at the
-     * subscribe too, and is refused only when its function resolves to the present as the change stream opens. A
-     * restart from the present after the history was lost that gets neither holds the subscription paused, and a
+     * its change stream opens. A {@code StartAt.dynamic(..)} start does that read at the subscribe too, and when the read
+     * returns neither, the start is refused the same way if its function resolves to the present as the change stream
+     * opens. A restart from the present after the history was lost that gets neither holds the subscription paused, and a
      * resume asks again. A subscription made while this model is stopped opens at the position recorded at the
      * subscribe, so earlier events count from the subscribe.
      */

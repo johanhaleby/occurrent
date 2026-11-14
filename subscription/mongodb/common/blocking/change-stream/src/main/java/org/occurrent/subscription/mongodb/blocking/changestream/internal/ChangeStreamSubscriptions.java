@@ -410,13 +410,14 @@ public final class ChangeStreamSubscriptions {
     }
 
     // False when the run stops here, closed or refused. A dynamic position goes on without the present, since it can
-    // resolve to a checkpoint, and the opening asks again when it resolves to the present
+    // resolve to a checkpoint, and is refused as its change stream opens if it resolves to the present then
     private boolean awaitedThePresent(String subscriptionId, InternalSubscription internalSubscription) {
         try {
             return internalSubscription.presentAtSubscribe.awaitedBy(internalSubscription);
         } catch (NoPositionAtThePresent e) {
             StartAt position = internalSubscription.currentStartAt.get();
             if (position.isDynamic()) {
+                internalSubscription.presentAtSubscribe.gaveNoPosition(e);
                 return true;
             }
             refuseStart(subscriptionId, internalSubscription, e.refusalOf(subscriptionId, position));
@@ -443,7 +444,7 @@ public final class ChangeStreamSubscriptions {
         try {
             ChangeStreamIterable<Document> changeStreamDocuments = configured(model.watch(internalSubscription.pipeline));
             SubscriptionModelContext subscriptionModelContext = subscriptionModelContext();
-            StartAt openingPosition = MongoCommons.resolveOpeningPosition(currentStartAt, subscriptionModelContext, this::currentPosition);
+            StartAt openingPosition = MongoCommons.resolveOpeningPosition(currentStartAt, subscriptionModelContext, () -> presentToOpenAt(internalSubscription));
             openedAt = new OpenedAt(openingPosition, currentStartAt.get());
             ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, openingPosition, subscriptionModelContext);
             cursor = changeStreamDocumentsAtPosition.cursor();
@@ -800,6 +801,17 @@ public final class ChangeStreamSubscriptions {
     // has not lost anything. Runs on the executor thread without the model's monitor.
     private void forget(String subscriptionId, InternalSubscription internalSubscription) {
         runningSubscriptions.remove(subscriptionId, internalSubscription);
+    }
+
+    // The position the run's change stream opens at when its position resolves to the present. Refused for a dynamic
+    // position the subscription was made with whose read at the subscribe gave none, as a start at the present is, since
+    // a later present skips what was written since the subscribe
+    private Checkpoint presentToOpenAt(InternalSubscription run) {
+        NoPositionAtThePresent noPosition = run.presentAtSubscribe.noPositionAt(run.currentStartAt.get());
+        if (noPosition != null) {
+            throw noPosition;
+        }
+        return currentPosition();
     }
 
     // The position a change stream at the present opens at, from the operation time of a ping reply, or from one read of
@@ -1199,6 +1211,8 @@ public final class ChangeStreamSubscriptions {
         private volatile boolean cancelled;
         // Set by the first run to get here, whether it waits for the answer or not
         private volatile boolean reached;
+        // Set when a run of a dynamic position found that the read gave no position
+        private volatile @Nullable NoPositionAtThePresent noPosition;
 
         PresentAtSubscribe(StartAt subscribedAt, BiConsumer<PresentAtSubscribe, BooleanSupplier> question) {
             this.subscribedAt = subscribedAt;
@@ -1212,6 +1226,15 @@ public final class ChangeStreamSubscriptions {
 
         void answered(Checkpoint position) {
             answer = position;
+        }
+
+        void gaveNoPosition(NoPositionAtThePresent refusal) {
+            noPosition = refusal;
+        }
+
+        // Only for the position the subscription was made with, which the answer is for
+        @Nullable NoPositionAtThePresent noPositionAt(StartAt position) {
+            return position == subscribedAt ? noPosition : null;
         }
 
         // position set to open at the answer when it is the position the subscription was made with and opens at the

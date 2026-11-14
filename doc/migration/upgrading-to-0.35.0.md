@@ -2335,7 +2335,8 @@ In 0.34.0 such a subscription opened at the present.
 
 Code that subscribes one of these models at `StartAt.now()`, at the model default, or at a `StartAt.dynamic(..)` that
 resolves to one of those, on a MongoDB server that sends no operation time. A `StartAt.dynamic(..)` start does the read
-at the subscribe whatever it resolves to, and is refused only when it resolves to the present. A replica set and a
+at the subscribe whatever it resolves to, and when that read gives neither, it is refused if it resolves to the present
+as its change stream opens. A replica set and a
 sharded cluster aren't affected.
 
 ### What to do
