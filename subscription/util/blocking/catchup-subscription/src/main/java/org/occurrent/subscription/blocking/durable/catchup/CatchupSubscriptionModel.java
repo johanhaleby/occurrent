@@ -478,33 +478,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     }
 
     /**
-     * Forwards to whichever {@link RepositionableSubscriptions} the wrapped model resolves to. Unlike
-     * {@link #resumeSubscription(String)}, it doesn't start this model first or run a parked replay, and it never
-     * replays, also not at a position a catch-up stores. The wrapped model handles such a position as one it cannot
-     * open its live feed at. A replay that {@link #resumeSubscription(String)} started for the subscription, running
-     * or waiting to run again, is held first and ends once the wrapped model has resumed the subscription, so the
-     * position given here wins over it, and a later {@link #resumeSubscription(String)} can replay again. When the
-     * wrapped model throws, a replay this held runs again as it was, and this throws what the wrapped model threw. When
-     * the replay is in the subscription's action or reads history, this holds the replay and waits up to ten seconds for
-     * it to return before the wrapped model resumes the subscription, so the replay's action doesn't run alongside the
-     * action of the resumed subscription. After a {@link #cancelSubscription(String)} that threw, it
-     * waits the same way for the replay that cancel ended, which nothing runs again, also when a {@link #stop()} came
-     * before or after the cancel. When the replay doesn't return in time, this logs at {@code ERROR}, runs a replay it
-     * held again as it was and throws {@link IllegalStateException}, with what running it again threw added as
-     * suppressed. A replay this held stays held instead of running again when this model was stopped meanwhile or the
-     * {@link CatchupListener} throws as it starts, and the {@link IllegalStateException} says so. It runs again on a
-     * resume or a start that resumes. Called from inside the action, on the replay's own thread, this throws
-     * {@link IllegalStateException} at once and changes nothing. An action that hands the call to another thread and
-     * waits for it fails once the ten seconds have passed.
-     * <p>
-     * It runs alone. A pause, resume, cancel or subscribe for the
-     * same id waits until it returns, for up to ten seconds, and then acts on what it left. While it runs, a subscription
-     * that read as running when it began reads as running and not paused, also while it waits for the action, so a
-     * caller that pauses what runs calls {@link #pauseSubscription(String)}, which pauses it once this has returned. One
-     * that read as paused reads as paused until this returns.
-     * <p>
-     * Once the wrapped model returns from the resume, this model is started again if a start whose live delegate threw
-     * stopped it, so a subscription made afterwards replays at once. After {@link #stop()} it stays stopped.
+     * Resumes the subscription the wrapped model holds paused at {@code startAt}, as
+     * {@link StreamCatchupSubscriptionModel#resumeSubscription(String, StartAt)} describes, with the wrapped model as the
+     * live delegate. The catch-up of this model that made the subscription decides what is stored and subscribes in
+     * place of a replay held because the wrapped model lost its live start, and a replay in the way on any catch-up of
+     * this model is held or waited for as that description says.
      * <p>
      * {@link RepositionableSubscriptions#findIn} finds this model only when the wrapped model is repositionable.
      *
