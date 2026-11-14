@@ -759,10 +759,7 @@ stacks, so it isn't affected on a store that returns the criteria it was given.
   read of `all()` with `afterVersions`. So when `all()` becomes a tag, use the three-argument constructor on that read,
   drop the versions from that append's result, and throw on that read yourself. In `append`, rewrite the criteria the
   same way, and give the inner store a condition with
-  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`. When the check only compares markers, as
-  [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says it does in some transactions through a
-  mongos, the added tag then counts like any other tag, so appending any event with that tag makes the check refuse,
-  whether or not the event matches.
+  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`.
 - **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
   condition throws `IllegalArgumentException` on every store. `failIfEventsMatch(criteria, token)` compiles with a
   deprecation warning, and `wholeStoreLock(token)` and `new DcbAppendCondition(criteria, Optional.of(token))` compile
@@ -815,26 +812,17 @@ doesn't match a condition's criteria no longer fails it, so you'll see fewer `Dc
 on a busy tag. A condition can still fail with no matching event, for example after a marker was deleted, when a
 0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had written.
 
-Through a mongos, an event that doesn't match the criteria doesn't fail it either when the append's transaction runs at
-read concern `snapshot` and write concern `majority`. A transaction through a mongos reads every shard at one point in
-time only at that pair, and the store asks for it when it starts a conditional append's transaction there. The check
-reads the options the transaction actually runs with, and when they aren't that pair, any event that moves a marker of
-the criteria still fails the condition. Some examples:
+Through a mongos, an event that doesn't match the criteria doesn't fail it either. A transaction through a mongos can
+read each shard at another point in time, so the store doesn't query the events in the append's transaction there. It
+starts a read-only transaction of its own on a second session, at read concern `snapshot` and write concern `majority`,
+reads the markers of the criteria again in it, and queries the events in it. When that snapshot shows a marker under
+another epoch or at an earlier version than the append's transaction read, or when the store can't run that
+transaction, the condition fails with no matching event.
 
-- The append joins a transaction of your own that runs at another read concern or write concern.
-- A read with `confirmsAppendBeforeSaving()` on a Spring or reactor store, in a Spring transaction that holds no MongoDB
-  session for the store's database factory, such as a JDBC one, starts a MongoDB transaction at your client's default
-  options. An append later in that Spring transaction joins it.
-- The transaction manager isn't Spring Data's `MongoTransactionManager` or `ReactiveMongoTransactionManager`, or it
-  isn't on the store's database factory.
-
-The Spring and reactor stores get that pair by starting their own transaction again before it sends anything, with the
-options the transaction manager and the `MongoClient` gave it, at read concern `snapshot` and write concern `majority`.
-A `wtimeout`, a journal flag and a `maxCommitTime` set there still apply. The native `MongoEventStore` keeps them from
-its own `TransactionOptions`, or from the `MongoClient` when those have no write concern.
-
-On all three stores a conditional append through a mongos commits with `w` set to `majority`. A stronger `w`, such as
-`3` or a custom write concern name, applies only at `majority` there.
+The check works the same in the store's own transaction, in one that `SpringTransactionExecutor` or
+`SpringReactiveTransactionExecutor` opened and in a transaction of your own. The store doesn't change the read concern
+or the write concern of any of them. The commit of its own read-only transaction waits for majority for at most
+`markerVersionsCommitTimeout`, 5 seconds by default.
 
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
 Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with
@@ -927,10 +915,7 @@ refuse. Such an item also no longer adds its type markers to what a conditional 
 Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
 `SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
 `DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
-example. When the check only compares markers, as it does in some transactions through a mongos, the MongoDB stores can
-still refuse an append the in-memory store accepts, for example after an event of another type that has one of the
-criteria's tags. [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says when that is. With a token, an item without
-tags still reads its type markers. The change is the first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
+example. With a token, an item without tags still reads its type markers. The change is the first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
 [ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
 describes it.
 

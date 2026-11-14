@@ -12,7 +12,7 @@ type, [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read
 [ADR 31](0031-capture-dcb-consistency-token-in-a-single-read.md) on what one read of the markers gives, and
 [ADR 74](0074-retry-only-where-the-transaction-is-owned.md) on an append in a caller's transaction.
 Builds on the marker versions of [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md).
-Amended by [ADR 175](0175-a-conditional-dcb-append-through-a-mongos-reads-one-point-in-time-and-checks-every-moved-tag-marker.md)
+Amended by [ADR 175](0175-a-conditional-dcb-append-through-a-mongos-queries-the-events-in-a-snapshot-of-its-own.md)
 on what step 3 does through a mongos.
 
 The second part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), splitting each type marker into

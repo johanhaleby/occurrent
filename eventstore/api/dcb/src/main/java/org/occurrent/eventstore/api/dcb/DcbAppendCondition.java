@@ -31,14 +31,12 @@ import static java.util.Objects.requireNonNull;
  * MongoDB stores, a tag-scoped or type-scoped append committed after a read with {@link DcbCriteria#all()} doesn't make
  * it fail (see {@link #wholeStoreLock(DcbConsistencyToken)}). A store may also make it fail when no matching event was
  * committed. The MongoDB stores can do that on a replica set, for example when a marker document was deleted after the
- * read or a 0.34 node appended after it. Through a mongos they do the same when the append's transaction runs at read
- * concern snapshot and write concern majority, which the store asks for when it starts the transaction. Through a mongos
- * in a transaction with other options, such as one of the caller's at the default read concern, they do that whenever a
- * marker of {@code criteria} moved after the read, for example for an event that shares a tag with {@code criteria} but
- * doesn't match it, or for another conditional append on the same criteria, whatever events it appended. The MongoDB
- * stores rely on a marker document being deleted only in a transaction that also finds no event with its tag or type,
- * at read concern snapshot on a sharded cluster, and not while a 0.34 node can still append, since 0.34 recreates a
- * deleted marker with no epoch and restarts its version at 1.
+ * read or a 0.34 node appended after it. Through a mongos they also do it when the read-only snapshot transaction they
+ * query the events in shows a marker of {@code criteria} under another epoch or at an earlier version than the append's
+ * transaction read, or when they can't run that transaction. The MongoDB stores rely on a marker document being deleted
+ * only in a transaction that also finds no event with its tag or type, at read concern snapshot on a sharded cluster,
+ * and not while a 0.34 node can still append, since 0.34 recreates a deleted marker with no epoch and restarts its
+ * version at 1.
  * <p>
  * A plain read through a mongos can miss a matching event while its token already holds that event's markers, when the
  * markers and the events are on different shards, and the append then doesn't fail. A read through a mongos with
