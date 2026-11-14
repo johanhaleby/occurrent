@@ -1,6 +1,7 @@
 package org.occurrent.subscription.api.blocking.internal;
 
 import org.occurrent.subscription.CatchupThenLiveOptions;
+import org.occurrent.subscription.api.blocking.internal.BlockingHandoverSpec.CatchUp;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandoverSpec.Offer;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandoverSpec.Trace;
 
@@ -79,7 +80,7 @@ final class BlockingHandoverRunner {
                         source.failCallback = failCallback;
                         AtomicReference<String> result = new AtomicReference<>();
                         Thread thread = Thread.ofPlatform().name("handover-replay").unstarted(() -> {
-                            result.set(runCatchUp(handover, source));
+                            result.set(runCatchUp(handover, source, notes));
                         });
                         catchUps.add(source);
                         replays.add(new Replay(source, thread, result));
@@ -96,6 +97,7 @@ final class BlockingHandoverRunner {
                 case CANCEL -> {
                     if (current != null) {
                         current.source().cancelled = true;
+                        current.source().cancelledBeforeItReturned |= replaying;
                     }
                 }
                 case STOP -> {
@@ -134,16 +136,21 @@ final class BlockingHandoverRunner {
         List<String> replayed = new ArrayList<>();
         finish(replays, helpers, handover, marker, notes, markerFindings, replayed, clock, catchUps);
         List<Offer> offers = helpers.stream().map(helper -> new Offer(helper.payload(), helper.call(), helper.answer().get(), failureFiredAfter(helper.offeredAt().get(), catchUps))).toList();
-        return new Trace(HISTORY, List.copyOf(delivered), offers, List.copyOf(markerFindings), List.copyOf(notes), replayed);
+        List<CatchUp> started = replays.stream().map(replay -> new CatchUp(String.valueOf(replay.result().get()), replay.source().cancelledBeforeItReturned)).toList();
+        return new Trace(HISTORY, List.copyOf(delivered), offers, List.copyOf(markerFindings), List.copyOf(notes), replayed, started);
     }
 
-    private static String runCatchUp(BlockingHandover<String, String> handover, ControllableSource source) {
+    /** A catch-up that throws is expected only when an injected failure fired in its own replay or drain */
+    private static String runCatchUp(BlockingHandover<String, String> handover, ControllableSource source, List<String> notes) {
         source.catchUpThread = Thread.currentThread();
         source.startedAt = source.clock.incrementAndGet();
         try {
             source.outcome = String.valueOf(handover.catchUp(source));
         } catch (Throwable t) {
             source.outcome = "threw " + t.getClass().getSimpleName();
+            if (source.failuresFiredAt.isEmpty()) {
+                notes.add("a catch-up threw although no failure was injected into it: " + t);
+            }
         } finally {
             source.endedAt = source.clock.incrementAndGet();
         }
@@ -236,11 +243,14 @@ final class BlockingHandoverRunner {
         ControllableSource clean = new ControllableSource(HISTORY, marker, clock);
         clean.openAllGates();
         catchUps.add(clean);
-        Thread later = Thread.ofPlatform().name("handover-later-catch-up").start(() -> runCatchUp(handover, clean));
+        Thread later = Thread.ofPlatform().name("handover-later-catch-up").start(() -> runCatchUp(handover, clean, notes));
         join(later, 5_000);
         if (later.isAlive()) {
             notes.add("a later catch-up never returned, so the replay turn was not released");
             later.interrupt();
+        }
+        if (!later.isAlive() && !"true".equals(clean.outcome) && !"false".equals(clean.outcome)) {
+            notes.add("the later catch-up did not return, it gave " + clean.outcome);
         }
         replayed.addAll(clean.yielded);
     }

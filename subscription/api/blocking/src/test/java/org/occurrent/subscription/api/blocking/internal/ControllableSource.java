@@ -26,6 +26,8 @@ final class ControllableSource implements BlockingHandover.Source<String> {
     /** What the replay yielded, so a pass that read nothing counts for nothing */
     final List<String> yielded = new CopyOnWriteArrayList<>();
     volatile boolean cancelled;
+    /** Set when the script cancelled this source while its catch-up had not returned */
+    volatile boolean cancelledBeforeItReturned;
     volatile boolean failCallback;
     volatile boolean markedWhileCancelled;
     volatile boolean markerWritten;

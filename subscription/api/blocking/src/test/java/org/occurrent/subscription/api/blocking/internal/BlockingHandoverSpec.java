@@ -19,7 +19,11 @@ final class BlockingHandoverSpec {
     record Offer(String payload, String call, String answer, boolean failureFiredAfterInItsCatchUp) {
     }
 
-    record Trace(List<String> history, List<String> delivered, List<Offer> offers, List<String> markerFindings, List<String> notes, List<String> replayed) {
+    /** What a catch-up the script started returned, and whether the script cancelled it before it returned */
+    record CatchUp(String result, boolean cancelledBeforeItReturned) {
+    }
+
+    record Trace(List<String> history, List<String> delivered, List<Offer> offers, List<String> markerFindings, List<String> notes, List<String> replayed, List<CatchUp> catchUps) {
     }
 
     private BlockingHandoverSpec() {
@@ -28,6 +32,14 @@ final class BlockingHandoverSpec {
     /** The marker is written only for a catch-up that nothing stopped or cancelled before the marker step */
     static List<String> markerViolations(Trace trace) {
         return trace.markerFindings();
+    }
+
+    /** A catch-up that was cancelled or stopped before it returned has not caught up, so it must not return true */
+    static List<String> stoppedCatchUpViolations(Trace trace) {
+        return trace.catchUps().stream()
+                .filter(catchUp -> catchUp.cancelledBeforeItReturned() && catchUp.result().equals("true"))
+                .map(catchUp -> "a catch-up that was cancelled before it returned returned true")
+                .toList();
     }
 
     /**
@@ -54,10 +66,12 @@ final class BlockingHandoverSpec {
         for (Offer offer : trace.offers()) {
             if (offer.answer() == null) {
                 violations.add(offer.payload() + " offered through " + offer.call() + " got no answer");
-            } else if (!trace.history().contains(offer.payload())) {
+            } else {
+                // A replay delivers a payload of the history on its own, so a refusal or a no answer says nothing about a copy of it
+                boolean copyOfHistory = trace.history().contains(offer.payload());
                 boolean delivered = trace.delivered().contains(offer.payload());
                 boolean refused = offer.answer().startsWith("refused");
-                if (refused && delivered) {
+                if (refused && delivered && !copyOfHistory) {
                     violations.add(offer.payload() + " was refused by " + offer.call() + " but delivered");
                 }
                 if (offer.call().equals("accept")) {
@@ -66,7 +80,7 @@ final class BlockingHandoverSpec {
                     }
                 } else if (offer.answer().equals("reported:true") && !delivered && (offer.call().equals("acceptIfLive") || !offer.failureFiredAfterInItsCatchUp())) {
                     violations.add(offer.payload() + " was reported delivered or buffered by " + offer.call() + " but never delivered");
-                } else if (offer.answer().equals("reported:false") && delivered) {
+                } else if (offer.answer().equals("reported:false") && delivered && !copyOfHistory) {
                     violations.add(offer.payload() + " was reported not delivered by " + offer.call() + " but delivered");
                 }
             }
