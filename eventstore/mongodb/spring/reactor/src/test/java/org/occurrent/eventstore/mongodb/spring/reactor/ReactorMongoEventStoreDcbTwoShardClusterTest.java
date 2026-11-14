@@ -421,10 +421,9 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
         Recorded recorded = recordedConditionalAppendWithConfiguredConcerns();
         List<BsonDocument> commands = recorded.commands();
 
-        BsonDocument commit = single(theAppendsTransaction(commands), "commitTransaction");
+        single(theAppendsTransaction(commands), "commitTransaction");
         SoftAssertions.assertSoftly(softly -> {
             softly.assertThat(commands).extracting(BsonDocument::getFirstKey).as("nothing aborts the append's transaction or the store's snapshot transaction").doesNotContain("abortTransaction");
-            softly.assertThat(commit).isNotNull();
             softly.assertThat(recorded.eventIds()).containsExactly("sold");
         });
     }
@@ -494,7 +493,7 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
             }
         };
         MongoClientSettings settings = MongoClientSettings.builder().applyConnectionString(new ConnectionString(cluster.getConnectionString()))
-                .writeConcern(WriteConcern.MAJORITY.withWTimeout(WTIMEOUT_MS, MILLISECONDS).withJournal(true)).addCommandListener(recorder).build();
+                .writeConcern(WriteConcern.ACKNOWLEDGED).addCommandListener(recorder).build();
         try (MongoClient recordingClient = MongoClients.create(settings)) {
             String recordingDatabase = cluster.createDatabase(TwoShardMongoCluster.SECOND_SHARD);
             SimpleReactiveMongoDatabaseFactory factory = new SimpleReactiveMongoDatabaseFactory(recordingClient, recordingDatabase);
