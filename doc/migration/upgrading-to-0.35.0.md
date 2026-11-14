@@ -124,8 +124,9 @@ other sections compile fine and behave differently, so read them first.
   The live model resumes at the start a `StartAt.dynamic(..)` function answered the catch-up, where 0.34.0 let the live
   model ask the function for itself. Compiles unchanged.
 - [A blocking catch-up refuses a resume at a position of a subscription that runs](#a-blocking-catch-up-refuses-a-resume-at-a-position-of-a-subscription-that-runs).
-  `resumeSubscription(id, startAt)` throws `SubscriptionAlreadyRunningException` where the 0.34.0 MongoDB models threw
-  `UnknownSubscriptionException` while the `subscribe(..)` replay ran. Compiles unchanged.
+  `resumeSubscription(id, startAt)` throws `SubscriptionAlreadyRunningException` itself, where 0.34.0 passed the resume
+  on to the live model and the MongoDB models threw `UnknownSubscriptionException` while the `subscribe(..)` replay ran.
+  Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
@@ -1305,9 +1306,11 @@ when the replay started after position 0 or after the beginning of time:
 | By time | `position:time;v:2;at:<time>;origin:<time>;liveFrom:<live start>` |
 
 A blocking stream catch-up with checkpoint storage stores the time form too when a `resumeSubscription(id, startAt)` at
-a time after the beginning, without a live start, replaces a position a catch-up stored, as
+a time after the beginning, without a live start, stores that time. The present position is then the live start. In
+0.34.0 such a resume stored nothing.
 [A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint)
-describes. The present position is then the live start. In 0.34.0 such a resume stored nothing.
+and [When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) say
+when a resume stores a position.
 
 The other checkpoints a catch-up stores keep the form they had in 0.34.
 
