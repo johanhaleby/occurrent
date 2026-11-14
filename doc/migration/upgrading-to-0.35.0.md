@@ -167,6 +167,10 @@ other sections compile fine and behave differently, so read them first.
   a subclass, or when a bean behind a CGLIB proxy inherits a final one. A method that shares its name and parameters
   with a package-private annotated method in another package fails at startup instead of running in that method's
   place. Compiles unchanged.
+- [A JDK proxy that a `FactoryBean` returns is scanned in the class its target source names](#a-jdk-proxy-that-a-factorybean-returns-is-scanned-in-the-class-its-target-source-names).
+  A generic interface handler on such a proxy subscribes to the type the class gives its type variable instead of to
+  the bound, and a handler annotated only on the class registers, or fails the bean when the proxy can't run it.
+  Compiles unchanged.
 
 ### Brokers
 
@@ -2187,15 +2191,51 @@ methods. For each one a bean inherits without overriding it:
   package-private and the proxy runs a public or protected method of the same name and parameters from a class in
   another package, rename one of the two methods.
 - If it's package-private and a subclass in another package declares a method with the same name and parameters and
-  no handler annotation of its own, the application fails at startup. To keep the subclass's method as the handler, which is what ran before, make both
-  methods protected or public, so the subclass's method overrides the superclass method. To run the superclass method
-  instead, rename the subclass's method.
+  no handler annotation of its own, the application fails at startup. To keep the subclass's method as the handler,
+  which is what ran before, make both methods protected or public, so the subclass's method overrides the superclass
+  method. To run the superclass method instead, rename the subclass's method.
 - If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
   A bean of the class that declares it keeps the original id.
 
 The code compiles unchanged, and nothing stored changes. There is no OpenRewrite recipe, because nothing in the code
 says whether an inherited handler was meant to run. See
 [ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md).
+
+## A JDK proxy that a `FactoryBean` returns is scanned in the class its target source names
+
+Both Spring Boot starters read the handlers of a `FactoryBean`'s product from the class the product runs. In 0.34.0
+they read them from the product's own class. For a JDK interface proxy over a target source that isn't a fixed
+singleton, such as a `LazyInitTargetSource`, that was the proxy class, so only the annotations on the proxy's
+interfaces counted, and a generic interface method was read with its erased parameter type. Now the starters read the
+class the target source names.
+
+### Who is affected
+
+Applications on either starter with a `FactoryBean` whose product is such a proxy, and with one of these:
+
+- a handler declared on a generic interface with a type variable, such as `on(E event)` on
+  `Handler<E extends OrderEvent>`, that the product's class implements as `Handler<Placed>`
+- a handler annotation on the product's class that its interface doesn't have
+
+A target source whose `getTargetClass()` returns `null` names no class, so the starters still read the proxy class,
+as before.
+
+### What changes
+
+- The generic handler subscribed to `E`'s bound, `OrderEvent`, together with the types it permits when it is a
+  sealed interface. It now subscribes to `Placed`, the type the class gives `E`, so events of the other types no
+  longer reach it.
+- A handler annotated only on the class never registered, and now does. When the proxy's interfaces don't declare it,
+  creating the bean fails with `SubscriptionHandlerNotInvocableException`, since the proxy can't run it.
+
+### What to do
+
+- If the generic handler should still get every type under the bound, implement the interface with the bound, as in
+  `Handler<OrderEvent>`.
+- If a handler annotated only on the class shouldn't run, remove the annotation. If it should, declare the method on
+  one of the proxy's interfaces.
+
+The code compiles unchanged, and nothing stored changes.
 
 ## `ComposedDefaultStartPosition` and its bean are removed
 
