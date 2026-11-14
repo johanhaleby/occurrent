@@ -49,6 +49,8 @@ import org.occurrent.subscription.internal.LostStartHold;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -64,6 +66,8 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * A competing consumer model over the catch-up model the Spring Boot starter wires. A catch-up replay from the
  * beginning whose live start is lost each time it is handed over is held paused by the catch-up model, which tells the
  * competing consumer model. The consumer gives up its lease then, since a grant would only replay the history again.
+ * A replay that starts after the beginning and loses its live start is held paused too, and the catch-up model records
+ * the loss, so the consumer gives up its lease and logs that a resume is refused again, and how to recover.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(60)
@@ -119,6 +123,30 @@ class CompetingConsumerHoldsALostLiveStartOverCatchupTest {
         ));
         await().atMost(EVENTUALLY).untilAsserted(() ->
                 assertThat(logged.errors()).as("errors logged").singleElement().asString().contains("replays the subscription from the beginning again"));
+    }
+
+    @Test
+    void holds_a_consumer_paused_with_one_error_that_tells_the_operator_to_replace_the_stored_checkpoint_when_the_catchup_model_holds_its_replay_from_after_the_beginning_paused_because_the_live_start_is_lost() {
+        // Given
+        strategy.grantOnRegister = true;
+        OffsetDateTime afterTheBeginning = OffsetDateTime.of(2020, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+
+        // When
+        competing.subscribe(NODE, ID, null, StartAt.dynamic(context -> context.hasSubscriptionModelType(CatchupSubscriptionModel.class) ? StartAtTime.offsetDateTime(afterTheBeginning) : StartAt.now()), __ -> {
+        });
+
+        // Then
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertAll(
+                () -> assertThat(competing.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(competing.isRunning(ID)).as("running").isFalse(),
+                () -> assertThat(catchup.isRunning(ID)).as("running in the catch-up model").isFalse(),
+                () -> assertThat(strategy.registrations).as("registered with the strategy").isEmpty(),
+                () -> assertThat(strategy.holders).as("holding the lease").isEmpty()
+        ));
+        await().atMost(EVENTUALLY).untilAsserted(() ->
+                assertThat(logged.errors()).as("errors logged").singleElement().asString()
+                        .contains("delete or replace that stored checkpoint")
+                        .doesNotContain("replays the subscription from the beginning again"));
     }
 
     @Test
