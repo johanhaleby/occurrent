@@ -71,11 +71,13 @@ import org.springframework.core.NestedExceptionUtils;
 import reactor.core.publisher.Mono;
 
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -1713,6 +1715,136 @@ class InheritedHandlerRegistrationTest {
     static class InheritingVaryingB extends PublicVaryingBase implements VaryingMarker {
         InheritingVaryingB(List<String> bodies) {
             super(bodies);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // A prototype whose factory returns a fixed sequence of classes
+    // ------------------------------------------------------------------------------------------------------
+
+    @Test
+    void a_prototype_returning_unrelated_classes_that_declare_the_same_private_handler_subscribes_it_once_when_the_first_class_returns() {
+        List<List<String>> subscribed = subscribedAfterEachBean(PrivateSameC1::new, PrivateSameC2::new, PrivateSameC1::new);
+
+        assertThat(subscribed).describedAs("ids subscribed after each getBean").containsExactly(List.of("same"), List.of("same"), List.of("same"));
+    }
+
+    @Test
+    void a_prototype_returning_unrelated_classes_that_declare_the_same_package_private_handler_subscribes_it_once_when_the_first_class_returns() {
+        List<List<String>> subscribed = subscribedAfterEachBean(PackagePrivateSameC1::new, PackagePrivateSameC2::new, PackagePrivateSameC1::new);
+
+        assertThat(subscribed).describedAs("ids subscribed after each getBean").containsExactly(List.of("same"), List.of("same"), List.of("same"));
+    }
+
+    @Test
+    void a_prototype_returning_a_superclass_and_then_a_subclass_that_declares_a_private_handler_of_its_signature_subscribes_each_once() {
+        List<List<String>> subscribed = subscribedAfterEachBean(PrivateHandlerOfA::new, PrivateHandlerOfBBelowA::new);
+
+        assertThat(subscribed).describedAs("ids subscribed after each getBean").hasSize(2);
+        assertThat(subscribed.get(0)).containsExactly("a");
+        assertThat(subscribed.get(1)).containsExactlyInAnyOrder("a", "b");
+    }
+
+    @Test
+    void a_prototype_returning_a_subclass_and_then_its_superclass_that_declare_a_private_handler_of_one_signature_subscribes_each_once() {
+        List<List<String>> subscribed = subscribedAfterEachBean(PrivateHandlerOfBBelowA::new, PrivateHandlerOfA::new);
+
+        assertThat(subscribed).describedAs("ids subscribed after each getBean").hasSize(2);
+        assertThat(subscribed.get(0)).containsExactlyInAnyOrder("a", "b");
+        assertThat(subscribed.get(1)).describedAs("the superclass adds nothing").containsExactlyInAnyOrder("a", "b");
+    }
+
+    @Test
+    void a_prototype_returning_a_subclass_twice_that_declares_a_private_handler_of_the_signature_of_its_superclass_subscribes_each_once() {
+        List<List<String>> subscribed = subscribedAfterEachBean(PrivateHandlerOfBBelowA::new, PrivateHandlerOfBBelowA::new);
+
+        assertThat(subscribed).describedAs("ids subscribed after each getBean").hasSize(2);
+        assertThat(subscribed.get(0)).containsExactlyInAnyOrder("a", "b");
+        assertThat(subscribed.get(1)).describedAs("the second instance adds nothing").containsExactlyInAnyOrder("a", "b");
+    }
+
+    @Test
+    void a_prototype_returning_a_package_private_handler_class_and_then_a_subclass_in_another_package_that_declares_a_handler_of_its_signature_subscribes_each_once() {
+        List<List<String>> subscribed = subscribedAfterEachBean(() -> new A(new CopyOnWriteArrayList<>()), () -> new MidAnnotated(new CopyOnWriteArrayList<>()));
+
+        assertThat(subscribed).describedAs("ids subscribed after each getBean").hasSize(2);
+        assertThat(subscribed.get(0)).containsExactly("a-handler");
+        assertThat(subscribed.get(1)).containsExactlyInAnyOrder("a-handler", "mid-handler");
+    }
+
+    @Test
+    void a_prototype_returning_a_subclass_in_another_package_and_then_the_package_private_handler_class_it_extends_subscribes_each_once() {
+        List<List<String>> subscribed = subscribedAfterEachBean(() -> new MidAnnotated(new CopyOnWriteArrayList<>()), () -> new A(new CopyOnWriteArrayList<>()));
+
+        assertThat(subscribed).describedAs("ids subscribed after each getBean").hasSize(2);
+        assertThat(subscribed.get(0)).containsExactlyInAnyOrder("a-handler", "mid-handler");
+        assertThat(subscribed.get(1)).describedAs("the superclass adds nothing").containsExactlyInAnyOrder("a-handler", "mid-handler");
+    }
+
+    @Test
+    void a_prototype_returning_a_subclass_in_another_package_twice_that_declares_a_handler_of_the_signature_of_a_package_private_handler_subscribes_each_once() {
+        List<List<String>> subscribed = subscribedAfterEachBean(() -> new MidAnnotated(new CopyOnWriteArrayList<>()), () -> new MidAnnotated(new CopyOnWriteArrayList<>()));
+
+        assertThat(subscribed).describedAs("ids subscribed after each getBean").hasSize(2);
+        assertThat(subscribed.get(0)).containsExactlyInAnyOrder("a-handler", "mid-handler");
+        assertThat(subscribed.get(1)).describedAs("the second instance adds nothing").containsExactlyInAnyOrder("a-handler", "mid-handler");
+    }
+
+    // One prototype bean whose factory returns the next supplier's instance each time, so each getBean is a scan of
+    // the class that supplier returns. Returns the ids subscribed after each getBean, and fails when one throws.
+    @SafeVarargs
+    private List<List<String>> subscribedAfterEachBean(Supplier<Object>... sequence) {
+        List<List<String>> subscribedAfterEach = new ArrayList<>();
+        AtomicInteger created = new AtomicInteger();
+        runner.withBean("varying", Object.class, () -> sequence[created.getAndIncrement()].get(), beanDefinition -> beanDefinition.setScope("prototype")).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            for (int i = 0; i < sequence.length; i++) {
+                assertThatCode(() -> context.getBean("varying")).doesNotThrowAnyException();
+                subscribedAfterEach.add(List.copyOf(subscribedIds(subscriptions)));
+            }
+            assertThat(created).describedAs("every instance was built").hasValue(sequence.length);
+        });
+        return subscribedAfterEach;
+    }
+
+    static class PrivateSameC1 {
+        @Subscription(id = "same")
+        @SuppressWarnings("unused")
+        private void on(TestEvent event) {
+        }
+    }
+
+    static class PrivateSameC2 {
+        @Subscription(id = "same")
+        @SuppressWarnings("unused")
+        private void on(TestEvent event) {
+        }
+    }
+
+    static class PackagePrivateSameC1 {
+        @Subscription(id = "same")
+        void on(TestEvent event) {
+        }
+    }
+
+    static class PackagePrivateSameC2 {
+        @Subscription(id = "same")
+        void on(TestEvent event) {
+        }
+    }
+
+    static class PrivateHandlerOfA {
+        @Subscription(id = "a")
+        @SuppressWarnings("unused")
+        private void on(TestEvent event) {
+        }
+    }
+
+    static class PrivateHandlerOfBBelowA extends PrivateHandlerOfA {
+        @Subscription(id = "b")
+        @SuppressWarnings("unused")
+        private void on(TestEvent event) {
         }
     }
 

@@ -26,12 +26,15 @@ import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.HandlerScan;
+import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.occurrent.springboot.common.between.PublicFactoryThatDoesNotOverride;
 import org.occurrent.springboot.common.between.PublicMethodThatDoesNotOverride;
 import org.occurrent.springboot.common.bridged.PublicLeafWithBridges;
 import org.occurrent.springboot.common.declaring.OverridesHandlerBelowAMethodThatDoesNot;
 import org.occurrent.springboot.common.declaring.PackagePrivateFactoryBase;
 import org.occurrent.springboot.common.declaring.PackagePrivateHandlerBase;
+import org.occurrent.springboot.common.generic.LeafInTheGenericHandlersPackage;
+import org.occurrent.springboot.common.generic.OverridesGenericPackagePrivateHandler;
 import org.occurrent.springboot.common.declaring.PackagePrivateOverridingFactoryMid;
 import org.occurrent.springboot.common.declaring.PackagePrivateOverridingMid;
 import org.occurrent.springboot.common.declaring.PublicOverridingMid;
@@ -999,25 +1002,6 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void handlerMethod_gives_a_private_method_and_the_private_method_of_its_subclass_distinct_signatures() {
-        Set<Method> scanned = HandlerScan.handlerMethods(PrivateHandlerSubclass.class, MARKERS);
-
-        assertThat(scanned).hasSize(2);
-        assertThat(scanned.stream().map(method -> HandlerMethod.in(scanned, method).signature()).distinct()).hasSize(2);
-    }
-
-    @Test
-    void handlerMethod_gives_a_cross_package_package_private_method_and_its_subclasss_method_distinct_signatures() throws Exception {
-        Method baseMethod = crossPackagePackagePrivate();
-        Method subclassMethod = PackagePrivateSubclassOfOtherPackage.class.getDeclaredMethod("packagePrivate");
-        Set<Method> handlers = Set.of(baseMethod, subclassMethod);
-        HandlerMethod base = HandlerMethod.in(handlers, baseMethod);
-        HandlerMethod subclass = HandlerMethod.in(handlers, subclassMethod);
-
-        assertThat(base.signature()).isNotEqualTo(subclass.signature());
-    }
-
-    @Test
     void handlerMethod_leaves_the_declaring_class_out_of_the_signature_of_an_inherited_public_or_protected_method() throws Exception {
         Method publicMethodDeclaration = CrossPackageMethods.class.getDeclaredMethod("publicMethod");
         Method protectedMethodDeclaration = CrossPackageMethods.class.getDeclaredMethod("protectedMethod");
@@ -1043,18 +1027,91 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void handlerMethod_keys_a_package_private_handler_differently_when_a_subclass_in_another_package_declares_an_annotated_method_of_its_signature() throws Exception {
+    void handlerMethod_keys_a_package_private_handler_the_same_when_a_subclass_in_another_package_declares_an_annotated_method_of_its_signature_and_lists_both() throws Exception {
         Method handler = A.class.getDeclaredMethod("on", String.class);
         Set<Method> scannedForA = HandlerScan.handlerMethods(A.class, List.of(Subscription.class));
         Set<Method> scannedForLeaf = HandlerScan.handlerMethods(LeafOfAnnotated.class, List.of(Subscription.class));
 
         assertThat(scannedForLeaf).hasSize(2);
-        assertThat(HandlerMethod.in(scannedForLeaf, handler).signature())
-                .describedAs("an annotated method of the same signature below the handler is a second handler, so the owner tells the two apart")
-                .isNotEqualTo(HandlerMethod.in(scannedForA, handler).signature())
-                .startsWith(A.class.getName() + "#");
+        assertThat(HandlerMethod.in(scannedForLeaf, handler).signature()).isEqualTo(HandlerMethod.in(scannedForA, handler).signature());
+        assertThat(HandlerMethod.in(scannedForLeaf, handler).sameSignature())
+                .describedAs("the second handler of the signature is how a scan of the subclass tells the two apart")
+                .isEqualTo(scannedForLeaf);
     }
 
+    static class UnrelatedPrivateHandler {
+        @Marked
+        @SuppressWarnings("unused")
+        private void handle(String event) {
+        }
+    }
+
+    private static HandlerMethod handlerOf(Class<?> type, Class<?> declaring) {
+        Set<Method> scanned = HandlerScan.handlerMethods(type, MARKERS);
+        Method method = scanned.stream().filter(candidate -> candidate.getDeclaringClass().equals(declaring)).findFirst().orElseThrow();
+        return HandlerMethod.in(scanned, method);
+    }
+
+    @Test
+    void registeredHandlers_skips_a_method_that_is_recorded_and_reports_a_second_mark_as_not_recorded() {
+        RegisteredHandlers registered = new RegisteredHandlers();
+        HandlerMethod handler = handlerOf(PrivateHandlerBase.class, PrivateHandlerBase.class);
+
+        assertThat(registered.isRegistered("bean", handler)).isFalse();
+        assertThat(registered.markRegistered("bean", handler)).isTrue();
+        assertThat(registered.isRegistered("bean", handler)).isTrue();
+        assertThat(registered.markRegistered("bean", handler)).describedAs("already recorded").isFalse();
+    }
+
+    @Test
+    void registeredHandlers_skips_the_method_of_an_unrelated_class_once_another_method_of_its_signature_is_recorded() {
+        RegisteredHandlers registered = new RegisteredHandlers();
+        HandlerMethod first = handlerOf(PrivateHandlerBase.class, PrivateHandlerBase.class);
+        HandlerMethod unrelated = handlerOf(UnrelatedPrivateHandler.class, UnrelatedPrivateHandler.class);
+        registered.markRegistered("bean", first);
+
+        assertThat(registered.isRegistered("bean", unrelated)).isTrue();
+        assertThat(registered.markRegistered("bean", unrelated)).describedAs("its scan found no recorded method of the signature").isFalse();
+    }
+
+    @Test
+    void registeredHandlers_registers_a_method_whose_scan_also_found_a_recorded_method_of_its_signature() {
+        RegisteredHandlers registered = new RegisteredHandlers();
+        HandlerMethod base = handlerOf(PrivateHandlerSubclass.class, PrivateHandlerBase.class);
+        HandlerMethod subclass = handlerOf(PrivateHandlerSubclass.class, PrivateHandlerSubclass.class);
+        registered.markRegistered("bean", base);
+
+        assertThat(registered.isRegistered("bean", subclass)).isFalse();
+        assertThat(registered.markRegistered("bean", subclass)).isTrue();
+        assertThat(registered.isRegistered("bean", base)).describedAs("the recorded method stays recorded").isTrue();
+        assertThat(registered.markRegistered("bean", subclass)).describedAs("now it is recorded too").isFalse();
+    }
+
+    @Test
+    void registeredHandlers_registers_a_forgotten_method_again() {
+        RegisteredHandlers registered = new RegisteredHandlers();
+        HandlerMethod handler = handlerOf(PrivateHandlerBase.class, PrivateHandlerBase.class);
+        registered.markRegistered("bean", handler);
+
+        registered.forgetRegistered("bean", handler);
+
+        assertThat(registered.isRegistered("bean", handler)).isFalse();
+        assertThat(registered.markRegistered("bean", handler)).isTrue();
+    }
+
+    @Test
+    void registeredHandlers_keeps_the_other_recorded_method_of_a_signature_when_one_is_forgotten() {
+        RegisteredHandlers registered = new RegisteredHandlers();
+        HandlerMethod base = handlerOf(PrivateHandlerSubclass.class, PrivateHandlerBase.class);
+        HandlerMethod subclass = handlerOf(PrivateHandlerSubclass.class, PrivateHandlerSubclass.class);
+        registered.markRegistered("bean", base);
+        registered.markRegistered("bean", subclass);
+
+        registered.forgetRegistered("bean", subclass);
+
+        assertThat(registered.isRegistered("bean", base)).isTrue();
+        assertThat(registered.isRegistered("bean", subclass)).isFalse();
+    }
     // ------------------------------------------------------------------------------------------------------
     // handlerMethods refuses a method whose annotation Spring reads from a method it does not override
     // ------------------------------------------------------------------------------------------------------
@@ -1237,6 +1294,32 @@ class SubscriptionAnnotationsTest {
 
         assertThat(HandlerScan.handlerMethods(proxyClass, List.of(Subscription.class)))
                 .containsExactly(ProxiedHandler.class.getDeclaredMethod("on", String.class));
+    }
+
+    @Test
+    void handlerMethods_returns_the_concrete_package_private_override_of_a_generic_handler_and_not_its_bridge_for_a_class_in_the_package_that_declares_it() throws Exception {
+        Method override = OverridesGenericPackagePrivateHandler.class.getDeclaredMethod("on", String.class);
+
+        assertThat(HandlerScan.handlerMethods(LeafInTheGenericHandlersPackage.class, List.of(Subscription.class)))
+                .describedAs("the compiler's bridge method on(Object) of the overriding class is not a handler")
+                .containsExactly(override);
+    }
+
+    interface ProxiedOverloadedHandler {
+        @Subscription(id = "string")
+        void on(String event);
+
+        @Subscription(id = "integer")
+        void on(Integer event);
+    }
+
+    @Test
+    void handlerMethods_returns_both_overloads_of_an_interface_for_a_jdk_proxy_class() throws Exception {
+        Class<?> proxyClass = jdkProxyClassOver(ProxiedOverloadedHandler.class);
+
+        assertThat(HandlerScan.handlerMethods(proxyClass, List.of(Subscription.class)))
+                .describedAs("two methods of one name and different parameter types are two handlers")
+                .containsExactlyInAnyOrder(ProxiedOverloadedHandler.class.getDeclaredMethod("on", String.class), ProxiedOverloadedHandler.class.getDeclaredMethod("on", Integer.class));
     }
 
     static class OverridesWidenedMid extends PublicOverridingMid {

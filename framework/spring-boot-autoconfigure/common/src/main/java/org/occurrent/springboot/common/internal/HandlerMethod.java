@@ -18,49 +18,37 @@
 package org.occurrent.springboot.common.internal;
 
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.util.Arrays;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
- * A handler method a scan found, with the signature {@link RegisteredHandlers} keys it by. The signature is the method
- * name and parameter types, so two classes a non-singleton bean's factory returns, each declaring its own handler of
- * one signature, register that handler once. The declaring class is added for a private or package-private method
- * when the scan also returned a handler of the same signature that a subclass of its declaring class declares. That
- * handler doesn't override it, so the two register as separate handlers. A method of the same signature that isn't a
- * handler adds nothing, so a class that inherits the handler keys it the way a scan of its declaring class does.
+ * A handler method a scan found, with the signature {@link RegisteredHandlers} keys it by and every handler of that
+ * signature the same scan found. The signature is the method name and parameter types, as in 0.34.0, so every scan of
+ * the method gives it the same signature. A private or package-private method and a method of the same signature that
+ * a subclass declares don't override each other, so they are two handlers, and a scan of the subclass finds both.
  * Internal to the Spring Boot starters, not an API.
  *
- * @param method    the method {@link HandlerScan#handlerMethods} returned
- * @param signature the part of the registration key that identifies the handler within its bean
+ * @param method        the method {@link HandlerScan#handlerMethods} returned
+ * @param signature     the part of the registration key that identifies the handler within its bean
+ * @param sameSignature every method of {@code signature} the scan returned, {@code method} among them
  */
-public record HandlerMethod(Method method, String signature) {
+public record HandlerMethod(Method method, String signature, Set<Method> sameSignature) {
 
     /**
      * @param handlers every method the scan returned, from {@link HandlerScan#handlerMethods}
      * @param method   one of {@code handlers}
-     * @return {@code method} with its signature
+     * @return {@code method} with its signature and the handlers of that signature in {@code handlers}
      */
     public static HandlerMethod in(Set<Method> handlers, Method method) {
-        String owner = isShadowedIn(handlers, method) ? method.getDeclaringClass().getName() + '#' : "";
-        return new HandlerMethod(method, owner + method.getName() + Arrays.toString(method.getParameterTypes()));
+        String signature = signatureOf(method);
+        Set<Method> sameSignature = handlers.stream()
+                .filter(handler -> signatureOf(handler).equals(signature))
+                .collect(Collectors.toUnmodifiableSet());
+        return new HandlerMethod(method, signature, sameSignature);
     }
 
-    // A private or package-private method a varying-class prototype's B inherits from A keys the way A's scan keyed
-    // it, so B skips the handler A registered. Only a handler of the same signature declared below A, which doesn't
-    // override it, needs the owner to tell the two handlers apart
-    private static boolean isShadowedIn(Set<Method> handlers, Method method) {
-        int modifiers = method.getModifiers();
-        Class<?> declaringClass = method.getDeclaringClass();
-        if (Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers) || declaringClass.isInterface()) {
-            return false;
-        }
-        for (Method handler : handlers) {
-            if (handler.getDeclaringClass() != declaringClass && declaringClass.isAssignableFrom(handler.getDeclaringClass())
-                    && handler.getName().equals(method.getName()) && Arrays.equals(handler.getParameterTypes(), method.getParameterTypes())) {
-                return true;
-            }
-        }
-        return false;
+    private static String signatureOf(Method method) {
+        return method.getName() + Arrays.toString(method.getParameterTypes());
     }
 }
