@@ -103,28 +103,31 @@ class CatchupLifecyclePropertyTest {
     void per_id_calls_without_pause_end_equal_to_some_serial_order(@ForAll("perIdScenariosWithoutPause") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
         assertThat(run.notes).as(run.toString()).isEmpty();
-        assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
+        assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.timing(), run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
     }
 
     @Disabled("#1516: resume(b) after stop() returns ok while the model stays stopped and b parked, when the subscribe(b) it resumes overlapped the stop. Shrunk plain [[subscribe(b)], [stop, resume(b)]], seed 3464570091306833055")
     @Property(tries = 200)
     void mixed_calls_without_pause_end_equal_to_some_serial_order(@ForAll("mixedScenariosWithoutPause") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
-        assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
+        assertThat(run.notes).as(run.toString()).isEmpty();
+        assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.timing(), run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
     }
 
     @Disabled("#1256: a second pause(a) during a subscribe-started replay returns ok, where the pause contract throws SubscriptionNotRunningException. Shrunk plain [[pause(b)], [subscribe(b), pause(b)]], seed 2619096700851834011")
     @Property(tries = 200)
     void per_id_calls_end_equal_to_some_serial_order(@ForAll("perIdScenarios") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
-        assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
+        assertThat(run.notes).as(run.toString()).isEmpty();
+        assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.timing(), run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
     }
 
     @Disabled("#1256: same cause as the per-id property. Shrunk plain [[subscribe(a)], [subscribe(a), pause(a), pause(a)]], seed -8546245661977250639")
     @Property(tries = 200)
     void mixed_calls_end_equal_to_some_serial_order(@ForAll("mixedScenarios") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
-        assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
+        assertThat(run.notes).as(run.toString()).isEmpty();
+        assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.timing(), run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
     }
 
     @Property(tries = 150)

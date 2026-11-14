@@ -8,6 +8,7 @@ import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionMo
 import org.occurrent.subscription.blocking.durable.catchup.StartAtTime;
 import org.occurrent.subscription.blocking.durable.catchup.StreamCatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.lifecycle.CatchupLifecycleSpec.Observed;
+import org.occurrent.subscription.blocking.durable.catchup.lifecycle.CatchupLifecycleSpec.Timing;
 import org.occurrent.subscription.blocking.durable.catchup.lifecycle.ControllableLiveModel.InjectedStartFailure;
 import org.occurrent.subscription.blocking.durable.catchup.lifecycle.LifecycleCall.Scenario;
 import org.occurrent.subscription.blocking.durable.catchup.lifecycle.LifecycleCall.StartFailure;
@@ -21,6 +22,8 @@ import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.concurrent.locks.LockSupport;
 
@@ -42,6 +45,9 @@ final class InterleavingRunner {
         final SubscriptionModel model;
         final List<List<String>> outcomes = new ArrayList<>();
         final List<String> notes = new CopyOnWriteArrayList<>();
+        final AtomicLong stamps = new AtomicLong();
+        final List<long[]> invoked = new ArrayList<>();
+        final List<long[]> returned = new ArrayList<>();
         @Nullable Observed observed;
         final Map<String, List<String>> receivedAfterRecovery = new TreeMap<>();
         final Set<String> knownAtTheEnd = new TreeSet<>();
@@ -52,6 +58,10 @@ final class InterleavingRunner {
             live.startDelayMicros = scenario.startDelayMicros();
             model = scenario.composite() ? new CatchupSubscriptionModel(live, history)
                     : new StreamCatchupSubscriptionModel(live, history, new CatchupSubscriptionModelConfig(1000));
+        }
+
+        Timing timing() {
+            return new Timing(invoked, returned);
         }
 
         @Override
@@ -69,9 +79,10 @@ final class InterleavingRunner {
             runThreads(run);
             quiesce(run);
             run.observed = observe(run);
-            for (String id : IDS) {
-                if (run.model.isRunning(id) || run.model.isPaused(id)) {
-                    run.knownAtTheEnd.add(id);
+            run.knownAtTheEnd.addAll(subscribedAndNeverCancelled(run));
+            for (String id : run.knownAtTheEnd) {
+                if (!run.model.isRunning(id) && !run.model.isPaused(id)) {
+                    run.notes.add(id + " was subscribed and never cancelled, but the model neither runs nor holds it paused");
                 }
             }
             if (recover) {
@@ -87,17 +98,41 @@ final class InterleavingRunner {
         return run;
     }
 
+    /** The ids a subscribe returned ok for and that no call of the scenario cancelled */
+    private static Set<String> subscribedAndNeverCancelled(Run run) {
+        Set<String> ids = new TreeSet<>();
+        for (int t = 0; t < run.scenario.threads().size(); t++) {
+            List<LifecycleCall> script = run.scenario.threads().get(t);
+            for (int i = 0; i < script.size(); i++) {
+                if (script.get(i).kind() == LifecycleCall.Kind.SUBSCRIBE && "ok".equals(run.outcomes.get(t).get(i))) {
+                    ids.add(script.get(i).id());
+                }
+            }
+        }
+        run.scenario.threads().forEach(script -> script.stream().filter(call -> call.kind() == LifecycleCall.Kind.CANCEL).forEach(call -> ids.remove(call.id())));
+        return ids;
+    }
+
     private static void runThreads(Run run) {
         CountDownLatch go = new CountDownLatch(1);
         List<Thread> threads = new ArrayList<>();
         List<AtomicReferenceArray<String>> slots = new ArrayList<>();
+        List<AtomicLongArray> invokedAt = new ArrayList<>();
+        List<AtomicLongArray> returnedAt = new ArrayList<>();
         for (List<LifecycleCall> script : run.scenario.threads()) {
             AtomicReferenceArray<String> slot = new AtomicReferenceArray<>(script.size());
             slots.add(slot);
+            AtomicLongArray invoked = neverStamped(script.size());
+            AtomicLongArray returned = neverStamped(script.size());
+            invokedAt.add(invoked);
+            returnedAt.add(returned);
             threads.add(Thread.ofPlatform().start(() -> {
                 await(go);
                 for (int i = 0; i < script.size(); i++) {
-                    slot.set(i, execute(run, script.get(i)));
+                    invoked.set(i, run.stamps.incrementAndGet());
+                    String outcome = execute(run, script.get(i));
+                    returned.set(i, run.stamps.incrementAndGet());
+                    slot.set(i, outcome);
                 }
             }));
         }
@@ -124,7 +159,26 @@ final class InterleavingRunner {
                 thread.interrupt();
             }
             run.outcomes.add(outcomes);
+            run.invoked.add(toArray(invokedAt.get(t)));
+            run.returned.add(toArray(returnedAt.get(t)));
         }
+    }
+
+    /** A call that never started or never returned has no stamp, so it orders nothing */
+    private static AtomicLongArray neverStamped(int size) {
+        AtomicLongArray array = new AtomicLongArray(size);
+        for (int i = 0; i < size; i++) {
+            array.set(i, Long.MAX_VALUE);
+        }
+        return array;
+    }
+
+    private static long[] toArray(AtomicLongArray array) {
+        long[] result = new long[array.length()];
+        for (int i = 0; i < result.length; i++) {
+            result[i] = array.get(i);
+        }
+        return result;
     }
 
     static String execute(Run run, LifecycleCall call) {

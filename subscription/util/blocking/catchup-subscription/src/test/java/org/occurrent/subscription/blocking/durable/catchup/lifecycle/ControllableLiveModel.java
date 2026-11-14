@@ -42,11 +42,8 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     volatile boolean running = true;
     volatile long startDelayMicros = 0;
     final ThreadLocal<StartFailure> failStartOnThisThread = ThreadLocal.withInitial(() -> StartFailure.NONE);
-    volatile @Nullable CountDownLatch blockNextStartUntil = null;
-    final CountDownLatch blockedStartEntered = new CountDownLatch(1);
     // Answers the live start check, false when the feed no longer has the history back to the checkpoint
     volatile Predicate<Checkpoint> canResume = checkpoint -> true;
-    final List<Boolean> startCalls = new CopyOnWriteArrayList<>();
     final Map<String, FakeSubscription> subscriptions = new ConcurrentHashMap<>();
 
     @Override
@@ -86,18 +83,7 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
 
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        startCalls.add(resumeSubscriptionsAutomatically);
         StartFailure mode = failStartOnThisThread.get();
-        CountDownLatch block = blockNextStartUntil;
-        if (block != null) {
-            blockNextStartUntil = null;
-            blockedStartEntered.countDown();
-            try {
-                block.await(10, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
         long delay = startDelayMicros;
         if (delay > 0) {
             LockSupport.parkNanos(delay * 1000);

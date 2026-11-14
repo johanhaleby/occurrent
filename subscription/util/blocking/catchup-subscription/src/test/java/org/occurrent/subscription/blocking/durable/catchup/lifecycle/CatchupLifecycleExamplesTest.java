@@ -122,7 +122,7 @@ class CatchupLifecycleExamplesTest {
         for (int i = 0; i < 500; i++) {
             Scenario scenario = new Scenario(false, 0, 0, List.of(List.of(call(Kind.SUBSCRIBE, "b")), List.of(call(Kind.STOP, null), call(Kind.RESUME, "b"))));
             Run run = InterleavingRunner.run(scenario, false);
-            if (!CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.observed, InterleavingRunner.IDS)) {
+            if (!CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.timing(), run.observed, InterleavingRunner.IDS)) {
                 unexplained++;
             }
         }

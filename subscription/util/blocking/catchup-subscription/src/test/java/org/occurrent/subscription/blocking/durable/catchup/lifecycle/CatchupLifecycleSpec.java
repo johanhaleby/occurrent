@@ -89,7 +89,9 @@ final class CatchupLifecycleSpec {
                     yield new Step(UNKNOWN, state);
                 }
                 yield switch (phase) {
-                    case RUNNING, REPLAYING -> new Step(OK, state.with(id, Phase.PAUSED));
+                    case RUNNING -> new Step(OK, state.with(id, Phase.PAUSED));
+                    // The spec does not tell held paused from parked, since every modelled call gives the same result for both
+                    case REPLAYING -> new Step(OK, state.with(id, Phase.PARKED));
                     case PARKED, PAUSED -> new Step(NOT_RUNNING, state);
                 };
             }
@@ -162,15 +164,24 @@ final class CatchupLifecycleSpec {
     }
 
     /**
-     * Whether some merge of the thread scripts explains the outcomes and the end state. outcomes.get(t).get(i) is what the
-     * i-th call of thread t gave.
+     * When each call was made and when it returned, on one shared counter. invoked.get(t)[i] and returned.get(t)[i] belong to
+     * the i-th call of thread t. A call that never returned has Long.MAX_VALUE.
      */
-    static boolean accepts(Scenario scenario, List<List<String>> outcomes, Observed observed, Set<String> ids) {
-        return accepts(scenario.threads(), outcomes, observed, ids, initial(), new int[scenario.threads().size()], new HashSet<>());
+    record Timing(List<long[]> invoked, List<long[]> returned) {
     }
 
-    private static boolean accepts(List<List<LifecycleCall>> threads, List<List<String>> outcomes, Observed observed, Set<String> ids, State state, int[] positions,
+    /**
+     * Whether some merge of the thread scripts explains the outcomes and the end state. outcomes.get(t).get(i) is what the
+     * i-th call of thread t gave. A merge keeps each thread's order and puts a call that returned before another call was
+     * made ahead of that call.
+     */
+    static boolean accepts(Scenario scenario, List<List<String>> outcomes, Timing timing, Observed observed, Set<String> ids) {
+        return accepts(scenario.threads(), outcomes, timing, observed, ids, initial(), new int[scenario.threads().size()], new HashSet<>());
+    }
+
+    private static boolean accepts(List<List<LifecycleCall>> threads, List<List<String>> outcomes, Timing timing, Observed observed, Set<String> ids, State state, int[] positions,
                                    Set<String> failed) {
+        // The real-time order depends on the positions only, so the key stays complete
         String key = java.util.Arrays.toString(positions) + state;
         if (failed.contains(key)) {
             return false;
@@ -179,11 +190,14 @@ final class CatchupLifecycleSpec {
         for (int t = 0; t < threads.size(); t++) {
             if (positions[t] < threads.get(t).size()) {
                 done = false;
+                if (!mayGoNext(timing, positions, t)) {
+                    continue;
+                }
                 LifecycleCall call = threads.get(t).get(positions[t]);
                 Step step = apply(state, call);
                 if (step.outcome().equals(outcomes.get(t).get(positions[t]))) {
                     positions[t]++;
-                    boolean accepted = accepts(threads, outcomes, observed, ids, step.next(), positions, failed);
+                    boolean accepted = accepts(threads, outcomes, timing, observed, ids, step.next(), positions, failed);
                     positions[t]--;
                     if (accepted) {
                         return true;
@@ -192,7 +206,7 @@ final class CatchupLifecycleSpec {
             }
         }
         for (State next : replaysFinishing(state)) {
-            if (accepts(threads, outcomes, observed, ids, next, positions, failed)) {
+            if (accepts(threads, outcomes, timing, observed, ids, next, positions, failed)) {
                 return true;
             }
         }
@@ -201,5 +215,16 @@ final class CatchupLifecycleSpec {
         }
         failed.add(key);
         return false;
+    }
+
+    /** False when the first call another thread has not applied yet returned before this thread's next call was made */
+    private static boolean mayGoNext(Timing timing, int[] positions, int t) {
+        long madeAt = timing.invoked().get(t)[positions[t]];
+        for (int u = 0; u < positions.length; u++) {
+            if (u != t && positions[u] < timing.returned().get(u).length && timing.returned().get(u)[positions[u]] < madeAt) {
+                return false;
+            }
+        }
+        return true;
     }
 }

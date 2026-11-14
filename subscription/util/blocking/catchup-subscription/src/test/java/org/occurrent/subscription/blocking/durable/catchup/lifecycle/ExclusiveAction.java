@@ -16,8 +16,9 @@ import java.util.function.Consumer;
 /**
  * Wraps the subscriber's action and watches S1 (never two actions in flight for one id) and S2 (a subscribe's
  * generation delivers nothing after a cancel of its id, or a pause of it or a stop, has returned).
- * Only a generation whose subscribe returned before that call began is bound by it. A resume of the id or a
- * start(true) in flight disarms a pause or a stop, since either can take effect after it.
+ * Only a generation whose subscribe returned before that call began is bound by it. A pause or a stop binds until an
+ * enabling call, a resume of the id that returned ok or a start(true) that did not fail before its effect, ends after the
+ * pause or the stop began. One still in flight counts, since it can take effect at any instant.
  */
 final class ExclusiveAction {
 
@@ -28,7 +29,6 @@ final class ExclusiveAction {
         boolean subscribedOk;
         long returnedAt;
         boolean cancelled;
-        boolean armed;
         int inAction;
 
         Generation(String id, int number) {
@@ -42,12 +42,30 @@ final class ExclusiveAction {
         }
     }
 
+    /** A pause of one id or a stop of all that returned ok, from when it began to when it returned */
+    private record Barrier(@Nullable String id, long beganAt, long returnedAt) {
+    }
+
+    /** A resume of one id or a start(true) of all. It stays enabling until it ends without having resumed anything */
+    private static final class Enabling {
+        final @Nullable String id;
+        final long beganAt;
+        long endedAt = Long.MAX_VALUE;
+        boolean resumed = true;
+
+        Enabling(@Nullable String id, long beganAt) {
+            this.id = id;
+            this.beganAt = beganAt;
+        }
+    }
+
     private final Object lock = new Object();
     private final Set<String> ids;
     private final List<Generation> generations = new ArrayList<>();
     private final Map<String, Integer> inActionPerId = new HashMap<>();
-    private final Map<String, Integer> resumesInFlight = new HashMap<>();
-    private int startTrueInFlight;
+    private final List<Barrier> barriers = new ArrayList<>();
+    private final List<Enabling> enablings = new ArrayList<>();
+    private final ThreadLocal<Enabling> enablingOfThisThread = new ThreadLocal<>();
     private long clock;
     private final ThreadLocal<Long> beganAt = ThreadLocal.withInitial(() -> 0L);
     private static final long ACTION_NANOS = 20_000L;
@@ -87,7 +105,7 @@ final class ExclusiveAction {
             }
             if (generation.cancelled) {
                 s2Violations.add(generation + " started an action after its cancel returned");
-            } else if (generation.armed) {
+            } else if (barredByAPauseOrAStop(generation)) {
                 s2Violations.add(generation + " started an action after a pause or a stop returned");
             }
         }
@@ -109,12 +127,10 @@ final class ExclusiveAction {
     void begin(LifecycleCall call) {
         synchronized (lock) {
             beganAt.set(++clock);
-            if (call.kind() == Kind.RESUME) {
-                resumesInFlight.merge(call.id(), 1, Integer::sum);
-                disarm(call.id());
-            } else if (call.kind() == Kind.START_TRUE) {
-                startTrueInFlight++;
-                ids.forEach(this::disarm);
+            if (call.kind() == Kind.RESUME || call.kind() == Kind.START_TRUE) {
+                Enabling enabling = new Enabling(call.kind() == Kind.RESUME ? call.id() : null, clock);
+                enablings.add(enabling);
+                enablingOfThisThread.set(enabling);
             }
         }
     }
@@ -123,8 +139,8 @@ final class ExclusiveAction {
         synchronized (lock) {
             clock++;
             switch (call.kind()) {
-                case RESUME -> resumesInFlight.merge(call.id(), -1, Integer::sum);
-                case START_TRUE -> startTrueInFlight--;
+                case RESUME -> finish(enablingOfThisThread.get(), returned);
+                case START_TRUE -> finish(enablingOfThisThread.get(), call.failure() != LifecycleCall.StartFailure.BEFORE_EFFECT);
                 case SUBSCRIBE -> {
                     if (returned && made != null) {
                         made.subscribedOk = true;
@@ -138,12 +154,12 @@ final class ExclusiveAction {
                 }
                 case PAUSE -> {
                     if (returned) {
-                        arm(call.id());
+                        barriers.add(new Barrier(call.id(), beganAt.get(), clock));
                     }
                 }
                 case STOP -> {
                     if (returned) {
-                        ids.forEach(this::arm);
+                        barriers.add(new Barrier(null, beganAt.get(), clock));
                     }
                 }
                 default -> {
@@ -152,18 +168,21 @@ final class ExclusiveAction {
         }
     }
 
+    private void finish(@Nullable Enabling enabling, boolean resumed) {
+        if (enabling != null) {
+            enabling.endedAt = clock;
+            enabling.resumed = resumed;
+            enablingOfThisThread.remove();
+        }
+    }
+
     private boolean returnedBefore(Generation g) {
         return g.subscribedOk && g.returnedAt < beganAt.get();
     }
 
-    private void arm(String id) {
-        if (startTrueInFlight == 0 && resumesInFlight.getOrDefault(id, 0) == 0) {
-            generations.stream().filter(g -> g.id.equals(id) && returnedBefore(g) && !g.cancelled).forEach(g -> g.armed = true);
-        }
-    }
-
-    private void disarm(String id) {
-        generations.stream().filter(g -> g.id.equals(id)).forEach(g -> g.armed = false);
+    private boolean barredByAPauseOrAStop(Generation g) {
+        return barriers.stream().anyMatch(barrier -> (barrier.id() == null || barrier.id().equals(g.id)) && g.subscribedOk && g.returnedAt < barrier.beganAt()
+                && enablings.stream().noneMatch(enabling -> (enabling.id == null || enabling.id.equals(g.id)) && enabling.resumed && enabling.endedAt >= barrier.beganAt()));
     }
 
     @Nullable Generation currentGeneration(String id) {
