@@ -70,6 +70,10 @@ method as the one the bean's class actually runs:
   the same signature below it hides it and doesn't override it, so when Spring's search gives that method the
   superclass method's annotation, it's refused at startup like the package-private case above. When it repeats the
   annotation, both methods are handlers.
+- When a method of a superclass or interface names a class missing at runtime, such as a type from an optional
+  dependency, Spring can't read the hierarchy. The scan then reads only the methods the bean's class declares, as
+  0.34.0 did, and logs at debug level that it skips the inherited ones. A method the bean's class declares itself that
+  names a missing class fails startup with `NoClassDefFoundError`, as in 0.34.0.
 
 A handler's event type and a factory's state type are read against the bean's class with Spring's `ResolvableType`.
 So `on(E event)` on `Base<E>` subscribes to `Placed` on a class that extends `Base<Placed>`. When the class doesn't give

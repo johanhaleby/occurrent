@@ -301,8 +301,9 @@ public final class HandlerScan {
      *
      * @param type            the concrete class the scan reads
      * @param annotationTypes the handler annotations to look for, searched with {@link SearchStrategy#TYPE_HIERARCHY}
-     * @return the matching methods, empty if there are none or if a method of a superclass or interface of
-     * {@code type} names a class missing at runtime, which is logged at debug level
+     * @return the matching methods, empty if there are none. When a method of a superclass or interface of
+     * {@code type} names a class missing at runtime, only the methods {@code type} declares are matched, which is
+     * logged at debug level
      * @throws NoClassDefFoundError  when a method {@code type} declares names a class missing at runtime, as in 0.34.0
      * @throws IllegalStateException when a method has an annotation Spring reads from a method it does not override
      * @throws IllegalArgumentException when {@code type} is a JDK proxy and two of its interfaces declare a method of
@@ -364,16 +365,45 @@ public final class HandlerScan {
                 }
             }
         } catch (IllegalStateException | LinkageError e) {
-            // ReflectionUtils reports a class it can't read as an IllegalStateException caused by the LinkageError,
-            // and a refusal above has no cause. A superclass or interface method naming a class missing at runtime
-            // skips the bean, as Spring's EventListenerMethodProcessor does
-            if (!(e instanceof LinkageError) && !(e.getCause() instanceof LinkageError)) {
+            if (!isReadFailure(e)) {
                 throw e;
             }
-            log.debug("Skipping {} in the search for Occurrent handler annotations, since its superclasses and interfaces can't be read", type.getName(), e);
-            return Set.of();
+            // When a superclass or interface method names a class missing at runtime, the scan reads only the methods
+            // type declares itself, as 0.34.0 did
+            log.debug("Reading only the methods {} declares in the search for Occurrent handler annotations, since its superclasses and interfaces can't be read", type.getName(), e);
+            handlers = declaredHandlerMethods(type, handlerLookup);
         }
         return java.lang.reflect.Proxy.isProxyClass(type) ? firstOfEachSignature(type, handlers, annotationTypes) : handlers;
+    }
+
+    // ReflectionUtils reports a class it can't read as an IllegalStateException caused by the LinkageError, and a
+    // refusal of the handler lookup has no cause
+    private static boolean isReadFailure(Throwable e) {
+        return e instanceof LinkageError || e.getCause() instanceof LinkageError;
+    }
+
+    // The handlers among the methods type declares, for a type whose superclasses or interfaces can't be read. A bridge
+    // counts as the method it calls, as MethodIntrospector counts it. A method whose check has to read a class that
+    // can't be read is left out, since its annotation comes from a superclass or interface method
+    private static Set<Method> declaredHandlerMethods(Class<?> type, MethodIntrospector.MetadataLookup<Boolean> handlerLookup) {
+        Set<Method> handlers = new LinkedHashSet<>();
+        for (Method method : type.getDeclaredMethods()) {
+            if (method.isSynthetic() && !method.isBridge()) {
+                continue;
+            }
+            try {
+                Method candidate = BridgeMethodResolver.findBridgedMethod(method);
+                if (Boolean.TRUE.equals(handlerLookup.inspect(candidate))) {
+                    handlers.add(candidate);
+                }
+            } catch (IllegalStateException | LinkageError e) {
+                if (!isReadFailure(e)) {
+                    throw e;
+                }
+                log.debug("Skipping {} in the search for Occurrent handler annotations, since a class it depends on can't be read", method, e);
+            }
+        }
+        return handlers;
     }
 
     /**

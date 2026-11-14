@@ -33,12 +33,13 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.SoftAssertions.assertSoftly;
 
 /**
- * A class a method names can be missing at runtime, such as an optional dependency. The scan of a class skips it when
- * a superclass or an interface has such a method, since a handler can't be read from it, and fails when the class
- * itself declares one, as in 0.34.0.
+ * A class a method names can be missing at runtime, such as an optional dependency. When a superclass or an interface
+ * has such a method, the scan of a class reads only the methods the class declares, so an inherited handler is not
+ * found and one the class declares is. It fails when the class itself declares such a method, as in 0.34.0.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class HandlerScanUnreadableHierarchyTest {
@@ -84,8 +85,21 @@ class HandlerScanUnreadableHierarchyTest {
         }
     }
 
+    public static class DeclaresHandlerAndExtendsUnreadableSuperclass extends UnreadableSuperclass {
+        @Subscription(id = "own-handler")
+        public void own(Integer event) {
+        }
+    }
+
+    public static class DeclaresHandlerAndImplementsUnreadableInterface implements UnreadableInterface {
+        @Subscription(id = "own-handler")
+        public void own(Integer event) {
+        }
+    }
+
     private static final List<Class<?>> FIXTURES = List.of(UnreadableSuperclass.class, ChildOfUnreadableSuperclass.class,
-            UnreadableInterface.class, ChildOfUnreadableInterface.class, DeclaresUnreadableMethod.class);
+            UnreadableInterface.class, ChildOfUnreadableInterface.class, DeclaresUnreadableMethod.class,
+            DeclaresHandlerAndExtendsUnreadableSuperclass.class, DeclaresHandlerAndImplementsUnreadableInterface.class);
 
     @Test
     void handlerMethods_finds_the_handler_of_a_class_inheriting_it_when_every_class_the_hierarchy_names_is_present() {
@@ -107,6 +121,22 @@ class HandlerScanUnreadableHierarchyTest {
         Class<?> child = new LoaderWithoutAbsentType().loadClass(ChildOfUnreadableInterface.class.getName());
 
         assertThat(scanWithoutThrowing(child)).isEmpty();
+    }
+
+    @Test
+    void handlerMethods_returns_only_the_handler_the_class_declares_when_a_superclass_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(DeclaresHandlerAndExtendsUnreadableSuperclass.class.getName());
+
+        assertThat(scanWithoutThrowing(child)).extracting(Method::getName, method -> method.getDeclaringClass().getName())
+                .containsExactly(tuple("own", child.getName()));
+    }
+
+    @Test
+    void handlerMethods_returns_only_the_handler_the_class_declares_when_an_interface_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> child = new LoaderWithoutAbsentType().loadClass(DeclaresHandlerAndImplementsUnreadableInterface.class.getName());
+
+        assertThat(scanWithoutThrowing(child)).extracting(Method::getName, method -> method.getDeclaringClass().getName())
+                .containsExactly(tuple("own", child.getName()));
     }
 
     @Test
