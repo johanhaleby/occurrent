@@ -1337,11 +1337,11 @@ stream history still reaches resumes it. With checkpoint storage that position r
 when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to.
 
 A resume token or another checkpoint the MongoDB model restarts at is stored as given. A catch-up time without a live
-start is stored with the present position as its live start, except on a DCB catch-up, which replays only from a
-position and stores a time only when the MongoDB model restarts at it. A `GlobalCheckpoint` above 0 without a live start, and a
-checkpoint the MongoDB model doesn't restart at, store nothing, so the position the catch-up stored stays. A resume
-that needs the present position to store, such as one at `StartAt.now()`, throws `IllegalStateException` and stores
-nothing when neither the event store nor the MongoDB model answers one.
+start is stored with the present position as its live start. A DCB catch-up doesn't replay from a time and the MongoDB
+model doesn't restart at one, so on a DCB catch-up a resume at a time stores nothing. A `GlobalCheckpoint` above 0
+without a live start, and a checkpoint the MongoDB model doesn't restart at, store nothing, so the position the
+catch-up stored stays. A resume that needs the present position to store, such as one at `StartAt.now()`, throws
+`IllegalStateException` and stores nothing when neither the event store nor the MongoDB model answers one.
 
 A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts around its catch-up, can't resume a
 subscription at a position, and its `cancelSubscription(id)` acts only on the instance you call it on. With checkpoint
