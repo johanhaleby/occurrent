@@ -23,12 +23,13 @@ could leave. Four examples:
   a subscribe-started catch-up hands over.
 * [#1239](https://github.com/johanhaleby/occurrent/issues/1239): a reactor catch-up action can handle the same event
   twice at once when `start(true)` follows a `stop()`.
-* [#893](https://github.com/johanhaleby/occurrent/issues/893) item 32: a reactive handover writes its catch-up marker
-  after a stop, so the next catch-up skips a replay that never finished.
+* [#893](https://github.com/johanhaleby/occurrent/issues/893) item 32: a stop that comes while a handover delivers what
+  it buffered during the replay still lets the catch-up report success, and the reactive one delivers those events
+  after `stop()` returned.
 
 The fixes so far each closed the window their issue found. On the blocking catch-up that added `lifecycleGeneration`,
 `liveDelegateResumes` and `stoppedByFailedStart` to `AbstractCatchupSubscriptionModel`, next to the per-id claim and
-handover lock from ADR 131. Each fix was tested against its own window, because nothing wrote down what a correct end
+the handover lock from ADR 131. Each fix was tested against its own window, because nothing wrote down what a correct end
 state is when calls overlap.
 
 Three implementation units in 0.35.0 change this code next. L2 changes the blocking catch-up, L3 the reactor catch-up
@@ -103,7 +104,8 @@ The serial result of each call, as one step on that state:
 Three more rows decide what a failure means:
 
 * A `start(..)` whose wrapped model throws before it started leaves the model stopped, as if the call never happened.
-  One that throws after the wrapped model started leaves everything as a successful `start(..)` would.
+  One that throws after the wrapped model started leaves the model running, with what the wrapped model resumed
+  running. A replay parked by a stop stays parked until the next `start(true)` or a resume of its id.
 * A replay whose live start is lost is held paused. A resume of it with an origin above the beginning refuses with
   `CatchupCannotResumeException` until it is cancelled or resumed at a given position.
 * A takeover that the wrapped model holds paused again takes over again. Each takeover counts toward the 3 replays
@@ -146,7 +148,7 @@ A `start(..)` or `stop()` waits for the per-id calls in flight and then runs alo
 
 The exclusive wait has no deadline of its own. Each shared holder waits at most 10 seconds for its claim, so the
 exclusive wait ends too. A `start(..)` or `stop()` called from an action on a replay thread, or from a thread that
-holds a claim, throws at once, as `claim` does today.
+holds a claim, throws at once, because it would wait for a per-id call that can only finish on that thread.
 
 Handover locks are counted and removed like claims. ADR 131 says its registry of handover locks is never reclaimed.
 Under this rule it keeps an entry only while a call or a replay thread uses it ([#1257](https://github.com/johanhaleby/occurrent/issues/1257)).
@@ -175,8 +177,8 @@ What the rule compares for each engine:
 * the order in which payloads reached the `deliver` callback the engine was created with
 
 The calls are `catchUp`, the three accept calls (`accept`, `acceptReportingDelivery`, `acceptIfLive`),
-`stopIfNotCatchingUp`, the stop and cancel calls of the models and feeds built on the engine, and a feed's register,
-unregister and reset.
+`stopIfNotCatchingUp`, the stop and cancel calls of the models and feeds built on the engine, a feed's `register`, a
+registrar's `close()`, and the reset [#1291](https://github.com/johanhaleby/occurrent/issues/1291) asks for.
 
 The catch-up marker is written in this order on both stacks:
 
@@ -187,8 +189,8 @@ The catch-up marker is written in this order on both stacks:
 
 `ReactiveHandover` writes the marker before step 3 today
 ([#893](https://github.com/johanhaleby/occurrent/issues/893) item 31). A stop or cancel that takes effect before step 4
-means no marker is written and the catch-up ends as stopped, not as done (#893 item 32). A failure is permanent and
-forgets the marker. Keeping a late store write from bringing the marker back after that is
+means no marker is written and the catch-up ends as stopped, not as done (#893 item 32). A failure is permanent, and
+on `ReactiveHandover` it also forgets the marker. Keeping a late store write from bringing the marker back after that is
 [#1150](https://github.com/johanhaleby/occurrent/issues/1150)'s.
 
 Every accepted payload gets an answer. The replay turn, which lets one catch-up at a time replay on an engine, is
@@ -216,7 +218,8 @@ A jqwik harness checks the rule against the code, in two test trees:
 For the catch-up models, jqwik generates 2 or 3 threads, each with 1 to 3 calls, over 1 or 2 ids. A runner starts the
 threads together, waits until every call returned and every replay finished, and reads the observables. A reference
 model in the test tree tries every order of the same calls that keeps each thread's order. The run passes when one of
-those orders gives the same call results and the same observables.
+those orders gives the same call results, the same `isRunning()` of the model, and the same `isRunning(id)` and
+`isPaused(id)` for each id. It doesn't compare the stored checkpoint, the handle or the delivered events.
 
 The reference model covers `subscribe`, `cancelSubscription`, `pauseSubscription`, `resumeSubscription(id)`,
 `start(false)`, `start(true)` and `stop()`, and a start that fails before or after it takes effect. It doesn't cover
@@ -230,8 +233,9 @@ doesn't catch an action that starts in that window.
 For `BlockingHandover`, a runner steps one replay thread through its history reads and the drain, and runs each accept
 call on a thread of its own. There is no reference model of the handover. Its properties check what holds in every
 order. The marker is written only for a catch-up that nothing cancelled. A live payload is delivered once, and a
-history payload once for each replay that read the history. Every accept call gets an answer that agrees with what was
-delivered, and a later catch-up gets the replay turn.
+history payload at most once for each replay that read the history. Every accept call gets an answer that agrees with
+what was delivered, except an `acceptReportingDelivery` in a run that injects a failure, which can report a buffered
+payload that is then lost. A later catch-up gets the replay turn.
 
 A property the code breaks today stays in the harness, disabled with the number of the issue that owns it. The unit
 that fixes that issue enables it. The timeout results are not exercised, because the 10 second wait is a constant.
@@ -239,11 +243,13 @@ that fixes that issue enables it. The timeout results are not exercised, because
 These are disabled today:
 
 * [#1256](https://github.com/johanhaleby/occurrent/issues/1256), a pause during a replay that a subscribe started
-  returns and the replay goes live anyway. S2 with a pause, both serial-order properties with a pause, and 2 examples.
-* [#1515](https://github.com/johanhaleby/occurrent/issues/1515), a cancel that overlaps a subscribe of the same id
-  returns and the action starts afterwards. S2 without a pause.
+  returns, and the replay keeps delivering to the action until the handover. S2 with a pause, both serial-order
+  properties with a pause, and 2 examples.
+* [#1515](https://github.com/johanhaleby/occurrent/issues/1515), an action starts after a cancel of its id returned,
+  although the subscribe had returned before the cancel began. S2 without a pause.
 * [#1516](https://github.com/johanhaleby/occurrent/issues/1516), `resumeSubscription(id)` after `stop()` returns
-  normally and the model stays stopped. The serial-order property without a pause, and 1 example.
+  normally and the model stays stopped, when the subscribe it resumes overlapped the stop. The serial-order property
+  without a pause, and 1 example.
 * #893 item 32, a cancel before the marker step still writes the marker. 1 handover property and 1 example.
 
 The reactor harness comes with L3.
@@ -286,7 +292,7 @@ Four more issues are owned outside these units and built against the rule. #1291
   waits for a `start(..)` or `stop()` in flight, which includes the wrapped model's own `start(..)` or `stop()`.
 * The handover lock registry stops growing with every id a model ever ran a catch-up for.
 * The `stillWanted` overloads are new public API on `CheckpointAwareSubscriptionModel`. A model written outside
-  Occurrent that doesn't override them keeps today's behaviour, where a cancel waits for the retry to give up.
+  Occurrent that doesn't override them keeps today's behaviour, where the retry runs on after a cancel until it gives up.
 * A reactor catch-up no longer blocks a Reactor thread on a lifecycle lock.
 * The harness doesn't test the timeout results. L2 can test them if it makes the 10 second wait configurable in tests.
 * The catch-up reference model has no rows for `shutdown()`, `subscribePaused`, `resumeSubscription(id, startAt)`, a

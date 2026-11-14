@@ -200,7 +200,7 @@ final class BlockingHandoverRunner {
             try {
                 handover.catchUp(clean);
             } catch (Throwable ignored) {
-                // A permanently failed handover refuses it, which is an answer
+                // A throw is an answer too
             }
         });
         join(later, 5_000);

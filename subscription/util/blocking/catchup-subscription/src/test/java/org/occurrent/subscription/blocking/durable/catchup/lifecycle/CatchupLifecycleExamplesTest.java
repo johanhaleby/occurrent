@@ -115,7 +115,7 @@ class CatchupLifecycleExamplesTest {
         }
     }
 
-    @Disabled("#1516: about 6 of 10 runs end with the model stopped after resume(b) returned ok")
+    @Disabled("#1516: the model can end stopped after resume(b) returned ok")
     @Example
     void a_resume_that_follows_a_stop_leaves_the_model_started_when_the_subscribe_it_resumes_overlaps_the_stop() {
         int unexplained = 0;

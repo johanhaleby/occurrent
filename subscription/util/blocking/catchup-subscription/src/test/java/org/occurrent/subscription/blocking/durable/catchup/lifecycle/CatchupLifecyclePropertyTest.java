@@ -69,7 +69,7 @@ class CatchupLifecyclePropertyTest {
         assertThat(run.notes).as(run.toString()).isEmpty();
     }
 
-    @Disabled("#1515: a cancel(b) overlapping subscribe(b) returned and b's action started afterwards, in about 1 of 50 runs. Shrunk composite start=300us [[subscribe(a), resume(a), cancel(b)], [subscribe(b), subscribe(a), subscribe(a)], [resume(a)]], seed 3712755869129851291")
+    @Disabled("#1515: b's action started after cancel(b) returned, although subscribe(b) had returned before the cancel began. Shrunk composite start=300us [[subscribe(a), resume(a), cancel(b)], [subscribe(b), subscribe(a), subscribe(a)], [resume(a)]], seed 3712755869129851291")
     @Property(tries = 200)
     void s2_without_pause_no_action_starts_after_a_cancel_or_a_stop_has_returned(@ForAll("mixedScenariosWithoutPause") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
