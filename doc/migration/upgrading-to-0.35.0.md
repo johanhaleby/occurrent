@@ -124,7 +124,7 @@ other sections compile fine and behave differently, so read them first.
   The live model resumes at the start a `StartAt.dynamic(..)` function answered the catch-up, where 0.34.0 let the live
   model ask the function for itself. Compiles unchanged.
 - [A blocking catch-up refuses a resume at a position of a subscription that runs](#a-blocking-catch-up-refuses-a-resume-at-a-position-of-a-subscription-that-runs).
-  `resumeSubscription(id, startAt)` throws `SubscriptionAlreadyRunningException` where 0.34.0 threw
+  `resumeSubscription(id, startAt)` throws `SubscriptionAlreadyRunningException` where the 0.34.0 MongoDB models threw
   `UnknownSubscriptionException` while the `subscribe(..)` replay ran. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
@@ -314,8 +314,9 @@ paused during that replay, it stores nothing and reads no present position.
 There is nothing to change in your code unless it depends on the checkpoint staying where it was after a resume at a
 position. A `DurableSubscriptionModel` over a repositionable subscription model you wrote yourself stores nothing on a
 resume at a position, as in 0.34.0. To have the position stored, override `RepositionableSubscriptions.restartsAt(..)`
-in that model to answer `true` for every checkpoint a subscription it subscribes there starts reading at. Apart from a time a stream catch-up stores in the `;v:2;` form, nothing stored changes format, and
-there is no OpenRewrite recipe for this. See
+in that model to answer `true` for every checkpoint a subscription it subscribes there starts reading at. Apart from a
+time a stream catch-up stores in the `;v:2;` form, nothing stored changes format, and there is no OpenRewrite recipe for
+this. See
 [ADR 151](../architecture/decisions/0151-a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper.md) and
 [#1253](https://github.com/johanhaleby/occurrent/issues/1253).
 
@@ -1303,9 +1304,10 @@ when the replay started after position 0 or after the beginning of time:
 | By position | `position:<position>;v:2;origin:<position>;replayTo:<position>;liveFrom:<live start>` |
 | By time | `position:time;v:2;at:<time>;origin:<time>;liveFrom:<live start>` |
 
-A blocking stream catch-up with checkpoint storage stores the time form too when you resume a subscription with
-`resumeSubscription(id, startAt)` at a time after the beginning without a live start. The present position is then the
-live start. In 0.34.0 such a resume stored nothing.
+A blocking stream catch-up with checkpoint storage stores the time form too when a `resumeSubscription(id, startAt)` at
+a time after the beginning, without a live start, replaces a position a catch-up stored, as
+[A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint)
+describes. The present position is then the live start. In 0.34.0 such a resume stored nothing.
 
 The other checkpoints a catch-up stores keep the form they had in 0.34.
 
@@ -1357,12 +1359,11 @@ nothing and reads no present position, since that replay reads the stored positi
 A resume token or another checkpoint the MongoDB model restarts at is stored as given, and so is a checkpoint the
 catch-up replays from with a live start or at the beginning. A time after the beginning that a stream catch-up replays
 from without a live start is stored with the present position as its live start, in the new form, which 0.34 refuses.
-A DCB catch-up replays only from a
-position and the MongoDB model doesn't restart at a time, so on a DCB catch-up a resume at a time stores nothing. A
-`GlobalCheckpoint` above 0 without a live start, and a checkpoint the MongoDB model doesn't restart at, store nothing,
-so the position the catch-up stored stays. A resume that needs the present position to store, such as one at
-`StartAt.now()`, throws `IllegalStateException` and stores nothing when neither the event store nor the MongoDB model
-answers one.
+A DCB catch-up replays only from a position and the MongoDB model doesn't restart at a time, so on a DCB catch-up a
+resume at a time stores nothing. A `GlobalCheckpoint` above 0 without a live start, and a checkpoint the MongoDB model
+doesn't restart at, store nothing, so the position the catch-up stored stays. A resume that needs the present position
+to store, such as one at `StartAt.now()`, throws `IllegalStateException` and stores nothing when neither the event
+store nor the MongoDB model answers one.
 
 A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts around its catch-up, can't resume a
 subscription at a position, and its `cancelSubscription(id)` acts only on the instance you call it on. With checkpoint
