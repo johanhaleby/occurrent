@@ -21,6 +21,7 @@ import com.mongodb.MongoClientSettings;
 import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
+import com.mongodb.reactivestreams.client.ClientSession;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import com.mongodb.event.CommandListener;
@@ -48,6 +49,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.TwoShardMongoCluster;
 import org.occurrent.testsupport.mongodb.TwoShardMongoCluster.Hold;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
+import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -57,6 +59,8 @@ import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -266,30 +270,32 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
 
     @Test
     void returns_a_matching_event_whose_commit_was_in_flight_on_the_events_shard_when_the_read_began() throws Exception {
-        CompletableFuture<?> matching = null;
-        DcbEventStream read;
-        try {
-            try (Hold hold = cluster.holdCommitsOnSecondShard()) {
-                matching = eventStore.append(List.of(taggedEventWithId("matching", ENROLLED, COURSE_C1))).toFuture();
-                awaitMarkerOnTheFirstShard(COURSE_C1_KEY);
-                CompletableFuture<DcbEventStream> reading = CompletableFuture.supplyAsync(() -> eventStore.read(ENROLLMENTS_IN_C1).block(Duration.ofSeconds(10)));
-                // Gives the read a fair chance to return or to block on the held commit
-                try {
-                    reading.get(2, TimeUnit.SECONDS);
-                } catch (TimeoutException blockedOnTheHeldCommit) {
-                    // Released below
-                }
-                hold.close();
-                read = reading.get(10, TimeUnit.SECONDS);
-            }
-        } finally {
-            // The hold is released by now, so the append still in flight finishes
-            if (matching != null) {
-                matching.get(30, TimeUnit.SECONDS);
-            }
-        }
+        DcbEventStream read = readMatchingEventWhoseCommitIsHeldOnTheEventsShard(eventStore);
+
         assertThat(read.events()).as("The read returns the matching event once its commit on the events shard is visible").extracting(CloudEvent::getId).containsExactly("matching");
         assertThat(read.consistencyToken().markers().get(COURSE_C1_KEY).version()).as("The marker of tag course:c1 in the token is at the version the matching event created").isEqualTo(1);
+    }
+
+    @Test
+    void returns_a_matching_event_whose_commit_was_in_flight_on_the_events_shard_when_the_read_began_through_a_template_whose_session_bound_template_is_not_a_reactive_mongo_template() throws Exception {
+        ReactiveMongoTemplate hidingItsSessionTemplate = new ReactiveMongoTemplate(databaseFactory) {
+            @Override
+            public ReactiveMongoOperations withSession(ClientSession session) {
+                ReactiveMongoOperations sessionTemplate = super.withSession(session);
+                return (ReactiveMongoOperations) Proxy.newProxyInstance(ReactiveMongoOperations.class.getClassLoader(), new Class<?>[]{ReactiveMongoOperations.class}, (proxy, method, args) -> {
+                    try {
+                        return method.invoke(sessionTemplate, args);
+                    } catch (InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+            }
+        };
+        ReactorMongoEventStore store = new ReactorMongoEventStore(hidingItsSessionTemplate, configuration().transactionConfig(transactionManager).build());
+
+        DcbEventStream read = readMatchingEventWhoseCommitIsHeldOnTheEventsShard(store);
+
+        assertThat(read.events()).as("The read returns the matching event, so it ran in the causally consistent session the store opened and not through the template").extracting(CloudEvent::getId).containsExactly("matching");
     }
 
     @Test
@@ -659,6 +665,32 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
                 .eventStoreCollectionName("events")
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .eventStoreCapabilities(STREAM, DCB);
+    }
+
+    private DcbEventStream readMatchingEventWhoseCommitIsHeldOnTheEventsShard(ReactorMongoEventStore store) throws Exception {
+        CompletableFuture<?> matching = null;
+        DcbEventStream read;
+        try {
+            try (Hold hold = cluster.holdCommitsOnSecondShard()) {
+                matching = store.append(List.of(taggedEventWithId("matching", ENROLLED, COURSE_C1))).toFuture();
+                awaitMarkerOnTheFirstShard(COURSE_C1_KEY);
+                CompletableFuture<DcbEventStream> reading = CompletableFuture.supplyAsync(() -> store.read(ENROLLMENTS_IN_C1).block(Duration.ofSeconds(10)));
+                // Gives the read a fair chance to return or to block on the held commit
+                try {
+                    reading.get(2, TimeUnit.SECONDS);
+                } catch (TimeoutException blockedOnTheHeldCommit) {
+                    // Released below
+                }
+                hold.close();
+                read = reading.get(10, TimeUnit.SECONDS);
+            }
+        } finally {
+            // The hold is released by now, so the append still in flight finishes
+            if (matching != null) {
+                matching.get(30, TimeUnit.SECONDS);
+            }
+        }
+        return read;
     }
 
     private DcbEventStream read(DcbCriteria criteria) {

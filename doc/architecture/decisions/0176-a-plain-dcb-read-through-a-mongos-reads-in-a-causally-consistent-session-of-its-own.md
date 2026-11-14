@@ -56,9 +56,12 @@ The Spring and reactor stores take the session from the template's database fact
 template bound to it, with session synchronization `NEVER`, as ADR 175's snapshot transaction does.
 
 In the reactor store, a template whose `withSession` returns something other than a `ReactiveMongoTemplate` gives the
-store no copy it can set `NEVER` on. The read then goes through the store's template as before, without the causally
-consistent session, so through a mongos it can still miss E. `ReactiveMongoTemplate.withSession` in spring-data-mongodb
-5.1.0 returns a `ReactiveMongoTemplate`, so only a subclass that overrides it takes this path. No test covers it.
+store no copy it can set `NEVER` on. With synchronization inactive, nothing binds another session, so the read goes
+through what `withSession` returned and stays in the causally consistent session. With synchronization active and no
+session bound, which only the fallback of a read with `withVersions()` reaches, the read fails with an
+`IllegalStateException`, since without `NEVER` the synchronization would bind another session to it.
+`ReactiveMongoTemplate.withSession` in spring-data-mongodb 5.1.0 returns a `ReactiveMongoTemplate`, so only a subclass
+that overrides it takes either path. A test with such a subclass covers each.
 
 A read with `withVersions()` that falls back to a plain read takes the same path when it runs outside a session of the
 caller's. That's a read from a store set up with `resumeFromMarkerVersions(false)`, a read of `DcbCriteria.all()`, and
