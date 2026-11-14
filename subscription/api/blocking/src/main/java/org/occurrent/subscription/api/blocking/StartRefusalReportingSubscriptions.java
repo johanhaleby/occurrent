@@ -27,9 +27,12 @@ import java.util.Optional;
  * <p>
  * The MongoDB subscription models work out a {@link org.occurrent.subscription.StartAt#dynamic(java.util.function.Function)}
  * start position when they open the change stream, and refuse a catch-up's checkpoint they have no change stream
- * position for. By then {@code subscribe} has returned, so the caller only learns about it from
+ * position for. They refuse a start at the present too when MongoDB gives them no position for it, and remove the
+ * subscription. By then {@code subscribe} has returned, so the caller only learns about it from
  * {@link Subscription#waitUntilStarted(java.time.Duration)}. A model that passes its subscriptions to such a model and
- * keeps state for them, such as a lease, needs to know so it can let go of that state.
+ * keeps state for them, such as a lease, needs to know so it can let go of that state. A restart from the present
+ * after a loss of history that gets no position isn't refused, and the model holds the subscription paused instead,
+ * so no listener is told.
  * <p>
  * Not every subscription model implements this, so reach it with {@link #findIn(SubscriptionModelCapability)}.
  */

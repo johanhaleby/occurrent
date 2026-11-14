@@ -33,8 +33,8 @@ import java.util.Optional;
  * so a subscription started at the present waits for nothing written before it. A model that can move a subscription
  * past events it never delivered, without being asked to, answers {@code false}. A listener call that throws doesn't
  * count as a delivery, and a model that answers {@code true} never calls a subscription's listener while an earlier call
- * for that subscription is still running. A cancel followed by a subscribe with the same id starts a new subscription,
- * so its listener can be called while a call made for the cancelled one still runs. An event can still be delivered
+ * for that subscription is still running. A cancel, or a removal by the model, followed by a subscribe with the same id
+ * starts a new subscription, so its listener can be called while a call made for the one before still runs. An event can still be delivered
  * again after its listener returned normally, together with the events after it, so a listener has to tolerate a repeat.
  * <p>
  * A caller that finds no implementation, which is an empty result from {@link #findIn(SubscriptionModelCapability)},
