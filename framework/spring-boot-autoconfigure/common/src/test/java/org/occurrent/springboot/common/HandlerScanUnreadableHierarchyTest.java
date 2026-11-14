@@ -133,11 +133,20 @@ class HandlerScanUnreadableHierarchyTest {
         }
     }
 
+    // The method naming AbsentType is private, so finding the method a bridge calls reads only the public methods of the
+    // interface and succeeds, while the scan of the interface itself fails
+    public interface UnreadableOnlyByItsPrivateMethod {
+        @SuppressWarnings("unused")
+        private void uses(AbsentType absent) {
+        }
+    }
+
     private static final List<Class<?>> FIXTURES = List.of(UnreadableSuperclass.class, ChildOfUnreadableSuperclass.class,
             UnreadableInterface.class, ChildOfUnreadableInterface.class, DeclaresUnreadableMethod.class,
             DeclaresHandlerAndExtendsUnreadableSuperclass.class, DeclaresHandlerAndImplementsUnreadableInterface.class,
             UnreadableGenericInterface.class, DeclaresBridgedHandlerAndImplementsUnreadableInterface.class,
-            UnreadableGenericSuperclass.class, DeclaresBridgeAndHandlerAndExtendsUnreadableSuperclass.class);
+            UnreadableGenericSuperclass.class, DeclaresBridgeAndHandlerAndExtendsUnreadableSuperclass.class,
+            UnreadableOnlyByItsPrivateMethod.class, PublicLeafDeclaringOnlyTheVisibilityBridge.class, PackagePrivateUnreadableHierarchyBase.class);
 
     @Test
     void handlerMethods_finds_the_handler_of_a_class_inheriting_it_when_every_class_the_hierarchy_names_is_present() {
@@ -195,6 +204,16 @@ class HandlerScanUnreadableHierarchyTest {
                 .filteredOn(Method::isBridge).extracting(Method::getName).containsExactly("on");
         assertThat(scanWithoutThrowing(child)).extracting(Method::getName, Method::isBridge, method -> method.getDeclaringClass().getName())
                 .containsExactlyInAnyOrder(tuple("on", false, child.getName()), tuple("own", false, child.getName()));
+    }
+
+    @Test
+    void handlerMethods_returns_the_method_a_visibility_bridge_calls_when_the_bridge_is_the_only_copy_the_class_declares_and_an_interface_declares_a_method_naming_a_class_missing_at_runtime() throws Exception {
+        Class<?> leaf = new LoaderWithoutAbsentType().loadClass(PublicLeafDeclaringOnlyTheVisibilityBridge.class.getName());
+
+        assertThat(leaf.getDeclaredMethods()).describedAs("the class declares only the visibility bridge")
+                .extracting(Method::getName, Method::isBridge).containsExactly(tuple("on", true));
+        assertThat(scanWithoutThrowing(leaf)).extracting(Method::getName, Method::isBridge, method -> method.getDeclaringClass().getSimpleName(), method -> List.of(method.getParameterTypes()))
+                .containsExactly(tuple("on", false, PackagePrivateUnreadableHierarchyBase.class.getSimpleName(), List.of(String.class)));
     }
 
     @Test
