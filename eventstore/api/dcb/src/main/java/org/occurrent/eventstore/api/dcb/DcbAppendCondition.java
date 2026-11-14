@@ -38,10 +38,14 @@ import static java.util.Objects.requireNonNull;
  * and not while a 0.34 node can still append, since 0.34 recreates a deleted marker with no epoch and restarts its
  * version at 1.
  * <p>
- * A plain read through a mongos can miss a matching event while its token already holds that event's markers, when the
- * markers and the events are on different shards, and the append then doesn't fail. A read through a mongos with
- * {@link DcbReadOptions#withVersions()} whose stream reports {@link DcbEventStream#markerVersions()} doesn't do that.
- * The append can also pass on any deployment when a read preference or a read concern puts a read's events behind its
+ * Through a mongos, outside a transaction or session of the caller's, the MongoDB stores run a read without
+ * {@link DcbReadOptions#withVersions()} in a causally consistent session of their own. At the default read concern and
+ * read preference, when the read's token holds a marker that a matching event moved, the read waits for that event's
+ * commit on the shard that holds the events and returns the event. They don't make a read in a transaction or session of the caller's wait, including one a
+ * transaction executor opened. The Spring stores read its markers and its events in that session, and the native
+ * {@code MongoEventStore} reads only its events in it and its markers outside it. A read through a mongos with
+ * {@link DcbReadOptions#withVersions()} whose stream reports {@link DcbEventStream#markerVersions()} returns such an
+ * event too. The append can pass on any deployment when a read preference or a read concern puts a read's events behind its
  * token, and with a token read inside a transaction after that transaction's own append, once the transaction has
  * rolled back (see {@link DcbEventStream#consistencyToken()}). The <a
  * href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md">0.35.0 upgrade

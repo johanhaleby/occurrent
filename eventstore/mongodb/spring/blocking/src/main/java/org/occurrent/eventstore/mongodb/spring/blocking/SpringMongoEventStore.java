@@ -313,11 +313,28 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
+        // With synchronization active the template reads in the session bound to it, or binds one, so only a read without synchronization needs a session of its own
+        if (deployment == Deployment.MONGOS && !TransactionSynchronizationManager.isSynchronizationActive()) {
+            return readInOwnSession(criteria, options);
+        }
         return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(criteria, mongoTemplate), this::currentPosition, mongoTemplate, queryOptions);
     }
 
-    // The token, the head, the template and the query options are passed in so a catch-up read scope can read all of them
-    // through its own session
+    private DcbEventStream readInOwnSession(DcbCriteria criteria, DcbReadOptions options) {
+        // Causally consistent so the events read waits on a commit still prepared on their shard that the markers read already shows
+        try (ClientSession session = mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().causallyConsistent(true).build())) {
+            MongoTemplate sessionTemplate = mongoTemplate.withSession(session);
+            sessionTemplate.setSessionSynchronization(NEVER);
+            // withSession doesn't copy the read preference set on the template
+            if (mongoTemplate.hasReadPreference()) {
+                sessionTemplate.setReadPreference(mongoTemplate.getReadPreference());
+            }
+            return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(criteria, sessionTemplate), () -> positionOf(sessionTemplate), sessionTemplate, queryOptions);
+        }
+    }
+
+    // The token, the head, the template and the query options are passed in so a catch-up read scope, or a read in a session
+    // the store opened, can read all of them through that session
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Supplier<DcbConsistencyToken> consistencyToken, LongSupplier currentPosition, MongoTemplate template, Function<Query, Query> readQueryOptions) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a
@@ -496,11 +513,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (!readWouldBindASession) {
             return readWithoutMarkerVersions(criteria, options);
         }
-        try (ClientSession session = mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build())) {
-            MongoTemplate sessionTemplate = mongoTemplate.withSession(session);
-            sessionTemplate.setSessionSynchronization(NEVER);
-            return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(criteria, sessionTemplate), () -> positionOf(sessionTemplate), sessionTemplate, queryOptions);
-        }
+        return readInOwnSession(criteria, options);
     }
 
     @Override

@@ -19,8 +19,10 @@ package org.occurrent.eventstore.mongodb.spring.reactor;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
 import com.mongodb.ReadConcern;
+import com.mongodb.ReadPreference;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
+import com.mongodb.reactivestreams.client.ClientSession;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import com.mongodb.event.CommandListener;
@@ -48,6 +50,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.TwoShardMongoCluster;
 import org.occurrent.testsupport.mongodb.TwoShardMongoCluster.Hold;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
+import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -57,6 +60,8 @@ import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -67,6 +72,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -94,6 +100,7 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
     private static final String COURSE_C1 = "course:c1";
     private static final String STUDENT_S1 = "student:s1";
     private static final DcbCriteria TICKETS_OF_K1 = DcbCriteria.type(TICKET_SOLD).tags(tag(CONCERT_K1));
+    private static final DcbCriteria ENROLLMENTS_IN_C1 = DcbCriteria.type(ENROLLED).tags(tag(COURSE_C1));
     private static final DcbCriteria ENROLLMENTS_OF_S1_IN_C1 = DcbCriteria.type(ENROLLED).tags(tag(COURSE_C1), tag(STUDENT_S1));
     private static final String COURSE_C1_KEY = DcbMarkerVersionsSupport.tagKey(tag(COURSE_C1));
     private static final String STUDENT_S1_KEY = DcbMarkerVersionsSupport.tagKey(tag(STUDENT_S1));
@@ -198,15 +205,23 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
     }
 
     @Test
-    void refuses_an_append_with_a_token_read_while_a_matching_event_had_committed_on_the_first_shard_and_not_on_the_second() throws Exception {
+    void refuses_an_append_with_a_token_whose_marker_on_the_events_shard_was_read_before_a_matching_event_the_read_returned() throws Exception {
         CompletableFuture<?> matching = null;
-        DcbEventStream readWhileHalfCommitted;
+        DcbEventStream read;
         try {
-            try (Hold ignored = cluster.holdCommitsOnSecondShard()) {
+            try (Hold hold = cluster.holdCommitsOnSecondShard()) {
                 matching = eventStore.append(List.of(taggedEventWithId("matching", ENROLLED, COURSE_C1, STUDENT_S1))).toFuture();
                 awaitMarkerOnTheFirstShard(COURSE_C1_KEY);
-                // A read that waited for the second shard would hang the test, so it gets a bound
-                readWhileHalfCommitted = eventStore.read(ENROLLMENTS_OF_S1_IN_C1).block(Duration.ofSeconds(10));
+                CompletableFuture<DcbEventStream> reading = CompletableFuture.supplyAsync(() -> eventStore.read(ENROLLMENTS_OF_S1_IN_C1).block(Duration.ofSeconds(10)));
+                // Gives the read a fair chance to return or to block on the held commit
+                try {
+                    reading.get(2, TimeUnit.SECONDS);
+                } catch (TimeoutException blockedOnTheHeldCommit) {
+                    // Released below
+                }
+                assertThat(reading).as("The read waits for the held commit of the matching event on the events shard").isNotDone();
+                hold.close();
+                read = reading.get(10, TimeUnit.SECONDS);
             }
         } finally {
             // The hold is released by now, so the append still in flight finishes
@@ -214,17 +229,76 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
                 matching.get(30, TimeUnit.SECONDS);
             }
         }
-        assertThat(readWhileHalfCommitted.events()).as("the read must miss the matching event, or the token isn't torn").isEmpty();
-        assertThat(readWhileHalfCommitted.consistencyToken().markers().get(COURSE_C1_KEY).version()).as("the read saw the marker of course c1 the matching event created").isEqualTo(1);
-        assertThat(readWhileHalfCommitted.consistencyToken().markers().get(STUDENT_S1_KEY).version()).as("the read saw no marker of student s1 yet").isZero();
+        assertThat(read.events()).as("The read returns the matching event").extracting(CloudEvent::getId).containsExactly("matching");
+        assertThat(read.consistencyToken().markers().get(COURSE_C1_KEY).version()).as("The token holds the marker of tag course:c1 the matching event created").isEqualTo(1);
+        assertThat(read.consistencyToken().markers().get(STUDENT_S1_KEY).version()).as("The token holds the marker of tag student:s1 from before the matching event").isZero();
 
-        Throwable thrown = catchThrowable(() -> eventStore.append(List.of(taggedEventWithId("second", ENROLLED, COURSE_C1, STUDENT_S1)), failIfEventsMatch(readWhileHalfCommitted.consistencyToken())).block());
+        Throwable thrown = catchThrowable(() -> eventStore.append(List.of(taggedEventWithId("second", ENROLLED, COURSE_C1, STUDENT_S1)), failIfEventsMatch(read.consistencyToken())).block());
 
         assertThat(thrown)
-                .as("The read saw the marker of course c1 after the matching event and the marker of student s1 before it, and missed the event. "
-                        + "Only the marker of student s1 moved, and the store finds the event above it")
+                .as("The marker of tag student:s1 in the token moved, and the store asks the events above it, where the matching event is")
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
         assertThat(read(ENROLLMENTS_OF_S1_IN_C1).events()).extracting(CloudEvent::getId).containsExactly("matching");
+    }
+
+    @Test
+    void returns_a_matching_event_whose_commit_was_in_flight_on_the_events_shard_when_the_read_began() throws Exception {
+        DcbEventStream read = readMatchingEventWhoseCommitIsHeldOnTheEventsShard(eventStore);
+
+        assertThat(read.events()).as("The read returns the matching event once its commit on the events shard is visible").extracting(CloudEvent::getId).containsExactly("matching");
+        assertThat(read.consistencyToken().markers().get(COURSE_C1_KEY).version()).as("The marker of tag course:c1 in the token is at the version the matching event created").isEqualTo(1);
+    }
+
+    @Test
+    void returns_a_matching_event_whose_commit_was_in_flight_on_the_events_shard_when_the_read_began_through_a_template_whose_session_bound_template_is_not_a_reactive_mongo_template() throws Exception {
+        ReactiveMongoTemplate hidingItsSessionTemplate = new ReactiveMongoTemplate(databaseFactory) {
+            @Override
+            public ReactiveMongoOperations withSession(ClientSession session) {
+                ReactiveMongoOperations sessionTemplate = super.withSession(session);
+                return (ReactiveMongoOperations) Proxy.newProxyInstance(ReactiveMongoOperations.class.getClassLoader(), new Class<?>[]{ReactiveMongoOperations.class}, (proxy, method, args) -> {
+                    try {
+                        return method.invoke(sessionTemplate, args);
+                    } catch (InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+            }
+        };
+        ReactorMongoEventStore store = new ReactorMongoEventStore(hidingItsSessionTemplate, configuration().transactionConfig(transactionManager).build());
+
+        DcbEventStream read = readMatchingEventWhoseCommitIsHeldOnTheEventsShard(store);
+
+        assertThat(read.events()).as("The read returns the matching event, so it ran in the causally consistent session the store opened and not through the template").extracting(CloudEvent::getId).containsExactly("matching");
+    }
+
+    @Test
+    void returns_a_whole_store_read_event_whose_commit_was_in_flight_on_the_events_shard_when_the_read_began() throws Exception {
+        DcbConsistencyToken emptyStoreToken = read(DcbCriteria.all()).consistencyToken();
+        CompletableFuture<?> matching = null;
+        DcbEventStream read;
+        try {
+            try (Hold hold = cluster.holdCommitsOnSecondShard()) {
+                matching = eventStore.append(List.of(taggedEventWithId("matching", ENROLLED, COURSE_C1)), failIfEventsMatch(emptyStoreToken)).toFuture();
+                awaitMarkerOnTheFirstShard(DcbMarkerVersionsSupport.MATCH_ALL_MARKER_KEY);
+                CompletableFuture<DcbEventStream> reading = CompletableFuture.supplyAsync(() -> eventStore.read(DcbCriteria.all()).block(Duration.ofSeconds(10)));
+                // Gives the read a fair chance to return or to block on the held commit
+                try {
+                    reading.get(2, TimeUnit.SECONDS);
+                } catch (TimeoutException blockedOnTheHeldCommit) {
+                    // Released below
+                }
+                assertThat(reading).as("The read waits for the held commit of the matching event on the events shard").isNotDone();
+                hold.close();
+                read = reading.get(10, TimeUnit.SECONDS);
+            }
+        } finally {
+            // The hold is released by now, so the append still in flight finishes
+            if (matching != null) {
+                matching.get(30, TimeUnit.SECONDS);
+            }
+        }
+        assertThat(read.events()).as("The read returns the event of the whole-store lock append once its commit on the events shard is visible").extracting(CloudEvent::getId).containsExactly("matching");
+        assertThat(read.consistencyToken().markers().get(DcbMarkerVersionsSupport.MATCH_ALL_MARKER_KEY).version()).as("The match-all marker in the token is at the version the whole-store lock append created").isEqualTo(1);
     }
 
     @Test
@@ -407,6 +481,36 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
     }
 
     @Test
+    void returns_its_own_uncommitted_event_to_a_plain_read_in_a_callers_transaction() {
+        List<String> readInTheTransaction = TransactionalOperator.create(transactionManager).execute(status -> {
+            status.setRollbackOnly();
+            return eventStore.append(List.of(taggedEventWithId("uncommitted", TICKET_SOLD, CONCERT_K1)))
+                    .then(Mono.defer(() -> eventStore.read(TICKETS_OF_K1)))
+                    .map(stream -> stream.events().stream().map(CloudEvent::getId).toList());
+        }).blockFirst();
+
+        assertThat(readInTheTransaction).as("A plain read in the caller's transaction sees the event the same transaction appended and hasn't committed").containsExactly("uncommitted");
+        assertThat(read(TICKETS_OF_K1).events()).as("The rolled back event wasn't stored").isEmpty();
+    }
+
+    @Test
+    void sends_the_read_preference_of_the_template_with_a_plain_read_through_a_mongos() {
+        ReactiveMongoTemplate secondaryPreferred = new ReactiveMongoTemplate(databaseFactory);
+        secondaryPreferred.setReadPreference(ReadPreference.secondaryPreferred());
+        ReactorMongoEventStore store = new ReactorMongoEventStore(secondaryPreferred, configuration().transactionConfig(transactionManager).build());
+        store.append(List.of(taggedEventWithId("matching", TICKET_SOLD, CONCERT_K1))).block();
+        COMMANDS.clear();
+
+        List<String> ids = store.read(TICKETS_OF_K1).block().events().stream().map(CloudEvent::getId).toList();
+
+        List<BsonDocument> findsOfTheEvents = COMMANDS.stream().filter(command -> "find".equals(command.getFirstKey()) && "events".equals(command.getString("find").getValue())).toList();
+        assertThat(ids).containsExactly("matching");
+        assertThat(findsOfTheEvents).as("The find on the events collection the read sent").isNotEmpty();
+        assertThat(findsOfTheEvents).extracting(command -> command.getDocument("$readPreference", new BsonDocument()).getString("mode", new BsonString("absent")).getValue())
+                .as("The read preference the find sends to the mongos").containsOnly("secondaryPreferred");
+    }
+
+    @Test
     void commits_the_stores_own_conditional_append_with_the_configured_write_concern_through_a_mongos() {
         List<BsonDocument> commands = recordedConditionalAppendWithConfiguredConcerns().commands();
 
@@ -565,6 +669,33 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
                 .eventStoreCollectionName("events")
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .eventStoreCapabilities(STREAM, DCB);
+    }
+
+    private DcbEventStream readMatchingEventWhoseCommitIsHeldOnTheEventsShard(ReactorMongoEventStore store) throws Exception {
+        CompletableFuture<?> matching = null;
+        DcbEventStream read;
+        try {
+            try (Hold hold = cluster.holdCommitsOnSecondShard()) {
+                matching = store.append(List.of(taggedEventWithId("matching", ENROLLED, COURSE_C1))).toFuture();
+                awaitMarkerOnTheFirstShard(COURSE_C1_KEY);
+                CompletableFuture<DcbEventStream> reading = CompletableFuture.supplyAsync(() -> store.read(ENROLLMENTS_IN_C1).block(Duration.ofSeconds(10)));
+                // Gives the read a fair chance to return or to block on the held commit
+                try {
+                    reading.get(2, TimeUnit.SECONDS);
+                } catch (TimeoutException blockedOnTheHeldCommit) {
+                    // Released below
+                }
+                assertThat(reading).as("The read waits for the held commit of the matching event on the events shard").isNotDone();
+                hold.close();
+                read = reading.get(10, TimeUnit.SECONDS);
+            }
+        } finally {
+            // The hold is released by now, so the append still in flight finishes
+            if (matching != null) {
+                matching.get(30, TimeUnit.SECONDS);
+            }
+        }
+        return read;
     }
 
     private DcbEventStream read(DcbCriteria criteria) {

@@ -408,10 +408,16 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
+        if (deployment == Deployment.MONGOS && ClientSessionHolder.get() == null) {
+            // Causally consistent so the events read waits on a commit still prepared on their shard that the markers read already shows
+            try (ClientSession session = mongoClient.startSession(ClientSessionOptions.builder().causallyConsistent(true).build())) {
+                return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(session, criteria), () -> currentPosition(session), query -> eventCollection.find(session, query));
+            }
+        }
         return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(null, criteria), this::currentPosition, this::findEvents);
     }
 
-    // The token, the head and the find are passed in so a catch-up read scope can read all three through its own session
+    // The token, the head and the find are passed in so a catch-up read scope, or a read in a session the store opened, can read all three through that session
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Supplier<DcbConsistencyToken> consistencyToken, LongSupplier currentPosition, Function<Bson, FindIterable<Document>> find) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a

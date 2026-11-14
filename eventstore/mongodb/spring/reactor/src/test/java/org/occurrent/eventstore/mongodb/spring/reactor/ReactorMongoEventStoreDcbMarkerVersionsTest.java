@@ -774,9 +774,8 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
     }
 
     @Test
-    void reads_the_events_of_a_versioned_read_without_the_confirmation_mark_but_no_marker_versions_when_the_session_bound_template_is_not_a_reactive_mongo_template() {
-        // The wrapper hides the ReactiveMongoTemplate type, so the store can't keep the read out of the synchronization and reads through its template
-        // That read may bind a session but still returns every event, which beats failing the read
+    void refuses_a_versioned_read_without_the_confirmation_mark_without_binding_a_session_to_the_synchronization_when_the_session_bound_template_is_not_a_reactive_mongo_template() {
+        // The wrapper hides the ReactiveMongoTemplate type, so the store can't keep the read out of the session the synchronization binds
         ReactiveMongoTemplate wrapping = new ReactiveMongoTemplate(databaseFactory) {
             @Override
             public ReactiveMongoOperations withSession(ClientSession session) {
@@ -792,15 +791,17 @@ class ReactorMongoEventStoreDcbMarkerVersionsTest {
         };
         ReactorMongoEventStore store = storeOver(wrapping, config -> config.resumeFromMarkerVersions(false));
         store.append(List.of(taggedEvent("before", DEPOSITED, ACCOUNT_A))).block();
-        AtomicReference<DcbEventStream> withoutMark = new AtomicReference<>();
+        AtomicReference<Throwable> refusal = new AtomicReference<>();
+        AtomicReference<List<TransactionSynchronization>> registeredAfterRead = new AtomicReference<>();
 
-        Throwable thrown = errorOf(inScopeWithoutTransaction(store.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions())
-                .doOnNext(withoutMark::set)));
+        inScopeWithoutTransaction(errorSignalOf(store.read(BOUNDARY_A, DcbReadOptions.fromBeginning().withVersions()))
+                .doOnNext(refusal::set)
+                .then(TransactionSynchronizationManager.forCurrentTransaction().map(TransactionSynchronizationManager::getSynchronizations))
+                .doOnNext(registeredAfterRead::set))
+                .block();
 
-        assertThat(thrown).as("what the read failed with").isNull();
-        // Checks that the fallback through the template reports no versions
-        assertThat(withoutMark.get().markerVersions()).isEmpty();
-        assertThat(withoutMark.get().events()).extracting(CloudEvent::getId).containsExactly("before");
+        assertThat(refusal.get()).as("what the read failed with").isInstanceOf(IllegalStateException.class).hasMessageContaining(ReactiveMongoTemplate.class.getSimpleName());
+        assertThat(registeredAfterRead.get()).as("synchronizations registered for a session bound by the read").isEmpty();
     }
 
     @Test

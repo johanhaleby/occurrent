@@ -6,7 +6,9 @@ Date: 2026-11-14
 
 Accepted. Resolves [#1476](https://github.com/johanhaleby/occurrent/issues/1476). Amends
 [ADR 149](0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md) on sharded
-clusters, where its step 3 refused every append whose markers moved.
+clusters, where its step 3 refused every append whose markers moved. Amended by
+[ADR 176](0176-a-plain-dcb-read-through-a-mongos-reads-in-a-causally-consistent-session-of-its-own.md) on what a plain read through a
+mongos can miss.
 
 ## Context
 
@@ -77,7 +79,8 @@ An item without tags already worked this way on a replica set, and it does the s
 Take a matching event E. E's append incremented, in its own transaction, every tag marker of an item with tags that E
 matches, or one of the type markers of an item without tags ([ADR 21](0021-dcb-write-path-query-scoped-concurrency.md)).
 Take k, one of those marker keys whose version in the token is from before E. When there is no such k, the token covers
-E, and that's [#1479](https://github.com/johanhaleby/occurrent/issues/1479). There are two cases, depending on whether
+E, and that's [#1479](https://github.com/johanhaleby/occurrent/issues/1479), which [ADR 176](0176-a-plain-dcb-read-through-a-mongos-reads-in-a-causally-consistent-session-of-its-own.md)
+decides. There are two cases, depending on whether
 the append's transaction read k after E's increment.
 
 - **It did.** The snapshot shows k under the same epoch and at a version at least as high, or the append is refused.
@@ -104,7 +107,9 @@ version.
 - A test on two shards for each store checks the three cases of #1476, a torn token built by hand, a token read while
   a matching event had committed on one shard and not the other, an append in the store's own transaction, in a
   `TransactionExecutor`'s and in a caller's, a snapshot transaction that fails, and two conditional appends in one
-  caller's transaction. A unit test checks the comparison.
+  caller's transaction. A unit test checks the comparison. [ADR 176](0176-a-plain-dcb-read-through-a-mongos-reads-in-a-causally-consistent-session-of-its-own.md) turned
+  the test of a token read while a matching event had committed on one shard and not the other into a test that the
+  read returns that event and that an append with the token it returns is refused.
 - A conditional append through a mongos that has to query the events costs a second session and a read-only
   transaction, whose commit waits for `majority` for at most `markerVersionsCommitTimeout`. An append whose markers
   didn't move, or rule out every item, doesn't start it.
@@ -127,7 +132,8 @@ version.
   an item without tags over striped type markers in both scopes, and no test on a sharded cluster turns the stripes on.
 - This doesn't make a plain read through a mongos safe. A token can still hold E's markers while the read misses E, and
   then no marker moves and the append passes. That's [#1479](https://github.com/johanhaleby/occurrent/issues/1479),
-  and the check alone can't see it.
+  and the check alone can't see it. [ADR 176](0176-a-plain-dcb-read-through-a-mongos-reads-in-a-causally-consistent-session-of-its-own.md) decides
+  it for a plain read outside a session of the caller's, at the default read concern and read preference.
 
 ## Open point: a condition without a token in a caller's transaction
 
@@ -173,4 +179,5 @@ after E, the query finds nothing and the append passes.
 **Keep refusing through a mongos.** That's correct and keeps the retries #1476 is about.
 
 **Read the token and the events in one snapshot transaction.** That closes #1479 as well, but on its own it doesn't close
-reason 1 for the append, and it costs a transaction on every read. #1479 decides it separately.
+reason 1 for the append, and it costs a transaction on every read. #1479 decides it separately, in
+[ADR 176](0176-a-plain-dcb-read-through-a-mongos-reads-in-a-causally-consistent-session-of-its-own.md).
