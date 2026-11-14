@@ -380,17 +380,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * Only the event path calls this, and it is not because the timer path has nothing to gain from it. A timeout
      * has no redelivery key of its own, so there is nothing to quarantine it on.
      * <p>
-     * What the timer path does instead is retry for ever, and that is not free for the saga's other instances. A poll
-     * fires at most {@link SagaRunnerConfig#timerBatchLimit()} instances, and nothing in
-     * {@link SagaStateStore#findWithDueTimers} requires a store to give a different instance a turn, so once that many
-     * instances cannot fire their timers the saga can stop firing timers altogether. That many is enough, since a
-     * batch full of them leaves no place for anything else.
-     * <a href="https://github.com/johanhaleby/occurrent/issues/1003">#1003</a> is where that missing guarantee is
-     * being added.
-     * <p>
-     * So a failing timeout does not block the poller, and it is not isolated from the saga's other instances either.
-     * Earlier versions of this javadoc said it was, on an accounting that was true of one instance and false of the
-     * batch they share.
+     * The timer path retries a failing timeout on a later poll instead, and {@link #markFailedAttempt} makes the timer
+     * due again one millisecond after each poll that failed to fire it. {@link SagaStateStore#findWithDueTimers}
+     * returns the instances that have been due longest first, so an instance whose timer keeps failing is tried again
+     * only after the instances that were due at its last attempt.
      */
     private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Duration quarantineAfter) {
         try {
@@ -529,11 +522,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             long nowMillis = now.toEpochMilli();
             List<SagaEnvelope<S>> due = stateStore.findWithDueTimers(now, config.timerBatchLimit());
             for (SagaEnvelope<S> envelope : due) {
-                List<String> dueTimerNames = envelope.timers().stream()
-                        .filter(timer -> timer.firesAtEpochMilli() <= nowMillis)
-                        .map(TimerEntry::name)
+                List<TimerEntry> dueTimers = envelope.timers().stream()
+                        // Due time rather than firesAt, so a failed timer is not tried again ahead of its turn when another
+                        // timer on the same instance brought the instance into the batch
+                        .filter(timer -> timer.dueAtEpochMilli() <= nowMillis)
                         .toList();
-                for (String timerName : dueTimerNames) {
+                for (TimerEntry timer : dueTimers) {
+                    String timerName = timer.name();
                     try {
                         process(envelope.sagaId(), SagaInput.timeout(envelope.sagaId(), TimerName.parse(timerName)), EventMeta.NONE, timerName);
                     } catch (Throwable t) {
@@ -543,14 +538,60 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         // OutOfMemoryError still does, because it is the JVM's condition and not this instance's.
                         rethrowIfNotTheInstances(t);
                         // Keep polling other timers/instances. This one stays due, so a later poll retries it unless
-                        // it is consumed first. Which poll is not promised, since nothing requires a store to give a
-                        // different instance a turn, see #1003.
+                        // it is consumed first.
                         log.warn("Failed to fire saga timer '{}' for instance '{}'", timerName, envelope.sagaId(), t);
+                        markFailedAttempt(envelope.sagaId(), timer, now);
                     }
                 }
             }
         } catch (Throwable t) {
             log.warn("Saga timer poll failed", t);
+        }
+    }
+
+    /**
+     * Make a timer whose fire threw due again one millisecond after {@code polledAt}, so later polls order the instance
+     * behind every instance that was due at {@code polledAt}, including one due at exactly that instant. Without it a
+     * batch of instances whose timers keep failing is returned first on every poll and the saga's other instances never
+     * get their timers fired.
+     * <p>
+     * Read without the state and written without it, so an instance whose state no longer decodes is marked too. A lost
+     * compare-and-set is read again and retried up to {@link SagaRunnerConfig#maxCasAttempts()} times, and not at all
+     * when the read finds the version the write lost at, since only a store that refuses a save at the same version
+     * loses that way. The write keeps
+     * the instance's version, so a slow event delivery that read the instance before the mark still saves. When the
+     * write cannot be made, the timer keeps the due time it had and the next poll tries it as early as before. Nothing is
+     * thrown, because the exception that matters is the one the fire threw.
+     */
+    private void markFailedAttempt(String sagaId, TimerEntry timer, Instant polledAt) {
+        Instant nextAttemptAt = polledAt.plusMillis(1);
+        try {
+            @Nullable Long lostAtVersion = null;
+            for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
+                SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
+                // Lost at a version that is still stored, so nothing changed it and the store refused a save at the same
+                // version. Every further attempt would be refused too
+                if (current != null && lostAtVersion != null && current.version() == lostAtVersion) {
+                    log.warn("Saga '{}' instance '{}' could not record that its timer '{}' failed, because the state store refuses a save "
+                             + "that keeps the version. The timer keeps its due time, so the next poll tries it before instances that "
+                             + "became due after it.",
+                            subscriptionId, sagaId, timer.name());
+                    return;
+                }
+                SagaEnvelope<S> marked = SagaExecutionSupport.withFailedTimerAttempt(current, timer, nextAttemptAt);
+                if (current == null || marked == null || stateStore.compareAndSaveWithoutState(sagaId, marked, current.version())) {
+                    return;
+                }
+                lostAtVersion = current.version();
+            }
+            log.warn("Saga '{}' instance '{}' could not record that its timer '{}' failed, because the instance kept changing under {} attempts. "
+                     + "The timer keeps its due time, so the next poll tries it before instances that became due after it.",
+                    subscriptionId, sagaId, timer.name(), config.maxCasAttempts());
+        } catch (Throwable storeFailure) {
+            rethrowIfNotTheInstances(storeFailure);
+            log.warn("Saga '{}' instance '{}' could not record that its timer '{}' failed, because the state store failed. "
+                     + "The timer keeps its due time, so the next poll tries it before instances that became due after it.",
+                    subscriptionId, sagaId, timer.name(), storeFailure);
         }
     }
 
@@ -668,7 +709,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return false;
         }
         long nowMillis = now.toEpochMilli();
-        return envelope.timers().stream().anyMatch(timer -> timer.name().equals(timerName) && timer.firesAtEpochMilli() <= nowMillis);
+        return envelope.timers().stream().anyMatch(timer -> timer.name().equals(timerName) && timer.dueAtEpochMilli() <= nowMillis);
     }
 
     // An event without a stream id and a stream version leaves nothing to compare a redelivery against, so the reaction

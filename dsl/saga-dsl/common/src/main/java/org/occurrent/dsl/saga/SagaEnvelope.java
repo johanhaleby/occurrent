@@ -36,7 +36,8 @@ import static java.util.Objects.requireNonNull;
  * @param sagaId            the instance id (the saga's correlation id)
  * @param state             the user state {@code S}
  * @param status            whether the instance is active or completed
- * @param version           the optimistic-lock version, incremented on every save. A fresh instance is saved at version 1.
+ * @param version           the optimistic-lock version, incremented on every save except the one that marks a failed
+ *                          timer. A fresh instance is saved at version 1.
  * @param timers            the pending timers, by name
  * @param streamWatermarks  the highest stream version folded per stream id, for deduplicating redelivered stream events
  * @param positionWatermark ignored. 0.31.0 to 0.34.0 stored the highest global position folded here, and the saga no
@@ -44,7 +45,7 @@ import static java.util.Objects.requireNonNull;
  *                          A stored value still loads, and the executor writes {@code null}. Deprecated since 0.35.0
  *                          and removed in a later release
  * @param createdAt         when the instance was created
- * @param updatedAt         when the instance was last saved
+ * @param updatedAt         when the instance last handled an input or recorded a failure, see {@link SagaInstance#updatedAt()}
  * @param completedAt       when the instance completed, or {@code null} while active
  * @param started           whether a start transition has been saved for this instance, which is not the same as
  *                          whether {@code onStart} was ever called. An instance whose very first event failed after
@@ -191,10 +192,33 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         }
     }
 
-    /** A pending timer: its name and when it should fire (epoch millis). */
-    public record TimerEntry(String name, long firesAtEpochMilli) {
+    /**
+     * A pending timer.
+     *
+     * @param name                    the timer's name
+     * @param firesAtEpochMilli       when the timer should fire (epoch millis)
+     * @param nextAttemptAtEpochMilli when the timer is due again after a fire of it threw (epoch millis), which is one
+     *                                millisecond after the poll that tried it, or {@code null} when no fire of it has
+     *                                failed. Arming the timer again for the instant it already fires at keeps this, and
+     *                                arming it for any other instant clears it
+     */
+    public record TimerEntry(String name, long firesAtEpochMilli, @Nullable Long nextAttemptAtEpochMilli) {
         public TimerEntry {
             requireNonNull(name, "name cannot be null");
+        }
+
+        /** A timer that no fire has failed for yet. */
+        public TimerEntry(String name, long firesAtEpochMilli) {
+            this(name, firesAtEpochMilli, null);
+        }
+
+        /**
+         * When this timer makes its instance due for the poller (epoch millis). That is {@link #firesAtEpochMilli()},
+         * or {@link #nextAttemptAtEpochMilli()} when that is later, so an instance whose timer keeps failing comes after
+         * the instances that were due when its last attempt was made.
+         */
+        public long dueAtEpochMilli() {
+            return nextAttemptAtEpochMilli == null ? firesAtEpochMilli : Math.max(firesAtEpochMilli, nextAttemptAtEpochMilli);
         }
     }
 
@@ -209,16 +233,27 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         return status == SagaStatus.QUARANTINED;
     }
 
-    /** The earliest firing time across all pending timers, or empty when there are none. Drives the due-timer query. */
+    /**
+     * The earliest firing time across all pending timers, or empty when there are none. A failed fire marked on a timer
+     * does not change it. The due-timer query goes by {@link #earliestDueAtEpochMilli()} instead.
+     */
     public OptionalLong earliestTimerFiresAtEpochMilli() {
         return timers.stream().mapToLong(TimerEntry::firesAtEpochMilli).min();
     }
 
     /**
+     * The earliest {@link TimerEntry#dueAtEpochMilli()} across all pending timers, or empty when there are none. Drives
+     * the due-timer query and its order. A timer whose fire threw counts from its next attempt rather than from when it
+     * was set to fire.
+     */
+    public OptionalLong earliestDueAtEpochMilli() {
+        return timers.stream().mapToLong(TimerEntry::dueAtEpochMilli).min();
+    }
+
+    /**
      * {@inheritDoc}
      * <p>
-     * The same instant as {@link #earliestTimerFiresAtEpochMilli()}, which stays in epoch millis because it is what
-     * the poller's indexed query compares against.
+     * The same instant as {@link #earliestTimerFiresAtEpochMilli()}.
      */
     @Override
     public @Nullable Instant nextTimerAt() {

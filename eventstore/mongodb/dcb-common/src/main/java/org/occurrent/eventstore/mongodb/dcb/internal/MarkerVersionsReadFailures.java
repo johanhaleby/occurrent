@@ -22,12 +22,18 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Tracks why reads that asked for marker versions couldn't report them, so a store logs the first failure of each kind
- * as a warning and every later one of the same kind at debug level. A deployment that keeps failing the read-only
- * commit then doesn't flood the log. One instance per store.
+ * Tracks why reads that asked for marker versions couldn't report them, and why the snapshot check of a conditional
+ * append through a mongos failed, so a store logs the first failure of each kind as a warning and every later one of
+ * the same kind at debug level. A deployment that keeps failing the read-only commit then doesn't flood the log. One
+ * instance per store.
  */
 @NullMarked
 public final class MarkerVersionsReadFailures {
+
+    /**
+     * The phase of a failed snapshot check of a conditional append through a mongos (ADR 175).
+     */
+    public static final String APPEND_CHECK = "append check";
 
     private final Set<String> seenKinds = ConcurrentHashMap.newKeySet();
 
@@ -53,5 +59,15 @@ public final class MarkerVersionsReadFailures {
                 : "The read returns no versions, so a snapshot over it is not saved this time.";
         return "A DCB read that asked for marker versions could not take them from a committed snapshot (" + phase + " failed with "
                 + cause.getClass().getSimpleName() + "). " + consequence;
+    }
+
+    /**
+     * The log message for a snapshot check of a conditional append through a mongos that failed, which refuses the
+     * append (ADR 175).
+     */
+    public static String appendCheckMessage(Throwable cause) {
+        return "A conditional DCB append through a mongos could not query the events in a read-only snapshot transaction ("
+                + APPEND_CHECK + " failed with " + cause.getClass().getSimpleName() + "), so the append is refused with"
+                + " DcbAppendConditionNotFulfilledException. markerVersionsCommitTimeout limits how long that transaction may take.";
     }
 }

@@ -69,7 +69,9 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
 
     final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
     final List<String> subscribePausedCalls = new CopyOnWriteArrayList<>();
+    final List<StartAt> subscribePausedStartAts = new CopyOnWriteArrayList<>();
     final List<String> resumeCalls = new CopyOnWriteArrayList<>();
+    final List<StartAt> resumedAt = new CopyOnWriteArrayList<>();
     final List<String> restartedFromNow = new CopyOnWriteArrayList<>();
     final List<Checkpoint> lossesReported = new CopyOnWriteArrayList<>();
 
@@ -163,6 +165,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     @Override
     public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         subscribePausedCalls.add(subscriptionId);
+        subscribePausedStartAts.add(startAt);
         paused.put(subscriptionId, new Open(filter, action, startAt));
         return handle(subscriptionId);
     }
@@ -193,6 +196,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         beforeTheNextResumeAt = () -> {
         };
         beforeThisResume.run();
+        resumedAt.add(startAt);
         RuntimeException failure = nextRepositioningResumeThrows;
         if (failure != null) {
             nextRepositioningResumeThrows = null;
@@ -274,6 +278,12 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint) {
         return !agedOut.contains(checkpoint);
+    }
+
+    // As the MongoDB models answer: it opens at any checkpoint but a catch-up's position, which it doesn't recognize
+    @Override
+    public boolean restartsAt(Checkpoint checkpoint) {
+        return !AbstractCatchupSubscriptionModel.isCatchupCheckpoint(checkpoint);
     }
 
     @Override

@@ -42,6 +42,7 @@ import org.junit.jupiter.api.Timeout;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.UnsupportedStartAtException;
@@ -152,6 +153,10 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
                 heldPausedReachedTheTestListener.countDown();
                 awaitUninterruptibly(heldPausedGate);
             }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+            }
         });
         nodeA = new CompetingConsumerSubscriptionModel(wrappedA, strategyA);
         wrappedA.addStartRefusalListener(new StartRefusalListener() {
@@ -162,6 +167,10 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
             @Override
             public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
                 heldPausedReachedTheListenerAfterTheNode.countDown();
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             }
         });
     }

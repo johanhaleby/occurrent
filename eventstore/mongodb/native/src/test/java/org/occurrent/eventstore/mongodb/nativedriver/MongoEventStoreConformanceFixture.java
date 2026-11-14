@@ -49,12 +49,21 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
     }
 
     MongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation) {
+        this(connectionString, timeRepresentation, false);
+    }
+
+    static MongoEventStoreConformanceFixture spreadingTypeMarkerWrites(ConnectionString connectionString) {
+        return new MongoEventStoreConformanceFixture(connectionString, TimeRepresentation.RFC_3339_STRING, true);
+    }
+
+    private MongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation, boolean spreadTypeMarkerWrites) {
         this.timeRepresentation = timeRepresentation;
         this.mongoClient = MongoClients.create(connectionString);
         this.database = requireNonNull(connectionString.getDatabase());
         this.eventStoreConfig = new EventStoreConfig.Builder()
                 .timeRepresentation(timeRepresentation)
                 .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                .spreadTypeMarkerWrites(spreadTypeMarkerWrites)
                 .build();
         this.eventStore = new MongoEventStore(mongoClient, database, "events", eventStoreConfig);
     }

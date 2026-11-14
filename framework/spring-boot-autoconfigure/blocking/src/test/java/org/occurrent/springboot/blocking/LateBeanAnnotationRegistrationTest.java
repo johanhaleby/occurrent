@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Source;
 import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
@@ -54,6 +55,7 @@ import org.springframework.context.annotation.Scope;
 import org.springframework.core.NestedExceptionUtils;
 import org.mockito.ArgumentCaptor;
 
+import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -153,6 +155,19 @@ class LateBeanAnnotationRegistrationTest {
             context.getBean("hiddenProductFactory");
 
             verify(subscriptions).subscribe(eq("factory-product-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+        });
+    }
+
+    // A prediction that is a JDK proxy class listing two interfaces that declare one signature under different
+    // handler annotations is refused by SubscriptionAnnotations with an IllegalArgumentException. A refusal read
+    // from a prediction counts as an annotation, so the factory's product is built and its own class decides, the
+    // same as for the IllegalStateException refusals. The product here is an ordinary class with one handler.
+    @Test
+    void a_predicted_jdk_proxy_class_with_conflicting_handler_annotations_leaves_the_decision_to_the_built_product() {
+        runner.withUserConfiguration(ProxyPredictingFactoryBeanConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            verify(context.getBean(Subscriptions.class)).subscribe(eq("factory-product-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
         });
     }
 
@@ -384,6 +399,28 @@ class LateBeanAnnotationRegistrationTest {
             assertThatThrownBy(() -> handler.getValue().invoke(null, new TestEvent()))
                     .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
                     .hasMessageContaining("is final");
+        });
+    }
+
+    // A handler that overrides a generic interface method has the concrete parameter type, on(TestEvent) for on(E),
+    // so no interface of a JDK proxy declares the signature the scan read. The delivery goes through the interface
+    // method the handler implements instead of failing the selection on the proxy's class.
+    @Test
+    void a_late_generic_interface_handler_wrapped_in_a_jdk_proxy_afterwards_is_delivered_through_the_proxy() {
+        LATE_GENERIC_HANDLER_CALLS.set(0);
+        LATE_GENERIC_ADVICE_CALLS.set(0);
+        runner.withUserConfiguration(LateGenericInterfaceHandlerConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Function2<EventMetadata, TestEvent, ?>> handler = ArgumentCaptor.forClass(Function2.class);
+            context.getBean("genericHandlerSubscriber");
+            verify(context.getBean(Subscriptions.class))
+                    .subscribe(eq("late-generic-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), handler.capture());
+
+            assertThatCode(() -> handler.getValue().invoke(null, new TestEvent())).describedAs("delivery through the proxy").doesNotThrowAnyException();
+
+            assertThat(LATE_GENERIC_HANDLER_CALLS).describedAs("the handler ran").hasValue(1);
+            assertThat(LATE_GENERIC_ADVICE_CALLS).describedAs("the advice of the proxy ran").hasValue(1);
         });
     }
 
@@ -644,6 +681,55 @@ class LateBeanAnnotationRegistrationTest {
 
         @Subscription(id = "factory-product-handler")
         void on(TestEvent event) {
+        }
+    }
+
+    interface ConflictingAsynchronousOn {
+        @Subscription(id = "conflicting-a")
+        void on(TestEvent event);
+    }
+
+    interface ConflictingSynchronousOn {
+        @SynchronousSubscription(id = "conflicting-b")
+        void on(TestEvent event);
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class ProxyPredictingFactoryBeanConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        ProxyPredictingProductFactory proxyPredictingProductFactory() {
+            return new ProxyPredictingProductFactory();
+        }
+    }
+
+    // Predicts a JDK proxy class over the two conflicting interfaces and builds an ordinary object instead, which is
+    // all getObjectType() is allowed to be, a prediction.
+    static class ProxyPredictingProductFactory implements SmartFactoryBean<Marker> {
+        private static final Class<?> PREDICTED = Proxy.newProxyInstance(
+                ProxyPredictingProductFactory.class.getClassLoader(),
+                new Class<?>[]{ConflictingAsynchronousOn.class, ConflictingSynchronousOn.class},
+                (proxy, method, args) -> null).getClass();
+
+        @Override
+        public Marker getObject() {
+            return new FactoryProductSubscriber();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return PREDICTED;
         }
     }
 
@@ -1248,6 +1334,64 @@ class LateBeanAnnotationRegistrationTest {
                     proxyFactory.setTarget(bean);
                     proxyFactory.setProxyTargetClass(true);
                     proxyFactory.addAdvice((MethodInterceptor) MethodInvocation::proceed);
+                    return proxyFactory.getProxy();
+                }
+            };
+        }
+    }
+
+    private static final AtomicInteger LATE_GENERIC_HANDLER_CALLS = new AtomicInteger();
+    private static final AtomicInteger LATE_GENERIC_ADVICE_CALLS = new AtomicInteger();
+
+    interface LateGenericHandler<E> {
+        void on(E event);
+    }
+
+    public static class LateGenericHandlerSubscriber implements Marker, LateGenericHandler<TestEvent> {
+        @Override
+        @Subscription(id = "late-generic-handler")
+        public void on(TestEvent event) {
+            LATE_GENERIC_HANDLER_CALLS.incrementAndGet();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class LateGenericInterfaceHandlerConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @Lazy
+        Marker genericHandlerSubscriber() {
+            return new LateGenericHandlerSubscriber();
+        }
+
+        // Wraps the bean only after this post processor's own callback has registered the handler, so the JDK proxy
+        // does not exist when the handler is registered.
+        @Bean
+        static BeanPostProcessor lateJdkProxyPostProcessor() {
+            return new BeanPostProcessor() {
+                @Override
+                public Object postProcessAfterInitialization(Object bean, String beanName) {
+                    if (!(bean instanceof LateGenericHandlerSubscriber)) {
+                        return bean;
+                    }
+                    ProxyFactory proxyFactory = new ProxyFactory();
+                    proxyFactory.setTarget(bean);
+                    proxyFactory.setInterfaces(Marker.class, LateGenericHandler.class);
+                    proxyFactory.addAdvice((MethodInterceptor) invocation -> {
+                        LATE_GENERIC_ADVICE_CALLS.incrementAndGet();
+                        return invocation.proceed();
+                    });
                     return proxyFactory.getProxy();
                 }
             };

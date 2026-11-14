@@ -79,6 +79,9 @@ import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 @NullMarked
 public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader, DcbAppendConfirmation, CatchupReads, DcbCatchupReads {
 
+    // The one stripe of a type marker this store writes. It derives every stripe key a condition reads, so the versions it reports mean the same as on the MongoDB stores.
+    private static final int TYPE_MARKER_STRIPE = 0;
+
     // We cannot use ConcurrentMap since it doesn't maintain insertion order
     private final Map<String, CopyOnWriteArrayList<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
     private final AtomicLong nextPosition = new AtomicLong(1);
@@ -527,7 +530,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
             // Increment the markers of the events' tags and types, and of the condition's for a conditional append,
             // and keep the versions each event got
-            Set<String> markerKeys = new TreeSet<>(DcbMarkerVersionsSupport.eventMarkerKeys(eventsToAppend));
+            Set<String> markerKeys = new TreeSet<>(DcbMarkerVersionsSupport.eventMarkerKeys(eventsToAppend, TYPE_MARKER_STRIPE));
             boolean reportsVersions = condition != null && condition.consistencyToken().isPresent() && !(condition.criteria() instanceof DcbCriteria.MatchAll);
             if (condition != null && !(condition.criteria() instanceof DcbCriteria.MatchAll)) {
                 markerKeys.addAll(DcbMarkerVersionsSupport.queryMarkerKeys(condition.criteria()));
@@ -535,7 +538,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             Map<String, Long> incremented = incrementMarkers(markerKeys);
             for (CloudEvent added : addedEvents) {
                 Map<String, Long> eventVersions = new HashMap<>();
-                DcbMarkerVersionsSupport.eventMarkerKeys(added).forEach(key -> eventVersions.put(key, incremented.get(key)));
+                DcbMarkerVersionsSupport.eventMarkerKeys(added, TYPE_MARKER_STRIPE).forEach(key -> eventVersions.put(key, incremented.get(key)));
                 markerVersionsByPosition.put(position(added), Map.copyOf(eventVersions));
             }
             Optional<DcbMarkerVersions> appendedVersions = reportsVersions

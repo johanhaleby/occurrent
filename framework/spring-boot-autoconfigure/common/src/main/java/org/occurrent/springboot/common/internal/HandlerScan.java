@@ -1,0 +1,960 @@
+/*
+ *
+ *  Copyright 2024 Johan Haleby
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+package org.occurrent.springboot.common.internal;
+
+import org.jspecify.annotations.Nullable;
+import org.occurrent.annotation.StreamId;
+import org.occurrent.annotation.StreamVersion;
+import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
+import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameterKind;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.aop.scope.ScopedProxyUtils;
+import org.springframework.aop.support.AopUtils;
+import org.springframework.asm.AnnotationVisitor;
+import org.springframework.asm.ClassReader;
+import org.springframework.asm.ClassVisitor;
+import org.springframework.asm.MethodVisitor;
+import org.springframework.asm.Opcodes;
+import org.springframework.asm.SpringAsmInfo;
+import org.springframework.beans.factory.config.BeanDefinitionHolder;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.beans.factory.support.RootBeanDefinition;
+import org.springframework.core.BridgeMethodResolver;
+import org.springframework.core.MethodIntrospector;
+import org.springframework.core.ResolvableType;
+import org.springframework.core.annotation.AnnotationUtils;
+import org.springframework.core.annotation.MergedAnnotation;
+import org.springframework.core.annotation.MergedAnnotations;
+import org.springframework.core.annotation.MergedAnnotations.SearchStrategy;
+import org.springframework.util.ClassUtils;
+
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.Parameter;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+
+/**
+ * How the Spring Boot starters find a bean's handler methods, read their types against the bean's class, and decide which method a call runs on a proxy. Internal to the Spring Boot starters, not an API, so the scan rules can change in a minor release.
+ */
+public final class HandlerScan {
+
+    private static final Logger log = LoggerFactory.getLogger(HandlerScan.class);
+
+    private HandlerScan() {
+    }
+
+    /**
+     * Classify each parameter of a subscription handler as {@link SubscriptionAnnotations#analyzeParameters(Method, Predicate, boolean)}
+     * does, reading each parameter's type as {@code implementation} sees it. A handler that {@code implementation}
+     * inherits from a generic superclass or interface, such as {@code on(E event)} in a {@code Base<E>} that
+     * {@code implementation} extends as {@code Base<OrderPlaced>}, then has {@code OrderPlaced} as its event type. A type
+     * variable that {@code implementation} does not bind, through a raw supertype for example, keeps the type the
+     * method declares, its bound or {@code Object}. A bridge method's types are read from the method it bridges.
+     *
+     * @param method                  the handler method
+     * @param implementation          the class whose instances the handler runs on, see {@link #implementationClassOf(Object)}
+     * @param isMetadataParameter     whether a parameter type is a metadata parameter
+     * @param supportsStreamAccessors whether {@code @StreamId}/{@code @StreamVersion} parameters are allowed
+     * @return the classified parameters, in declaration order
+     */
+    public static List<HandlerParameter> analyzeParameters(Method method, Class<?> implementation, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
+        // The bridge javac adds to a public class for a public method it inherits from a superclass that isn't public
+        // has the erased parameter types and no generic signature, so the types are read from the method it bridges
+        return classifyParameters(method, bridgedMethod(method), implementation, isMetadataParameter, supportsStreamAccessors);
+    }
+
+    /**
+     * Classify each parameter of a subscription handler, reading each parameter's type from {@code method} itself as
+     * its declaring class sees it, so a type variable gives its bound and a bridge method its erased types, as
+     * {@link SubscriptionAnnotations#analyzeParameters(Method, Predicate, boolean)} did in 0.34.0.
+     *
+     * @param method                  the handler method
+     * @param isMetadataParameter     whether a parameter type is a metadata parameter
+     * @param supportsStreamAccessors whether {@code @StreamId}/{@code @StreamVersion} parameters are allowed
+     * @return the classified parameters, in declaration order
+     */
+    public static List<HandlerParameter> analyzeDeclaredParameters(Method method, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
+        return classifyParameters(method, method, method.getDeclaringClass(), isMetadataParameter, supportsStreamAccessors);
+    }
+
+    private static List<HandlerParameter> classifyParameters(Method method, Method typeSource, Class<?> implementation, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
+        List<HandlerParameter> parameters = new ArrayList<>();
+        boolean hasEvent = false;
+        boolean hasMetadata = false;
+        boolean hasStreamId = false;
+        boolean hasStreamVersion = false;
+        Parameter[] declaredParameters = method.getParameters();
+        for (int index = 0; index < declaredParameters.length; index++) {
+            Parameter parameter = declaredParameters[index];
+            Class<?> type = ResolvableType.forMethodParameter(typeSource, index, implementation).resolve(typeSource.getParameterTypes()[index]);
+            boolean streamIdAnnotated = parameter.isAnnotationPresent(StreamId.class);
+            boolean streamVersionAnnotated = parameter.isAnnotationPresent(StreamVersion.class);
+            if (streamIdAnnotated && streamVersionAnnotated) {
+                throw new IllegalArgumentException("A subscription parameter may not be annotated with both @StreamId and @StreamVersion, but %s#%s declares one that is.".formatted(method.getDeclaringClass().getName(), method.getName()));
+            }
+            HandlerParameterKind kind;
+            if (streamIdAnnotated) {
+                if (!supportsStreamAccessors) {
+                    throw new IllegalArgumentException("@StreamId is only supported on @Subscription, @StreamSubscription, and @SynchronousSubscription handlers, but %s#%s declares it.".formatted(method.getDeclaringClass().getName(), method.getName()));
+                }
+                if (type != String.class) {
+                    throw new IllegalArgumentException("A @StreamId parameter must be of type String, but %s#%s declares it as %s.".formatted(method.getDeclaringClass().getName(), method.getName(), type.getName()));
+                }
+                if (hasStreamId) {
+                    throw new IllegalArgumentException("A subscription method may declare at most one @StreamId parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
+                }
+                hasStreamId = true;
+                kind = HandlerParameterKind.STREAM_ID;
+            } else if (streamVersionAnnotated) {
+                if (!supportsStreamAccessors) {
+                    throw new IllegalArgumentException("@StreamVersion is only supported on @Subscription, @StreamSubscription, and @SynchronousSubscription handlers, but %s#%s declares it.".formatted(method.getDeclaringClass().getName(), method.getName()));
+                }
+                if (type != long.class && type != Long.class) {
+                    throw new IllegalArgumentException("A @StreamVersion parameter must be of type long or Long, but %s#%s declares it as %s.".formatted(method.getDeclaringClass().getName(), method.getName(), type.getName()));
+                }
+                if (hasStreamVersion) {
+                    throw new IllegalArgumentException("A subscription method may declare at most one @StreamVersion parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
+                }
+                hasStreamVersion = true;
+                kind = HandlerParameterKind.STREAM_VERSION;
+            } else if (isMetadataParameter.test(type)) {
+                if (hasMetadata) {
+                    throw new IllegalArgumentException("A subscription method may declare at most one metadata parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
+                }
+                hasMetadata = true;
+                kind = HandlerParameterKind.METADATA;
+            } else {
+                if (hasEvent) {
+                    throw new IllegalArgumentException("A subscription method may declare only one event parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
+                }
+                hasEvent = true;
+                kind = HandlerParameterKind.EVENT;
+            }
+            parameters.add(new HandlerParameter(type, kind));
+        }
+        return parameters;
+    }
+
+    /**
+     * The class whose code runs when a handler or factory is invoked on {@code bean}, which is the user class,
+     * {@link ClassUtils#getUserClass}, of the object {@link SubscriptionAnnotations#ultimateTarget} unwraps
+     * {@code bean} to. A proxy whose target source is not a fixed singleton is not unwrapped, so a CGLIB proxy like
+     * that answers with the class it subclasses, and a JDK interface proxy like that with its own proxy class, as in
+     * 0.34.0. Both annotation post-processors scan this class, and handler and factory generics are read against it,
+     * so the two agree on one {@link Method} per handler.
+     *
+     * @param bean the (possibly proxied) bean
+     * @return the class a bean is scanned for handlers in, and a handler's or factory's generic types are read against
+     */
+    public static Class<?> implementationClassOf(Object bean) {
+        // The target of a JDK proxy that isn't unwrapped can be a bean of its own, scanned under its own name, so the
+        // proxy class is read instead of the class its target source names, or the handlers would register twice
+        return ClassUtils.getUserClass(SubscriptionAnnotations.ultimateTarget(bean).getClass());
+    }
+
+    /**
+     * The method to invoke on {@code bean} to run {@code method}, the one {@link AopUtils#selectInvocableMethod} selects
+     * for {@code bean}'s class. A JDK interface proxy implements only its interfaces, and the scan reads the class
+     * behind it, so when the scanned method overrides a generic interface method, such as {@code on(Placed)} for
+     * {@code on(E)}, no interface declares the scanned signature and the selection fails. The interface method that
+     * the class behind the proxy implements with {@code method} is returned instead, so the call still goes through
+     * the proxy and its advice. When the selection is an interface method of the same signature that {@code method}
+     * doesn't implement, such as a default method beside a private handler of a superclass, invoking it would run
+     * another body under the handler's id, so it is refused.
+     *
+     * @param bean   the (possibly proxied) object the method is about to be invoked on
+     * @param method the method the scan read
+     * @return the method to invoke on {@code bean}
+     * @throws IllegalStateException when {@code bean} has no method that runs {@code method}
+     */
+    public static Method invocableMethodOn(Object bean, Method method) {
+        Method selected;
+        try {
+            selected = AopUtils.selectInvocableMethod(method, bean.getClass());
+        } catch (IllegalStateException e) {
+            Method interfaceMethod = proxyInterfaceMethodRunning(bean, method);
+            if (interfaceMethod == null) {
+                throw e;
+            }
+            return interfaceMethod;
+        }
+        if (!selected.equals(method) && !selectionRuns(bean, selected, method)) {
+            throw new IllegalStateException("Invoking %s on %s runs %s instead".formatted(method, bean.getClass().getName(), selected));
+        }
+        return selected;
+    }
+
+    // selectInvocableMethod falls back to a method of the same signature on the proxy's interfaces, which runs method
+    // only when method implements it. An interface method is public, so a private or package-private method never
+    // does. The class behind a proxy that isn't unwrapped can't be read, so there only the modifiers decide.
+    // getMostSpecificMethod answers the method a bridge calls, and the scan can hand over the bridge javac adds to a
+    // public class for a public method of a package-private superclass, so method is compared as the method it bridges
+    private static boolean selectionRuns(Object bean, Method selected, Method method) {
+        if (!Modifier.isPublic(method.getModifiers())) {
+            return false;
+        }
+        Class<?> implementation = implementationClassOf(bean);
+        return java.lang.reflect.Proxy.isProxyClass(implementation) || AopUtils.getMostSpecificMethod(selected, implementation).equals(bridgedMethod(method));
+    }
+
+    // Compares method as the method it bridges, for the reason selectionRuns does
+    private static @Nullable Method proxyInterfaceMethodRunning(Object bean, Method method) {
+        if (!java.lang.reflect.Proxy.isProxyClass(bean.getClass())) {
+            return null;
+        }
+        Class<?> implementation = implementationClassOf(bean);
+        Method bridged = bridgedMethod(method);
+        for (Class<?> proxiedInterface : bean.getClass().getInterfaces()) {
+            for (Method interfaceMethod : proxiedInterface.getMethods()) {
+                if (!Modifier.isStatic(interfaceMethod.getModifiers()) && interfaceMethod.getName().equals(method.getName())
+                        && interfaceMethod.getParameterCount() == method.getParameterCount()
+                        && AopUtils.getMostSpecificMethod(interfaceMethod, implementation).equals(bridged)) {
+                    return interfaceMethod;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Answers whether {@code method} is package-private and declared in another runtime package than
+     * {@code implementation}, which is another package or the same package name in another class loader. A CGLIB proxy
+     * of {@code implementation} is generated in {@code implementation}'s runtime package, so it cannot override
+     * such a method, and invoking the method on the proxy runs the method's own body on the proxy instance, with no
+     * advice and none of the bean's state.
+     *
+     * @param method         the handler or factory method
+     * @param implementation the class a CGLIB proxy in the bean's chain subclasses
+     * @return {@code true} if a CGLIB proxy of {@code implementation} cannot override {@code method} for being package-private
+     */
+    public static boolean isPackagePrivateOutsidePackageOf(Method method, Class<?> implementation) {
+        int modifiers = method.getModifiers();
+        return !Modifier.isPublic(modifiers) && !Modifier.isProtected(modifiers) && !Modifier.isPrivate(modifiers)
+                && !inSameRuntimePackage(method.getDeclaringClass(), implementation);
+    }
+
+    /**
+     * Read type argument {@code index} of {@code method}'s return type against {@code implementation} and return its
+     * class. A factory that {@code implementation} inherits from a generic superclass or interface, such as
+     * {@code Projection<S, MyEvent, String> projection()} in a {@code Base<S>} that {@code implementation} extends as
+     * {@code Base<MyView>}, then names {@code MyView}. A parameterized argument names its raw class.
+     *
+     * @param method         the factory method
+     * @param implementation the class whose instance the factory runs on, see {@link #implementationClassOf(Object)}
+     * @param index          the type argument to read
+     * @return the class, or {@code null} when the return type has no such type argument, or the argument is a wildcard
+     * or a type variable that {@code implementation} does not bind, through a raw supertype or a type parameter of its
+     * own for example, or one the method itself declares
+     */
+    public static @Nullable Class<?> returnTypeArgument(Method method, Class<?> implementation, int index) {
+        // A bridge has the raw return type, so it is read from the method the bridge calls, as analyzeParameters does
+        if (!(bridgedMethod(method).getGenericReturnType() instanceof ParameterizedType returnType) || returnType.getActualTypeArguments().length <= index) {
+            return null;
+        }
+        Type argument = returnType.getActualTypeArguments()[index];
+        // ResolvableType.resolve() falls back to a variable's bound, which names no class the factory chose, so the
+        // binding is followed by hand and an unbound variable answers null
+        while (argument instanceof TypeVariable<?> variable) {
+            if (!(variable.getGenericDeclaration() instanceof Class<?> declaringClass)) {
+                return null;
+            }
+            int position = Arrays.asList(declaringClass.getTypeParameters()).indexOf(variable);
+            Type binding = ResolvableType.forClass(implementation).as(declaringClass).getGeneric(position).getType();
+            if (binding.equals(variable)) {
+                return null;
+            }
+            argument = binding;
+        }
+        if (argument instanceof Class<?> type) {
+            return type;
+        }
+        if (argument instanceof ParameterizedType parameterized && parameterized.getRawType() instanceof Class<?> raw) {
+            return raw;
+        }
+        return null;
+    }
+
+    /**
+     * The methods of {@code type} annotated with any of {@code annotationTypes}, read from {@code type}, its
+     * superclasses and its interfaces, so an inherited handler and an interface default method count the way a
+     * declared one does.
+     * Each method is the one {@code type} actually runs, so an override is found once, under its own annotation if it
+     * repeats one and under the overridden method's if it doesn't. Generic bridge methods are left out, so a generic
+     * handler is found once too. A public class that inherits a public method from a package-private superclass gives
+     * the bridge method javac generates for it, which calls the inherited method. Overriding follows the JVM's rules, under which a package-private method is overridden only
+     * from its own package or through a chain of overrides that starts there. Spring's annotation search ignores
+     * packages, so it can give a method the annotation of a package-private method the method doesn't override. Such a
+     * method is refused with an {@link IllegalStateException}, since nothing says which of the two bodies the handler
+     * is, unless {@code type} or a superclass below it declares a method of the same signature, which is then checked
+     * instead. A package-private method that a method of {@code type} or one of its superclasses overrides is left out, since
+     * {@code type} never runs it. A static method an interface declares is left out, since a class does not inherit
+     * it. A static method a superclass declares is returned like any other, so a static subscription handler there is
+     * refused the way one the class declares is. Both annotation post-processors call this, so they find the same
+     * methods.
+     * <p>
+     * A package-private annotated method is returned when {@code type} runs it, even when a method of the same
+     * signature from another package sits between it and {@code type}. That method doesn't override it, and is
+     * returned on its own when it has a handler annotation. When that method is public or protected, a CGLIB proxy of
+     * {@code type} runs it for both, which {@link #methodACglibProxyRunsInsteadOf} answers so the caller can refuse
+     * the package-private one.
+     *
+     * @param type            the concrete class the scan reads
+     * @param annotationTypes the handler annotations to look for, searched with {@link SearchStrategy#TYPE_HIERARCHY}
+     * @return the matching methods, empty if there are none. When a method of a superclass or interface of
+     * {@code type} names a class missing at runtime and no superclass or interface of {@code type} declares a handler,
+     * only the methods {@code type} declares are matched, which is logged at debug level
+     * @throws NoClassDefFoundError  when a method {@code type} declares names a class missing at runtime, as in 0.34.0
+     * @throws IllegalStateException when a method has an annotation Spring reads from a method it does not override,
+     *                               or when a method of a superclass or interface names a class missing at runtime and
+     *                               a superclass or interface declares a handler no method {@code type} declares runs,
+     *                               or has a class file that can't be read
+     * @throws IllegalArgumentException when {@code type} is a JDK proxy and two of its interfaces declare a method of
+     *                                  the same name and parameter types with different handler annotations, or with
+     *                                  one handler annotation whose attributes differ
+     */
+    public static Set<Method> handlerMethods(Class<?> type, List<Class<? extends Annotation>> annotationTypes) {
+        if (!AnnotationUtils.isCandidateClass(type, annotationTypes)) {
+            return Set.of();
+        }
+        MethodIntrospector.MetadataLookup<Boolean> handlerLookup = method -> {
+            if (Modifier.isStatic(method.getModifiers()) && method.getDeclaringClass().isInterface()) {
+                return null;
+            }
+            MergedAnnotations annotations = MergedAnnotations.from(method, SearchStrategy.TYPE_HIERARCHY);
+            // MethodIntrospector can hand over a bridge method, and keeps either the bridge or the method it bridges, so
+            // the checks below compare against the method it bridges
+            Method bridged = BridgeMethodResolver.findBridgedMethod(method);
+            boolean annotated = false;
+            for (Class<? extends Annotation> annotationType : annotationTypes) {
+                MergedAnnotation<? extends Annotation> annotation = annotations.get(annotationType);
+                if (!annotation.isPresent()) {
+                    continue;
+                }
+                // MethodIntrospector keeps a package-private method of another package than type even when a method of
+                // its own package overrides it, since Spring decides overriding by type's package alone
+                if (!methodTheJvmRuns(bridged, type).equals(bridged)) {
+                    return null;
+                }
+                if (annotation.getSource() instanceof Method declaration && !methodTheJvmRuns(declaration, type).equals(bridged)) {
+                    // A method of the same signature declared below it is the one the class shows for that
+                    // signature, and it is checked on its own, as a handler or refused
+                    if (declaredBelow(bridged, type)) {
+                        return null;
+                    }
+                    throw annotationFromAMethodNotOverridden(bridged, declaration, annotation);
+                }
+                annotated = true;
+            }
+            return annotated ? Boolean.TRUE : null;
+        };
+        // A method type itself declares that names a class missing at runtime fails the scan, as in 0.34.0
+        type.getDeclaredMethods();
+        Set<Method> handlers;
+        try {
+            handlers = new LinkedHashSet<>(MethodIntrospector.selectMethods(type, handlerLookup).keySet());
+            // MethodIntrospector reads a package-private method through ClassUtils.getMostSpecificMethod, which takes
+            // the first method of the same signature up from type when type is in the method's package, even a method
+            // of another package that doesn't override it. The method MethodIntrospector never inspects is still the
+            // one the JVM runs, so each package-private method that ClassUtils.getMostSpecificMethod replaces is
+            // inspected here
+            for (Class<?> candidateClass = type; candidateClass != null && candidateClass != Object.class; candidateClass = candidateClass.getSuperclass()) {
+                for (Method method : candidateClass.getDeclaredMethods()) {
+                    int modifiers = method.getModifiers();
+                    boolean packagePrivate = !Modifier.isPublic(modifiers) && !Modifier.isProtected(modifiers) && !Modifier.isPrivate(modifiers);
+                    if (packagePrivate && !method.isSynthetic() && ClassUtils.getMostSpecificMethod(method, type) != method
+                            && !handlers.contains(method) && Boolean.TRUE.equals(handlerLookup.inspect(method))) {
+                        handlers.add(method);
+                    }
+                }
+            }
+        } catch (IllegalStateException | LinkageError e) {
+            if (!isReadFailure(e)) {
+                throw e;
+            }
+            // When a superclass or interface method names a class missing at runtime, the scan reads only the methods type
+            // declares itself, as 0.34.0 did, and fails when a superclass or interface declares a handler none of them runs
+            log.debug("Reading only the methods {} declares in the search for Occurrent handler annotations, since its superclasses and interfaces can't be read", type.getName(), e);
+            handlers = declaredHandlerMethods(type, handlerLookup, annotationTypes);
+            refuseHandlersTheFallbackDrops(type, annotationTypes, handlers, e instanceof LinkageError linkageError ? linkageError : (LinkageError) e.getCause());
+        }
+        return java.lang.reflect.Proxy.isProxyClass(type) ? firstOfEachSignature(type, handlers, annotationTypes) : handlers;
+    }
+
+    // ReflectionUtils reports a class it can't read as an IllegalStateException caused by the LinkageError, and a
+    // refusal of the handler lookup has no cause
+    private static boolean isReadFailure(Throwable e) {
+        return e instanceof LinkageError || e.getCause() instanceof LinkageError;
+    }
+
+    /**
+     * The method a bridge calls, as {@link BridgeMethodResolver#findBridgedMethod(Method)} finds it, or the bridge
+     * itself when finding it means reading a class missing at runtime. The scan returns a bridge like that when a public
+     * class inherits a handler as a public method from a superclass that isn't public and whose methods name a class
+     * missing at runtime, as 0.34.0 did. The bridge has the parameter and return types of the method it calls, erased.
+     *
+     * @param method the method, a bridge or not
+     * @return the method the bridge calls, or {@code method} when it isn't a bridge or the method it calls can't be read
+     */
+    public static Method bridgedMethod(Method method) {
+        try {
+            return BridgeMethodResolver.findBridgedMethod(method);
+        } catch (IllegalStateException | LinkageError e) {
+            if (!isReadFailure(e)) {
+                throw e;
+            }
+            return method;
+        }
+    }
+
+    // A handler declared by a superclass or interface would never register once the scan reads only the methods type
+    // declares, so a handler annotation on one fails the scan, unless a method type declares and the scan returns runs
+    // that handler. The class file of a class whose methods can't be read is read without loading it. A synthetic
+    // method of a class that can be read is left out, since a bridge there runs a method the scan checks on its own
+    private static void refuseHandlersTheFallbackDrops(Class<?> type, List<Class<? extends Annotation>> annotationTypes, Set<Method> handlers, LinkageError readFailure) {
+        for (Class<?> candidate : superclassesAndInterfacesOf(type)) {
+            Method[] declaredMethods;
+            try {
+                declaredMethods = candidate.getDeclaredMethods();
+            } catch (LinkageError e) {
+                refuseHandlersOfUnreadableClass(type, candidate, annotationTypes, handlers, e);
+                continue;
+            }
+            Set<String> neverRegistered = new LinkedHashSet<>();
+            for (Method method : declaredMethods) {
+                if (method.isSynthetic() || candidate.isInterface() && Modifier.isStatic(method.getModifiers())
+                        || annotationTypes.stream().noneMatch(MergedAnnotations.from(method)::isPresent)) {
+                    continue;
+                }
+                ClassFileMethod handler = new ClassFileMethod(method.getName(), parametersOf(org.springframework.asm.Type.getMethodDescriptor(method)), method.getModifiers());
+                if (!runByAHandlerTypeDeclares(type, candidate, handler, handlers)) {
+                    neverRegistered.add(candidate.getName() + "#" + handler);
+                }
+            }
+            if (!neverRegistered.isEmpty()) {
+                String missing = missingClassOf(readFailure);
+                throw new IllegalStateException(("The Occurrent handler %s would never register, since %s is missing at runtime, so the scan reads only the methods %s declares. "
+                        + "Put %s on the classpath.").formatted(String.join(" and ", neverRegistered), missing, type.getName(), missing), readFailure);
+            }
+        }
+    }
+
+    private static String missingClassOf(LinkageError readFailure) {
+        return readFailure instanceof NoClassDefFoundError && readFailure.getMessage() != null ? readFailure.getMessage().replace('/', '.') : readFailure.toString();
+    }
+
+    // A handler declared by a superclass or interface whose methods can't be read would never register, so its class
+    // file is read without loading it, and a handler annotation found there fails the scan, unless a method type
+    // declares and the scan returns runs that handler
+    private static void refuseHandlersOfUnreadableClass(Class<?> type, Class<?> candidate, List<Class<? extends Annotation>> annotationTypes, Set<Method> handlers, LinkageError unreadable) {
+        String missing = missingClassOf(unreadable);
+        Set<ClassFileMethod> annotated;
+        try {
+            annotated = annotatedMethodsInClassFile(candidate, annotationTypes);
+        } catch (IOException | IllegalArgumentException e) {
+            IllegalStateException failure = new IllegalStateException(("The methods of %s can't be read, since %s is missing at runtime, and neither can its class file, so the scan can't tell "
+                    + "whether it declares an Occurrent handler. Put %s on the classpath.").formatted(candidate.getName(), missing, missing), unreadable);
+            failure.addSuppressed(e);
+            throw failure;
+        }
+        Set<String> neverRegistered = new LinkedHashSet<>();
+        for (ClassFileMethod method : annotated) {
+            // handlerMethods doesn't return a static method an interface declares
+            if (candidate.isInterface() && method.isStatic()) {
+                continue;
+            }
+            if (!runByAHandlerTypeDeclares(type, candidate, method, handlers)) {
+                neverRegistered.add(candidate.getName() + "#" + method);
+            }
+        }
+        if (!neverRegistered.isEmpty()) {
+            throw new IllegalStateException(("The methods of %s can't be read, since %s is missing at runtime, so its Occurrent handler %s would never register. "
+                    + "Put %s on the classpath.").formatted(candidate.getName(), missing, String.join(" and ", neverRegistered), missing), unreadable);
+        }
+    }
+
+    // A method of a class file, with its parameter types as its descriptor up to the closing parenthesis
+    private record ClassFileMethod(String name, String parameters, int access) {
+        boolean isStatic() {
+            return (access & Opcodes.ACC_STATIC) != 0;
+        }
+
+        // Such as on(java.lang.String)
+        @Override
+        public String toString() {
+            return Arrays.stream(org.springframework.asm.Type.getArgumentTypes(parameters + "V")).map(org.springframework.asm.Type::getClassName)
+                    .collect(Collectors.joining(", ", name + "(", ")"));
+        }
+    }
+
+    // The methods of the class file of candidate that have one of annotationTypes, directly or as a meta-annotation,
+    // read without loading candidate
+    private static Set<ClassFileMethod> annotatedMethodsInClassFile(Class<?> candidate, List<Class<? extends Annotation>> annotationTypes) throws IOException {
+        ClassLoader classLoader = classLoaderOf(candidate);
+        ClassReader reader = classReaderOf(candidate);
+        Set<ClassFileMethod> annotated = new LinkedHashSet<>();
+        reader.accept(new ClassVisitor(SpringAsmInfo.ASM_VERSION) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, @Nullable String signature, String @Nullable [] exceptions) {
+                return new MethodVisitor(SpringAsmInfo.ASM_VERSION) {
+                    @Override
+                    public @Nullable AnnotationVisitor visitAnnotation(String annotationDescriptor, boolean visible) {
+                        if (visible && isHandlerAnnotation(org.springframework.asm.Type.getType(annotationDescriptor).getClassName(), classLoader, annotationTypes)) {
+                            annotated.add(new ClassFileMethod(name, parametersOf(descriptor), access));
+                        }
+                        return null;
+                    }
+                };
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return annotated;
+    }
+
+    // Reads the class file of type without loading the classes it names
+    private static ClassReader classReaderOf(Class<?> type) throws IOException {
+        ClassLoader classLoader = classLoaderOf(type);
+        String classFileName = ClassUtils.convertClassNameToResourcePath(type.getName()) + ClassUtils.CLASS_FILE_SUFFIX;
+        try (InputStream classFile = classLoader == null ? null : classLoader.getResourceAsStream(classFileName)) {
+            if (classFile == null) {
+                throw new FileNotFoundException(classFileName);
+            }
+            return new ClassReader(classFile);
+        }
+    }
+
+    private static @Nullable ClassLoader classLoaderOf(Class<?> type) {
+        return type.getClassLoader() != null ? type.getClassLoader() : ClassUtils.getDefaultClassLoader();
+    }
+
+    // The JVM ignores an annotation whose class is missing, so the scan does too
+    private static boolean isHandlerAnnotation(String className, @Nullable ClassLoader classLoader, List<Class<? extends Annotation>> annotationTypes) {
+        Class<?> annotationClass;
+        try {
+            annotationClass = ClassUtils.forName(className, classLoader);
+        } catch (ClassNotFoundException | LinkageError e) {
+            return false;
+        }
+        return annotationTypes.stream().anyMatch(annotationType -> annotationType == annotationClass
+                || annotationClass.isAnnotation() && MergedAnnotations.from(annotationClass).isPresent(annotationType));
+    }
+
+    private static String parametersOf(String descriptor) {
+        return descriptor.substring(0, descriptor.indexOf(')') + 1);
+    }
+
+    // Whether a method type declares runs method when it is invoked on an instance of type, and the scan returns that
+    // method or the method it calls when it's a bridge. That is a method of the same name and parameter types that
+    // overrides it, which includes the visibility bridge javac adds for a public method of a superclass that isn't public
+    private static boolean runByAHandlerTypeDeclares(Class<?> type, Class<?> candidate, ClassFileMethod method, Set<Method> handlers) {
+        if (!overriddenInType(type, candidate, method)) {
+            return false;
+        }
+        for (Method declared : type.getDeclaredMethods()) {
+            if (declared.getName().equals(method.name()) && parametersOf(org.springframework.asm.Type.getMethodDescriptor(declared)).equals(method.parameters())
+                    && (handlers.contains(declared) || declared.isBridge() && callsAnyOf(type, declared, handlers))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean callsAnyOf(Class<?> type, Method bridge, Set<Method> handlers) {
+        BridgeCall call = bridgeCallsOf(type).get(bridge.getName() + org.springframework.asm.Type.getMethodDescriptor(bridge));
+        return call != null && handlers.stream().anyMatch(handler -> call.calls(type, handler));
+    }
+
+    // Whether a method of type with the name and parameter types of method overrides it, by the JVM's rules. A static or
+    // private method is never overridden. A package-private method of another package than type's is overridden only
+    // through a public or protected method of the same name and parameter types that a class between them declares in
+    // its package. When that class can't be read, the scan can't tell, and counts the method as not overridden
+    private static boolean overriddenInType(Class<?> type, Class<?> candidate, ClassFileMethod method) {
+        int access = method.access();
+        if (method.isStatic() || (access & Opcodes.ACC_PRIVATE) != 0) {
+            return false;
+        }
+        if ((access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_PROTECTED)) != 0 || inSameRuntimePackage(candidate, type)) {
+            return true;
+        }
+        for (Class<?> between = type.getSuperclass(); between != null && between != candidate; between = between.getSuperclass()) {
+            if (inSameRuntimePackage(between, candidate) && declaresOverridable(between, method)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean declaresOverridable(Class<?> declaringClass, ClassFileMethod method) {
+        Method[] declaredMethods;
+        try {
+            declaredMethods = declaringClass.getDeclaredMethods();
+        } catch (LinkageError e) {
+            return false;
+        }
+        return Arrays.stream(declaredMethods).anyMatch(declared -> declared.getName().equals(method.name())
+                && parametersOf(org.springframework.asm.Type.getMethodDescriptor(declared)).equals(method.parameters())
+                && (Modifier.isPublic(declared.getModifiers()) || Modifier.isProtected(declared.getModifiers())) && !Modifier.isStatic(declared.getModifiers()));
+    }
+
+    // The method a bridge calls, as the bridge's code in the class file names it. The bridge javac adds for an override
+    // with other erased types and the visibility bridge it adds for a public method of a superclass that isn't public can
+    // have the same name and parameter types, and only the code tells them apart. The first calls a method of the class
+    // that declares the bridge, the second the method of a superclass or interface that class inherits
+    private record BridgeCall(String owner, String name, String descriptor) {
+        boolean callsAMethodOf(Class<?> type) {
+            return owner.equals(org.springframework.asm.Type.getInternalName(type));
+        }
+
+        // Whether a bridge type declares, with this call, runs method
+        boolean calls(Class<?> type, Method method) {
+            if (!name.equals(method.getName()) || !descriptor.equals(org.springframework.asm.Type.getMethodDescriptor(method))) {
+                return false;
+            }
+            if (callsAMethodOf(type)) {
+                return method.getDeclaringClass() == type;
+            }
+            return method.getDeclaringClass() != type && superclassesAndInterfacesOf(type).stream()
+                    .anyMatch(ownerClass -> org.springframework.asm.Type.getInternalName(ownerClass).equals(owner) && method.getDeclaringClass().isAssignableFrom(ownerClass));
+        }
+    }
+
+    // The method each bridge type declares calls, keyed by the bridge's name and descriptor, read from the class file
+    // of type. Empty when the class file can't be read, so no bridge counts as calling a method the scan returns
+    private static Map<String, BridgeCall> bridgeCallsOf(Class<?> type) {
+        ClassReader reader;
+        try {
+            reader = classReaderOf(type);
+        } catch (IOException | IllegalArgumentException e) {
+            log.debug("Can't read the class file of {} to find the methods its bridges call", type.getName(), e);
+            return Map.of();
+        }
+        Map<String, BridgeCall> calls = new HashMap<>();
+        reader.accept(new ClassVisitor(SpringAsmInfo.ASM_VERSION) {
+            @Override
+            public @Nullable MethodVisitor visitMethod(int access, String name, String descriptor, @Nullable String signature, String @Nullable [] exceptions) {
+                if ((access & Opcodes.ACC_BRIDGE) == 0) {
+                    return null;
+                }
+                return new MethodVisitor(SpringAsmInfo.ASM_VERSION) {
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String calledName, String calledDescriptor, boolean isInterface) {
+                        calls.putIfAbsent(name + descriptor, new BridgeCall(owner, calledName, calledDescriptor));
+                    }
+                };
+            }
+        }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return calls;
+    }
+
+    // Every superclass and interface of type, up to and without Object
+    private static Set<Class<?>> superclassesAndInterfacesOf(Class<?> type) {
+        Set<Class<?>> classes = new LinkedHashSet<>();
+        Deque<Class<?>> pending = new ArrayDeque<>();
+        pending.add(type);
+        while (!pending.isEmpty()) {
+            Class<?> current = pending.removeFirst();
+            if (current == Object.class || !classes.add(current)) {
+                continue;
+            }
+            if (current.getSuperclass() != null) {
+                pending.add(current.getSuperclass());
+            }
+            pending.addAll(Arrays.asList(current.getInterfaces()));
+        }
+        classes.remove(type);
+        return classes;
+    }
+
+    // The handlers among the methods type declares, for a type whose superclasses or interfaces can't be read. A bridge
+    // counts as the method it calls, as MethodIntrospector counts it, and a visibility bridge that Spring resolves to a
+    // method its code doesn't call counts as itself. When finding the method a bridge calls has to
+    // read a class missing at runtime, the bridge's code says it. A bridge that calls a method of type is left out, since
+    // that method is checked on its own. Any other bridge with a handler annotation javac copied to it is the handler,
+    // as in 0.34.0, and so is one whose class file can't be read. Any other method is left out when checking it for a
+    // handler annotation has to read a class missing at runtime
+    private static Set<Method> declaredHandlerMethods(Class<?> type, MethodIntrospector.MetadataLookup<Boolean> handlerLookup, List<Class<? extends Annotation>> annotationTypes) {
+        Set<Method> handlers = new LinkedHashSet<>();
+        Map<String, BridgeCall> bridgeCalls = null;
+        for (Method method : type.getDeclaredMethods()) {
+            if (method.isSynthetic() && !method.isBridge()) {
+                continue;
+            }
+            try {
+                Method candidate = BridgeMethodResolver.findBridgedMethod(method);
+                if (candidate != method) {
+                    if (bridgeCalls == null) {
+                        bridgeCalls = bridgeCallsOf(type);
+                    }
+                    // Spring can resolve a visibility bridge to a default method of an interface when a superclass that
+                    // isn't public declares the method the bridge calls with the same signature. The bridge runs the
+                    // superclass method, so the bridge itself is the handler, as in the full scan and in 0.34.0
+                    BridgeCall call = bridgeCalls.get(method.getName() + org.springframework.asm.Type.getMethodDescriptor(method));
+                    if (call != null && !call.callsAMethodOf(type) && !call.calls(type, candidate)) {
+                        candidate = method;
+                    }
+                }
+                if (Boolean.TRUE.equals(handlerLookup.inspect(candidate))) {
+                    handlers.add(candidate);
+                }
+            } catch (IllegalStateException | LinkageError e) {
+                if (!isReadFailure(e)) {
+                    throw e;
+                }
+                if (method.isBridge()) {
+                    if (bridgeCalls == null) {
+                        bridgeCalls = bridgeCallsOf(type);
+                    }
+                    BridgeCall call = bridgeCalls.get(method.getName() + org.springframework.asm.Type.getMethodDescriptor(method));
+                    if ((call == null || !call.callsAMethodOf(type)) && annotationTypes.stream().anyMatch(method::isAnnotationPresent)) {
+                        handlers.add(method);
+                        continue;
+                    }
+                }
+                log.debug("Skipping {} in the search for Occurrent handler annotations, since a class it depends on can't be read", method, e);
+            }
+        }
+        return handlers;
+    }
+
+    /**
+     * Answers which method a CGLIB proxy of {@code implementation} runs when {@code method} is invoked on it, when that
+     * is another method than {@code method}. A CGLIB proxy overrides one method for each name and parameter types, the
+     * first instance method up from {@code implementation} that is public, protected, or package-private in
+     * {@code implementation}'s package. When {@code method} is package-private and a public or protected method of the
+     * same signature from another package sits between {@code implementation} and {@code method}'s class, the proxy
+     * overrides that method. The proxy is in {@code method}'s package, so the JVM treats the proxy's method as
+     * overriding {@code method} too, and invoking {@code method} on the proxy runs the other method's body.
+     *
+     * @param method         the handler or factory method the scan found
+     * @param implementation the class a CGLIB proxy in the bean's chain subclasses
+     * @return the method the proxy runs instead of {@code method}, or {@code null} when it runs {@code method}
+     */
+    public static @Nullable Method methodACglibProxyRunsInsteadOf(Method method, Class<?> implementation) {
+        int modifiers = method.getModifiers();
+        if (Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers) || Modifier.isPrivate(modifiers) || Modifier.isStatic(modifiers)
+                || !inSameRuntimePackage(method.getDeclaringClass(), implementation) || !method.getDeclaringClass().isAssignableFrom(implementation)) {
+            return null;
+        }
+        for (Class<?> candidateClass = implementation; candidateClass != method.getDeclaringClass(); candidateClass = candidateClass.getSuperclass()) {
+            Method candidate = declaredMethod(candidateClass, method);
+            if (candidate == null || Modifier.isStatic(candidate.getModifiers()) || Modifier.isPrivate(candidate.getModifiers())) {
+                continue;
+            }
+            boolean visibleToTheProxy = Modifier.isPublic(candidate.getModifiers()) || Modifier.isProtected(candidate.getModifiers())
+                    || inSameRuntimePackage(candidateClass, implementation);
+            if (visibleToTheProxy) {
+                return overrides(candidate, method) ? null : candidate;
+            }
+        }
+        return null;
+    }
+
+    // A JDK proxy hands its invocation handler one method for each name and parameter types, the one from the first
+    // interface it lists that has that signature, so two annotated interface methods of one signature are one method
+    // the proxy runs. MethodIntrospector gives the methods in the order the proxy lists its interfaces, so the first
+    // annotated one is kept, the way an annotation search on a class implementing those interfaces finds the first.
+    // When the two differ in a handler annotation or in any attribute of one, such as the id, keeping either would let
+    // the order of the interfaces decide which handler registers, so the scan refuses them. The attributes compared are
+    // the ones the post-processors read, through AnnotationUtils.findAnnotation
+    private static Set<Method> firstOfEachSignature(Class<?> type, Set<Method> methods, List<Class<? extends Annotation>> annotationTypes) {
+        Map<List<Object>, Method> bySignature = new LinkedHashMap<>();
+        for (Method method : methods) {
+            Method kept = bySignature.putIfAbsent(List.of(method.getName(), List.of(method.getParameterTypes())), method);
+            if (kept == null) {
+                continue;
+            }
+            List<Annotation> keptAnnotations = handlerAnnotationsOf(kept, annotationTypes);
+            List<Annotation> annotations = handlerAnnotationsOf(method, annotationTypes);
+            if (!keptAnnotations.equals(annotations)) {
+                throw new IllegalArgumentException("Method %s#%s is annotated with %s and %s#%s with %s, and JDK proxy %s runs them as one method since they have the same name and parameter types, so only one of them would register. Annotate only one of them, or give both the same annotation with the same attributes."
+                        .formatted(kept.getDeclaringClass().getName(), kept.getName(), describe(keptAnnotations),
+                                method.getDeclaringClass().getName(), method.getName(), describe(annotations), type.getName()));
+            }
+        }
+        return new LinkedHashSet<>(bySignature.values());
+    }
+
+    private static List<Annotation> handlerAnnotationsOf(Method method, List<Class<? extends Annotation>> annotationTypes) {
+        List<Annotation> annotations = new ArrayList<>();
+        for (Class<? extends Annotation> annotationType : annotationTypes) {
+            Annotation annotation = AnnotationUtils.findAnnotation(method, annotationType);
+            if (annotation != null) {
+                annotations.add(annotation);
+            }
+        }
+        return annotations;
+    }
+
+    private static String describe(List<Annotation> annotations) {
+        return annotations.stream().map(annotation -> {
+            String text = annotation.toString();
+            int attributes = text.indexOf('(');
+            return attributes < 0 ? text : "@" + annotation.annotationType().getSimpleName() + text.substring(attributes);
+        }).collect(Collectors.joining(" and "));
+    }
+
+    // The method the JVM runs when method is invoked on an instance of type, bridges resolved to the method they
+    // bridge. The JVM picks the first method of the same signature up from type that overrides method, and Spring's
+    // ClassUtils.getMostSpecificMethod decides overriding for a package-private method by type's package instead of
+    // the overriding method's, which is wrong when a superclass in method's own package overrides it
+    public static Method methodTheJvmRuns(Method method, Class<?> type) {
+        Class<?> declaringClass = method.getDeclaringClass();
+        int modifiers = method.getModifiers();
+        if (Modifier.isStatic(modifiers) || Modifier.isPrivate(modifiers)) {
+            return method;
+        }
+        // A JDK proxy class hands every interface method to its invocation handler, so the interface method is the one
+        // that runs, not the proxy class's generated method. A sub-interface the proxy implements may redeclare it, so
+        // it resolves against the first interface the proxy lists that extends the method's interface
+        if (declaringClass.isInterface() && java.lang.reflect.Proxy.isProxyClass(type)) {
+            for (Class<?> proxiedInterface : type.getInterfaces()) {
+                if (declaringClass.isAssignableFrom(proxiedInterface)) {
+                    return bridgedMethod(AopUtils.getMostSpecificMethod(method, proxiedInterface));
+                }
+            }
+            return bridgedMethod(method);
+        }
+        if (declaringClass.isInterface() || !declaringClass.isAssignableFrom(type)) {
+            return bridgedMethod(AopUtils.getMostSpecificMethod(method, type));
+        }
+        for (Class<?> candidateClass = type; candidateClass != null && candidateClass != declaringClass; candidateClass = candidateClass.getSuperclass()) {
+            Method candidate = declaredMethod(candidateClass, method);
+            if (candidate != null && overrides(candidate, method)) {
+                return bridgedMethod(candidate);
+            }
+        }
+        return bridgedMethod(method);
+    }
+
+    // Whether overrider, declared in a subclass of overridden's declaring class, overrides it under the JVM's rules
+    // (JVMS 5.4.5). A package-private method is overridden from its own runtime package, or by overriding a method in
+    // between that overrides it
+    private static boolean overrides(Method overrider, Method overridden) {
+        if (Modifier.isPrivate(overrider.getModifiers()) || Modifier.isStatic(overrider.getModifiers())) {
+            return false;
+        }
+        int modifiers = overridden.getModifiers();
+        if (Modifier.isPrivate(modifiers) || Modifier.isStatic(modifiers)) {
+            return false;
+        }
+        if (Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers) || inSameRuntimePackage(overrider.getDeclaringClass(), overridden.getDeclaringClass())) {
+            return true;
+        }
+        for (Class<?> between = overrider.getDeclaringClass().getSuperclass(); between != null && between != overridden.getDeclaringClass(); between = between.getSuperclass()) {
+            Method intermediate = declaredMethod(between, overridden);
+            if (intermediate != null && overrides(intermediate, overridden) && overrides(overrider, intermediate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Whether two handlers of one name and parameter types, from scans of instances of one bean, are one handler. When
+    // the two scans read one class, or one class extends the other, they are one handler when an instance of the class
+    // further down runs one method for both. So a private method and a method of the same signature its subclass
+    // declares are two handlers, and so are a private method of a superclass and an interface default method. A bean
+    // whose instances come from unrelated classes has one handler of the signature, as in 0.34.0
+    static boolean isSameHandler(HandlerMethod a, HandlerMethod b) {
+        Class<?> below;
+        if (a.implementation().isAssignableFrom(b.implementation())) {
+            below = b.implementation();
+        } else if (b.implementation().isAssignableFrom(a.implementation())) {
+            below = a.implementation();
+        } else {
+            return true;
+        }
+        return methodTheJvmRuns(a.method(), below).equals(methodTheJvmRuns(b.method(), below));
+    }
+
+    // Whether type or a superclass of type below method's declaring class declares an instance method of method's
+    // signature that isn't private
+    private static boolean declaredBelow(Method method, Class<?> type) {
+        for (Class<?> candidateClass = type; candidateClass != null && candidateClass != method.getDeclaringClass(); candidateClass = candidateClass.getSuperclass()) {
+            Method candidate = declaredMethod(candidateClass, method);
+            if (candidate != null && !Modifier.isPrivate(candidate.getModifiers()) && !Modifier.isStatic(candidate.getModifiers())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean inSameRuntimePackage(Class<?> a, Class<?> b) {
+        return a.getPackageName().equals(b.getPackageName()) && a.getClassLoader() == b.getClassLoader();
+    }
+
+    private static @Nullable Method declaredMethod(Class<?> type, Method signature) {
+        try {
+            return type.getDeclaredMethod(signature.getName(), signature.getParameterTypes());
+        } catch (NoSuchMethodException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Answers whether {@code beanName} names the proxy of a scoped bean, a definition that decorates its target's
+     * definition under {@link ScopedProxyUtils#getTargetBeanName}. Both annotation post-processors skip such a name,
+     * so a scoped bean's handlers register once, under its target's name. Internal to the Spring Boot starters.
+     *
+     * @param beanFactory the bean factory that defines {@code beanName}
+     * @param beanName    the bean name the scan is about to read
+     * @return {@code true} when {@code beanName} is a scoped proxy whose target has a definition of its own
+     */
+    public static boolean isScopedProxy(ConfigurableListableBeanFactory beanFactory, String beanName) {
+        if (!beanFactory.containsBeanDefinition(beanName)) {
+            return false;
+        }
+        String targetBeanName = ScopedProxyUtils.getTargetBeanName(beanName);
+        BeanDefinitionHolder decorated = beanFactory.getMergedBeanDefinition(beanName) instanceof RootBeanDefinition root ? root.getDecoratedDefinition() : null;
+        return decorated != null && decorated.getBeanName().equals(targetBeanName) && beanFactory.containsBeanDefinition(targetBeanName);
+    }
+
+    private static IllegalStateException annotationFromAMethodNotOverridden(Method method, Method declaration, MergedAnnotation<? extends Annotation> annotation) {
+        String annotationName = "@" + annotation.getType().getSimpleName();
+        String handler = annotation.getValue("id", String.class).map(id -> "%s with id \"%s\"".formatted(annotationName, id)).orElse(annotationName);
+        if (Modifier.isStatic(method.getModifiers())) {
+            return new IllegalStateException(("Method %s is static, so it does not override %s, which declares %s, but Spring's annotation search finds the annotation on both, so which body is the handler is ambiguous. "
+                    + "Rename %s to keep %s as the handler.").formatted(signatureOf(method), signatureOf(declaration), handler, signatureOf(method), signatureOf(declaration)));
+        }
+        return new IllegalStateException(("Method %s does not override %s, which declares %s, but Spring's annotation search finds the annotation on both, so which body is the handler is ambiguous. "
+                + "Make both %s and %s protected or public so %s overrides it and runs as the handler, or rename %s to keep %s as the handler.").formatted(
+                signatureOf(method), signatureOf(declaration), handler, signatureOf(declaration), signatureOf(method), signatureOf(method), signatureOf(method), signatureOf(declaration)));
+    }
+
+    private static String signatureOf(Method method) {
+        return method.getDeclaringClass().getName() + '#' + method.getName()
+                + Arrays.stream(method.getParameterTypes()).map(Class::getSimpleName).collect(Collectors.joining(", ", "(", ")"));
+    }
+}

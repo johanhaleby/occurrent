@@ -140,18 +140,18 @@ public final class DcbMarkerVersionsDocuments {
     }
 
     /**
-     * Writes {@code mv} on each event document, one element per marker key of its event with the marker's epoch and
-     * the version this append's transaction gave it.
+     * Writes {@code mv} on each event document, one element per marker key of its event, with each type on
+     * {@code stripe}, with the marker's epoch and the version this append's transaction gave it.
      *
      * @throws IllegalStateException if a marker the append incremented is missing from {@code markersByKey}
      */
-    public static void stampMarkerVersions(List<Document> eventDocuments, List<CloudEvent> events, Map<String, Document> markersByKey) {
+    public static void stampMarkerVersions(List<Document> eventDocuments, List<CloudEvent> events, Map<String, Document> markersByKey, int stripe) {
         if (eventDocuments.size() != events.size()) {
             throw new IllegalStateException("Expected one document per event");
         }
         for (int i = 0; i < events.size(); i++) {
             List<Document> elements = new ArrayList<>();
-            for (String key : DcbMarkerVersionsSupport.eventMarkerKeys(events.get(i))) {
+            for (String key : DcbMarkerVersionsSupport.eventMarkerKeys(events.get(i), stripe)) {
                 Document marker = markersByKey.get(key);
                 if (marker == null) {
                     throw new IllegalStateException("The append incremented marker " + key + " but could not read it back");
@@ -167,13 +167,19 @@ public final class DcbMarkerVersionsDocuments {
     /**
      * The elements of {@code mv} that select the events of {@code item} appended after {@code saved}. Call it only
      * after {@link DcbMarkerVersionsSupport#requireResumable} accepted {@code saved}, so every selection key has a
-     * marker with the saved epoch.
+     * marker with the saved epoch, or is saved as absent. A key saved as absent selects every element of the marker's
+     * current epoch with a version above 0, or nothing while it has no marker.
      */
     public static List<Selection> selections(DcbCriterion item, Map<String, Document> markersByKey, DcbMarkerVersions saved) {
         List<Selection> selections = new ArrayList<>();
         for (String key : DcbMarkerVersionsSupport.selectionKeys(item)) {
-            Document marker = Objects.requireNonNull(markersByKey.get(key), () -> "No marker for " + key);
-            long version = saved.get(key).orElseThrow(() -> new IllegalStateException("No saved version for " + key)).version();
+            DcbMarkerVersions.MarkerVersion savedVersion = saved.get(key).orElseThrow(() -> new IllegalStateException("No saved version for " + key));
+            Document marker = markersByKey.get(key);
+            if (marker == null && savedVersion.equals(DcbMarkerVersions.MarkerVersion.absent())) {
+                continue;
+            }
+            Objects.requireNonNull(marker, () -> "No marker for " + key);
+            long version = savedVersion.version();
             selections.add(new Selection(key, Objects.requireNonNull(marker.get(CHECKPOINT_EPOCH), () -> "No epoch for " + key), version));
         }
         return selections;
@@ -234,9 +240,12 @@ public final class DcbMarkerVersionsDocuments {
 
     /**
      * The filter on an event with an element of {@code mv} that one of {@code selections} selects. {@code $elemMatch}
-     * keeps the key, the epoch and the version on one element.
+     * keeps the key, the epoch and the version on one element. No selection matches no event.
      */
     public static Bson selectionFilter(List<Selection> selections) {
+        if (selections.isEmpty()) {
+            return Filters.in(ID, List.of());
+        }
         List<Bson> elements = selections.stream()
                 .map(selection -> Filters.elemMatch(EVENT_MARKER_VERSIONS, Filters.and(
                         Filters.eq(EVENT_MARKER_VERSIONS_KEY, selection.key()),

@@ -8,6 +8,9 @@ Accepted
 
 Refines [ADR 63](0063-saga-dsl.md).
 
+[ADR 173](0173-a-failing-saga-timer-is-tried-again-after-the-timers-already-due.md) makes `findWithDueTimers`
+return the earliest due instance first, so the claim below that it may return instances in any order no longer holds.
+
 ## Context
 
 ADR 63 put a saga's timers in its own state envelope rather than in JobRunr, and accepted a named cost for it: "no

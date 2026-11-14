@@ -122,6 +122,64 @@ class InMemorySagaStateStoreTest {
     class FindWithDueTimers {
 
         @Test
+        void returns_instances_in_ascending_order_of_their_effective_due_time() {
+            long now = NOW.toEpochMilli();
+            store.compareAndSave("marked-late", envelope("marked-late", "a", 1, List.of(new TimerEntry("t", now - 5_000, now - 100))), 0);
+            store.compareAndSave("fired-latest", envelope("fired-latest", "a", 1, List.of(new TimerEntry("t", now - 500))), 0);
+            store.compareAndSave("fired-earliest", envelope("fired-earliest", "a", 1, List.of(new TimerEntry("t", now - 9_000))), 0);
+            store.compareAndSave("marked-mid", envelope("marked-mid", "a", 1, List.of(new TimerEntry("t", now - 8_000, now - 3_000))), 0);
+
+            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+
+            assertThat(due).extracting(SagaEnvelope::sagaId)
+                    .containsExactly("fired-earliest", "marked-mid", "fired-latest", "marked-late");
+        }
+
+        @Test
+        void breaks_ties_in_due_time_by_saga_id() {
+            long now = NOW.toEpochMilli();
+            for (String sagaId : List.of("c", "a", "d", "b")) {
+                store.compareAndSave(sagaId, envelope(sagaId, "a", 1, List.of(new TimerEntry("t", now - 1_000))), 0);
+            }
+
+            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+
+            assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("a", "b", "c", "d");
+        }
+
+        @Test
+        void keeps_the_instances_that_have_been_due_longest_when_the_limit_truncates() {
+            long now = NOW.toEpochMilli();
+            for (int i = 0; i < 6; i++) {
+                String sagaId = "s" + i;
+                store.compareAndSave(sagaId, envelope(sagaId, "a", 1, List.of(new TimerEntry("t", now - 6_000 + i * 1_000L))), 0);
+            }
+
+            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 3);
+
+            assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("s0", "s1", "s2");
+        }
+
+        @Test
+        void an_instance_whose_timer_failed_ranks_behind_one_that_became_due_before_the_failure_was_marked() {
+            long now = NOW.toEpochMilli();
+            store.compareAndSave("failed", envelope("failed", "a", 1, List.of(new TimerEntry("t", now - 9_000, now - 1_000))), 0);
+            store.compareAndSave("healthy", envelope("healthy", "a", 1, List.of(new TimerEntry("t", now - 4_000))), 0);
+
+            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 1);
+
+            assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("healthy");
+        }
+
+        @Test
+        void does_not_return_an_instance_whose_marker_is_still_in_the_future() {
+            long now = NOW.toEpochMilli();
+            store.compareAndSave("backed-off", envelope("backed-off", "a", 1, List.of(new TimerEntry("t", now - 9_000, now + 1_000))), 0);
+
+            assertThat(store.findWithDueTimers(NOW, 10)).isEmpty();
+        }
+
+        @Test
         void returns_active_instances_whose_earliest_timer_is_due() {
             store.compareAndSave("due", envelope("due", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
             store.compareAndSave("not-due", envelope("not-due", "a", 1, List.of(new TimerEntry("t", NOW.plusSeconds(60).toEpochMilli()))), 0);

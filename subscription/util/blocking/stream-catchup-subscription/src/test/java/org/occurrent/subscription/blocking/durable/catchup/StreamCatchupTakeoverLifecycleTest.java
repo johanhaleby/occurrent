@@ -18,6 +18,7 @@ package org.occurrent.subscription.blocking.durable.catchup;
 
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.ThrowableProxy;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.AppenderBase;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -42,6 +43,8 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
@@ -61,11 +64,13 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
@@ -88,11 +93,15 @@ class StreamCatchupTakeoverLifecycleTest {
     private InMemoryCheckpointStorage storage;
     private final CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<String> signals = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<CatchupCannotResumeException> heldPausedReports = new CopyOnWriteArrayList<>();
     private final ConcurrentLinkedQueue<Throwable> failedOnTheirOwnThreads = new ConcurrentLinkedQueue<>();
     private final AtomicInteger deliveries = new AtomicInteger();
     private final CountDownLatch inTheTakeoverReplay = new CountDownLatch(1);
     private final CountDownLatch letTheTakeoverReplayGo = new CountDownLatch(1);
     private volatile boolean blocksInTheTakeoverReplay;
+    private volatile boolean failsEveryDelivery;
+    // Once set, the next delivery waits as one in the takeover replay does
+    private final AtomicBoolean blocksTheNextDelivery = new AtomicBoolean();
     private final Logger catchupLogger = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
     private final LoggedEvents logged = new LoggedEvents();
     private LiveStartLosingSubscriptionModel liveModel;
@@ -190,6 +199,107 @@ class StreamCatchupTakeoverLifecycleTest {
                 () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").isEmpty(),
                 () -> assertThat(liveModel.restartedFromThePresent).as("restarts from the present").isEmpty()
         );
+    }
+
+    @ParameterizedTest(name = "storing={0}")
+    @ValueSource(booleans = {true, false})
+    @Timeout(60)
+    void the_handle_a_subscribe_returned_starts_once_a_resume_runs_a_held_takeover_replay_again_and_it_hands_over(boolean storing) {
+        // Given
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> {
+        }).losingEveryOpen();
+        create(storing);
+        Subscription subscribed = catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        assertThat(waitUpTo(Duration.ofSeconds(10), () -> heldReplays() == 1)).as("the takeover replay was held").isTrue();
+
+        // When
+        liveModel.keepingEveryOpen();
+        catchup.resumeSubscription(ID);
+        AtomicBoolean started = new AtomicBoolean();
+        Throwable thrown = catchThrowable(() -> started.set(subscribed.waitUntilStarted(Duration.ofSeconds(10))));
+
+        // Then
+        assertThat(thrown).as("thrown by waiting for the subscription the subscribe returned to start").isNull();
+        assertAll(
+                () -> assertThat(started).as("started").isTrue(),
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").hasSize(1),
+                () -> assertThat(liveModel.restartedFromThePresent).as("restarts from the present").isEmpty()
+        );
+    }
+
+    @Test
+    @Timeout(60)
+    void a_start_that_resumes_while_a_resume_runs_a_held_takeover_replay_again_leaves_the_subscription_paused_in_the_live_model_until_the_replay_hands_over() throws InterruptedException {
+        // Given a held takeover replay that a resume runs again, and a live model that resumes the subscription where it
+        // lost the history on a start that resumes
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> {
+        }).losingEveryOpen().startResumingWhereItWasHeldOnceThisReturns(() -> {
+        });
+        create(false);
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        assertThat(waitUpTo(Duration.ofSeconds(10), () -> heldReplays() == 1)).as("the takeover replay was held").isTrue();
+        liveModel.keepingEveryOpen();
+        blocksTheNextDelivery.set(true);
+        catchup.resumeSubscription(ID);
+        assertThat(inTheTakeoverReplay.await(10, TimeUnit.SECONDS)).as("the takeover replay runs again").isTrue();
+
+        // When
+        catchup.start(true);
+
+        // Then
+        assertAll(
+                () -> assertThat(liveModel.isPaused(ID)).as("held paused by the live model").isTrue(),
+                () -> assertThat(liveModel.isRunning(ID)).as("running in the live model").isFalse()
+        );
+        letTheTakeoverReplayGo.countDown();
+        boolean handedOver = waitUpTo(Duration.ofSeconds(10), () -> !liveModel.openedAt.isEmpty() && !catchup.isCatchingUp(ID) && catchup.isRunning(ID));
+        assertAll(
+                () -> assertThat(handedOver).as("the replay run again resumed the subscription at the live start it read").isTrue(),
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").hasSize(1),
+                () -> assertThat(liveModel.restartedFromThePresent).as("restarts from the present").isEmpty()
+        );
+    }
+
+    @Test
+    @Timeout(60)
+    void a_resume_after_a_takeover_replay_is_held_and_before_its_thread_fails_the_held_handle_gets_a_handle_that_starts_once_the_replay_run_again_hands_over() {
+        // Given a live model that loses its live start at each open, and a resume made where the replay's thread logs the
+        // hold, which comes after the hold and before that thread fails the handle of the held replay
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> {
+        }).losingEveryOpen();
+        create(false);
+        AtomicBoolean asked = new AtomicBoolean();
+        AtomicReference<Subscription> resumed = new AtomicReference<>();
+        AtomicReference<Throwable> resumeFailure = new AtomicReference<>();
+        AppenderBase<ILoggingEvent> resumesWhereTheHoldIsLogged = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (isTheHoldOfAReplayFromTheBeginning(event) && asked.compareAndSet(false, true)) {
+                    liveModel.keepingEveryOpen();
+                    resumeFailure.set(catchThrowable(() -> resumed.set(catchup.resumeSubscription(ID))));
+                }
+            }
+        };
+        resumesWhereTheHoldIsLogged.start();
+        catchupLogger.addAppender(resumesWhereTheHoldIsLogged);
+        try {
+            // When
+            catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+            assertThat(waitUpTo(Duration.ofSeconds(10), () -> resumed.get() != null || resumeFailure.get() != null)).as("resumed where the hold is logged").isTrue();
+            AtomicBoolean started = new AtomicBoolean();
+            Throwable thrown = catchThrowable(() -> started.set(resumed.get().waitUntilStarted(Duration.ofSeconds(10))));
+
+            // Then
+            assertThat(resumeFailure.get()).as("thrown by the resume").isNull();
+            assertThat(thrown).as("thrown by waiting for the subscription the resume returned to start").isNull();
+            assertAll(
+                    () -> assertThat(started).as("started").isTrue(),
+                    () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").hasSize(1),
+                    () -> assertThat(heldReplays()).as("replays held").isEqualTo(1)
+            );
+        } finally {
+            catchupLogger.detachAppender(resumesWhereTheHoldIsLogged);
+        }
     }
 
     @Test
@@ -630,11 +740,160 @@ class StreamCatchupTakeoverLifecycleTest {
         }
     }
 
+    @Test
+    @Timeout(60)
+    void a_resume_at_a_checkpoint_of_a_held_takeover_replay_stores_that_checkpoint_over_the_catch_up_position_the_replay_stored() {
+        // Given
+        heldTakeoverReplayWithACatchupPositionStored();
+        Checkpoint resumedAt = new StringBasedCheckpoint("a checkpoint the live model has the history back to");
+
+        // When
+        Subscription resumed = catchup.resumeSubscription(ID, StartAt.checkpoint(resumedAt));
+
+        // Then
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10))).as("the resumed subscription started").isTrue();
+        assertAll(
+                () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(resumedAt),
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").containsExactly(resumedAt)
+        );
+    }
+
+    @Test
+    @Timeout(60)
+    void a_pause_and_resume_after_a_resume_at_a_checkpoint_of_a_held_takeover_replay_resumes_the_live_model_and_replays_nothing_again() {
+        // Given
+        heldTakeoverReplayWithACatchupPositionStored();
+        Checkpoint resumedAt = new StringBasedCheckpoint("a checkpoint the live model has the history back to");
+        assertThat(catchup.resumeSubscription(ID, StartAt.checkpoint(resumedAt)).waitUntilStarted(Duration.ofSeconds(10))).as("the resume at a checkpoint started").isTrue();
+        catchup.pauseSubscription(ID);
+        List<DomainEvent> deliveredBefore = List.copyOf(received);
+
+        // When
+        AtomicBoolean started = new AtomicBoolean();
+        Throwable thrown = catchThrowable(() -> started.set(catchup.resumeSubscription(ID).waitUntilStarted(Duration.ofSeconds(10))));
+        write(writtenInTheGap);
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isNull();
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).as("events delivered").contains(writtenInTheGap));
+        assertAll(
+                () -> assertThat(started).as("started").isTrue(),
+                () -> assertThat(received.subList(deliveredBefore.size(), received.size())).as("events delivered since the resume, only the later event").containsExactly(writtenInTheGap),
+                () -> assertThat(liveModel.resumedInTheDelegate).as("subscriptions the live model resumed where it paused them").containsExactly(ID),
+                () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(resumedAt)
+        );
+    }
+
+    @Test
+    @Timeout(60)
+    void a_resume_at_now_of_a_held_takeover_replay_stores_the_present_position_and_resumes_the_live_model_at_it() {
+        // Given
+        Checkpoint storedBefore = heldTakeoverReplayWithACatchupPositionStored();
+
+        // When
+        Subscription resumed = catchup.resumeSubscription(ID, StartAt.now());
+
+        // Then
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10))).as("the resumed subscription started").isTrue();
+        Checkpoint stored = storage.read(ID);
+        assertThat(stored).as("stored position").isNotNull().isNotEqualTo(storedBefore);
+        assertAll(
+                () -> assertThat(GlobalCheckpoint.isGlobalCheckpoint(stored)).as("stored position is a catch-up position").isFalse(),
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened, the present position stored").containsExactly(stored)
+        );
+    }
+
+    @Test
+    @Timeout(60)
+    void a_resume_at_a_checkpoint_of_a_held_takeover_replay_that_the_live_model_throws_from_puts_the_catch_up_position_back_and_throws_what_the_live_model_threw() {
+        // Given
+        Checkpoint storedBefore = heldTakeoverReplayWithACatchupPositionStored();
+        IllegalStateException liveModelDown = new IllegalStateException("live model down");
+        liveModel.beforeTheNextResumeAt(() -> {
+            throw liveModelDown;
+        });
+
+        // When
+        Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.checkpoint(new StringBasedCheckpoint("a checkpoint the live model has the history back to"))));
+
+        // Then
+        assertThat(thrown).as("thrown by the resume").isSameAs(liveModelDown);
+        assertAll(
+                () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(storedBefore),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isTrue(),
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").isEmpty()
+        );
+    }
+
+    @Test
+    @Timeout(60)
+    void is_not_held_paused_for_the_refusal_it_reported_once_the_held_replay_is_resumed_and_the_subscription_is_paused_while_that_replay_fails() {
+        // Given
+        CatchupCannotResumeException reported = heldTakeoverReplayWhoseRefusalWasReported();
+        failsEveryDelivery = true;
+        catchup.resumeSubscription(ID);
+
+        // When
+        catchup.pauseSubscription(ID);
+
+        // Then
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(catchup.hasParkedReplay(ID)).as("replay held for the pause").isTrue());
+        assertThat(catchup.isHeldPausedFor(ID, reported)).as("held paused for the refusal reported before the resume").isFalse();
+    }
+
+    @Test
+    @Timeout(60)
+    void is_not_held_paused_for_the_refusal_it_reported_once_the_held_replay_is_run_again_by_start_and_the_subscription_is_paused_while_that_replay_fails() {
+        // Given
+        CatchupCannotResumeException reported = heldTakeoverReplayWhoseRefusalWasReported();
+        failsEveryDelivery = true;
+        catchup.start(true);
+
+        // When
+        catchup.pauseSubscription(ID);
+
+        // Then
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(catchup.hasParkedReplay(ID)).as("replay held for the pause").isTrue());
+        assertThat(catchup.isHeldPausedFor(ID, reported)).as("held paused for the refusal reported before the start").isFalse();
+    }
+
+    private CatchupCannotResumeException heldTakeoverReplayWhoseRefusalWasReported() {
+        heldTakeoverReplayWithACatchupPositionStored();
+        CatchupCannotResumeException reported = heldPausedReports.get(0);
+        assertThat(catchup.isHeldPausedFor(ID, reported)).as("held paused for the refusal reported").isTrue();
+        return reported;
+    }
+
+    // A takeover replay from the beginning whose live start the live model loses at each open, held once the catch-up
+    // made 4 replays, with the catch-up position it stored, and the hold reported. The live model keeps every open after this returns
+    private Checkpoint heldTakeoverReplayWithACatchupPositionStored() {
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> {
+        }).losingEveryOpen();
+        create(true);
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        assertThat(waitUpTo(Duration.ofSeconds(10), () -> heldReplays() == 1)).as("the takeover replay was held").isTrue();
+        Checkpoint stored = storage.read(ID);
+        assertThat(stored).as("position the takeover replay stored").isNotNull().matches(GlobalCheckpoint::isGlobalCheckpoint, "a catch-up position");
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(heldPausedReports).as("refusals the held replay reported").hasSize(1));
+        liveModel.keepingEveryOpen();
+        return stored;
+    }
+
     private void create(boolean storing) {
         CatchupSubscriptionModelConfig config = storing
                 ? new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1))
                 : new CatchupSubscriptionModelConfig(100);
         catchup = new StreamCatchupSubscriptionModel(liveModel, eventStore, config);
+        catchup.addStartRefusalListener(new StartRefusalListener() {
+            @Override
+            public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+                heldPausedReports.add(refusal);
+            }
+        });
         catchup.listenForCatchup(ID, new CatchupListener() {
             @Override
             public void catchupStarted(Object episode) {
@@ -650,8 +909,11 @@ class StreamCatchupTakeoverLifecycleTest {
 
     private Consumer<CloudEvent> action() {
         return cloudEvent -> {
+            if (failsEveryDelivery) {
+                throw new IllegalStateException("the action fails");
+            }
             received.add(cloudEventConverter.toDomainEvent(cloudEvent));
-            if (blocksInTheTakeoverReplay && deliveries.incrementAndGet() == history.size() + 1) {
+            if ((blocksInTheTakeoverReplay && deliveries.incrementAndGet() == history.size() + 1) || blocksTheNextDelivery.compareAndSet(true, false)) {
                 inTheTakeoverReplay.countDown();
                 awaitUnchecked(letTheTakeoverReplayGo);
             }
@@ -691,10 +953,12 @@ class StreamCatchupTakeoverLifecycleTest {
 
     // The replays held because the catch-up cannot resume, each logged once
     private long heldReplays() {
-        return logged.events.stream()
-                .filter(event -> event.getFormattedMessage().contains("failed, so it was held, and runs again once the subscription is resumed or start(true) is called on this model"))
-                .filter(event -> event.getThrowableProxy() != null && event.getThrowableProxy().getClassName().equals(CatchupCannotResumeException.class.getName()))
-                .count();
+        return logged.events.stream().filter(StreamCatchupTakeoverLifecycleTest::isTheHoldOfAReplayFromTheBeginning).count();
+    }
+
+    private static boolean isTheHoldOfAReplayFromTheBeginning(ILoggingEvent logged) {
+        return logged.getFormattedMessage().contains("failed, so the subscription is held paused, and resuming it or start(true) on this model replays again from the beginning")
+                && logged.getThrowableProxy() instanceof ThrowableProxy proxy && proxy.getThrowable() instanceof CatchupCannotResumeException;
     }
 
     private static InMemoryCheckpointStorage savesRecordedIn(List<String> saved) {

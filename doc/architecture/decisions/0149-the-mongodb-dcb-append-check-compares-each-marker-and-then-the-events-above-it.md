@@ -12,6 +12,9 @@ type, [ADR 147](0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read
 [ADR 31](0031-capture-dcb-consistency-token-in-a-single-read.md) on what one read of the markers gives, and
 [ADR 74](0074-retry-only-where-the-transaction-is-owned.md) on an append in a caller's transaction.
 Builds on the marker versions of [ADR 148](0148-dcb-snapshots-resume-from-marker-versions-not-positions.md).
+Amended by [ADR 175](0175-a-conditional-dcb-append-through-a-mongos-queries-the-events-in-a-snapshot-of-its-own.md)
+on what step 3 does through a mongos, and by [ADR 176](0176-a-plain-dcb-read-through-a-mongos-reads-in-a-causally-consistent-session-of-its-own.md) on what a plain read
+through a mongos can miss.
 
 The second part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), splitting each type marker into
 several documents, is decided in [ADR 162](0162-a-dcb-type-marker-is-split-into-stripes.md). The check below works
@@ -71,8 +74,9 @@ Like `version()`, the map is for store implementations. ADR 147 made the token a
 be added this way. A `DcbEventStore` of your own can keep using `of(DcbCriteria, long)`, and a MongoDB store refuses a
 token made that way, as the next section says. The MongoDB stores keep the sum in `version()`.
 `MarkerObservation` replaces the stores' internal `ObservedMarker`. It can't be `DcbMarkerVersions.MarkerVersion`,
-which requires an epoch and a version of at least 1, because a token also has to hold a marker that was missing or
-had no epoch.
+which holds either an epoch and a version of at least 1 or, since
+[ADR 162](0162-a-dcb-type-marker-is-split-into-stripes.md), no epoch and version 0, because a token also has to hold
+what a read saw of a marker that `MarkerVersion` refuses, such as one with a version and no epoch.
 
 Every MongoDB read already loads the marker documents to sum them (`MongoEventStore.java:764-782`), and the marker
 documents already hold the epoch and `s`. So the map costs no extra read. Each store fills it on every read path,
@@ -159,6 +163,8 @@ hole, so it isn't new. A read with `withVersions()` whose stream reports version
 same probe it blocked during the window and the append was refused. A stream that reports none may have come from a
 plain read, and then has the hole. In that probe, holding E's commit for 9 seconds made the read give up on its snapshot
 after 5 seconds, report no versions and let the append pass. ADR 148 has the other reasons a read reports none.
+[ADR 176](0176-a-plain-dcb-read-through-a-mongos-reads-in-a-causally-consistent-session-of-its-own.md) makes a plain read through a mongos outside a session of the caller's wait for E's
+commit on the events' shard, at the default read concern and read preference.
 
 ### Why a matching event can't get through
 

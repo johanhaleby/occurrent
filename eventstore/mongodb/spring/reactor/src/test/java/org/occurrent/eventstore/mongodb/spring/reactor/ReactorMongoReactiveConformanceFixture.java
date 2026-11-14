@@ -17,6 +17,9 @@
 package org.occurrent.eventstore.mongodb.spring.reactor;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
+import com.mongodb.TransactionOptions;
+import com.mongodb.event.CommandListener;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import org.occurrent.eventstore.api.EventStoreCapability;
@@ -26,9 +29,12 @@ import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.reactor.ReactiveEventStoreFixture;
+import org.springframework.data.mongodb.ReactiveMongoDatabaseFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+
+import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
@@ -43,11 +49,21 @@ class ReactorMongoReactiveConformanceFixture implements ReactiveEventStoreFixtur
     private final ReactorMongoEventStore eventStore;
 
     ReactorMongoReactiveConformanceFixture(ConnectionString connectionString) {
-        this.mongoClient = MongoClients.create(connectionString);
+        this(connectionString, List.of(), null);
+    }
+
+    static ReactorMongoReactiveConformanceFixture listeningToCommands(ConnectionString connectionString, CommandListener commandListener, TransactionOptions transactionOptions) {
+        return new ReactorMongoReactiveConformanceFixture(connectionString, List.of(commandListener), transactionOptions);
+    }
+
+    private ReactorMongoReactiveConformanceFixture(ConnectionString connectionString, List<CommandListener> commandListeners, TransactionOptions transactionOptions) {
+        MongoClientSettings.Builder settings = MongoClientSettings.builder().applyConnectionString(connectionString);
+        commandListeners.forEach(settings::addCommandListener);
+        this.mongoClient = MongoClients.create(settings.build());
         String database = requireNonNull(connectionString.getDatabase());
-        ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, database);
-        ReactiveMongoTransactionManager transactionManager = new ReactiveMongoTransactionManager(
-                new SimpleReactiveMongoDatabaseFactory(mongoClient, database));
+        ReactiveMongoDatabaseFactory databaseFactory = new SimpleReactiveMongoDatabaseFactory(mongoClient, database);
+        ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(databaseFactory);
+        ReactiveMongoTransactionManager transactionManager = new ReactiveMongoTransactionManager(databaseFactory, transactionOptions);
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(connectionString.getCollection())
                 .transactionConfig(transactionManager)

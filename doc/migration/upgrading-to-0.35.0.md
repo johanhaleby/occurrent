@@ -12,6 +12,8 @@ other sections compile fine and behave differently, so read them first.
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
   `SagaEnvelope` gains a 14th record component and `SagaRunnerConfig` a 6th. **Breaks the build** if you use a record
   pattern over either.
+- [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due).
+  `SagaEnvelope.TimerEntry` gains a third record component. **Breaks the build** if you use a record pattern over it.
 - [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). `DomainEventFeed` and
   `CatchupProjectionFeed` lose both `accept(..)` overloads, on the blocking and the reactor stack. **Breaks the build**
   if you still call one of them.
@@ -48,6 +50,9 @@ other sections compile fine and behave differently, so read them first.
   `SagaRunnerConfig`.
 - [A saga's quarantine budget runs per failing event](#a-sagas-quarantine-budget-runs-per-failing-event). Each failing
   event keeps its own clock. Compiles unchanged.
+- [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due). A failed
+  timer is tried again after every instance that was already due. Compiles unchanged unless you use a record pattern
+  over `TimerEntry`.
 
 ### DCB
 
@@ -60,6 +65,10 @@ other sections compile fine and behave differently, so read them first.
   `DcbEventStore` of your own usually does.
 - [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags). On MongoDB, sharing a type
   with a criteria item that has tags is no longer a reason for a condition to refuse.
+- [Appends of one type can spread over eight marker documents](#appends-of-one-type-can-spread-over-eight-marker-documents).
+  On MongoDB, `spreadTypeMarkerWrites(true)` lets appends of one type with different tags commit at the same time.
+  Whatever the setting, a read or conditional append on a criteria item without tags uses eight marker documents per
+  type. Don't turn it on while a 0.34.0 node uses the store.
 - [An append on MongoDB waits for majority on its position reservation](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation).
   This overrides a w:1 on that one write, which on the Spring and reactor stores now runs outside a transaction of yours
   too. On a set of a primary, a secondary and an arbiter with the secondary down, an append throws after
@@ -127,6 +136,13 @@ other sections compile fine and behave differently, so read them first.
   On a server that sends no operation time, a `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel`
   subscription at the present reads the change stream once to record its position, and `waitUntilStarted(..)` and
   `start(true)` throw `UnsupportedStartAtException` when that read gives none. Compiles unchanged.
+- [A blocking catch-up resume at a dynamic start uses the catch-up's answer](#a-blocking-catch-up-resume-at-a-dynamic-start-uses-the-catch-ups-answer).
+  The live model resumes at the start a `StartAt.dynamic(..)` function answered the catch-up, where 0.34.0 let the live
+  model ask the function for itself. Compiles unchanged.
+- [A blocking catch-up refuses a resume at a position of a subscription that runs](#a-blocking-catch-up-refuses-a-resume-at-a-position-of-a-subscription-that-runs).
+  `resumeSubscription(id, startAt)` throws `SubscriptionAlreadyRunningException` itself, where 0.34.0 passed the resume
+  on to the live model and the MongoDB models threw `UnknownSubscriptionException` while the `subscribe(..)` replay ran.
+  Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
@@ -167,6 +183,20 @@ other sections compile fine and behave differently, so read them first.
 - [A subscription with no start position resumes from a catch-up's checkpoint](#a-subscription-with-no-start-position-resumes-from-a-catch-ups-checkpoint).
   On the blocking stack a subscription with `startAt` unset no longer skips the events written while the application
   was down when a catch-up's replay stopped before it went live. Compiles unchanged.
+- [A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered). An annotated
+  method that a bean's class inherits from a superclass, or gets as an interface default method, starts running, and
+  replays the history on its first start when its `startAt` or `source = PUSH` asks for that. The application fails
+  at startup when two beans run one annotated method, for example a bean of the class that declares it and a bean of
+  a subclass, or when a bean behind a CGLIB proxy inherits a final subscription handler. A method without a handler
+  annotation that shares its name and parameters with a package-private annotated method in another package fails at
+  startup instead of running in that method's place. A method that repeats the handler annotation of such a method, or
+  of a private superclass method, runs together with it, and with the same id the application fails at startup. A
+  static method that hides an annotated static factory method of a superclass fails at startup the same way. A
+  handler declared with a type variable gets only the type the bean's class gives it, which can narrow a handler that
+  ran in 0.34.0, one of the bridge kind or one on a JDK proxy that can't be unwrapped. Compiles unchanged.
+- [`SubscriptionAnnotations` reads handlers as the bean's class sees them](#subscriptionannotations-reads-handlers-as-the-beans-class-sees-them).
+  Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly sees the changes
+  the starters make to find inherited handlers. Compiles unchanged.
 
 ### Brokers
 
@@ -302,10 +332,22 @@ A catch-up model whose live delegate is a `DurableSubscriptionModel` now has the
 durable model at one. [Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it) says such a resume stores nothing until the first live
 position or the quiet save. That section stays as it was released, and over a durable model it no longer holds.
 
+A blocking catch-up model with checkpoint storage that resumes a subscription at a checkpoint or at now also replaces a
+stored position a catch-up replays from, such as the one its replay stored, whatever its live delegate. So a
+`resumeSubscription(subscriptionId)` after a later pause doesn't replay from that position, as it could in 0.34.0. At
+now it stores the present position, and throws `IllegalStateException` when it can read none. At a time after the
+beginning without a live start, a stream catch-up stores that time with the present position as its live start, in the
+`position:time;v:2;` form that
+[A catch-up keeps its live start in the checkpoints it stores](#a-catch-up-keeps-its-live-start-in-the-checkpoints-it-stores)
+describes, and 0.34 refuses that form. While a replay that `subscribe(..)` started is still running for a subscription
+paused during that replay, it stores nothing and reads no present position.
+
 There is nothing to change in your code unless it depends on the checkpoint staying where it was after a resume at a
 position. A `DurableSubscriptionModel` over a repositionable subscription model you wrote yourself stores nothing on a
 resume at a position, as in 0.34.0. To have the position stored, override `RepositionableSubscriptions.restartsAt(..)`
-in that model to answer `true` for every checkpoint a subscription it subscribes there starts reading at. Nothing stored changes format, and there is no OpenRewrite recipe for this. See
+in that model to answer `true` for every checkpoint a subscription it subscribes there starts reading at. Apart from a
+time a stream catch-up stores in the `;v:2;` form, nothing stored changes format, and there is no OpenRewrite recipe for
+this. See
 [ADR 151](../architecture/decisions/0151-a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper.md) and
 [#1253](https://github.com/johanhaleby/occurrent/issues/1253).
 
@@ -325,8 +367,10 @@ From 0.35.0 a wrapper is unwrapped only for a capability that a wrapper's own st
 * `QuietPositionReportingSubscriptions`, which adds and removes a listener that is told positions.
 * `Pushable`, which takes events in at the bottom of the stack.
 * `HistoryLossReportingSubscriptions`, which a catch-up model reaches under a durable model.
-* `StartRefusalReportingSubscriptions`, which a competing consumer model reaches under a durable or catch-up model,
-  so it can give back the lease of a subscription whose start the MongoDB model refused.
+* `StartRefusalReportingSubscriptions`, which a competing consumer model reaches under a durable model, so it can
+  give back the lease of a subscription whose start the MongoDB model refused. A blocking catch-up model implements it
+  itself. It passes the listener on to the MongoDB model under it, and also tells the listener when it holds a
+  subscription paused because the live start of its replay is gone.
 
 Every other capability is found only on a model that implements it. That is `RepositionableSubscriptions`,
 `Subscribable`, `CancellableSubscriptions`, `SubscriptionModelLifeCycle`, `SubscriptionModel`,
@@ -545,6 +589,55 @@ other marks, or rebuilds them with the four-argument `StreamMarks` constructor, 
 failures alternate between two events, such as versions 7, 8, 7, 8 of one stream, then starts each event's clock again
 on every failure and never reaches its budget.
 
+## A saga timer that keeps failing waits behind the timers already due
+
+Up to 0.34.0 the timer poll took at most `timerBatchLimit` due instances in any order, and a timer whose reaction threw
+stayed due at the same `firesAt`. Once `timerBatchLimit` instances kept failing their timers, no other instance's timer
+fired. The reason for the change is in
+[ADR 173](../architecture/decisions/0173-a-failing-saga-timer-is-tried-again-after-the-timers-already-due.md), and the
+report is [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
+
+### Who is affected
+
+- Code that uses a record pattern over `SagaEnvelope.TimerEntry`, or compares entries with `equals`.
+- A `SagaStateStore` of your own.
+- Anything that reads the MongoDB field `nextTimerFiresAt` directly, for example a monitoring query.
+
+### What changes
+
+- `TimerEntry` gains `nextAttemptAtEpochMilli`, which is null until the timer fails. When a timer's reaction throws, the
+  poller writes the instant just after its poll there. A timer is due at the later of `firesAt` and that instant.
+- `findWithDueTimers` returns the earliest due instance first. Instances due at the same instant come back in no
+  particular order.
+- On MongoDB, a failed timer's subdocument holds `nextAttemptAtEpochMilli`, and `nextTimerFiresAt` is the earliest due
+  time across the instance's timers. For a timer that keeps failing that is its last failed attempt, not its `firesAt`.
+- `SagaInstance.nextTimerAt()` still returns the earliest `firesAt`, so an instance stuck on a failing timer still
+  shows a time in the past.
+- The write that records a failed timer keeps the instance's version. It reaches `compareAndSaveWithoutState`, or
+  `compareAndSave` through its default, with an envelope whose version equals `expectedVersion`. Every other save
+  still raises the version by one.
+
+### What to do
+
+- Add the third component to a record pattern over `TimerEntry`. The two-argument constructor still compiles and
+  sets it to null.
+- In a store of your own, persist the new component and return `findWithDueTimers` ordered by
+  `SagaEnvelope.earliestDueAtEpochMilli()`. A store that does neither keeps working, with the 0.34.0 order.
+- In a store of your own, store the version in the envelope as it comes, even when it equals `expectedVersion`. A
+  store that refuses that save refuses every record of a failed timer, so the poller logs a `WARN` for each failed fire
+  and the instance keeps the 0.34.0 order. A store that sets the version itself, for example with a JPA `@Version`
+  column, raises it on the record too, and an event that takes longer than the poll interval between its read and its
+  save can then lose its compare and set on every attempt and fail with `SagaConcurrencyException`.
+- Point a monitoring query at `SagaInstance.nextTimerAt()` rather than at `nextTimerFiresAt`, if it looks for instances
+  whose timers have been due for a long time.
+
+### Stored saga state
+
+Nothing to migrate. A 0.34.0 document has no `nextAttemptAtEpochMilli`, which reads as a timer that has not failed,
+and its `nextTimerFiresAt` is already the earliest due time. During a rolling deploy 0.34.0 reads only `name` and
+`firesAtEpochMilli` from a timer subdocument, so it ignores the new field, and a 0.34.0 write drops it, which gives
+that instance the 0.34.0 order again.
+
 ## The deprecated `accept(..)` on the projection feeds is removed
 
 `accept(E)` and `accept(EventMetadata, E)` are gone from the blocking and the reactor `DomainEventFeed` and
@@ -762,9 +855,7 @@ stacks, so it isn't affected on a store that returns the criteria it was given.
   read of `all()` with `afterVersions`. So when `all()` becomes a tag, use the three-argument constructor on that read,
   drop the versions from that append's result, and throw on that read yourself. In `append`, rewrite the criteria the
   same way, and give the inner store a condition with
-  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`. On a sharded cluster the added tag then
-  counts in the check like any other tag, so appending any event with that tag makes the check refuse, whether or not
-  the event matches.
+  `DcbConsistencyToken.of(rewrittenCriteria, token.version(), token.markers())`.
 - **Code that reads with one criteria and appends with another**, passing the token the read returned. Creating the
   condition throws `IllegalArgumentException` on every store. `failIfEventsMatch(criteria, token)` compiles with a
   deprecation warning, and `wholeStoreLock(token)` and `new DcbAppendCondition(criteria, Optional.of(token))` compile
@@ -815,12 +906,29 @@ criteria than its read would then append on the read's criteria instead of throw
 On MongoDB, a token also holds what the read saw of each marker. On a replica set, an event a 0.35.0 node appended that
 doesn't match a condition's criteria no longer fails it, so you'll see fewer `DcbAppendConditionNotFulfilledException`s
 on a busy tag. A condition can still fail with no matching event, for example after a marker was deleted, when a
-0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had written. On anything else, such as a
-sharded cluster, this doesn't apply, and any event that moves a marker of the criteria still fails it.
+0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had written.
+
+Through a mongos, an event that doesn't match the criteria doesn't fail it either. A transaction through a mongos can
+read each shard at another point in time, so the store doesn't query the events in the append's transaction there. It
+starts a read-only transaction of its own on a second session, at read concern `snapshot` and write concern `majority`,
+reads the markers of the criteria again in it, and queries the events in it. When that snapshot shows a marker under
+another epoch or at an earlier version than the append's transaction read, or when the store can't run that
+transaction, the condition fails with no matching event. It also fails there for the reasons it does on a replica set,
+after a marker was deleted, when a 0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had
+written.
+
+The check works the same in the store's own transaction, in one that `SpringTransactionExecutor` or
+`SpringReactiveTransactionExecutor` opened and in a transaction of your own. The store doesn't change the read concern
+or the write concern of any of them. The commit of its own read-only transaction waits for majority for at most
+`markerVersionsCommitTimeout`, 5 seconds by default.
+
+The read-only transaction takes a second connection from the client's pool while the append's transaction is open. With
+`loadBalanced=true` the driver keeps every transaction on one connection until it ends, so when as many conditional appends
+as `maxPoolSize` reach the query at once, each one waits for a connection that none of the others gives back. Each check
+then fails after about `markerVersionsCommitTimeout`, and its append is refused. On a load-balanced deployment, set
+`maxPoolSize` above the number of conditional appends you run at the same time.
 
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
-Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with
-`withVersions()` doesn't when its stream reports `markerVersions()`, because it read both in one snapshot transaction.
 On any deployment, a read whose events are behind its token can do this, for
 example when a read preference or a read concern sends the events read to a lagging secondary or to an older snapshot. A
 token also doesn't depend on a read's limit, skip or position range, so after such a read a condition doesn't fail for a
@@ -832,10 +940,30 @@ the same database factory as yours and its transaction is set to `REQUIRES_NEW` 
 commits above the last reserved position. 0.35.0 reserves positions outside every transaction and waits for majority on
 the reservation, as [the next section](#an-append-on-mongodb-waits-for-majority-on-its-position-reservation) says.
 
+Through a mongos, a read without `withVersions()` reads the markers and the events in separate operations, which can
+reach different shards. Outside a transaction or session of yours, the store reads the markers, the position counter
+and the events in a causally consistent session of its own. When the markers read sees a marker that a matching event
+moved, the events read waits for that event's commit on the shard that holds the events, and returns the event. I tested
+that only with no read concern or read preference set, so that the reads go to the primary. With one set on the client,
+the database, the template or in a Spring store's query options, the read may still miss the event.
+
+Such a read can take as long as that commit. A marker in its token that's on the shard holding the events can still be
+from before the event.
+
+The store doesn't make a read in a transaction or session of yours wait, as before. On the Spring stores it reads the markers, the
+counter and the events in that session, and so does one in a transaction that `SpringTransactionExecutor` or
+`SpringReactiveTransactionExecutor` opened. That includes a read while transaction synchronization is active, since the
+template then reads in the session bound there, or binds one. On `MongoEventStore`, a read with a session bound in
+`ClientSessionHolder`, as `NativeMongoTransactionExecutor` binds one, reads the markers and the counter outside that
+session and only the events in it, as 0.34.0 did. No test checks whether such a read can miss the event. A read with `withVersions()`
+doesn't miss it when its stream reports `markerVersions()`, because it read the markers and the events in one snapshot
+transaction. On a replica set the read is the same as before.
+
 If you delete marker documents from the `_dcb_checkpoints` collection, delete one only in a transaction that also
 finds no event with its tag or type, and not during a rolling upgrade. On a sharded cluster, run that transaction at
 read concern snapshot. Earlier versions said pruning during quiescence was harmless. It isn't, because a token can be
-held across the prune.
+held across the prune. A type has eight marker documents, `marker:type:<type>` and `marker:typestripe:<n>:<type>` for
+`<n>` from 1 to 7, and the rule holds for each of them.
 
 A `DcbEventStore` of your own needs no change, and `DcbConsistencyToken.of(criteria, version)` keeps working for it.
 A MongoDB store throws `IllegalArgumentException` for a token built that way.
@@ -908,21 +1036,20 @@ refuse. Such an item also no longer adds its type markers to what a conditional 
 Say you read `DcbCriteria.type("SeatReserved").tags(Tag.of("show", "1"))`, and another command appends a
 `SeatReserved` tagged `show:2`. A conditional append with the read's token used to throw
 `DcbAppendConditionNotFulfilledException`, and now succeeds. The in-memory store already answered that way for this
-example. On a sharded cluster the MongoDB stores can still refuse an append the in-memory store accepts, for example
-after an event of another type that has one of the criteria's tags. On a replica set that event no longer refuses
-it, as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says. With a token, an item without
-tags still reads its type markers. The change is the first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
+example. With a token, an item without tags still reads its type markers. The change is the first part of [#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
 [ADR 147](../architecture/decisions/0147-a-dcb-consistency-token-belongs-to-the-criteria-it-was-read-with.md)
 describes it.
 
 ### What stays the same
 
 - A conditional append on criteria with tags is still refused when an event that matches them committed after the
-  read. On a replica set the check reads the events as they are when the append runs, so an event deleted by then, or
+  read. On a replica set and through a mongos the check reads the events as they are when the append runs, so an event deleted by then, or
   changed so that it no longer matches, may not fail it. A read can also miss such an event and let the append through,
   as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says.
-- Every append still increments a marker for each type and each tag of its events, so two appends of one type still
-  can't commit at the same time on MongoDB, whatever their tags.
+- Every append still increments a marker for each type and each tag of its events, so by default two appends of one
+  type still can't commit at the same time on MongoDB, whatever their tags.
+  [Appends of one type can spread over eight marker documents](#appends-of-one-type-can-spread-over-eight-marker-documents)
+  says how to change that.
 - This change adds nothing on disk, so it doesn't stop 0.34.0 and 0.35.0 nodes appending to the same store, within the
   limits in [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions). A conditional
   append from a 0.34.0 node still increments the type markers of its criteria, also for an item with tags. A conditional
@@ -953,6 +1080,69 @@ describes it.
   says.
 - **Code or an operator that deletes marker documents.** Follow the rule at the end of
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
+
+## Appends of one type can spread over eight marker documents
+
+On MongoDB every DCB append increments a marker document for each type of its events, so two appends of one type
+can't commit at the same time, even when their tags differ and no condition could ever match both. 0.35.0 splits the
+marker of a type into eight documents. By default an append increments the first one for its events, the document
+0.34.0 uses.
+
+To spread the writes, set `spreadTypeMarkerWrites(true)` on the `EventStoreConfig` of the native, Spring blocking or
+Spring reactor store, or this in either Spring Boot starter:
+
+```properties
+occurrent.event-store.mongodb.spread-type-marker-writes=true
+```
+
+An append then increments one of the eight documents for each type of its events, picked from its `AppendId`. Two
+appends of one type with different tags share a document only when they pick the same one. The change is the second part of
+[#1229](https://github.com/johanhaleby/occurrent/issues/1229), and
+[ADR 162](../architecture/decisions/0162-a-dcb-type-marker-is-split-into-stripes.md) describes it.
+
+### What changes whatever the setting
+
+- A read of a criteria item without tags, such as `DcbCriteria.type("TicketSold")`, reads all eight documents of each
+  of its types, in the same query.
+- A conditional append on such an item compares all eight documents of each type and increments them, so it still
+  conflicts with every append of the type.
+- The `DcbMarkerVersions` of such an item hold eight entries per type. An entry for a document that doesn't exist yet
+  has no epoch and version 0, and it equals `MarkerVersion.absent()`. Such a boundary reports versions before
+  any event of its types was appended.
+- A criteria item with tags reads no type marker, as
+  [Criteria with tags conflict on their tags](#criteria-with-tags-conflict-on-their-tags) says, so none of this
+  touches it.
+
+### Turning the setting on or off
+
+Every 0.35.0 node reads all eight documents, whatever its own setting. So nodes on different settings can share a
+store, and a rolling restart that turns the setting on or off is safe.
+
+Turn it on only when no 0.34.0 node appends to or reads from the store. A 0.34.0 node reads only the first document of
+a type. Say a 0.34.0 node reads `type("TicketSold")`, and a 0.35.0 node with the setting on then appends a
+`TicketSold` that picks the fourth document. The 0.34.0 node's conditional append sees no change in the first document
+and commits, although a matching event was appended after its read. The same holds for any 0.34.0 condition with a
+token and an item without tags. A 0.34.0 condition without a token checks the events in its own transaction, so it
+misses only a matching append on another document that commits at the same time.
+
+With the setting off, 0.34.0 and 0.35.0 nodes can share a store in both directions, as before.
+
+To go back to 0.34.0 after turning the setting on, turn it off and restart every process that appends to the store,
+including a separate service, a migration or a tool with its own `EventStoreConfig`. Then downgrade. The marker documents
+beyond the first of each type stay in the store, and 0.34.0 doesn't use them.
+
+### Who is affected
+
+- **An application whose appends are mostly of one type.** It can turn the setting on, once no 0.34.0 node uses the
+  store.
+- **An application that reads or appends with conditions on criteria items without tags.** Each such read and
+  conditional append uses eight marker documents per type instead of one, whatever the setting.
+- **Code that inspects `DcbMarkerVersions`.** `MarkerVersion.epoch()` is `null` for an absent entry. A snapshot store
+  of your own has to keep the entry without an epoch, as `SpringMongoSnapshotStore` and
+  `ReactiveSpringMongoSnapshotStore` do.
+- **A `DcbEventStore` of your own that reports marker versions.** The TCK expects the keys
+  `DcbMarkerVersionsSupport.queryMarkerKeys` gives, which are eight per type for a criteria item without tags, with an
+  absent entry for each document that doesn't exist.
 
 ## The default transaction executors retry on a MongoDB error label
 
@@ -1030,10 +1220,10 @@ after them. In 0.34.0 they saved the position of the last event and lost an appe
   late, and folding it last could give another state than a read in position order.
 - When the store reported no versions, or didn't confirm the append, the snapshot isn't saved. The first skip for each
   reason logs a warning, and later ones log at debug.
-- A boundary reports no versions until each tag of an item with tags, and each type of an item without tags, has a
-  marker. A decider reads the whole boundary, an attempt whose read reported no versions saves nothing, and its append creates the missing markers
+- A boundary reports no versions until each tag of an item with tags has a marker and every marker of the boundary
+  that exists has an epoch. A decider reads the whole boundary, an attempt whose read reported no versions saves nothing, and its append creates the missing markers
   and gives the others an epoch, so its next command can save. A `@Snapshot` view never appends, so it reads the whole
-  boundary until other appends have done that for every marker. 0.34.0 saved at a position there.
+  boundary until other appends have created its tag markers and given every marker that exists an epoch. 0.34.0 saved at a position there.
 - A `@Snapshot` view over `DcbCriteria.all()` keeps no snapshot and logs a warning at start, since a read of every event
   has no marker versions. A snapshot 0.34.0 saved for it stays in the store and stops changing, so delete it or give the
   view a boundary. `dcbSnapshotView { }` in Kotlin uses `DcbCriteria.all()` unless you set tags or criteria. A decider over
@@ -1293,6 +1483,13 @@ when the replay started after position 0 or after the beginning of time:
 | By position | `position:<position>;v:2;origin:<position>;replayTo:<position>;liveFrom:<live start>` |
 | By time | `position:time;v:2;at:<time>;origin:<time>;liveFrom:<live start>` |
 
+A blocking stream catch-up with checkpoint storage stores the time form too when a `resumeSubscription(id, startAt)` at
+a time after the beginning, without a live start, stores that time. The present position is then the live start. In
+0.34.0 such a resume stored nothing.
+[A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint)
+and [When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) say
+when a resume stores a position.
+
 The other checkpoints a catch-up stores keep the form they had in 0.34.
 
 A catch-up runs without the live delegate when the model it wraps answers `null` to its start. Under the Spring Boot
@@ -1322,9 +1519,38 @@ replays too, it fails with `CatchupCannotResumeException`, an `IllegalStateExcep
 replay, from reading its live start to checking it. Size the change stream history to reach back at least that far. On
 MongoDB that is the oplog, which you can keep for a minimum time with the `oplogMinRetentionHours` setting.
 
-A blocking catch-up whose replay a resume or a takeover started then holds the replay and logs the failure once, and
-runs it again when the subscription is resumed or `start(true)` is called. A replay that `subscribe(..)` started ends
-with the exception, which `waitUntilStarted()` throws.
+A blocking catch-up and a named reactor catch-up then hold the subscription paused and log the failure once at error
+level, and the `Flux` of an unnamed reactor catch-up fails with the exception. In 0.34.0 a blocking subscription ended
+when its subscribe started the replay, and the replay ran again after a backoff when a resume started it. A named
+reactor subscription ended and freed its id unless a takeover started the replay. `waitUntilStarted()` fails with the
+exception, and the id stays taken, so a subscribe of the same id throws `DuplicateSubscriptionIdException` until you
+cancel the subscription. Resuming the subscription replays again from the beginning, and so does `start(true)`. Over a
+`CompetingConsumerSubscriptionModel` around a blocking catch-up the node gives up the lease and stops competing for it
+until you resume the subscription.
+
+A replay that started later and loses its live start is held paused the same way. A replay again from its start would
+skip events, so `resumeSubscription(id)` throws `CatchupCannotResumeException` until you cancel the subscription, and so
+does `start(true)` on the blocking stack. A reactor `start(true)` keeps it held paused and replays nothing. On a
+blocking catch-up subscription model you call directly, `resumeSubscription(id, startAt)` at a position the change
+stream history still reaches resumes it. With checkpoint storage that position replaces the one the catch-up stored
+when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to. While
+a replay that `subscribe(..)` started is still running for a subscription paused during that replay, the resume stores
+nothing and reads no present position, since that replay reads the stored position to decide where it goes live from.
+
+A resume token or another checkpoint the MongoDB model restarts at is stored as given, and so is a checkpoint the
+catch-up replays from with a live start or at the beginning. A time after the beginning that a stream catch-up replays
+from without a live start is stored with the present position as its live start, in the new form, which 0.34 refuses.
+A DCB catch-up replays only from a position and the MongoDB model doesn't restart at a time, so on a DCB catch-up a
+resume at a time stores nothing. A `GlobalCheckpoint` above 0 without a live start, and a checkpoint the MongoDB model
+doesn't restart at, store nothing, so the position the catch-up stored stays. A resume that needs the present position
+to store, such as one at `StartAt.now()`, throws `IllegalStateException` and stores nothing when neither the event
+store nor the MongoDB model answers one.
+
+A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts around its catch-up, can't resume a
+subscription at a position, and its `cancelSubscription(id)` acts only on the instance you call it on. With checkpoint
+storage every instance that gets the lease refuses the same stored checkpoint. Stop every instance of the application
+and delete or replace that checkpoint, as the `ERROR` the competing consumer logs says. Without checkpoint storage,
+cancel the subscription on every instance and subscribe it again from the beginning or from a checkpoint you kept.
 
 A DCB catch-up and the reactor catch-ups replay only by position, and throw the same exception when you start them from
 a time replay's checkpoint in the new form.
@@ -1493,7 +1719,10 @@ again.
 
 The same applies to a checkpoint 0.34 stored in the middle of a replay that started above position 0. When the
 application is down for the upgrade for so long that the change stream history no longer reaches back to the live start
-in that checkpoint, 0.35 refuses it.
+in that checkpoint, 0.35 refuses it. A blocking catch-up refuses it in `subscribe(..)`, before it replays anything, so
+in Spring Boot with `startupMode` unset the application doesn't start, as when a stored resume token is gone. With
+`startupMode = BACKGROUND`, or on a competing-consumer node that gets the lease later, the catch-up holds the
+subscription paused at that live start instead.
 
 A start at position 0, `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or the beginning of time is not refused. A
 replay from there whose live start is lost still replays again, as
@@ -1507,9 +1736,11 @@ went live at the present, as
 [A stream catch-up over an event store without positions replays from position 0](#a-stream-catch-up-over-an-event-store-without-positions-replays-from-position-0)
 describes.
 
-The blocking catch-up throws `CatchupCannotResumeException` from `subscribe(..)` or from `waitUntilStarted()`, and a
-replay a resume or a takeover started is held, as for a lost live start. The reactor catch-up fails its `Flux` with it.
-The message names the subscription and what to do.
+The blocking catch-up throws `CatchupCannotResumeException` from `subscribe(..)` or from `waitUntilStarted()`. A replay
+that loses its live start is held paused, whether a subscribe, a resume or a takeover started it, as
+[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay)
+describes. The reactor catch-up fails its `Flux` with it, except that a named reactor catch-up whose replay loses its
+live start holds the subscription paused the same way. The message names the subscription and what to do.
 
 ### What to do
 
@@ -2099,6 +2330,227 @@ A subscription whose live checkpoint MongoDB no longer has stops the application
 [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now)
 for how to recover it.
 
+## A handler method the bean inherits is registered
+
+Both Spring Boot starters used to read a bean's handlers only from the methods its class declares. An annotated method
+that the class inherits from a superclass, or gets as an interface default method, never registered when the class
+didn't override it, and nothing was logged. Both starters now register it. Two kinds did register in 0.34.0. When a
+public class inherits a public annotated method from a superclass that isn't public, the compiler adds a bridge
+method to the class that calls the inherited method and has its annotation, and 0.34.0 found that bridge. Such a
+handler keeps running under the same id. When it is declared with a type variable, its types now come from the bean's
+class, see What changes below. The other is an annotated interface method, default or abstract, on a bean behind a
+JDK proxy whose target can't be unwrapped. 0.34.0 read the proxy's class, which declares every method of its
+interfaces, so it found that method, and both starters still register it. When it is declared with a type variable,
+its types now come from what the proxy's interfaces bind, see What changes below.
+
+When a superclass or interface of the bean has a method that names a class missing at runtime, such as a type from an
+optional dependency, both starters read only the methods the bean's class declares, as 0.34.0 did. They read that
+superclass's or interface's class file without loading it, and the methods of every other superclass and interface.
+When one of them declares a handler, the application now fails at startup with an `IllegalStateException` that names
+the handler and the missing class, where 0.34.0 started. It doesn't fail when the bean's class declares a method that
+runs that handler, which is an override with a handler annotation, or the bridge method the compiler adds to a public
+class for a public handler it inherits from a superclass that isn't public. Both keep running as in 0.34.0. It fails
+the same way when that class file can't be read either. Put the missing class on the classpath. When none declares a
+handler, both starters log at debug level that they skip the inherited methods.
+
+This covers `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@SynchronousSubscription`, `@Projection` and
+`@Snapshot`, and `@Saga` on the blocking starter. An inherited `@Projection`, `@Snapshot` or `@Saga` factory method,
+which was never found either, runs too.
+
+An override registered before and still does. Without an annotation of its own, it runs under the overridden method's
+annotation, and when it repeats the annotation, it uses its own. A method with the same name and parameters as a
+private superclass method, or as a package-private one in a superclass in another package, doesn't override it. When
+both have a handler annotation, both now register, see What changes below.
+
+### Who is affected
+
+Applications on either starter with one of these:
+
+- a bean whose class inherits an annotated method from a superclass and doesn't override it, other than the bridge
+  kind above
+- a bean whose class implements an interface with an annotated default method and doesn't override it
+- two or more beans that run one annotated method without overriding it, either two subclasses of the class that
+  declares it, or that class and a subclass, each a bean
+- a bean whose class declares a method with the same name and parameters as a package-private annotated method that a
+  superclass in another package declares
+- a bean whose class repeats a handler annotation on a method with the same name and parameters as a private annotated
+  superclass method
+- a bean whose class declares a static method with the same name and parameters as an annotated static method of a
+  superclass
+- a bean whose class inherits a handler or factory method of the bridge kind above that is declared with a type
+  variable
+- a bean that is a JDK proxy of the kind above with a handler or factory method declared with a type variable on a
+  generic interface, when one of the proxy's interfaces binds that variable
+- a bean that is a JDK proxy of the kind above, when two of its interfaces declare a method with the same name and
+  parameters, each with the same handler annotation but with different attributes, such as the id
+
+### What changes
+
+- An inherited handler, other than the two kinds above, starts running on the first start after the upgrade, from
+  its own start settings. When nothing is stored for its id, `startAt = BEGINNING`, or `startAt = BEGINNING_OF_TIME`
+  on `@StreamSubscription`, replays the whole history. So does a `@Snapshot`, whose `startAt` is `BEGINNING` by
+  default, and a `@Projection` or `@Saga` with `source = PUSH`, which replays the event store's history before it goes
+  live unless it sets `catchup = NONE`. When a handler with that id ran before, for example before the method moved
+  into a superclass, its position is stored, and under the default `resumeBehavior` it resumes from there. It then
+  gets every event written since that handler last ran.
+- A handler declared with a type variable, such as `on(E event)` on `Base<E>`, takes its event type from the bean's
+  class. A class that extends `Base<Placed>` subscribes to `Placed`. An inherited factory method declared with a type
+  variable reads its state type the same way. This changes the bridge kind above too. 0.34.0 read its types from the
+  bridge, which has only the erased types. So with `Base<E extends OrderEvent>`, such a handler subscribed to
+  `OrderEvent` and now subscribes to `Placed` only, under the same id. When its annotation's `eventTypes` lists a
+  type that isn't `Placed` or a subtype of it, the application now fails at startup with an `IllegalStateException`,
+  where 0.34.0 subscribed it to those types. Such a factory method found no state type, so it failed at startup
+  unless it named its store or the application had one bean of the store type. It keeps that store, and where it
+  failed, it now gets the zero-config store.
+- The JDK proxy kind above takes its types from what the proxy's interfaces bind. 0.34.0 read them from the proxy
+  class's own method, which has only the erased types. So when `Handler<E extends OrderEvent>` declares the handler
+  and the proxy implements `PlacedHandler extends Handler<Placed>`, the handler subscribed to `OrderEvent` and now
+  subscribes to `Placed` only, under the same id. A proxy that implements `Handler` itself still subscribes to
+  `OrderEvent`. When the annotation's `eventTypes` lists a type that isn't `Placed` or a subtype of it, such as
+  another subtype of `OrderEvent`, the application now fails at startup with an `IllegalStateException`. A factory
+  method of that kind found no state type either, so it failed at startup unless it named its store or the
+  application had one bean of the store type. It keeps that store, and where it failed, it now gets the zero-config
+  store for the type the interfaces bind.
+- When two interfaces of the JDK proxy kind above declare a method with the same name and parameters, the proxy has
+  one method for both. 0.34.0 found the annotation of the first interface the proxy lists on it, so only that handler
+  registered, and the order of the interfaces decided which. When the two annotations differ in any attribute, such
+  as the id, the application now fails at startup with an `IllegalArgumentException` that names both methods. When
+  they're equal in every attribute, the handler registers once, as before.
+- Two beans that run one annotated method register two handlers with the same id, so the application fails at
+  startup with `DuplicateSubscriptionIdException`. That holds when both inherit it, and when one of them is a bean of
+  the class that declares it. The id is the key the subscription's checkpoint is stored under,
+  so two handlers can't share it.
+- A bean's class can repeat a handler annotation on a method with the same name and parameters as an annotated
+  superclass method that it doesn't override, because the superclass method is private, or package-private in a
+  superclass in another package. In 0.34.0 only the class's method ran. Now both methods register. When the two ids
+  differ, the superclass method starts running too, as an inherited handler does above. When the ids are the same,
+  the application fails at startup with `DuplicateSubscriptionIdException`.
+- An inherited subscription handler that is static fails at startup with `SubscriptionHandlerNotInvocableException`.
+  So does one on a bean behind a CGLIB proxy when it is private, final, or package-private in another package than
+  the bean's class, since the proxy can't override it. It also fails there when it is package-private and a class in
+  another package, between it and the bean's class, declares a public or protected method with the same name and
+  parameters, since the proxy runs that method instead. A handler method the bean's class declares already got the
+  same refusal, except the two package-private cases, which can't happen there. Behind a JDK interface proxy, an
+  inherited subscription handler that is private or package-private fails at startup the same way, since the proxy
+  runs only methods of its interfaces. That holds when one of them declares a method with the same name and
+  parameters too, since the bean's class implements that method with another body.
+- An inherited `@Projection`, `@Snapshot` or `@Saga` factory method that is private, final, or package-private in
+  one of the two cases above fails at startup with an `IllegalStateException` when the bean is behind a CGLIB proxy
+  whose target can't be unwrapped, for example a proxy
+  built with a custom `TargetSource` whose `isStatic()` returns `false`. A factory method the bean's class declares
+  runs there as before, and a static factory method always runs, since it reads no bean.
+- In Kotlin a superclass method is final unless it is marked `open`, and the `kotlin-spring` plugin opens a class only
+  when the class itself has a Spring annotation such as `@Component`. So a subscription handler on a plain Kotlin
+  superclass fails at startup when the bean that inherits it is behind a CGLIB proxy, for example because it has a
+  `@Transactional` method. A `@Projection`, `@Snapshot` or `@Saga` factory method there fails only when the proxy's
+  target can't be unwrapped, as above.
+- A class that overrides a generic handler with a concrete parameter type, such as `on(String event)` in a class that
+  extends `Base<String>` and overrides `on(E event)`, failed at startup with `DuplicateSubscriptionIdException`. The
+  scan also found the bridge method `on(Object)` that the compiler adds, under the same id. The handler now registers
+  once.
+- A package-private method doesn't override a method of a superclass in another package, even with the same name and
+  parameters, but both starters treated it as if it did. Say `Base` in package `a` declares a package-private
+  `@Subscription(id = "h") void on(Placed event)`, and `Sub` in package `b` extends it and declares
+  `void on(Placed event)` with no annotation. A `Sub` bean ran `Sub.on` under id `h`. The application now fails at
+  startup, and the error names both methods. A `@Projection`, `@Snapshot` or `@Saga` factory method changes the same
+  way.
+- A static method doesn't override a static method of a superclass with the same name and parameters, it hides it,
+  but both starters ran it under that method's annotation. Say `Base` declares `@Projection(id = "p")` on a static
+  `projection()`, and `Sub` extends it and declares a static `projection()` with no annotation. A `Sub` bean ran
+  `Sub.projection` as projection `p`. The application now fails at startup with an `IllegalStateException` that names
+  both methods. When `Sub.projection` repeats `@Projection(id = "p")`, both methods register, so the application
+  fails at startup with `DuplicateSubscriptionIdException`, and with different ids `Base.projection` starts running
+  too. This covers `@Projection` and `@Snapshot`, and `@Saga` on the blocking starter. A static subscription handler
+  failed at startup in 0.34.0 too, and when a subclass hides it, the error is now that `IllegalStateException`
+  instead of `SubscriptionHandlerNotInvocableException`.
+
+### What to do
+
+Before you upgrade, search for Occurrent annotations on methods of classes your beans extend, and on interface default
+methods. For each one a bean inherits without overriding it:
+
+- If the handler should run, check where its `startAt` starts it. `BEGINNING` replays the history it missed, and
+  `NOW` starts at the present.
+- If it shouldn't run on any bean, remove the annotation from the method. A handler of the two kinds above keeps
+  its annotation, since it ran in 0.34.0 and removing the annotation stops a subscription that has a stored
+  checkpoint.
+- If only some of the classes that inherit it should run it, move the annotation off the superclass method. Then
+  override the method in each class that should run it and repeat the annotation there. An override without the
+  annotation runs under the annotation of the method it overrides, so leaving the annotation on the superclass keeps
+  it running everywhere.
+- If it's a static subscription handler, make it an instance method. If the bean is behind a CGLIB proxy and the
+  method is private, final, or package-private in another package, make it public or protected and not final. In
+  Kotlin, mark it `open`. If it's package-private and the proxy runs a public or protected method of the same name and
+  parameters from a class in another package, rename one of the two methods. For a `@Projection`, `@Snapshot` or
+  `@Saga` factory method, this is needed only when the proxy's target can't be unwrapped. If the bean is behind a
+  JDK interface proxy and the handler is private or package-private, make it public and declare it on an interface
+  the proxy implements.
+- If it's package-private and a subclass in another package declares a method with the same name and parameters and
+  no handler annotation of its own, the application fails at startup. To keep the subclass's method as the handler,
+  which is what ran before, make both methods protected or public, so the subclass's method overrides the superclass
+  method. To run the superclass method instead, rename the subclass's method.
+- If it's private, or package-private and declared in another package than a subclass, and the subclass declares a
+  method with the same name and parameters that repeats the handler annotation, both methods run. To keep only the
+  subclass's method, which is what ran before, make both methods protected or public, so the subclass's method
+  overrides the superclass method, or remove the annotation from the superclass method.
+- If it's a static `@Projection`, `@Snapshot` or `@Saga` factory method and a subclass declares a static method with
+  the same name and parameters, the application fails at startup, or registers both when that method repeats the
+  annotation. To run the subclass's method, which is what ran before, put the annotation on it and remove it from the
+  superclass method. To run the superclass method instead, rename the subclass's method.
+- If it's a handler of either kind above declared with a type variable, and the bean's class, or the proxy's
+  interfaces, give the variable a narrower type than its bound, events of the bound's other types stop reaching it.
+  To keep the types it subscribed to in 0.34.0, make one of these changes before you upgrade. For the bridge kind,
+  bind the variable to its bound, for example `extends Base<OrderEvent>`, or extend `Base` raw. For the JDK proxy
+  kind, have the proxy implement an interface that binds the variable to its bound, such as
+  `OrderHandler extends Handler<OrderEvent>`, or have it implement `Handler` itself in place of `PlacedHandler`. To
+  keep the narrower type instead, remove from its `eventTypes` the types that aren't that type or a subtype of it, or
+  the application fails at startup. A factory method of either kind keeps the store it named, or the one bean of the
+  store type it got.
+- If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
+  A bean of the class that declares it keeps the original id. If the method is private, or package-private and
+  declared in another package than a subclass, the subclasses can't override it, so first make it protected or public,
+  or move its annotation to the subclass methods.
+- If two interfaces of a JDK proxy declare a method with the same name and parameters and their annotations differ,
+  keep the annotation on the method of the first interface the proxy lists, whose handler ran in 0.34.0, and remove
+  it from the other. Or give both the same attributes.
+
+The code compiles unchanged. An inherited handler that starts running writes what a new handler writes, such as its
+checkpoint and, for a `@Projection`, `@Snapshot` or `@Saga`, its state. There is no OpenRewrite recipe, because nothing in the code
+says whether an inherited handler was meant to run. See
+[ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md).
+
+## `SubscriptionAnnotations` reads handlers as the bean's class sees them
+
+Both Spring Boot starters read a bean's handlers through `SubscriptionAnnotations`, in the module they share. Three of
+its public methods change so that the starters find inherited handlers, see
+[A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered).
+
+### Who is affected
+
+Code outside the starters that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter`.
+
+### What changes
+
+- `invokeDescriptorFactory` runs a factory method that the class of the unwrapped bean inherits unchanged, where
+  0.34.0 refused every factory method that class didn't declare itself. Behind a CGLIB proxy whose target can't be
+  unwrapped, it refuses an inherited factory method the proxy can't override, such as a private or final one. Behind
+  a JDK interface proxy whose target can't be unwrapped, it runs the factory through the proxy by the method of the
+  proxy's interface that runs it, where 0.34.0 ran only a method the proxy class itself declares.
+- `runsImplementationOf` decides whether the bean's class overrides the method by the JVM's rules. Say `Base` in
+  package `a` declares a package-private `on(Placed)`, `Mid` in package `b` extends it and declares `on(Placed)` too,
+  and `Leaf` in package `a` extends `Mid`. `Mid.on` doesn't override `Base.on`, so a `Leaf` runs `Base.on`, and the
+  method now answers `true` for `Base.on` on a `Leaf`, where 0.34.0 answered `false`.
+- `resolveTypeFilter` reads the handler's parameter types as the bean's class sees them, so `on(E event)` on `Base<E>`
+  subscribes a bean of a class that extends `Base<Placed>` to `Placed`, where 0.34.0 read the bound of `E`. Handed a
+  bridge method, it reads the types of the method the bridge calls. `analyzeParameters` still reads the types as the
+  method declares them.
+
+### What to do
+
+The code compiles unchanged. Where you call one of the three methods, check what your code does with the new answer
+for an inherited factory method, a package-private method declared again in another package, or a handler declared
+with a type variable.
+
 ## `ComposedDefaultStartPosition` and its bean are removed
 
 The blocking Spring Boot starter no longer has `ComposedDefaultStartPosition` or the `occurrentComposedDefaultStartPosition`
@@ -2360,6 +2812,40 @@ the exception can stop the application from starting, with no call of your own i
 `startupMode = BACKGROUND` on the annotation to start the subscription in the background instead, or pass
 `waitUntilStarted = false` to the Kotlin DSL's `subscribe(..)`. The refusal is then logged as an error and the
 subscription is removed.
+
+## A blocking catch-up resume at a dynamic start uses the catch-up's answer
+
+`resumeSubscription(id, startAt)` on `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` or the blocking
+`CatchupSubscriptionModel` asks a `StartAt.dynamic(..)` function for the catch-up first, with or without checkpoint
+storage, and the live model resumes at the start the function answered. In 0.34.0 the catch-up passed the `StartAt`
+on unchanged, and the live model asked the function for itself.
+
+A function that answers the same position for every model sees no change. A function that answers by
+`SubscriptionModelContext`, with one position for the catch-up and another for the live model, now resumes the live
+model at the catch-up's position. A live model that wraps another, such as `DurableSubscriptionModel`, is still asked
+whether it starts at all, as at a subscribe. When the function answers `null` for the catch-up, the live model asks it
+for itself, as in 0.34.0. To resume the live model at a position of its own, pass that position with
+`StartAt.checkpoint(..)` instead of the dynamic start.
+
+## A blocking catch-up refuses a resume at a position of a subscription that runs
+
+`resumeSubscription(id, startAt)` on `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` or the blocking
+`CatchupSubscriptionModel` throws `SubscriptionAlreadyRunningException` when the catch-up made the subscription and it
+runs. It throws before it stores anything and before it asks a `StartAt.dynamic(..)` function. A subscription runs here
+when it isn't paused, the replay its `subscribe(..)` started didn't end before the live model got it, and no replay that
+`resumeSubscription(id)` started runs for it or is about to start to take over a live start the live model lost. That
+includes one whose `subscribe(..)` replay still runs, and one the live model is still opening after `subscribe(..)`
+returned, as the MongoDB models do. In 0.34.0 the catch-up passed such a resume on to the live model. The MongoDB
+models threw `SubscriptionAlreadyRunningException` for a subscription they held, which is what the catch-up throws
+now. While the `subscribe(..)` replay ran they didn't hold it yet, and threw `UnknownSubscriptionException`.
+
+`RepositionableSubscriptions` already says that `resumeSubscription(id, startAt)` throws
+`SubscriptionAlreadyRunningException` for a subscription that runs. A `catch` of that exception, of
+`SubscriptionRefusedException` or of `IllegalArgumentException`, which it extends, catches it. A `catch` of
+`UnknownSubscriptionException` no longer catches a resume during the `subscribe(..)` replay. A subscription you pause
+while its `subscribe(..)` replay runs isn't refused this way. The live model doesn't hold it until that replay hands
+over, so a resume at a position before then still throws `UnknownSubscriptionException` from a MongoDB model, as in
+0.34.0.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 

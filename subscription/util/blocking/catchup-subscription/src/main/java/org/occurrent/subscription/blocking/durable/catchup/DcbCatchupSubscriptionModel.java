@@ -132,6 +132,12 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                     paused -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, firstStartAt), action, paused));
         }
 
+        Subscription heldPaused = refuseOrHoldIfItsStoredLiveStartIsLost(subscriptionId, firstStartAt,
+                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, liveStart), action, true));
+        if (heldPaused != null) {
+            return heldPaused;
+        }
+
         // A replay that stop() cut short runs again from the last position it stored, as a restart would, so the
         // stored position does not move back
         Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId,
@@ -242,7 +248,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         });
     }
 
-    private ReplayScope<DcbCatchupReadScope> openScope(@Nullable String notBefore) {
+    @Override
+    protected ReplayScope<DcbCatchupReadScope> openScope(@Nullable String notBefore) {
         DcbCatchupReadScope scope = dcbCatchupReads.openDcbCatchupReadScope(notBefore);
         return new ReplayScope<>(scope, scope.liveStart(), scope::close);
     }
@@ -295,6 +302,13 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     // attempt's events only and still fires when n is larger than a window
     private Predicate<CloudEvent> persistDuringCatchupForOneAttempt() {
         return returnIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class, CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).map(EveryN::forOneSubscription).orElse(__ -> false);
+    }
+
+    // A start at a time goes to the live delegate, so a positioned resume at a time stores it only when the live delegate
+    // restarts at it, and never as a time this model would refuse to replay from
+    @Override
+    protected boolean replaysFrom(Checkpoint given) {
+        return CatchupCheckpoints.isPosition(given);
     }
 
     // firstStartAt is already resolved (non-dynamic) by the time this runs, so the context class used to call get()

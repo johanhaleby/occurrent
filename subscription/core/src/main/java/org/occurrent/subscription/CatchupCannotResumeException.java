@@ -23,8 +23,15 @@ package org.occurrent.subscription;
  * This extends {@link IllegalStateException}, which is what a catch-up threw before this type existed when the
  * subscription model lost its live start during or right after each of its replays, so code catching that still
  * catches it. A catch-up also throws it when it is asked to start from a checkpoint that a time-based catch-up stored,
- * but can only replay by position. A blocking catch-up whose replay a resume or a takeover started doesn't run that
- * replay again after this, and holds it until the subscription is resumed.
+ * but can only replay by position.
+ * <p>
+ * A blocking catch-up whose replay throws this because the subscription model lost its live start holds the replay
+ * paused, whichever call started it. When the replay started after the beginning, a resume or a {@code start(true)}
+ * throws this until the subscription is cancelled or resumed at a given position, since a replay again would skip
+ * events. A replay that started at the beginning runs again on a resume or a {@code start(true)}.
+ * <p>
+ * For any other reason, a blocking catch-up holds a replay that a resume or a takeover started until the subscription
+ * is resumed, and a replay that a subscribe started ends.
  */
 public class CatchupCannotResumeException extends IllegalStateException {
 

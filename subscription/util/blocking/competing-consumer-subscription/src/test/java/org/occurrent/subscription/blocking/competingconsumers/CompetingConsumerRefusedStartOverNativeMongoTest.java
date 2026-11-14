@@ -32,7 +32,9 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
@@ -49,6 +51,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -177,6 +180,20 @@ class CompetingConsumerRefusedStartOverNativeMongoTest {
     }
 
     // A catch-up's checkpoint that a native model has no change stream position for
+    private static StartRefusalReportingSubscriptions.StartRefusalListener onStartRefusal(BiConsumer<String, UnsupportedStartAtException> onRefusal) {
+        return new StartRefusalReportingSubscriptions.StartRefusalListener() {
+            @Override
+            public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+                onRefusal.accept(subscriptionId, refusal);
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+                throw new AssertionError("A MongoDB model never holds a subscription paused, but was asked to for " + subscriptionId, refusal);
+            }
+        };
+    }
+
     private static StartAt refusedStartAt() {
         return StartAt.dynamic(context -> StartAt.checkpoint(GlobalCheckpoint.of(0)));
     }
@@ -204,7 +221,7 @@ class CompetingConsumerRefusedStartOverNativeMongoTest {
         private Node(String subscriberId, MongoDatabase database, String eventCollection, String locks) {
             this.subscriberId = subscriberId;
             NativeMongoSubscriptionModel nativeModel = nativeModel(database, eventCollection);
-            nativeModel.addStartRefusalListener((subscriptionId, refusal) -> refusals.incrementAndGet());
+            nativeModel.addStartRefusalListener(onStartRefusal((subscriptionId, refusal) -> refusals.incrementAndGet()));
             strategy = new NativeMongoLeaseCompetingConsumerStrategy.Builder(database, locks).leaseTime(LEASE_TIME).build();
             wrapped = new CountingStarts(nativeModel);
             model = new CompetingConsumerSubscriptionModel(wrapped, strategy);

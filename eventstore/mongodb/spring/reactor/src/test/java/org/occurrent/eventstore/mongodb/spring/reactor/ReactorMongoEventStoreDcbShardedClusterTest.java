@@ -73,10 +73,9 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedE
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEventWithId;
 
 /**
- * What the reactor store answers to a conditional append when it runs against a mongos.
- * A read there can tear across shards, so a token can hold one marker from after an event and another from before
- * it. The store refuses a conditional append when any marker of its criteria moved, and doesn't try to settle it
- * (ADR 149).
+ * What the reactor store answers to a conditional append through a mongos with one shard.
+ * When a marker of the criteria moved and the markers can't settle the condition, the store reads the markers again in a read-only snapshot transaction on a second session and queries the events there (ADR 175).
+ * The tests check which appends pass and which are refused, and the marker versions of a read that is the first operation of a transaction and of a read that confirms an append before saving.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -138,38 +137,37 @@ class ReactorMongoEventStoreDcbShardedClusterTest {
     }
 
     @Test
-    void refuses_an_append_after_an_event_of_another_type_with_the_tag_because_it_doesn_t_ask_the_events() {
+    void accepts_an_append_after_an_event_of_another_type_with_the_tag_because_it_asks_the_events_at_one_point_in_time() {
         DcbConsistencyToken token = eventStore.read(TICKETS_OF_K1).consistencyToken();
         eventStore.append(List.of(taggedEvent(CONCERT_RENAMED, CONCERT_K1)));
         CloudEvent event = taggedEvent(TICKET_SOLD, CONCERT_K1);
 
-        assertThatThrownBy(() -> eventStore.append(List.of(event), failIfEventsMatch(token)))
-                .as("The marker of the tag moved. A token read through a mongos can hold a marker from after a matching event and miss "
-                        + "the event, so the store doesn't ask the events and the check refuses. A store that queried here would let this append through")
-                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        assertThatCode(() -> eventStore.append(List.of(event), failIfEventsMatch(token)))
+                .as("The marker of the tag moved, and the store's own snapshot transaction finds no matching event above it")
+                .doesNotThrowAnyException();
     }
 
     @Test
-    void refuses_an_append_after_another_conditional_append_on_the_same_criteria_whatever_it_appended() {
+    void accepts_an_append_after_another_conditional_append_on_the_same_criteria_that_appended_no_matching_event() {
         DcbConsistencyToken token = eventStore.read(TICKETS_OF_K1).consistencyToken();
         DcbConsistencyToken otherToken = eventStore.read(TICKETS_OF_K1).consistencyToken();
         eventStore.append(List.of(taggedEvent(CONCERT_RENAMED, CONCERT_K1)), failIfEventsMatch(otherToken));
         CloudEvent event = taggedEvent(TICKET_SOLD, CONCERT_K1);
 
-        assertThatThrownBy(() -> eventStore.append(List.of(event), failIfEventsMatch(token)))
-                .as("The first append incremented the marker of the criteria without matching it, and on a mongos the check doesn't look further than the marker")
-                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        assertThatCode(() -> eventStore.append(List.of(event), failIfEventsMatch(token)))
+                .as("The first append moved the marker of the criteria without a matching event, and the events above it settle that")
+                .doesNotThrowAnyException();
     }
 
     @Test
-    void refuses_an_append_after_an_event_with_only_some_of_the_tags_of_the_criteria() {
+    void accepts_an_append_after_an_event_with_only_some_of_the_tags_of_the_criteria() {
         DcbCriteria criteria = DcbCriteria.type(ENROLLED).tags(tag("course:c1"), tag("student:s1"));
         DcbConsistencyToken token = eventStore.read(criteria).consistencyToken();
         eventStore.append(List.of(taggedEvent(ENROLLED, "course:c1", "student:s2")));
 
-        assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent(ENROLLED, "course:c1", "student:s1")), failIfEventsMatch(token)))
-                .as("The marker of student s1 didn't move, but a token read through a mongos can hold it from before a matching event, so it doesn't rule the event out")
-                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+        assertThatCode(() -> eventStore.append(List.of(taggedEvent(ENROLLED, "course:c1", "student:s1")), failIfEventsMatch(token)))
+                .as("Only the marker of course c1 moved, and no event above it has student s1 as well")
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -178,7 +176,7 @@ class ReactorMongoEventStoreDcbShardedClusterTest {
         eventStore.append(List.of(taggedEvent(CONCERT_RENAMED, "concert:k2")));
 
         assertThatCode(() -> eventStore.append(List.of(taggedEvent(TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)))
-                .as("The event moved no marker of the criteria, so the refusals above are not the store refusing every condition")
+                .as("The event moved no marker of the criteria, so the markers settle the condition without the events")
                 .doesNotThrowAnyException();
     }
 
@@ -188,7 +186,7 @@ class ReactorMongoEventStoreDcbShardedClusterTest {
         eventStore.append(List.of(taggedEvent(TICKET_SOLD, CONCERT_K1)));
 
         assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent(TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token)))
-                .as("A matching event is refused too, as it is whenever a marker moved")
+                .as("The marker of the tag moved, and the store finds the matching event above it")
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 

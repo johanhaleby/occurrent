@@ -288,6 +288,26 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     }
 
     @Test
+    void does_not_spread_type_marker_writes_when_the_property_is_unset() {
+        eventStoreConfigContextRunner().run(context -> {
+            EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
+
+            assertThat(eventStoreConfig.spreadTypeMarkerWrites).isFalse();
+        });
+    }
+
+    @Test
+    void spreads_type_marker_writes_when_the_property_is_true() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues("occurrent.event-store.mongodb.spread-type-marker-writes=true")
+                .run(context -> {
+                    EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
+
+                    assertThat(eventStoreConfig.spreadTypeMarkerWrites).isTrue();
+                });
+    }
+
+    @Test
     void opts_a_stream_store_out_of_position_when_the_position_property_is_false() {
         eventStoreConfigContextRunner()
                 .withPropertyValues("occurrent.event-store.stream.position=false")

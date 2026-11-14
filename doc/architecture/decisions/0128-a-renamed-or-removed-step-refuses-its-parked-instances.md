@@ -55,7 +55,9 @@ catches a failing timeout per instance, logs it, and leaves it due for the next 
 step firing a timer costs one stuck instance", which was wrong in the same way ADR 134's Context was. The timer
 survives, and nothing in `findWithDueTimers` requires a store to give a different instance a turn, so once
 `timerBatchLimit` instances are in that state the saga can stop firing timers altogether.
-See [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
+See [#1003](https://github.com/johanhaleby/occurrent/issues/1003), which
+[ADR 173](0173-a-failing-saga-timer-is-tried-again-after-the-timers-already-due.md) fixes by trying a failed timer again
+after every instance that was already due.
 
 **Amended for [#1028](https://github.com/johanhaleby/occurrent/issues/1028).** Two more of the paragraph's claims
 have gone. It used to attribute to `SagaRunner`'s javadoc that the subscription model "retries the same event

@@ -220,6 +220,12 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
         return !lost.contains(checkpoint);
     }
 
+    // As the MongoDB models answer: it opens at any checkpoint but a catch-up's position, which it doesn't recognize
+    @Override
+    public boolean restartsAt(Checkpoint checkpoint) {
+        return !AbstractCatchupSubscriptionModel.isCatchupCheckpoint(checkpoint);
+    }
+
     @Override
     public void stop() {
         delegate.stop();

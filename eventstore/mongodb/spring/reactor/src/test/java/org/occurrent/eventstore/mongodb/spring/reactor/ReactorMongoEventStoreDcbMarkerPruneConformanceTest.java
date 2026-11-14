@@ -59,7 +59,11 @@ class ReactorMongoEventStoreDcbMarkerPruneConformanceTest extends DcbMarkerPrune
 
     @Override
     protected EventStoreFixture createFixture() {
-        return new ReactorMongoEventStoreConformanceFixture(connectionString());
+        return spreadTypeMarkerWrites() ? ReactorMongoEventStoreConformanceFixture.spreadingTypeMarkerWrites(connectionString()) : new ReactorMongoEventStoreConformanceFixture(connectionString());
+    }
+
+    protected boolean spreadTypeMarkerWrites() {
+        return false;
     }
 
     @Override

@@ -53,7 +53,11 @@ class MongoEventStoreDcbMarkerPruneConformanceTest extends DcbMarkerPruneConform
 
     @Override
     protected EventStoreFixture createFixture() {
-        return new MongoEventStoreConformanceFixture(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+        return spreadTypeMarkerWrites() ? MongoEventStoreConformanceFixture.spreadingTypeMarkerWrites(new ConnectionString(mongoDBContainer.getReplicaSetUrl())) : new MongoEventStoreConformanceFixture(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+    }
+
+    protected boolean spreadTypeMarkerWrites() {
+        return false;
     }
 
     @Override

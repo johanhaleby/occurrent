@@ -57,9 +57,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * instance held the thread when the heap ran out. That is {@code SagaExecutionSupport.isAttributableToTheInstance},
  * the same rule the event path applies.
  * <p>
- * This does not make a failing instance isolated from the saga's other instances. Nothing requires a store to give a
- * different instance a turn, so enough failing instances can stop the saga firing timers altogether. See
- * <a href="https://github.com/johanhaleby/occurrent/issues/1003">#1003</a>.
+ * What a failing instance costs the saga's other instances over many polls is covered by
+ * {@code SagaTimerFairnessTest}, and what a failed fire writes to the timer by {@code SagaTimerFailedAttemptMarkerTest}.
  */
 @DisplayName("A timer reaction that throws an Error")
 @DisplayNameGeneration(ReplaceUnderscores.class)

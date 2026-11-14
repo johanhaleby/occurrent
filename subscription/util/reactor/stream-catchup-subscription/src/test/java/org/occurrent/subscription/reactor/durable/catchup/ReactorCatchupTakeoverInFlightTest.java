@@ -60,7 +60,7 @@ class ReactorCatchupTakeoverInFlightTest {
         // and then throws while it still holds the subscription paused for the takeover
         IntrospectableLosingLiveStartModel wrapped = new IntrospectableLosingLiveStartModel();
         ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
-        try (ErrorsLoggedByTheCatchup logged = new ErrorsLoggedByTheCatchup()) {
+        try (LoggedByTheCatchup logged = new LoggedByTheCatchup()) {
             AtomicReference<Sinks.Empty<Void>> reads = new AtomicReference<>();
             wrapped.loses = LosingLiveStartModel.Loses.ON_ANOTHER_THREAD_WHILE_SUBSCRIBE_WAITS;
             wrapped.losesTheNextOpen();

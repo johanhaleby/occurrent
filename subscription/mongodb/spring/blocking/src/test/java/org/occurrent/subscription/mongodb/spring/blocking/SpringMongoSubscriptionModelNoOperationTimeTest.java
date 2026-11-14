@@ -52,6 +52,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -80,6 +81,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
@@ -325,7 +327,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
 
@@ -352,7 +354,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(withoutCommitTime, null));
         subscriptionModel = modelOver(RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         String subscriptionId = UUID.randomUUID().toString();
 
         // When
@@ -375,7 +377,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         subscriptionModel.stop();
         String subscriptionId = UUID.randomUUID().toString();
         Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
@@ -404,7 +406,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(withoutCommitTime, null));
         subscriptionModel = modelOver(RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         subscriptionModel.stop();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
@@ -425,7 +427,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         // Given: a subscription that has run, and a server whose change stream gives no position now
         subscriptionModel = modelOver(RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId())).waitUntilStarted(Duration.ofSeconds(10));
@@ -468,7 +470,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         // Given: a subscription that has run and is paused, and a server whose change stream gives no position now
         subscriptionModel = modelOver(RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId())).waitUntilStarted(Duration.ofSeconds(10));
@@ -507,7 +509,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(mappingErrors(mapped));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         String subscriptionId = UUID.randomUUID().toString();
 
         // When
@@ -532,7 +534,7 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         subscriptionModel = modelOver(mappingErrors(mapped));
         subscriptionModel.stop();
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
         });
@@ -669,6 +671,10 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
             public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
                 throw new IllegalStateException("listener failed");
             }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+            }
         });
         List<String> heldPaused = new CopyOnWriteArrayList<>();
         subscriptionModel.addStartRefusalListener(new StartRefusalListener() {
@@ -679,6 +685,10 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
             @Override
             public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
                 heldPaused.add(subscriptionId);
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             }
         });
         String subscriptionId = UUID.randomUUID().toString();
@@ -882,5 +892,19 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build());
+    }
+
+    private static StartRefusalListener onStartRefusal(BiConsumer<String, UnsupportedStartAtException> onRefusal) {
+        return new StartRefusalListener() {
+            @Override
+            public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+                onRefusal.accept(subscriptionId, refusal);
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+                throw new AssertionError("A MongoDB model never holds a subscription paused, but was asked to for " + subscriptionId, refusal);
+            }
+        };
     }
 }

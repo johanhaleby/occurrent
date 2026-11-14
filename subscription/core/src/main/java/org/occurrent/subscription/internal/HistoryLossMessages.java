@@ -38,6 +38,24 @@ public final class HistoryLossMessages {
             + " Cancelling and subscribing again from now skips the events since {}.";
 
     /**
+     * The error a catch-up logs once when it pauses a subscription with an id for good after the subscription model lost
+     * the history from the live start its replay would go live from. The events a subscribe from now skips can start before
+     * that live start, also when the replay delivered none. The arguments are the
+     * subscription id, the live start and the live start again.
+     */
+    public static final String LIVE_START_LOST_LOG = "The subscription model no longer has the history to resume catch-up subscription {} from {}, the live start its replay would go live from, so the subscription is paused and delivers nothing more."
+            + " Resuming it throws CatchupCannotResumeException until it is cancelled. To get every event, cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept."
+            + " Cancelling and subscribing again from now skips the events its replay hadn't delivered, which can start before {}.";
+
+    /**
+     * The error to log for a loss {@link #TERMINAL_FAILURE_LOG} or {@link #LIVE_START_LOST_LOG} describes, the second
+     * when {@code liveStart} says the subscription model lost the live start a replay would go live from.
+     */
+    public static String terminalFailureLog(boolean liveStart) {
+        return liveStart ? LIVE_START_LOST_LOG : TERMINAL_FAILURE_LOG;
+    }
+
+    /**
      * What a blocking catch-up logs when a resume at a given position clears a loss it recorded, which can come after
      * the error that loss logged. The arguments are the subscription id, the position resumed at and the lost position.
      */
@@ -56,7 +74,7 @@ public final class HistoryLossMessages {
      * before anything is read. {@code subscriptionId} only names the subscription, and may be null.
      */
     public static CatchupCannotResumeException cannotStartFrom(@Nullable String subscriptionId, Checkpoint checkpoint) {
-        return new HistoryLost("Cannot start catch-up subscription " + name(subscriptionId) + " from checkpoint \"" + checkpoint.asString()
+        return new HistoryLost(checkpoint, true, "Cannot start catch-up subscription " + name(subscriptionId) + " from checkpoint \"" + checkpoint.asString()
                 + "\", because the subscription model no longer has the history back to it, and starting from anywhere later would skip the events in between."
                 + " Start the subscription from the beginning, or from an earlier checkpoint the application kept.");
     }
@@ -66,22 +84,65 @@ public final class HistoryLossMessages {
      * {@code lostFrom}. {@code subscriptionId} only names the subscription, and may be null.
      */
     public static CatchupCannotResumeException historyLost(@Nullable String subscriptionId, Checkpoint lostFrom) {
-        return new HistoryLost("Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + lostFrom.asString()
+        return new HistoryLost(lostFrom, true, "Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + lostFrom.asString()
                 + "\", where it stopped, and resuming from anywhere later would skip the events in between. Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept.");
     }
 
     /**
-     * Whether {@code failure} is a refusal from {@link #cannotStartFrom} or {@link #historyLost}, so the position the
-     * subscription would go on from is one the subscription model no longer has the history back to. Any other
-     * {@link CatchupCannotResumeException} answers {@code false}.
+     * Refuses to resume a subscription that was paused for good after the subscription model lost the history from
+     * {@code liveStart}, the live start its replay would go live from. The events a resume from later would skip can start
+     * before it, so the message doesn't name it as where the subscription stopped. {@code subscriptionId} only names the
+     * subscription, and may be null.
+     */
+    public static CatchupCannotResumeException liveStartLostOnResume(@Nullable String subscriptionId, Checkpoint liveStart) {
+        return new HistoryLost(liveStart, true, "Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + liveStart.asString()
+                + "\", the live start its replay would go live from, and resuming from anywhere later would skip the events its replay hadn't delivered, which can start before that live start."
+                + " Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept.");
+    }
+
+    /**
+     * The refusal {@link #historyLost} or {@link #liveStartLostOnResume} gives, the second when {@code liveStart} says
+     * the subscription model lost the live start a replay would go live from.
+     */
+    public static CatchupCannotResumeException resumeRefused(@Nullable String subscriptionId, Checkpoint lostFrom, boolean liveStart) {
+        return liveStart ? liveStartLostOnResume(subscriptionId, lostFrom) : historyLost(subscriptionId, lostFrom);
+    }
+
+    /**
+     * Refuses to hand a catch-up over to live delivery with {@code message}, because the subscription model no longer
+     * has the history from {@code lostLiveStart}, the live start the replay read. {@code replaysFromTheBeginning} says
+     * whether the replay started at position 0 or the beginning of time, so running it again skips nothing.
+     */
+    public static CatchupCannotResumeException liveStartLost(String message, Checkpoint lostLiveStart, boolean replaysFromTheBeginning) {
+        return new HistoryLost(lostLiveStart, !replaysFromTheBeginning, message);
+    }
+
+    /**
+     * Whether {@code failure} is a refusal from {@link #cannotStartFrom}, {@link #historyLost} or {@link #liveStartLost},
+     * so the position the subscription would go on from is one the subscription model no longer has the history back
+     * to. Any other {@link CatchupCannotResumeException} answers {@code false}.
      */
     public static boolean isHistoryLost(Throwable failure) {
         return failure instanceof HistoryLost;
     }
 
+    /**
+     * The position {@code failure} says the subscription model lost the history from, when {@link #isHistoryLost} is
+     * true for a refusal whose resume would skip events, and {@code null} otherwise. A loss by a replay from the
+     * beginning answers {@code null}, since running that replay again skips nothing.
+     */
+    public static @Nullable Checkpoint lostFromWhereAResumeSkipsEvents(Throwable failure) {
+        return failure instanceof HistoryLost lost && lost.resumeSkipsEvents ? lost.lostFrom : null;
+    }
+
     private static final class HistoryLost extends CatchupCannotResumeException {
-        private HistoryLost(String message) {
+        private final Checkpoint lostFrom;
+        private final boolean resumeSkipsEvents;
+
+        private HistoryLost(Checkpoint lostFrom, boolean resumeSkipsEvents, String message) {
             super(message);
+            this.lostFrom = lostFrom;
+            this.resumeSkipsEvents = resumeSkipsEvents;
         }
     }
 

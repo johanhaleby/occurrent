@@ -72,6 +72,11 @@ import java.lang.annotation.*;
  * must carry an id equal to the projection's {@code id}. A {@code ViewStateRepository} bean is the store-agnostic
  * option when you need full control over how the id maps to the stored key.
  * </p>
+ * <p>
+ * The Spring Boot starter finds this annotation on a method the bean's class declares, inherits from a superclass, or
+ * gets as an interface default method. An override without an annotation of its own runs under the overridden
+ * method's annotation, and an override that repeats the annotation uses its own.
+ * </p>
  */
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)

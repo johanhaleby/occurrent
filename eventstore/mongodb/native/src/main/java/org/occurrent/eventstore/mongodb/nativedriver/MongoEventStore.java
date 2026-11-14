@@ -44,6 +44,8 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
@@ -125,7 +127,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final boolean streamPositionEnabled;
     private final boolean requireBackfilledPosition;
     private final boolean resumeFromMarkerVersions;
-    private final boolean runsOnReplicaSet;
+    private final boolean spreadTypeMarkerWrites;
+    private final Deployment deployment;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
@@ -173,13 +176,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventCollection);
         this.requireBackfilledPosition = config.requireBackfilledPosition;
         this.resumeFromMarkerVersions = config.resumeFromMarkerVersions;
+        this.spreadTypeMarkerWrites = config.spreadTypeMarkerWrites;
         this.markerVersionsTransactionOptions = DcbMarkerVersionsDocuments.readOnlySnapshotTransactionOptions(config.markerVersionsCommitTimeout);
         this.markerVersionsCommitTimeout = config.markerVersionsCommitTimeout;
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
-        this.runsOnReplicaSet = dcbEnabled && DcbAppendConditionCheck.runsOnReplicaSet(database::runCommand);
+        this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(database::runCommand) : Deployment.OTHER;
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -404,10 +408,16 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
+        if (deployment == Deployment.MONGOS && ClientSessionHolder.get() == null) {
+            // Causally consistent so the events read waits on a commit still prepared on their shard that the markers read already shows
+            try (ClientSession session = mongoClient.startSession(ClientSessionOptions.builder().causallyConsistent(true).build())) {
+                return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(session, criteria), () -> currentPosition(session), query -> eventCollection.find(session, query));
+            }
+        }
         return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(null, criteria), this::currentPosition, this::findEvents);
     }
 
-    // The token, the head and the find are passed in so a catch-up read scope can read all three through its own session
+    // The token, the head and the find are passed in so a catch-up read scope, or a read in a session the store opened, can read all three through that session
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options, Supplier<DcbConsistencyToken> consistencyToken, LongSupplier currentPosition, Function<Bson, FindIterable<Document>> find) {
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a
@@ -463,7 +473,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             if (!options.firstOperationOfTransaction() || !ambientSession.hasActiveTransaction()) {
                 return markerVersionsUnavailable(criteria, options, "The read runs inside a session or transaction the caller owns, whose writes may still abort", null);
             }
-            if (runsOnReplicaSet) {
+            if (deployment == Deployment.REPLICA_SET) {
                 return readMarkerVersionsInSession(ambientSession, criteria, options);
             }
             // Off a replica set nothing has run in the caller's transaction yet, so a snapshot of the store's own misses none of its writes
@@ -677,19 +687,21 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     private DcbAppendResult appendInSession(ClientSession clientSession, String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition, AppendId appendId) {
         long currentStreamVersion = currentStreamVersion(streamId, clientSession);
+        // The same stripe for every event and every attempt of this append, since the append id is created once
+        int stripe = DcbMarkerModel.stripeOf(appendId, spreadTypeMarkerWrites);
         final Map<String, Document> markers;
         if (condition != null) {
-            markers = enforceAppendCondition(clientSession, condition, eventsToAppend, lastPosition);
+            markers = enforceAppendCondition(clientSession, condition, eventsToAppend, lastPosition, stripe);
         } else {
             // An unconditional append still increments its events' markers, so a concurrent conditional append whose
             // criteria match one of these events, other than DcbCriteria.all() (ADR 0030), shares a marker with it,
             // serializes against it, and its check observes it. Without this, nothing forces a write-write conflict
             // and a concurrent conditional append's snapshot could miss this append (write skew). See ADR 0021.
-            markers = incrementConflictMarkers(clientSession, DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
+            markers = incrementConflictMarkers(clientSession, DcbMarkerModel.eventMarkerKeys(eventsToAppend, stripe), lastPosition);
         }
 
         List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition, appendId);
-        DcbMarkerVersionsDocuments.stampMarkerVersions(documents, eventsToAppend, markers);
+        DcbMarkerVersionsDocuments.stampMarkerVersions(documents, eventsToAppend, markers, stripe);
         insertAllDcb(clientSession, streamId, currentStreamVersion, documents);
         Optional<DcbMarkerVersions> markerVersions = resumeFromMarkerVersions ? DcbMarkerVersionsDocuments.appendedVersions(condition, markers) : Optional.empty();
         return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size(), Optional.of(appendId), markerVersions);
@@ -710,7 +722,36 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return documents;
     }
 
-    private Map<String, Document> enforceAppendCondition(ClientSession clientSession, DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition) {
+    // Through a mongos the append's transaction reads each shard from when it first touched it, so it can miss an event
+    // that the markers it read reflect. The events are queried in a read-only snapshot transaction of the store's own
+    // instead, and the answer counts only when that snapshot holds the markers the append read. Anything else refuses
+    // (ADR 175).
+    private boolean conflictsInASnapshotOfItsOwn(DcbCriteria criteria, Map<String, DcbConsistencyToken.MarkerObservation> current, Bson matchingEvent) {
+        try (ClientSession snapshotSession = mongoClient.startSession()) {
+            snapshotSession.startTransaction(markerVersionsTransactionOptions);
+            Map<String, DcbConsistencyToken.MarkerObservation> inSnapshot = DcbMarkerVersionsDocuments.observe(current.keySet(), queryMarkers(snapshotSession, criteria));
+            boolean conflict = !DcbAppendConditionCheck.snapshotHoldsTheAppendsRead(current, inSnapshot) || findsAnEvent(snapshotSession, matchingEvent);
+            snapshotSession.commitTransaction();
+            return conflict;
+        } catch (RuntimeException e) {
+            return appendCheckFailed(e);
+        }
+    }
+
+    private boolean appendCheckFailed(RuntimeException cause) {
+        if (markerVersionsReadFailures.recordAndCheckFirst(MarkerVersionsReadFailures.APPEND_CHECK, cause)) {
+            log.warn(MarkerVersionsReadFailures.appendCheckMessage(cause), cause);
+        } else if (log.isDebugEnabled()) {
+            log.debug(MarkerVersionsReadFailures.appendCheckMessage(cause), cause);
+        }
+        return true;
+    }
+
+    private boolean findsAnEvent(ClientSession clientSession, Bson filter) {
+        return eventCollection.find(clientSession, filter).projection(Projections.include(ID)).limit(1).first() != null;
+    }
+
+    private Map<String, Document> enforceAppendCondition(ClientSession clientSession, DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition, int stripe) {
         Optional<DcbConsistencyToken> expectedToken = condition.consistencyToken();
         final boolean conflict;
         if (expectedToken.isPresent()) {
@@ -721,12 +762,16 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             // append transaction at commit, not when positions are reserved.
             Map<String, Document> markers = queryMarkers(clientSession, condition.criteria());
             Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
-            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, runsOnReplicaSet)) {
+            Scope scope = Scope.of(deployment);
+            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, scope)) {
                 case DcbAppendConditionCheck.Pass ignored -> false;
                 case DcbAppendConditionCheck.Refuse ignored -> true;
-                case DcbAppendConditionCheck.QueryEvents query -> eventCollection.find(clientSession, or(query.items().stream()
-                        .map(item -> and(toBsonFilter(item.item()), DcbMarkerVersionsDocuments.selectionFilter(DcbMarkerVersionsDocuments.selections(item, markers))))
-                        .toList())).projection(Projections.include(ID)).limit(1).first() != null;
+                case DcbAppendConditionCheck.QueryEvents query -> {
+                    Bson matchingEvent = or(query.items().stream()
+                            .map(item -> and(toBsonFilter(item.item()), DcbMarkerVersionsDocuments.selectionFilter(DcbMarkerVersionsDocuments.selections(item, markers))))
+                            .toList());
+                    yield scope == Scope.SNAPSHOT_THROUGH_MONGOS ? conflictsInASnapshotOfItsOwn(condition.criteria(), current, matchingEvent) : findsAnEvent(clientSession, matchingEvent);
+                }
             };
         } else {
             // No token: an absolute "fail if any matching event exists" guard. Checks the live events rather than
@@ -743,9 +788,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // this check against the winner's committed increment. The query's markers are always incremented, so a
         // concurrent append whose events match the query is serialized even when this append's own events do not
         // match it. A query with DcbCriteria.all() is the exception, since no event has the match-all key among its
-        // own keys (ADR 0030).
+        // own keys (ADR 0030). An item without tags has every stripe of its types among the query's keys, so this
+        // append shares a marker with an append of any of those types, whichever stripe that one writes.
         TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.criteria()));
-        markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
+        markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend, stripe));
         return incrementConflictMarkers(clientSession, markerKeys, lastPosition);
     }
 
@@ -756,8 +802,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // serialize. The version is also the optimistic-concurrency token (see
     // consistencyToken): a reader snapshots a query's marker versions, and a conditional append compares them with the
     // current ones (ADR 149). The stored lastPosition is informational.
-    // The marker collection holds one document per distinct tag and type that has taken part in an append, and
-    // nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection
+    // The marker collection holds one document per distinct tag that has taken part in an append, and up to eight
+    // per type, and nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection
     // without bound. A marker may be deleted only in a transaction that also finds no event with its tag or type
     // (ADR 149), and a later append recreates any it still needs.
     // Returns the incremented markers as this transaction left them, keyed by marker key, so the append stamps its

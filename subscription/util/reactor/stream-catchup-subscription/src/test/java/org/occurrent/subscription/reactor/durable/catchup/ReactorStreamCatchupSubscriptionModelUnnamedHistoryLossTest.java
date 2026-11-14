@@ -68,7 +68,7 @@ class ReactorStreamCatchupSubscriptionModelUnnamedHistoryLossTest {
     private static final Checkpoint LATER_TOKEN = new StringBasedCheckpoint("a token after reading on");
 
     private final ScriptedLiveModel live = new ScriptedLiveModel();
-    private final ErrorsLoggedByTheCatchup logged = new ErrorsLoggedByTheCatchup();
+    private final LoggedByTheCatchup logged = new LoggedByTheCatchup();
     private final ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(live, new ReactorStreamCatchupSubscriptionModelHistoryLossTest.ScriptedReader());
 
     @AfterEach

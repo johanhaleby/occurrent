@@ -68,6 +68,7 @@ import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -97,6 +98,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
@@ -346,7 +348,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
 
@@ -373,7 +375,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(withoutCommitTime, null));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         String subscriptionId = UUID.randomUUID().toString();
 
         // When
@@ -396,7 +398,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         subscriptionModel.stop();
         String subscriptionId = UUID.randomUUID().toString();
         Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
@@ -425,7 +427,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(withoutCommitTime, null));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         subscriptionModel.stop();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
@@ -446,7 +448,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         // Given: a subscription that has run, and a server whose change stream gives no position now
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId())).waitUntilStarted(Duration.ofSeconds(10));
@@ -493,7 +495,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
 
         // When
@@ -549,7 +551,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         // Given: a subscription that has started
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         Subscription started = subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId()));
@@ -582,7 +584,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         // Given: a paused subscription
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId())).waitUntilStarted(Duration.ofSeconds(10));
@@ -617,7 +619,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         // Given: a subscription held paused after its history was lost while the server gave no position
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
         }).waitUntilStarted(Duration.ofSeconds(10));
@@ -647,7 +649,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         historyLostWhenOpening.set(true);
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
 
@@ -708,7 +710,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         historyLostWhenOpening.set(true);
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.checkpoint(checkpoint), cloudEvent -> handled.add(cloudEvent.getId()));
@@ -743,7 +745,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         // Given: a subscription held paused after its history was lost while the server gave no position
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId())).waitUntilStarted(Duration.ofSeconds(10));
@@ -783,7 +785,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         // Given: a subscription that has run and is paused, and a server whose change stream gives no position now
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId())).waitUntilStarted(Duration.ofSeconds(10));
@@ -820,7 +822,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         MongoOperationTimeCheckpoint checkpoint = new MongoOperationTimeCheckpoint(requireNonNull(MongoCommons.operationTimeAfter(database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND))));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId())).waitUntilStarted(Duration.ofSeconds(10));
@@ -858,7 +860,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), mappingErrors(mapped));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         String subscriptionId = UUID.randomUUID().toString();
 
         // When
@@ -883,7 +885,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), mappingErrors(mapped));
         subscriptionModel.stop();
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
         });
@@ -946,7 +948,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         String subscriptionId = UUID.randomUUID().toString();
 
         // When
@@ -995,7 +997,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         subscriptionModel.stop();
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId()));
@@ -1025,7 +1027,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         subscriptionModel.stop();
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         List<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId()));
@@ -1054,7 +1056,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.dynamic(ctx -> StartAt.checkpoint(checkpoint)), cloudEvent -> handled.add(cloudEvent.getId())).waitUntilStarted(Duration.ofSeconds(10));
@@ -1084,7 +1086,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.dynamic(ctx -> StartAt.checkpoint(checkpoint)), cloudEvent -> handled.add(cloudEvent.getId())).waitUntilStarted(Duration.ofSeconds(10));
@@ -1117,7 +1119,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         subscriptionModel.stop();
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.dynamic(ctx -> StartAt.checkpoint(checkpoint)), cloudEvent -> handled.add(cloudEvent.getId()));
@@ -1156,7 +1158,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         subscriptionModel.stop();
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.dynamic(ctx -> StartAt.checkpoint(checkpoint)), cloudEvent -> handled.add(cloudEvent.getId()));
@@ -1187,7 +1189,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.dynamic(ctx -> {
@@ -1226,7 +1228,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> cursorReading(null, null));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.dynamic(ctx -> {
@@ -1267,7 +1269,7 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         presentRead.set(() -> reads.getAndIncrement() == 0 ? held : cursorReading(null, recorded));
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
         List<String> refused = new CopyOnWriteArrayList<>();
-        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
         CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId()));
@@ -1488,6 +1490,10 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
             public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
                 throw new IllegalStateException("listener failed");
             }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+            }
         });
         RecordingStartRefusalListener listener = new RecordingStartRefusalListener();
         subscriptionModel.addStartRefusalListener(listener);
@@ -1578,6 +1584,10 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal, BooleanSupplier stillSubscribed) {
             heldPausedWith.add(refusal);
             heldPaused.add(subscriptionId);
+        }
+
+        @Override
+        public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
         }
     }
 
@@ -1773,5 +1783,19 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build());
+    }
+
+    private static StartRefusalListener onStartRefusal(BiConsumer<String, UnsupportedStartAtException> onRefusal) {
+        return new StartRefusalListener() {
+            @Override
+            public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+                onRefusal.accept(subscriptionId, refusal);
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+                throw new AssertionError("A MongoDB model never holds a subscription paused, but was asked to for " + subscriptionId, refusal);
+            }
+        };
     }
 }

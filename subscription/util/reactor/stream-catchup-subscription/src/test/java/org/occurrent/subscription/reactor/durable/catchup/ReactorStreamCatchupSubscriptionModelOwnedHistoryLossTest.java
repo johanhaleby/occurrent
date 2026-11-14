@@ -80,7 +80,7 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
     private final LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
     private final CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
     private final AtomicInteger catchupsStarted = new AtomicInteger();
-    private final ErrorsLoggedByTheCatchup logged = new ErrorsLoggedByTheCatchup();
+    private final LoggedByTheCatchup logged = new LoggedByTheCatchup();
     private ReactorStreamCatchupSubscriptionModel catchup;
 
     @BeforeEach
@@ -694,7 +694,8 @@ class ReactorStreamCatchupSubscriptionModelOwnedHistoryLossTest {
                 () -> assertThat(catchup.isRunning(ID)).as("running").isFalse(),
                 () -> assertThat(logged.errors()).as("errors logged").containsExactly(terminalFailureLog(lostFrom)),
                 () -> assertThat(catchThrowable(() -> catchup.resumeSubscription(ID))).as("what a resume throws")
-                        .isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining("\"" + lostFrom.asString() + "\"")
+                        .isInstanceOf(CatchupCannotResumeException.class).hasMessage(HistoryLossMessages.historyLost(ID, lostFrom).getMessage())
+                        .hasMessageContaining("catch-up subscription " + ID + ",").hasMessageContaining("\"" + lostFrom.asString() + "\"")
         );
     }
 
