@@ -58,6 +58,8 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
@@ -167,7 +169,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final boolean streamPositionEnabled;
     private final boolean resumeFromMarkerVersions;
     private final boolean spreadTypeMarkerWrites;
-    private final boolean runsOnReplicaSet;
+    private final Deployment deployment;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
@@ -207,7 +209,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
-        this.runsOnReplicaSet = dcbEnabled && DcbAppendConditionCheck.runsOnReplicaSet(mongoTemplate::executeCommand);
+        this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(mongoTemplate::executeCommand) : Deployment.OTHER;
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, streamPositionEnabled, mongoTemplate);
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -376,7 +378,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
             }
             // Off a replica set nothing has run in the caller's transaction yet, so a snapshot of the store's own misses none of its writes
-            return runsOnReplicaSet ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
+            return deployment == Deployment.REPLICA_SET ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
         }
         Object boundSession = TransactionSynchronizationManager.isSynchronizationActive() ? TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) : null;
         if (boundSession != null && BOUND_SESSIONS_WRITTEN_IN.contains(boundSession)) {
@@ -387,7 +389,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
         }
         if (options.confirmsAppendBeforeSaving() && TransactionSynchronizationManager.isSynchronizationActive()) {
-            if (runsOnReplicaSet) {
+            if (deployment == Deployment.REPLICA_SET) {
                 return readMarkerVersionsWith(mongoTemplate, criteria, options);
             }
             DcbEventStream eventStream = readInOwnTransaction(criteria, options);
@@ -958,6 +960,33 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return documents;
     }
 
+    // Through a mongos the append's transaction reads each shard from when it first touched it, so it can miss an event
+    // that the markers it read reflect. The events are queried in a read-only snapshot transaction of the store's own
+    // instead, on a session no synchronization binds, and the answer counts only when that snapshot holds the markers
+    // the append read. Anything else refuses (ADR 175).
+    private boolean conflictsInASnapshotOfItsOwn(DcbCriteria criteria, Map<String, DcbConsistencyToken.MarkerObservation> current, Query matchingEvent) {
+        try (ClientSession snapshotSession = mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder().build())) {
+            snapshotSession.startTransaction(markerVersionsTransactionOptions);
+            MongoTemplate sessionTemplate = mongoTemplate.withSession(snapshotSession);
+            sessionTemplate.setSessionSynchronization(NEVER);
+            Map<String, DcbConsistencyToken.MarkerObservation> inSnapshot = DcbMarkerVersionsDocuments.observe(current.keySet(), queryMarkers(criteria, sessionTemplate));
+            boolean conflict = !DcbAppendConditionCheck.snapshotHoldsTheAppendsRead(current, inSnapshot) || sessionTemplate.exists(matchingEvent, eventStoreCollectionName);
+            snapshotSession.commitTransaction();
+            return conflict;
+        } catch (RuntimeException e) {
+            return appendCheckFailed(e);
+        }
+    }
+
+    private boolean appendCheckFailed(RuntimeException cause) {
+        if (markerVersionsReadFailures.recordAndCheckFirst(MarkerVersionsReadFailures.APPEND_CHECK, cause)) {
+            log.warn(MarkerVersionsReadFailures.appendCheckMessage(cause), cause);
+        } else if (log.isDebugEnabled()) {
+            log.debug(MarkerVersionsReadFailures.appendCheckMessage(cause), cause);
+        }
+        return true;
+    }
+
     private Map<String, Document> enforceAppendCondition(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition, int stripe) {
         Optional<DcbConsistencyToken> expectedToken = condition.consistencyToken();
         final boolean conflict;
@@ -969,12 +998,16 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             // append transaction at commit, not when positions are reserved.
             Map<String, Document> markers = queryMarkers(condition.criteria(), mongoTemplate);
             Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
-            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, runsOnReplicaSet)) {
+            Scope scope = Scope.of(deployment);
+            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, scope)) {
                 case DcbAppendConditionCheck.Pass ignored -> false;
                 case DcbAppendConditionCheck.Refuse ignored -> true;
-                case DcbAppendConditionCheck.QueryEvents query -> mongoTemplate.exists(new Query(new Criteria().orOperator(query.items().stream()
-                        .map(item -> new Criteria().andOperator(toCriteria(item.item()), markerVersionsCriteria(DcbMarkerVersionsDocuments.selections(item, markers))))
-                        .toList())), eventStoreCollectionName);
+                case DcbAppendConditionCheck.QueryEvents query -> {
+                    Query matchingEvent = new Query(new Criteria().orOperator(query.items().stream()
+                            .map(item -> new Criteria().andOperator(toCriteria(item.item()), markerVersionsCriteria(DcbMarkerVersionsDocuments.selections(item, markers))))
+                            .toList()));
+                    yield scope == Scope.SNAPSHOT_THROUGH_MONGOS ? conflictsInASnapshotOfItsOwn(condition.criteria(), current, matchingEvent) : mongoTemplate.exists(matchingEvent, eventStoreCollectionName);
+                }
             };
         } else {
             // No token: an absolute "fail if any matching event exists" guard. Checks the live events rather than

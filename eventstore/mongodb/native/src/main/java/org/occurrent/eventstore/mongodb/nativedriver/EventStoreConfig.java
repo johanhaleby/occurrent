@@ -83,7 +83,8 @@ public class EventStoreConfig {
     // When true, an append increments the type marker stripe its append id picks instead of stripe 0. See
     // Builder.spreadTypeMarkerWrites(boolean).
     public final boolean spreadTypeMarkerWrites;
-    // The bound on the read-only transaction that reports marker versions. See Builder.markerVersionsCommitTimeout(Duration).
+    // The bound on the read-only transaction that reports marker versions, and through a mongos on the one a conditional
+    // append queries the events in. See Builder.markerVersionsCommitTimeout(Duration).
     public final Duration markerVersionsCommitTimeout;
 
     /**
@@ -400,6 +401,11 @@ public class EventStoreConfig {
          * 0, where the driver sends no {@code wtimeout}, the client's timeout bounds that wait instead. A
          * {@code timeoutMS} of 0 waits forever, so there this timeout bounds the whole reservation, the wait to select a
          * primary included.
+         * <p>
+         * Through a mongos it also bounds the read-only transaction in which a conditional append queries the events
+         * (ADR 175). An append whose read-only transaction doesn't commit within it is refused with
+         * {@code DcbAppendConditionNotFulfilledException}. The append's own transaction keeps the options it was started
+         * with.
          *
          * @param markerVersionsCommitTimeout at least 1 millisecond
          * @return The same {@code Builder} instance.

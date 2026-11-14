@@ -44,6 +44,8 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerVersionsDocuments;
@@ -126,7 +128,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final boolean requireBackfilledPosition;
     private final boolean resumeFromMarkerVersions;
     private final boolean spreadTypeMarkerWrites;
-    private final boolean runsOnReplicaSet;
+    private final Deployment deployment;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
@@ -181,7 +183,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
-        this.runsOnReplicaSet = dcbEnabled && DcbAppendConditionCheck.runsOnReplicaSet(database::runCommand);
+        this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(database::runCommand) : Deployment.OTHER;
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -465,7 +467,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             if (!options.firstOperationOfTransaction() || !ambientSession.hasActiveTransaction()) {
                 return markerVersionsUnavailable(criteria, options, "The read runs inside a session or transaction the caller owns, whose writes may still abort", null);
             }
-            if (runsOnReplicaSet) {
+            if (deployment == Deployment.REPLICA_SET) {
                 return readMarkerVersionsInSession(ambientSession, criteria, options);
             }
             // Off a replica set nothing has run in the caller's transaction yet, so a snapshot of the store's own misses none of its writes
@@ -714,6 +716,35 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return documents;
     }
 
+    // Through a mongos the append's transaction reads each shard from when it first touched it, so it can miss an event
+    // that the markers it read reflect. The events are queried in a read-only snapshot transaction of the store's own
+    // instead, and the answer counts only when that snapshot holds the markers the append read. Anything else refuses
+    // (ADR 175).
+    private boolean conflictsInASnapshotOfItsOwn(DcbCriteria criteria, Map<String, DcbConsistencyToken.MarkerObservation> current, Bson matchingEvent) {
+        try (ClientSession snapshotSession = mongoClient.startSession()) {
+            snapshotSession.startTransaction(markerVersionsTransactionOptions);
+            Map<String, DcbConsistencyToken.MarkerObservation> inSnapshot = DcbMarkerVersionsDocuments.observe(current.keySet(), queryMarkers(snapshotSession, criteria));
+            boolean conflict = !DcbAppendConditionCheck.snapshotHoldsTheAppendsRead(current, inSnapshot) || findsAnEvent(snapshotSession, matchingEvent);
+            snapshotSession.commitTransaction();
+            return conflict;
+        } catch (RuntimeException e) {
+            return appendCheckFailed(e);
+        }
+    }
+
+    private boolean appendCheckFailed(RuntimeException cause) {
+        if (markerVersionsReadFailures.recordAndCheckFirst(MarkerVersionsReadFailures.APPEND_CHECK, cause)) {
+            log.warn(MarkerVersionsReadFailures.appendCheckMessage(cause), cause);
+        } else if (log.isDebugEnabled()) {
+            log.debug(MarkerVersionsReadFailures.appendCheckMessage(cause), cause);
+        }
+        return true;
+    }
+
+    private boolean findsAnEvent(ClientSession clientSession, Bson filter) {
+        return eventCollection.find(clientSession, filter).projection(Projections.include(ID)).limit(1).first() != null;
+    }
+
     private Map<String, Document> enforceAppendCondition(ClientSession clientSession, DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition, int stripe) {
         Optional<DcbConsistencyToken> expectedToken = condition.consistencyToken();
         final boolean conflict;
@@ -725,12 +756,16 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             // append transaction at commit, not when positions are reserved.
             Map<String, Document> markers = queryMarkers(clientSession, condition.criteria());
             Map<String, DcbConsistencyToken.MarkerObservation> current = DcbMarkerVersionsDocuments.observe(DcbMarkerModel.queryMarkerKeys(condition.criteria()), markers);
-            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, runsOnReplicaSet)) {
+            Scope scope = Scope.of(deployment);
+            conflict = switch (DcbAppendConditionCheck.check(expectedToken.get(), condition.criteria(), current, scope)) {
                 case DcbAppendConditionCheck.Pass ignored -> false;
                 case DcbAppendConditionCheck.Refuse ignored -> true;
-                case DcbAppendConditionCheck.QueryEvents query -> eventCollection.find(clientSession, or(query.items().stream()
-                        .map(item -> and(toBsonFilter(item.item()), DcbMarkerVersionsDocuments.selectionFilter(DcbMarkerVersionsDocuments.selections(item, markers))))
-                        .toList())).projection(Projections.include(ID)).limit(1).first() != null;
+                case DcbAppendConditionCheck.QueryEvents query -> {
+                    Bson matchingEvent = or(query.items().stream()
+                            .map(item -> and(toBsonFilter(item.item()), DcbMarkerVersionsDocuments.selectionFilter(DcbMarkerVersionsDocuments.selections(item, markers))))
+                            .toList());
+                    yield scope == Scope.SNAPSHOT_THROUGH_MONGOS ? conflictsInASnapshotOfItsOwn(condition.criteria(), current, matchingEvent) : findsAnEvent(clientSession, matchingEvent);
+                }
             };
         } else {
             // No token: an absolute "fail if any matching event exists" guard. Checks the live events rather than

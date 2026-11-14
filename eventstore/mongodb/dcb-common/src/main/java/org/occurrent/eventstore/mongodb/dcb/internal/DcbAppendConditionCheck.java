@@ -46,6 +46,79 @@ public final class DcbAppendConditionCheck {
     }
 
     /**
+     * What a store's deployment answers to {@code hello}.
+     */
+    public enum Deployment {
+        /**
+         * A replica set.
+         */
+        REPLICA_SET,
+        /**
+         * A mongos, or a load balancer in front of one.
+         */
+        MONGOS,
+        /**
+         * Anything else, such as a standalone server.
+         */
+        OTHER
+    }
+
+    /**
+     * What the check may assume about the append's transaction and the token's read.
+     */
+    public enum Scope {
+        /**
+         * The transaction reads the markers and the events from one snapshot, and a read whose token holds a marker
+         * from after an event holds the event (ADR 149).
+         */
+        REPLICA_SET,
+        /**
+         * The append's transaction can read each shard at another point in time, and a token's markers can come from
+         * different points in time. The store queries the events in a snapshot transaction of its own, whose answer
+         * counts only when {@link #snapshotHoldsTheAppendsRead(Map, Map)} (ADR 175).
+         */
+        SNAPSHOT_THROUGH_MONGOS,
+        /**
+         * Neither holds, so every marker that moved refuses the append.
+         */
+        MARKERS_ONLY;
+
+        /**
+         * The scope of a conditional append on {@code deployment}.
+         *
+         * @param deployment the store's deployment
+         */
+        public static Scope of(Deployment deployment) {
+            return switch (deployment) {
+                case REPLICA_SET -> REPLICA_SET;
+                case MONGOS -> SNAPSHOT_THROUGH_MONGOS;
+                case OTHER -> MARKERS_ONLY;
+            };
+        }
+    }
+
+    /**
+     * Whether the store's snapshot holds every event that the markers the append's transaction read reflect. It does
+     * when each marker has the same epoch in both reads and a version in the snapshot at least as high as the append
+     * read. An event that matches the condition increments one of the condition's markers in its own transaction (ADR
+     * 0021), so a snapshot that holds that increment holds the event. An event that commits after the append read the
+     * markers conflicts with the append's own increment of them (ADR 149).
+     *
+     * @param current    what the append's transaction read of every marker key of the condition
+     * @param inSnapshot what the store's snapshot read of the same keys
+     */
+    public static boolean snapshotHoldsTheAppendsRead(Map<String, MarkerObservation> current, Map<String, MarkerObservation> inSnapshot) {
+        for (Map.Entry<String, MarkerObservation> entry : current.entrySet()) {
+            MarkerObservation inAppend = entry.getValue();
+            MarkerObservation inTheSnapshot = inSnapshot.get(entry.getKey());
+            if (inTheSnapshot == null || !Objects.equals(inAppend.epoch(), inTheSnapshot.epoch()) || inTheSnapshot.version() < inAppend.version()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * What the markers say about a condition.
      */
     public sealed interface Outcome {
@@ -92,12 +165,11 @@ public final class DcbAppendConditionCheck {
      * @param token            the token of the condition
      * @param criteria         the criteria of the condition
      * @param current          the marker observation of every marker key of {@code criteria}
-     * @param runsOnReplicaSet whether the store may rule an item out by its markers and query the events, see
-     *                         {@link #runsOnReplicaSet(Function)}
+     * @param scope            what the check may assume, see {@link Scope#of(Deployment)}
      * @throws IllegalArgumentException if the token doesn't hold exactly the marker keys of {@code criteria}, which means
      *                                  this store's read didn't create it
      */
-    public static Outcome check(DcbConsistencyToken token, DcbCriteria criteria, Map<String, MarkerObservation> current, boolean runsOnReplicaSet) {
+    public static Outcome check(DcbConsistencyToken token, DcbCriteria criteria, Map<String, MarkerObservation> current, Scope scope) {
         Set<String> keys = DcbMarkerVersionsSupport.queryMarkerKeys(criteria);
         Map<String, MarkerObservation> read = token.markers();
         if (!read.keySet().equals(keys)) {
@@ -115,14 +187,13 @@ public final class DcbAppendConditionCheck {
         if (!moved) {
             return new Pass();
         }
-        // Through a mongos a read can hold a marker from after an event and miss the event, so an unmoved marker rules nothing out (ADR 0149)
-        if (!runsOnReplicaSet || criteria instanceof DcbCriteria.MatchAll) {
+        if (scope == Scope.MARKERS_ONLY || criteria instanceof DcbCriteria.MatchAll) {
             return new Refuse();
         }
         List<ItemQuery> items = new ArrayList<>();
         for (DcbCriterion item : DcbMarkerVersionsSupport.items(criteria)) {
             List<String> movedKeys = DcbMarkerVersionsSupport.queryMarkerKeys(item).stream().filter(key -> moved(read.get(key), current.get(key))).toList();
-            if (ruledOutByTheMarkers(item, movedKeys)) {
+            if (ruledOutByTheMarkers(item, movedKeys, scope)) {
                 continue;
             }
             for (String key : movedKeys) {
@@ -130,23 +201,25 @@ public final class DcbAppendConditionCheck {
                     return new Refuse();
                 }
             }
-            List<String> selectionKeys = item.tags().isEmpty() ? movedKeys : DcbMarkerVersionsSupport.selectionKeys(item);
+            List<String> selectionKeys = selectsOnEveryMovedKey(item, scope) ? movedKeys : DcbMarkerVersionsSupport.selectionKeys(item);
             items.add(new ItemQuery(item, selectionKeys.stream().map(key -> new KeySelection(key, read.get(key).version())).toList()));
         }
         return items.isEmpty() ? new Pass() : new QueryEvents(items);
     }
 
     /**
-     * Whether this deployment is a replica set, the one case where the store may rule an item out by its markers and
-     * query the events. ADR 149 says what that assumes. It's false for a mongos, a load balancer in front of one and
-     * anything else that doesn't answer like a replica set. Every failure except a server that doesn't know
-     * {@code hello} propagates.
+     * The deployment the store runs on, asked once when the store is created. A mongos answers {@code msg} isdbgrid, also
+     * through a load balancer, and a replica set member answers a {@code setName}. Every failure except a server that
+     * doesn't know {@code hello} propagates.
      *
      * @param runCommand runs a command against the store's database
      */
-    public static boolean runsOnReplicaSet(Function<Document, Document> runCommand) {
+    public static Deployment deployment(Function<Document, Document> runCommand) {
         Document answer = Objects.requireNonNull(helloOrIsMaster(runCommand), "The server sent no answer to hello or isMaster");
-        return answer.get("setName") != null && !"isdbgrid".equals(answer.get("msg"));
+        if ("isdbgrid".equals(answer.get("msg"))) {
+            return Deployment.MONGOS;
+        }
+        return answer.get("setName") != null ? Deployment.REPLICA_SET : Deployment.OTHER;
     }
 
     // An old server, such as MongoDB 4.2.8, doesn't know hello. The Spring templates wrap the driver's exception, so the
@@ -175,12 +248,19 @@ public final class DcbAppendConditionCheck {
 
     // A matching event increments every tag marker of an item with tags, so one marker that didn't move rules it out. It
     // increments one of the type markers of an item without tags, so that item needs one that moved. The check doesn't
-    // read the events for this, so it also holds for a writer that writes no mv.
-    private static boolean ruledOutByTheMarkers(DcbCriterion item, List<String> movedKeys) {
-        if (item.tags().isEmpty()) {
+    // read the events for this, so it also holds for a writer that writes no mv. Through a mongos the token's unmoved
+    // marker can be from after an event the read missed, so only an item none of whose markers moved is ruled out.
+    private static boolean ruledOutByTheMarkers(DcbCriterion item, List<String> movedKeys, Scope scope) {
+        if (selectsOnEveryMovedKey(item, scope)) {
             return movedKeys.isEmpty();
         }
         return movedKeys.size() < item.tags().size();
+    }
+
+    // Every tag marker of an item with tags moved on a replica set, so its first tag key finds a matching event. Through a
+    // mongos a matching event the read missed sits above the token's version only on the keys whose marker moved.
+    private static boolean selectsOnEveryMovedKey(DcbCriterion item, Scope scope) {
+        return item.tags().isEmpty() || scope == Scope.SNAPSHOT_THROUGH_MONGOS;
     }
 
     // A marker without an epoch was last written by 0.34, so its events may have no mv. The epoch hasn't changed since the

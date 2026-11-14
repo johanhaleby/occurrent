@@ -39,6 +39,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
  * @see <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0021-dcb-write-path-query-scoped-concurrency.md">ADR 21, the tag-marker write path</a>
  * @see <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0030-keep-matchall-dcb-append-condition-with-documented-limit.md">ADR 30, the whole-store lock's documented limit</a>
  * @see <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0149-the-mongodb-dcb-append-check-compares-each-marker-and-then-the-events-above-it.md">ADR 149, the marker check followed by a query of the events</a>
+ * @see <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0175-a-conditional-dcb-append-through-a-mongos-queries-the-events-in-a-snapshot-of-its-own.md">ADR 175, the query of the events in a snapshot of the store's own through a mongos</a>
  */
 @NullMarked
 public enum DcbAppendConditionModel {
@@ -74,9 +75,10 @@ public enum DcbAppendConditionModel {
      *     {@link DcbAppendCondition#wholeStoreLock()} already documents, and the reason it is correct only for a single
      *     writer or a bootstrap append that races only with other bootstrap appends (ADR 30).</li>
      * </ul>
-     * On anything but a replica set, such as a sharded cluster, a MongoDB store doesn't query, and refuses when a marker
-     * of the criteria moved. That is the {@link #TAG_MARKER} answer to the first question, and the suite doesn't assert
-     * it for this model.
+     * Through a mongos a MongoDB store queries the events in a read-only snapshot transaction of its own, whatever
+     * transaction the append runs in. It refuses when that snapshot shows a marker of the criteria under another epoch or
+     * at an earlier version than the append's transaction read, and when it can't run that transaction. As on a replica
+     * set, it also refuses when a marker was deleted after the read or 0.34 wrote it (ADR 149).
      */
     MARKERS_THEN_EVENTS,
 
