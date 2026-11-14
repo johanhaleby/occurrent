@@ -64,6 +64,7 @@ import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStor
 /**
  * A resume that comes while a replay is held in its history read, after the live model lost the live start that replay
  * goes live from, and so gets the handle of that replay rather than a replay of its own.
+ * A start refusal listener that throws does not keep the next one from being told about the hold.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(60)
