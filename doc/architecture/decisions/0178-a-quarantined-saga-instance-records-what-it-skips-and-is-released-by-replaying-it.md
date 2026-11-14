@@ -111,8 +111,9 @@ instance again and finds the entry gone from the list. That also holds for a key
 can't recognise as applied.
 
 When a recorded input fails again while releasing, the failure is recorded the way any failure is, and the instance
-stays releasing. The timer poller, which runs on every node, also asks for releasing instances on every poll and
-continues their replay. `SagaStateStore` gains a query for them, a `default` method that throws
+stays releasing. The timer poller also asks for releasing instances on every poll and continues their replay. With a
+competing-consumer strategy only the node holding the saga's timer lease polls, which is the Spring Boot starter's
+setup, and without one every node does. `SagaStateStore` gains a query for them, a `default` method that throws
 `UnsupportedOperationException`, so a custom store keeps compiling. The poller logs that once at `WARN` and stops asking,
 and on such a store a failed or interrupted release goes on only when `release` is called again. The poller is what
 retries the failed input until it succeeds or its budget runs out, and it also resumes a release that a crash
