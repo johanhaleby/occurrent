@@ -1381,29 +1381,22 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (currentAttempt.remove(subscriptionId, attempt)) {
                 runningCatchupSubscriptions.remove(subscriptionId);
             }
-            wentLive(subscriptionId);
+            recordWentLive(subscriptionId, true);
             live.complete(resumed);
             return attempt.replay.handle;
         }
         Subscription subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAtToUse, liveConsumer);
         attempt.wentLive = true;
-        wentLive(subscriptionId);
+        recordWentLive(subscriptionId, true);
         live.complete(subscription);
         applyPendingPauseIfAny(subscriptionId);
         return attempt.replay.handle;
     }
 
-    private void wentLive(String subscriptionId) {
+    private void recordWentLive(String subscriptionId, boolean wentLive) {
         Subscribed made = subscribed.get(subscriptionId);
         if (made != null) {
-            made.didNotGoLive().set(false);
-        }
-    }
-
-    private void didNotGoLive(String subscriptionId) {
-        Subscribed made = subscribed.get(subscriptionId);
-        if (made != null) {
-            made.didNotGoLive().set(true);
+            made.didNotGoLive().set(!wentLive);
         }
     }
 
@@ -1424,8 +1417,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     // Asked for the subscription the live delegate didn't get, so it goes with it. Still under the lock
                     // the pause was recorded under, so no later subscription for the id has asked for one yet.
                     pauseRequestedDuringCatchup.remove(subscriptionId);
-                    if (!attempt.wentLive) {
-                        didNotGoLive(subscriptionId);
+                    if (!attempt.replay.resuming && !attempt.wentLive) {
+                        recordWentLive(subscriptionId, false);
                     }
                 }
                 attempt.decidedFailure = new DecidedFailure(failure, runAgainAfter(subscriptionId, attempt, failure));
@@ -3797,7 +3790,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 runningCatchupSubscriptions.remove(subscriptionId);
                 pauseRequestedDuringCatchup.remove(subscriptionId);
                 if (!attempt.replay.resuming && !attempt.wentLive && !attempt.parked && !attempt.abandoned()) {
-                    didNotGoLive(subscriptionId);
+                    recordWentLive(subscriptionId, false);
                 }
             }
             // Logged as well as reported, since a caller that never calls waitUntilStarted, such as the Spring Boot

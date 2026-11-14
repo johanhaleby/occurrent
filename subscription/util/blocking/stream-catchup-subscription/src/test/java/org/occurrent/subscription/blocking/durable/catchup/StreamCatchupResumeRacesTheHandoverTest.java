@@ -80,7 +80,7 @@ class StreamCatchupResumeRacesTheHandoverTest {
     private InMemorySubscriptionModel inMemorySubscriptionModel;
     private CloudEventConverter<DomainEvent> cloudEventConverter;
     private InMemoryEventStore eventStore;
-    private PausingTheResumeAfterItSavesThePresentPosition storage;
+    private RecordingTheSaveOfThePresentPosition storage;
     private LiveStartLosingSubscriptionModel liveModel;
     private StreamCatchupSubscriptionModel catchup;
     private List<NameDefined> replayed;
@@ -93,7 +93,7 @@ class StreamCatchupResumeRacesTheHandoverTest {
         LocalDateTime time = LocalDateTime.now();
         replayed = List.of(nameDefined(time, "event1"), nameDefined(time, "event2"), nameDefined(time, "event3"));
         replayed.forEach(this::write);
-        storage = new PausingTheResumeAfterItSavesThePresentPosition();
+        storage = new RecordingTheSaveOfThePresentPosition();
         liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, true, () -> {
         }).neverLosingAnOpen();
     }
@@ -102,7 +102,6 @@ class StreamCatchupResumeRacesTheHandoverTest {
     void shutdown() {
         releaseTheReplay.countDown();
         releaseTheOpen.countDown();
-        storage.releaseTheResume.countDown();
         if (catchup != null) {
             catchup.shutdown();
         }
@@ -110,7 +109,7 @@ class StreamCatchupResumeRacesTheHandoverTest {
     }
 
     @Test
-    void goes_live_from_the_live_start_of_the_replay_and_not_from_the_present_position_a_resume_stored_when_the_resume_fails_after_the_replay_read_it_before_the_handover() {
+    void goes_live_from_the_live_start_of_the_replay_and_refuses_a_resume_from_now_that_comes_while_the_replay_is_held_before_the_handover() {
         // Given
         catchup = new StreamCatchupSubscriptionModel(new HoldingTheLiveStartCheck(liveModel), eventStore, config());
         catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
@@ -127,9 +126,8 @@ class StreamCatchupResumeRacesTheHandoverTest {
             return catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
         });
         boolean resumeEndedWhileTheReplayWasHeld = reached(resumed);
-        Checkpoint storedWhileTheReplayWasHeld = storage.read(ID);
+        Checkpoint storedWhileTheReplayWasHeld = resumeEndedWhileTheReplayWasHeld ? storage.read(ID) : null;
         releaseTheReplay.countDown();
-        storage.releaseTheResume.countDown();
         Throwable thrown = resumed.orTimeout(WAIT.toSeconds(), TimeUnit.SECONDS).join();
         await().atMost(WAIT).untilAsserted(() -> assertThat(liveModel.openedAt).as("live starts the live model opened").isNotEmpty());
 
@@ -137,7 +135,11 @@ class StreamCatchupResumeRacesTheHandoverTest {
         assertAll("the test entered the window, with the replay held between its reconcile and the handover lock and the resume returned or thrown",
                 () -> assertThat(resumeEndedWhileTheReplayWasHeld).as("window: the resume returned or threw while the replay was held").isTrue(),
                 () -> assertThat(storage.presentPositionSaved).as("window: the resume saved no present position while the replay was held").isNotDone(),
-                () -> assertThat(storedWhileTheReplayWasHeld).as("window: stored position while the replay was held is what the replay stored").isEqualTo(storedByTheReplay),
+                () -> {
+                    if (resumeEndedWhileTheReplayWasHeld) {
+                        assertThat(storedWhileTheReplayWasHeld).as("window: stored position while the replay was held is what the replay stored").isEqualTo(storedByTheReplay);
+                    }
+                },
                 () -> assertThat(received).as("window: the event committed after the live start was not delivered by the replay, so only a live start at or before it delivers it")
                         .extracting(DomainEvent::eventId).doesNotContain(committedAfterTheLiveStart.eventId())
         );
@@ -182,7 +184,6 @@ class StreamCatchupResumeRacesTheHandoverTest {
             opened = true;
         } catch (org.awaitility.core.ConditionTimeoutException ignored) {
         }
-        storage.releaseTheResume.countDown();
         Throwable thrown = resumed.orTimeout(WAIT.toSeconds(), TimeUnit.SECONDS).join();
 
         // Then
@@ -219,7 +220,6 @@ class StreamCatchupResumeRacesTheHandoverTest {
         });
         boolean resumeEnded = reached(resumed);
         releaseTheReplay.countDown();
-        storage.releaseTheResume.countDown();
         Throwable thrown = resumed.orTimeout(WAIT.toSeconds(), TimeUnit.SECONDS).join();
         await().atMost(WAIT).untilAsserted(() -> assertThat(liveModel.openedAt).as("live starts the live model opened").isNotEmpty());
 
@@ -251,12 +251,14 @@ class StreamCatchupResumeRacesTheHandoverTest {
         assertThat(storedBeforeTheResume).as("window: the failed save left no position stored, so the resume has none to put back").isNull();
 
         // When
+        storage.theResumeThread = Thread.currentThread();
         Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
 
         // Then
         assertThat(thrown).as("the resume is not refused by the catch-up but by the live model, which does not hold the subscription")
                 .isExactlyInstanceOf(IllegalStateException.class).hasMessage("Subscription " + ID + " is not paused");
-        assertThat(storage.read(ID)).as("stored position after the failed resume is the one stored before it").isEqualTo(storedBeforeTheResume);
+        assertThat(storage.presentPositionSaved).as("the refused resume stored no present position").isNotDone();
+        assertThat(storage.read(ID)).as("the refused resume stored nothing").isNull();
     }
 
     @Test
@@ -273,13 +275,17 @@ class StreamCatchupResumeRacesTheHandoverTest {
         assertThat(liveModel.openedAt).as("window: the live model never opened the subscription").isEmpty();
 
         Checkpoint storedBeforeTheResume = storage.read(ID);
+        assertThat(storedBeforeTheResume).as("window: the failed handover left a catch-up position stored, which the resume replaces and then has to put back")
+                .isNotNull().matches(AbstractCatchupSubscriptionModel::isCatchupCheckpoint, "a catch-up position");
 
         // When
+        storage.theResumeThread = Thread.currentThread();
         Throwable thrown = catchThrowable(() -> catchup.resumeSubscription(ID, StartAt.now()));
 
         // Then
         assertThat(thrown).as("the resume is not refused by the catch-up but by the live model, which does not hold the subscription")
                 .isExactlyInstanceOf(IllegalStateException.class).hasMessage("Subscription " + ID + " is not paused");
+        assertThat(storage.presentPositionSaved).as("the resume replaced the stored position with the present position before the live model refused it").isDone();
         assertThat(storage.read(ID)).as("stored position after the failed resume is the one stored before it").isEqualTo(storedBeforeTheResume);
     }
 
@@ -300,13 +306,11 @@ class StreamCatchupResumeRacesTheHandoverTest {
         eventStore.write(event.eventId(), cloudEvents);
     }
 
-    // Stores as usual, and pauses the resume thread once it has saved a position that is not a catch-up's, as the
-    // resume of the present position does, until the test lets it go
-    private static final class PausingTheResumeAfterItSavesThePresentPosition extends InMemoryCheckpointStorage {
+    // Stores as usual, and notes when the resume thread has saved a position that is not a catch-up's, as the resume of
+    // the present position does
+    private static final class RecordingTheSaveOfThePresentPosition extends InMemoryCheckpointStorage {
         final CompletableFuture<Void> presentPositionSaved = new CompletableFuture<>();
-        final CountDownLatch releaseTheResume = new CountDownLatch(1);
         final AtomicBoolean failsTheNextSave = new AtomicBoolean();
-        private final AtomicBoolean paused = new AtomicBoolean();
         volatile @Nullable Thread theResumeThread;
 
         @Override
@@ -315,9 +319,8 @@ class StreamCatchupResumeRacesTheHandoverTest {
                 throw new IllegalStateException("the checkpoint storage failed");
             }
             Checkpoint saved = super.save(subscriptionId, checkpoint, condition);
-            if (Thread.currentThread() == theResumeThread && !AbstractCatchupSubscriptionModel.isCatchupCheckpoint(checkpoint) && paused.compareAndSet(false, true)) {
+            if (Thread.currentThread() == theResumeThread && !AbstractCatchupSubscriptionModel.isCatchupCheckpoint(checkpoint)) {
                 presentPositionSaved.complete(null);
-                awaitLatch(releaseTheResume);
             }
             return saved;
         }
