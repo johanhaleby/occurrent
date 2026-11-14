@@ -940,10 +940,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                         // that made the subscription reads that position, since each child reads its own event store.
                         Subscribed owned = subscribed.get(subscriptionId);
                         AbstractCatchupSubscriptionModel owner = owned == null ? this : owned.owner();
-                        // A dynamic start is asked once here, and the position stored and the position the live
-                        // delegate resumes at both come from what it answered. They differ for a time, which is stored
-                        // with the present position as its live start. A wrapper is still asked whether it starts at
-                        // all, as at a subscribe. When it answers nothing here, the live delegate asks it for itself.
+                        // A dynamic start is asked once here. The live delegate resumes at what it answered, and a
+                        // position replaceTheStoredPosition stores comes from it too, a time with the present position
+                        // as its live start. A wrapper is still asked whether it starts at all, as at a subscribe. When
+                        // it answers nothing here, the live delegate asks it for itself.
                         StartAt answered = answeredForThisModel(startAt);
                         @Nullable StartAt forThisModel = answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered;
                         replaced = owner.replaceTheStoredPosition(subscriptionId, forThisModel, true, repositionable);
