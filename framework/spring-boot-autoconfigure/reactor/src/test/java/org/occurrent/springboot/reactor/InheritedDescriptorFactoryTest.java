@@ -40,7 +40,9 @@ import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.springframework.aop.TargetSource;
 import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.aop.target.SingletonTargetSource;
 import org.springframework.beans.factory.FactoryBean;
+import org.springframework.beans.factory.SmartFactoryBean;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -126,6 +128,20 @@ class InheritedDescriptorFactoryTest {
     }
 
     @Test
+    void a_snapshot_factory_inherited_from_a_generic_superclass_behind_a_jdk_proxy_over_a_fixed_target_gives_the_default_store_the_state_type_the_bean_binds() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(SnapshotCollaboratorsConfiguration.class)
+                .withBean(RecordingSnapshotStoreProvider.class, () -> new RecordingSnapshotStoreProvider(new CopyOnWriteArrayList<>()))
+                .withBean("snapshotFactory", UnwrappedFactoryMarker.class, () -> jdkProxyOverFixedTarget(new BoundSnapshotFactoryBehindProxy(), UnwrappedFactoryMarker.class))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(Proxy.isProxyClass(context.getBean("snapshotFactory").getClass())).describedAs("the bean is a JDK proxy").isTrue();
+                    assertThat(context.getBean(RecordingSnapshotStoreProvider.class).stateTypes()).containsExactly(ViewState.class);
+                });
+    }
+
+    @Test
     void a_snapshot_factory_inherited_through_a_raw_supertype_keeps_the_state_type_error() {
         new ApplicationContextRunner()
                 .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
@@ -142,6 +158,22 @@ class InheritedDescriptorFactoryTest {
     }
 
     record ViewState() {
+    }
+
+    interface UnwrappedFactoryMarker {
+    }
+
+    static class BoundSnapshotFactoryBehindProxy extends GenericSnapshotFactory<ViewState> implements UnwrappedFactoryMarker {
+        BoundSnapshotFactoryBehindProxy() {
+            super(new ViewState());
+        }
+    }
+
+    private static <I> I jdkProxyOverFixedTarget(Object target, Class<I> proxiedInterface) {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setTargetSource(new SingletonTargetSource(target));
+        proxyFactory.setInterfaces(proxiedInterface);
+        return proxiedInterface.cast(proxyFactory.getProxy());
     }
 
     abstract static class GenericSnapshotFactory<S> {
@@ -291,6 +323,18 @@ class InheritedDescriptorFactoryTest {
     }
 
     @Test
+    void a_class_declared_projection_factory_behind_a_jdk_proxy_that_does_not_implement_the_declaring_class_is_not_found_and_never_runs() {
+        UNIMPLEMENTED_FACTORY_INVOCATIONS.set(0);
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(ProjectionInfrastructureConfiguration.class, UnimplementedFactoryProductConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(UNIMPLEMENTED_FACTORY_INVOCATIONS).describedAs("the factory is not found, so it never ran").hasValue(0);
+                });
+    }
+
+    @Test
     void an_interface_declared_projection_factory_on_a_prototype_that_switches_to_an_overriding_implementation_is_refused() {
         INTERFACE_FACTORY_INVOCATIONS.set(0);
         OVERRIDING_INTERFACE_FACTORY_INVOCATIONS.set(0);
@@ -381,6 +425,74 @@ class InheritedDescriptorFactoryTest {
         @Bean
         JdkProxyProductFactoryBean interfaceFactory() {
             return new JdkProxyProductFactoryBean();
+        }
+    }
+
+    private static final AtomicInteger UNIMPLEMENTED_FACTORY_INVOCATIONS = new AtomicInteger();
+
+    interface UnrelatedInterface {
+        void other();
+    }
+
+    // Declares the factory on the class only, so the proxy over UnrelatedInterface has no method that runs it
+    static class UnimplementedFactoryImpl implements UnrelatedInterface {
+        @Override
+        public void other() {
+        }
+
+        @Projection(id = "class-declared-projection", source = Source.PUSH)
+        public org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            UNIMPLEMENTED_FACTORY_INVOCATIONS.incrementAndGet();
+            return countingProjection();
+        }
+    }
+
+    // Eager, since the interface declares nothing for the startup scan to decide to build the product from
+    static class UnimplementedFactoryProductFactoryBean implements SmartFactoryBean<UnrelatedInterface> {
+        @Override
+        public boolean isEagerInit() {
+            return true;
+        }
+
+        @Override
+        public UnrelatedInterface getObject() {
+            UnimplementedFactoryImpl target = new UnimplementedFactoryImpl();
+            ProxyFactory proxyFactory = new ProxyFactory();
+            proxyFactory.addInterface(UnrelatedInterface.class);
+            proxyFactory.setTargetSource(new TargetSource() {
+                @Override
+                public Class<?> getTargetClass() {
+                    return UnimplementedFactoryImpl.class;
+                }
+
+                @Override
+                public boolean isStatic() {
+                    return false;
+                }
+
+                @Override
+                public Object getTarget() {
+                    return target;
+                }
+
+                @Override
+                public void releaseTarget(Object released) {
+                }
+            });
+            return (UnrelatedInterface) proxyFactory.getProxy();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return UnrelatedInterface.class;
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class UnimplementedFactoryProductConfiguration {
+        @Bean
+        UnimplementedFactoryProductFactoryBean unimplementedFactory() {
+            return new UnimplementedFactoryProductFactoryBean();
         }
     }
 

@@ -54,6 +54,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.aop.TargetSource;
 import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.aop.target.SingletonTargetSource;
 import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.SmartFactoryBean;
 import org.springframework.beans.factory.config.BeanPostProcessor;
@@ -77,6 +78,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.SoftAssertions.assertSoftly;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -174,6 +176,19 @@ class InheritedDescriptorFactoryTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean(RecordingSagaStateStoreProvider.class).stateTypes()).containsExactly(OrderState.class);
+                });
+    }
+
+    @Test
+    void a_snapshot_factory_inherited_from_a_generic_superclass_behind_a_jdk_proxy_over_a_fixed_target_gives_the_default_store_the_state_type_the_bean_binds() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(SnapshotCollaboratorsConfiguration.class, RecordingProviderConfiguration.class)
+                .withBean("snapshotFactory", UnwrappedFactoryMarker.class, () -> jdkProxyOverFixedTarget(new BoundSnapshotFactoryBehindProxy(), UnwrappedFactoryMarker.class))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(Proxy.isProxyClass(context.getBean("snapshotFactory").getClass())).describedAs("the bean is a JDK proxy").isTrue();
+                    assertThat(context.getBean(RecordingSnapshotStoreProvider.class).stateTypes()).containsExactly(ViewState.class);
                 });
     }
 
@@ -417,6 +432,22 @@ class InheritedDescriptorFactoryTest {
         }
     }
 
+    interface UnwrappedFactoryMarker {
+    }
+
+    static class BoundSnapshotFactoryBehindProxy extends GenericSnapshotFactory<ViewState> implements UnwrappedFactoryMarker {
+        BoundSnapshotFactoryBehindProxy() {
+            super(new ViewState());
+        }
+    }
+
+    private static <I> I jdkProxyOverFixedTarget(Object target, Class<I> proxiedInterface) {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setTargetSource(new SingletonTargetSource(target));
+        proxyFactory.setInterfaces(proxiedInterface);
+        return proxiedInterface.cast(proxyFactory.getProxy());
+    }
+
     abstract static class GenericSnapshotFactory<S> {
         private final S initial;
 
@@ -526,11 +557,13 @@ class InheritedDescriptorFactoryTest {
                 .withBean("snapshotFactory", InterfaceSnapshotFactoryImpl.class, InterfaceSnapshotFactoryImpl::new)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    assertThat(Proxy.isProxyClass(context.getBean("snapshotFactory").getClass())).describedAs("the bean is a JDK proxy").isTrue();
-                    assertThat(INTERFACE_SNAPSHOT_FACTORY_INVOCATIONS).hasValue(1);
-                    assertThat(INTERFACE_SNAPSHOT_FACTORY_ADVICE_CALLS).describedAs("the factory ran through the proxy").hasValue(1);
-                    assertThat(mockingDetails(context.getBean(Subscriptions.class)).getInvocations())
-                            .anyMatch(invocation -> invocation.getMethod().getName().equals("subscribe") && "interface-declared-snapshot".equals(invocation.getRawArguments()[0]));
+                    assertSoftly(softly -> {
+                        softly.assertThat(Proxy.isProxyClass(context.getBean("snapshotFactory").getClass())).describedAs("the bean is a JDK proxy").isTrue();
+                        softly.assertThat(INTERFACE_SNAPSHOT_FACTORY_INVOCATIONS).hasValue(1);
+                        softly.assertThat(INTERFACE_SNAPSHOT_FACTORY_ADVICE_CALLS).describedAs("the factory ran through the proxy").hasValue(1);
+                        softly.assertThat(mockingDetails(context.getBean(Subscriptions.class)).getInvocations())
+                                .anyMatch(invocation -> invocation.getMethod().getName().equals("subscribe") && "interface-declared-snapshot".equals(invocation.getRawArguments()[0]));
+                    });
                 });
     }
 

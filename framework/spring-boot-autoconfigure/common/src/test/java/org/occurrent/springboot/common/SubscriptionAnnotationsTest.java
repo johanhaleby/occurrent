@@ -75,6 +75,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.SoftAssertions.assertSoftly;
 
 class SubscriptionAnnotationsTest {
 
@@ -1725,10 +1726,12 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void isPackagePrivateOutsidePackageOf_is_false_for_a_public_protected_or_private_method_declared_in_another_package() throws Exception {
-        for (String name : List.of("publicMethod", "protectedMethod", "privateMethod")) {
-            assertThat(HandlerScan.isPackagePrivateOutsidePackageOf(CrossPackageMethods.class.getDeclaredMethod(name), InheritsCrossPackageMethods.class))
-                    .describedAs(name).isFalse();
-        }
+        assertSoftly(softly -> {
+            for (String name : List.of("publicMethod", "protectedMethod", "privateMethod")) {
+                softly.assertThat(HandlerScan.isPackagePrivateOutsidePackageOf(method(CrossPackageMethods.class, name), InheritsCrossPackageMethods.class))
+                        .describedAs(name).isFalse();
+            }
+        });
     }
 
     // ------------------------------------------------------------------------------------------------------
@@ -1811,8 +1814,12 @@ class SubscriptionAnnotationsTest {
         }
     }
 
-    private static Method method(Class<?> type, String name) throws Exception {
-        return type.getDeclaredMethod(name);
+    private static Method method(Class<?> type, String name) {
+        try {
+            return type.getDeclaredMethod(name);
+        } catch (NoSuchMethodException e) {
+            throw new AssertionError(e);
+        }
     }
 
     @Test
@@ -1822,8 +1829,10 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void returnTypeArgument_reads_the_requested_index() throws Exception {
-        assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateSecond"), BindsMyView.class, 1)).isEqualTo(MyView.class);
-        assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateSecond"), BindsMyView.class, 0)).isEqualTo(String.class);
+        assertSoftly(softly -> {
+            softly.assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateSecond"), BindsMyView.class, 1)).isEqualTo(MyView.class);
+            softly.assertThat(HandlerScan.returnTypeArgument(method(FactoryBaseOfS.class, "stateSecond"), BindsMyView.class, 0)).isEqualTo(String.class);
+        });
     }
 
     @Test
@@ -1858,16 +1867,20 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void returnTypeArgument_is_null_for_a_wildcard_a_raw_return_type_a_non_generic_return_type_and_an_index_past_the_arguments() throws Exception {
-        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "wildcard"), ShapesOfReturnTypes.class, 0)).isNull();
-        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "raw"), ShapesOfReturnTypes.class, 0)).isNull();
-        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "notParameterized"), ShapesOfReturnTypes.class, 0)).isNull();
-        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "concrete"), ShapesOfReturnTypes.class, 2)).isNull();
+        assertSoftly(softly -> {
+            softly.assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "wildcard"), ShapesOfReturnTypes.class, 0)).isNull();
+            softly.assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "raw"), ShapesOfReturnTypes.class, 0)).isNull();
+            softly.assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "notParameterized"), ShapesOfReturnTypes.class, 0)).isNull();
+            softly.assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "concrete"), ShapesOfReturnTypes.class, 2)).isNull();
+        });
     }
 
     @Test
     void returnTypeArgument_returns_a_concrete_class_and_the_raw_class_of_a_parameterized_argument() throws Exception {
-        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "concrete"), ShapesOfReturnTypes.class, 0)).isEqualTo(MyView.class);
-        assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "parameterized"), ShapesOfReturnTypes.class, 0)).isEqualTo(List.class);
+        assertSoftly(softly -> {
+            softly.assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "concrete"), ShapesOfReturnTypes.class, 0)).isEqualTo(MyView.class);
+            softly.assertThat(HandlerScan.returnTypeArgument(method(ShapesOfReturnTypes.class, "parameterized"), ShapesOfReturnTypes.class, 0)).isEqualTo(List.class);
+        });
     }
 
     // ------------------------------------------------------------------------------------------------------
