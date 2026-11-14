@@ -21,7 +21,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.dcb.DcbMarkerVersions.MarkerVersion;
 
+import java.util.concurrent.atomic.AtomicReference;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 @DisplayName("a marker version written by a default Jackson 2 object mapper")
 class MarkerVersionJacksonTest {
@@ -30,32 +33,25 @@ class MarkerVersionJacksonTest {
 
     @Test
     void reads_back_equal_when_absent() {
-        assertThat(roundTripFailureOf(MarkerVersion.absent())).isNull();
-        assertThat(roundTrip(MarkerVersion.absent())).isEqualTo(MarkerVersion.absent());
+        MarkerVersion absent = MarkerVersion.absent();
+        AtomicReference<MarkerVersion> readBack = new AtomicReference<>();
+
+        assertThatCode(() -> readBack.set(roundTrip(absent))).doesNotThrowAnyException();
+
+        assertThat(readBack.get()).isEqualTo(absent);
     }
 
     @Test
     void reads_back_equal_when_present() {
         MarkerVersion present = new MarkerVersion("epoch-1", 3, 1);
+        AtomicReference<MarkerVersion> readBack = new AtomicReference<>();
 
-        assertThat(roundTripFailureOf(present)).isNull();
-        assertThat(roundTrip(present)).isEqualTo(present);
+        assertThatCode(() -> readBack.set(roundTrip(present))).doesNotThrowAnyException();
+
+        assertThat(readBack.get()).isEqualTo(present);
     }
 
-    private String roundTripFailureOf(MarkerVersion version) {
-        try {
-            objectMapper.readValue(objectMapper.writeValueAsString(version), MarkerVersion.class);
-            return null;
-        } catch (Exception e) {
-            return e.getMessage();
-        }
-    }
-
-    private MarkerVersion roundTrip(MarkerVersion version) {
-        try {
-            return objectMapper.readValue(objectMapper.writeValueAsString(version), MarkerVersion.class);
-        } catch (Exception e) {
-            return null;
-        }
+    private MarkerVersion roundTrip(MarkerVersion version) throws Exception {
+        return objectMapper.readValue(objectMapper.writeValueAsString(version), MarkerVersion.class);
     }
 }
