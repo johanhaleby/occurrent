@@ -580,13 +580,17 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
-    // No listener is told. A start refusal listener is told the id is free, and this run keeps it. The history loss
-    // listeners were asked about a loss before the restart, and there is no position to tell them it restarts from. A
-    // waiter for this run to start, such as the handle a resume returned, is told the refusal, since it never starts
+    // The start refusal listeners are told it is held, not refused, since a refusal tells them the id is free and this
+    // run keeps it. They are told also when an earlier wait counted this run as started, and refusedWhileHeld then
+    // changes nothing. The history loss listeners were asked about a loss before the restart, and there is no position
+    // to tell them it restarts from. A waiter for this run to start, such as the handle a resume returned, is told the
+    // refusal, since it never starts
     private void heldPausedWithoutAPosition(String subscriptionId, InternalSubscription internalSubscription, NoPositionAtThePresent noPosition) {
         if (pausedOnThisRun(subscriptionId, internalSubscription)) {
-            internalSubscription.refusedWhileHeld(noPosition.refusalOf(subscriptionId, internalSubscription.currentStartAt.get()));
+            UnsupportedStartAtException refusal = noPosition.refusalOf(subscriptionId, internalSubscription.currentStartAt.get());
+            internalSubscription.refusedWhileHeld(refusal);
             log.error("Cannot open the change stream of subscription {} at the present: {} It is paused, and resuming it asks MongoDB again.", subscriptionId, noPosition.getMessage(), noPosition);
+            startHeldPaused(subscriptionId, refusal);
         } else {
             log.debug("Cannot open the change stream of subscription {} at the present, but it was paused, resumed or cancelled meanwhile, so it isn't held.", subscriptionId, noPosition);
         }
@@ -798,6 +802,16 @@ public final class ChangeStreamSubscriptions {
                 listener.handleStartRefusal(subscriptionId, copyOf(refusal));
             } catch (RuntimeException e) {
                 log.error("A listener failed when told that the start position of subscription {} was refused. The subscription stays refused, and the other listeners are told.", subscriptionId, e);
+            }
+        }
+    }
+
+    private void startHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+        for (StartRefusalListener listener : startRefusalListeners) {
+            try {
+                listener.handleStartHeldPaused(subscriptionId, copyOf(refusal));
+            } catch (RuntimeException e) {
+                log.error("A listener failed when told that subscription {} is held paused without a position at the present. The subscription stays paused, and the other listeners are told.", subscriptionId, e);
             }
         }
     }

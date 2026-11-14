@@ -468,7 +468,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // Per competing consumer, from its subscribe until it is forgotten, what its handles throw once the wrapped model
     // refused its start
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, StartRefusal> startRefusals = new ConcurrentHashMap<>();
-    private final StartRefusalListener startRefusalListener = this::startRefused;
+    private final StartRefusalListener startRefusalListener = new StartRefusalListener() {
+        @Override
+        public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+            startRefused(subscriptionId, refusal);
+        }
+
+        @Override
+        public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+            startHeldPaused(subscriptionId);
+        }
+    };
     // A handle waits for a refusal to be acted on only when the wrapped model reports it
     private final boolean wrappedModelReportsStartRefusals;
     // Waited for after a call failed, and doubled after each failure that follows, up to the most. A lease callback
@@ -4727,21 +4737,35 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
     }
 
-    // The competing consumer that has the id here or that a subscribe is making, or null for an id this model doesn't
-    // know, one that doesn't compete, and once this model is shut down
-    private synchronized @Nullable SubscriptionIdAndSubscriberId reportStartRefusal(String subscriptionId, UnsupportedStartAtException refused) {
-        if (shutDown) {
-            return null;
+    // The wrapped model keeps the subscription and its id, so nothing is given back or forgotten, and a handle whose
+    // wrapped handle throws the refusal stops waiting for a report that never comes. The consumer keeps its lease.
+    private void startHeldPaused(String subscriptionId) {
+        @Nullable SubscriptionIdAndSubscriberId key = competingConsumerWithId(subscriptionId);
+        @Nullable StartRefusal startRefusal = key == null ? null : startRefusals.get(key);
+        if (startRefusal != null) {
+            startRefusal.actedOn();
         }
-        @Nullable BeingMade beingMade = subscriptionsBeingMade.get(subscriptionId);
-        @Nullable SubscriptionIdAndSubscriberId key = beingMade != null ? beingMade.key
-                : findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId)).map(cc -> cc.subscriptionIdAndSubscriberId).orElse(null);
+    }
+
+    private synchronized @Nullable SubscriptionIdAndSubscriberId reportStartRefusal(String subscriptionId, UnsupportedStartAtException refused) {
+        @Nullable SubscriptionIdAndSubscriberId key = competingConsumerWithId(subscriptionId);
         @Nullable StartRefusal startRefusal = key == null ? null : startRefusals.get(key);
         if (startRefusal == null) {
             return null;
         }
         startRefusal.reported.set(refused);
         return key;
+    }
+
+    // The competing consumer that has the id here or that a subscribe is making, or null for an id this model doesn't
+    // know, one that doesn't compete, and once this model is shut down
+    private synchronized @Nullable SubscriptionIdAndSubscriberId competingConsumerWithId(String subscriptionId) {
+        if (shutDown) {
+            return null;
+        }
+        @Nullable BeingMade beingMade = subscriptionsBeingMade.get(subscriptionId);
+        return beingMade != null ? beingMade.key
+                : findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId)).map(cc -> cc.subscriptionIdAndSubscriberId).orElse(null);
     }
 
     private synchronized boolean isBeingMade(SubscriptionIdAndSubscriberId key) {

@@ -2327,12 +2327,15 @@ When that read returns neither an event nor a resume token, the subscription can
   `StartRefusalReportingSubscriptions` are told, as for a catch-up's checkpoint.
 * A `resumeSubscription(id, StartAt.now())` does the read when the resumed change stream opens. When it gets neither,
   the subscription is held paused and stays in the model, `waitUntilStarted(..)` on the handle the resume returned
-  throws the `UnsupportedStartAtException`, and no listener is told. `resumeSubscription(id)` reads the change stream
-  again. A `StartAt.dynamic(..)` resume that resolves to the present as its change stream opens is held the same way.
+  throws the `UnsupportedStartAtException`, and the listeners added through `StartRefusalReportingSubscriptions` are
+  told through `handleStartHeldPaused(..)`, not `handleStartRefusal(..)`. `resumeSubscription(id)` reads the change
+  stream again. A `StartAt.dynamic(..)` resume that resolves to the present as its change stream opens is held the
+  same way.
 * With `restartSubscriptionsOnChangeStreamHistoryLost` on, a restart from the present after the history was lost that
-  gets neither holds the subscription paused. `isPaused(id)` answers `true`, an error in the log names it, and
-  `resumeSubscription(id)` reads the change stream again. Under a `CompetingConsumerSubscriptionModel` the node that
-  holds it keeps the lease, so no other node runs the subscription until it is resumed on that node.
+  gets neither holds the subscription paused. `isPaused(id)` answers `true`, an error in the log names it, the
+  listeners are told through `handleStartHeldPaused(..)`, and `resumeSubscription(id)` reads the change stream again.
+  Under a `CompetingConsumerSubscriptionModel` the node that holds it keeps the lease, so no other node runs the
+  subscription until it is resumed on that node.
 
 In 0.34.0 such a subscription opened at the present.
 

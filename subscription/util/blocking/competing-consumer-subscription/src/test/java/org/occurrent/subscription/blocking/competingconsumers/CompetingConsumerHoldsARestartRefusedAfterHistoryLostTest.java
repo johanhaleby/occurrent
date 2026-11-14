@@ -43,6 +43,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoLeaseCompetingConsumerStrategy;
@@ -63,6 +64,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -154,6 +157,43 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
         assertThat(nodeB.isRunning(SUBSCRIPTION_ID)).as("node B is running without the lease").isFalse();
         assertThat(readsAfterFourLeaseTimes).as("reads of MongoDB for the present while held, after four lease times").isEqualTo(readsWhenHeld);
         assertThat(reads.get()).as("reads of MongoDB for the present while held, at the end").isEqualTo(readsWhenHeld);
+    }
+
+    @Timeout(value = 60, unit = SECONDS)
+    @Test
+    void waiting_without_a_timeout_on_a_resume_of_the_held_subscription_answers_with_the_refusal_instead_of_waiting_forever() {
+        // Given
+        Subscription resumed = resumeTheHeldSubscriptionOnNodeA();
+
+        // When
+        // Then
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> assertThatThrownBy(resumed::waitUntilStarted).isInstanceOf(UnsupportedStartAtException.class));
+        assertThat(wrappedA.isPaused(SUBSCRIPTION_ID)).as("wrapped model on A is held paused").isTrue();
+        assertThat(nodeA.isPaused(SUBSCRIPTION_ID)).as("node A is paused").isTrue();
+        assertThat(nodeA.subscriptionIds()).as("node A still knows the subscription").contains(SUBSCRIPTION_ID);
+    }
+
+    @Timeout(value = 60, unit = SECONDS)
+    @Test
+    void waiting_with_a_timeout_on_a_resume_of_the_held_subscription_answers_with_the_refusal_well_before_the_timeout() {
+        // Given
+        Subscription resumed = resumeTheHeldSubscriptionOnNodeA();
+
+        // When
+        // Then
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> assertThatThrownBy(() -> resumed.waitUntilStarted(Duration.ofSeconds(30))).isInstanceOf(UnsupportedStartAtException.class));
+        assertThat(wrappedA.isPaused(SUBSCRIPTION_ID)).as("wrapped model on A is held paused").isTrue();
+        assertThat(nodeA.subscriptionIds()).as("node A still knows the subscription").contains(SUBSCRIPTION_ID);
+    }
+
+    private Subscription resumeTheHeldSubscriptionOnNodeA() {
+        Subscription started = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
+        });
+        assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+        presentRefused.set(true);
+        historyLost.set(true);
+        await().atMost(15, SECONDS).until(() -> wrappedA.isPaused(SUBSCRIPTION_ID));
+        return nodeA.resumeSubscription(SUBSCRIPTION_ID);
     }
 
     private static AgnosticSubscriptionFilter filter() {

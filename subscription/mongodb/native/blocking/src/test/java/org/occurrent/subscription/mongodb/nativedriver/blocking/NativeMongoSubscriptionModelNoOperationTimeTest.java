@@ -62,6 +62,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions.HistoryLossListener;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -1274,6 +1275,113 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         assertThat(presentReads).as("reads of the change stream that records the present").hasValue(1);
         assertThat(cursorsOpened()).as("cursors of the subscription's change streams opened").isZero();
         assertThat(handled).as("events delivered").isEmpty();
+    }
+
+    @Test
+    void a_resume_at_the_present_that_is_held_paused_tells_the_start_refusal_listeners_it_is_held_and_not_that_it_is_refused() {
+        // Given: a subscription that has run, and a server whose change stream gives no position now
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        RecordingStartRefusalListener listener = new RecordingStartRefusalListener();
+        subscriptionModel.addStartRefusalListener(listener);
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
+        }).waitUntilStarted(Duration.ofSeconds(10));
+        subscriptionModel.pauseSubscription(subscriptionId);
+        presentRead.set(() -> cursorReading(null, null));
+
+        // When
+        subscriptionModel.resumeSubscription(subscriptionId, StartAt.now());
+        waitAtMostFor(TEN_SECONDS, () -> !listener.heldPaused.isEmpty());
+
+        // Then: the listeners were told it is held paused, with the refusal a handle throws, and not that it is refused
+        assertThat(listener.heldPaused).as("subscriptions the listener was told are held paused").containsExactly(subscriptionId);
+        assertThat(listener.heldPausedWith).as("refusals the listener was told with").singleElement()
+                .satisfies(refusal -> assertThat(refusal).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("MongoDB gave neither an operation time nor a change stream position"));
+        assertThat(listener.refused).as("start refusals told").isEmpty();
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+        assertThat(subscriptionModel.subscriptionIds()).as("known subscriptions").contains(subscriptionId);
+    }
+
+    @Test
+    void a_run_held_paused_after_it_waited_for_a_stuck_call_and_its_handle_answered_true_still_tells_the_start_refusal_listeners_it_is_held() {
+        // Given: the call of the action for the first event is stuck, and a listener of start refusals
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        RecordingStartRefusalListener listener = new RecordingStartRefusalListener();
+        subscriptionModel.addStartRefusalListener(listener);
+        CountDownLatch releaseTheStuckCall = new CountDownLatch(1);
+        heldReads.add(releaseTheStuckCall);
+        CountDownLatch actionCalled = new CountDownLatch(1);
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
+            actionCalled.countDown();
+            awaitUninterruptibly(releaseTheStuckCall);
+        }).waitUntilStarted(Duration.ofSeconds(10));
+        mongoEventStore.write("1", 0, serialize(nameDefined("name1")));
+        assertThat(awaitUnlessInterrupted(actionCalled, Duration.ofSeconds(10))).as("action called for the first event").isTrue();
+
+        // When: it is paused, which returns while that call still runs, and resumed as its history is lost as the resumed run opens, while the server gives no position to restart from
+        subscriptionModel.pauseSubscription(subscriptionId);
+        presentRead.set(() -> cursorReading(null, null));
+        historyLostWhenOpening.set(true);
+        Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+        boolean startedWhileTheCallIsStuck = resumed.waitUntilStarted(Duration.ofSeconds(10));
+        waitAtMostFor(TEN_SECONDS, () -> !historyLostWhenOpening.get());
+        int readsWhileTheCallIsStuck = presentReads.get();
+        List<String> toldWhileTheCallIsStuck = List.copyOf(listener.heldPaused);
+
+        // And: the stuck call returns, so the restart from the present reads no position
+        releaseTheStuckCall.countDown();
+        waitAtMostFor(TEN_SECONDS, () -> !listener.heldPaused.isEmpty());
+
+        // Then: the handle had answered true, and the listeners were told only once the run was held, and not that it is refused
+        assertThat(startedWhileTheCallIsStuck).as("resume handle answered while the call is stuck").isTrue();
+        assertThat(readsWhileTheCallIsStuck).as("reads of the change stream that records the present while the call is stuck").isZero();
+        assertThat(toldWhileTheCallIsStuck).as("subscriptions the listener was told are held paused while the call is stuck").isEmpty();
+        assertThat(listener.heldPaused).as("subscriptions the listener was told are held paused").containsExactly(subscriptionId);
+        assertThat(listener.refused).as("start refusals told").isEmpty();
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+        assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isFalse();
+    }
+
+    private static final class RecordingStartRefusalListener implements StartRefusalListener {
+        private final List<String> refused = new CopyOnWriteArrayList<>();
+        private final List<String> heldPaused = new CopyOnWriteArrayList<>();
+        private final List<UnsupportedStartAtException> heldPausedWith = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+            refused.add(subscriptionId);
+        }
+
+        @Override
+        public void handleStartHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+            heldPausedWith.add(refusal);
+            heldPaused.add(subscriptionId);
+        }
+    }
+
+    private static boolean awaitUnlessInterrupted(CountDownLatch latch, Duration timeout) {
+        try {
+            return latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private static void awaitUninterruptibly(CountDownLatch latch) {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                latch.await();
+                break;
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private List<String> errorsLoggedAbout(String subscriptionId) {
