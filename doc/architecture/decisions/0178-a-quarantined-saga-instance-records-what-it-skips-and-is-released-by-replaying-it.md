@@ -56,10 +56,10 @@ a quarantined instance, and all three record it:
 - `SagaExecution`'s load-failure path, which skips an input when the state no longer decodes and the instance is
   quarantined. It records through `compareAndSaveWithoutState`, so the undecodable state is never written.
 
-A skip used to write nothing. It now writes the key's record, and then a compare-and-set on the instance that raises a
-skip counter on it, retried on a lost write like any other save. A skip whose key is recorded already still raises the
-counter. That write changes the instance's version, which point 3
-relies on. The watermarks still don't move, which is what ADR 134 Decision point 5 requires.
+A skip used to write nothing. It now makes the three writes point 2 describes, two compare-and-sets on the instance with
+the key's record between them, and each compare-and-set is retried on a lost write like any other save. The second one
+changes the instance's version after the record exists, which point 3 relies on. A skip whose key is recorded already
+makes only that second write. The watermarks still don't move, which is what ADR 134 Decision point 5 requires.
 
 Events from a DCB store are stored with a stream id and a stream version on MongoDB, so they are recorded by stream key
 like any other.
@@ -76,12 +76,16 @@ again keeps the id, and keeps the counter for the records that stay. Records are
 quarantine id, and a release reads only those under the current id. A record left over from an earlier quarantine of the
 same instance is never replayed.
 
-A record takes the skip counter's value as its sequence number, and the instance write after it raises the counter.
-When that instance write fails, after a crash or a lost compare-and-set, the record stays and the next skip can
-take the same number. Records are read in order of sequence number and then key, so the order is fixed either way. The
-input of such a record was never acknowledged, so it is offered again before any later input of its stream, and its
-skip raises the counter then. So two inputs of one stream never share a number, and a release that finds the record
-replays an input the instance never applied.
+A skip reads the instance's skip counter and raises it by one in a compare-and-set on the instance. The value it read is
+the record's sequence number. Then it writes the record with that number, and then it changes the instance's version
+again in a second compare-and-set. Each number is taken once, so no two records of a quarantine share one, and release
+reads the records in order of sequence number, which is the order the inputs were skipped in.
+
+A crash or a lost race between those writes can skip a number, but never gives two records the same one. When the first
+write succeeds and the record isn't written, the input was never acknowledged, so it is offered again and takes a new
+number. When the record is written and the second write isn't, the input is offered again, finds its key recorded, and
+makes only the second write. When two skips of one key race, the record of the first stays, and the other makes only the
+second write. A release that finds a record whose skip never finished replays an input the instance never applied.
 
 `SagaStateStore.delete(sagaId)` also deletes the instance's records.
 
@@ -107,9 +111,9 @@ stream marks as any other input. A record's CloudEvent key is used only to find 
 stores write has a stream id and version. An event read back without them, which only a custom `EventStoreQueries` can
 return, quarantines the instance again at once, as a missing event does in point 5, with a failure type of its own.
 
-An input that arrives live while the instance is releasing reaches the quarantined skip and is recorded. The
-compare-and-set that raises the skip counter after the record changes the instance's version, so a release that read the
-records before that input loses its `ACTIVE` write, reads again, and finds the new record. When the counter write loses
+An input that arrives live while the instance is releasing reaches the quarantined skip and is recorded. The skip's
+second compare-and-set, after the record, changes the instance's version, so a release that read the records before the
+record existed loses its `ACTIVE` write, reads again, and finds the new record. When that second write loses
 instead, because the instance went `ACTIVE` first, the input is processed again against the `ACTIVE` instance and applied
 like any live input, and its record stays under a quarantine id no release reads again. Either way no input is skipped
 without a record that a release reads.
@@ -202,7 +206,7 @@ missing `occurrent.saga.quarantine-after` now means the default.
   `SagaFailure` and `SagaInstance` don't hold it. On MongoDB it is a top-level field of the instance's document.
 - On MongoDB the records are documents in a collection of their own next to the saga collection. A unique index on the
   saga id, the quarantine id and the key keeps a key from being recorded twice, and an index on the saga id, the
-  quarantine id, the sequence number and the key serves the order release reads them in.
+  quarantine id and the sequence number serves the order release reads them in.
 - A document written before 0.35.0 has none of these fields and reads as not releasing, with no quarantine id.
 
 On MongoDB, an instance whose failure record has a quarantine id is stored with the status `QUARANTINED_RECORDING`
@@ -232,6 +236,12 @@ After a downgrade, a 0.34.0 node throws on every input of an instance that 0.35.
 stalls the saga's subscription when the input comes live and stops it when the input comes in a catch-up, as above,
 until the node runs 0.35.0 again, or until the instance is deleted and the node restarts. No input is lost.
 
+A downgrade that doesn't stall anything goes in three steps, all on 0.35.0. Turn quarantine off, so that no instance is
+quarantined while the others are dealt with. Then release each instance that 0.35.0 quarantined until `release` returns
+`RELEASED`, or delete it with `SagaStateStore.delete(sagaId)`. Then downgrade. Of what this record adds, only the
+`QUARANTINED_RECORDING` status is something 0.34.0 can't read, and no instance has it after these steps. A downgrade
+that skips these steps stalls or stops the saga's subscription as above, until the node runs 0.35.0 again.
+
 ### 9. Two corrections to ADR 134
 
 - ADR 134's Status section says the quarantine budget is off on "push feeds and the broker sources". `SagaRunner` also
@@ -247,7 +257,8 @@ until the node runs 0.35.0 again, or until the instance is deleted and the node 
 
 - A quarantined instance can be brought back without stopping the saga, without a redeploy, and without the other
   instances of the saga waiting for anything.
-- A skip by a quarantined instance is now two writes, the record and the compare-and-set on the instance.
+- A skip by a quarantined instance is now three writes, two compare-and-sets on the instance and the record between
+  them.
 - A quarantined instance keeps a record of every input it skips, with no limit. The records take space in the store
   until a release replays them or the instance is deleted.
 - An instance whose K or recorded input refers to an event that was deleted from the store stays quarantined until the
@@ -255,7 +266,8 @@ until the node runs 0.35.0 again, or until the instance is deleted and the node 
 - A rolling upgrade from 0.34.0 that follows the upgrade guide takes two deploys, one with quarantine off and one that
   turns it on.
 - A 0.34.0 node, in a mixed cluster or after a downgrade, stalls or stops the subscription of a saga with an instance
-  that 0.35.0 quarantined, until it runs 0.35.0. It loses no input.
+  that 0.35.0 quarantined, until it runs 0.35.0. It loses no input. A downgrade that releases or deletes those instances
+  first, on 0.35.0 with quarantine off, stalls nothing.
 - An application that never configured quarantine starts quarantining on upgrade. The changelog and the upgrade guide
   say so and name `disableQuarantine()` and `occurrent.saga.quarantine-enabled=false`.
 - `SagaFailure` gains two components, so a record pattern over it stops compiling. `SagaEnvelope` changes in 0.35.0
