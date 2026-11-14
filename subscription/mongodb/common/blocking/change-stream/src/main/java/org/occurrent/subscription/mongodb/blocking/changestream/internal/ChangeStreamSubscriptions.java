@@ -1227,9 +1227,8 @@ public final class ChangeStreamSubscriptions {
     // The question to MongoDB for the position that fixes where a subscription started at the present opens.
     // One question shared by every run of the subscription, asked again after the retry strategy gives up on it. MongoDB
     // giving no position is an answer, not a give-up, and isn't asked again, since a later answer would skip what was
-    // written since the subscribe. It's
-    // asked on the executor right after subscribe(..) on a stopped model, or by the first run that gets to it. A pause
-    // doesn't stop it.
+    // written since the subscribe. It's asked on the executor right after subscribe(..) on a stopped model, or by the
+    // first run that gets to it. A pause doesn't stop it.
     private static final class PresentAtSubscribe {
         private final StartAt subscribedAt;
         private final BiConsumer<PresentAtSubscribe, BooleanSupplier> question;
@@ -1481,6 +1480,8 @@ public final class ChangeStreamSubscriptions {
         boolean waitForThePreviousRuns(String subscriptionId) {
             // Set when the wait first finds a call still running, so the first warning is logged once
             @Nullable Long waitingSince = null;
+            // Kept across the runs of the chain, so a chain of stuck calls doesn't start the doubling again at each one
+            Duration untilTheNextWarning = FIRST_STILL_WAITING_WARNING_AFTER;
             try {
                 for (InternalSubscription run = previous; run != null; run = run.previous) {
                     if (waitingSince == null && run.isDelivering()) {
@@ -1491,7 +1492,6 @@ public final class ChangeStreamSubscriptions {
                         started();
                         log.warn("Subscription {} waits for an action call of a run it replaced to return before it goes on. The call hasn't returned since the subscription was paused. It waits with no deadline, and a pause or a cancel of the subscription ends the wait.", subscriptionId);
                     }
-                    Duration untilTheNextWarning = FIRST_STILL_WAITING_WARNING_AFTER;
                     while (true) {
                         Waited waited = run.awaitNotDeliveringUnlessClosed(this, untilTheNextWarning);
                         if (waited == Waited.CLOSED) {
