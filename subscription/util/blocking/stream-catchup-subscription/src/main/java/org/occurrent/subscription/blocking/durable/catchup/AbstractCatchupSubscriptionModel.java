@@ -42,6 +42,7 @@ import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -83,7 +84,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * stream module both modes build against.
  */
 @NullMarked
-abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions {
+abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions, StartRefusalReportingSubscriptions {
 
     private static final Logger log = LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
 
@@ -142,6 +143,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // resume, or a cancel and re-subscribe all run another catch-up for the same id, and a recorder that stopped
     // being told would record that catch-up's history as though it were live.
     private final ConcurrentMap<String, CatchupListener> catchupListeners = new ConcurrentHashMap<>();
+    // Told when this model holds a subscription paused because the live delegate lost the live start of its replay
+    private final List<StartRefusalListener> heldPausedListeners = new CopyOnWriteArrayList<>();
     // One lock per subscriptionId, guarding a fresh attempt's registration (startCatchupAsync), a finishing
     // attempt's checkpoint cleanup and delegate subscribe (or its cancelled-cleanup branch), and
     // cancelRunningCatchup. The identity check above only made the ownership decision itself atomic, not what
@@ -339,41 +342,55 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * @param lostLiveStart           The live start the live delegate lost when this model last took the subscription
      *                                over, and {@code null} before that. Only a run that a start(true) of the live
      *                                delegate resumed there reports a loss of it again.
-     * @param historyLost             The position the live delegate lost the history from when no replay of this model
-     *                                could take the loss over, and {@code null} before that. Once set, a resume refuses
+     * @param historyLost             The position the live delegate lost the history from, recorded only where a resume
+     *                                would skip events, which is when no replay of this model could take the loss over, or when
+     *                                a replay that started after the beginning lost its live start. {@code null} before
+     *                                that, and when a replay from the beginning loses its live start, since a replay
+     *                                again skips nothing. Once set, a resume refuses
      *                                with {@link CatchupCannotResumeException} until the subscription is cancelled, or
      *                                until {@link AbstractCatchupSubscriptionModel#resumeSubscription(String, StartAt)}
      *                                resumes it at a position the live delegate still has the history from.
+     * @param didNotGoLive            Set once a replay its subscribe started ended before the live delegate got the
+     *                                subscription, at its handover too, and cleared once a replay hands it over, so a
+     *                                resume at a given position doesn't refuse it as running.
      */
     private record Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action,
                               CompletableFuture<Void> cancelledReplayReturned, AtomicReference<@Nullable Checkpoint> lostLiveStart,
-                              HistoryLost historyLost) {
+                              HistoryLost historyLost, AtomicBoolean didNotGoLive) {
 
         private Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            this(owner, filter, startAt, action, CompletableFuture.completedFuture(null), new AtomicReference<>(), new HistoryLost());
+            this(owner, filter, startAt, action, CompletableFuture.completedFuture(null), new AtomicReference<>(), new HistoryLost(), new AtomicBoolean());
         }
     }
 
-    // The position the live delegate lost the history from, how many times a resume at a given position cleared it, and
-    // the position the last such resume gave. A loss reported before such a resume must not be recorded after it, which
-    // would mark a subscription it has resumed as lost, unless it is a loss of the position that resume gave.
+    // The position the live delegate lost the history from, whether it is the live start a replay would go live from,
+    // how many times a resume at a given position cleared it, and the position the last such resume gave. A loss
+    // reported before such a resume must not be recorded after it, which would mark a subscription it has resumed as
+    // lost, unless it is a loss of the position that resume gave.
     private static final class HistoryLost {
-        private record State(int clears, @Nullable Checkpoint lostFrom, @Nullable String resumedAt) {
+        private record State(int clears, @Nullable Checkpoint lostFrom, boolean liveStart, @Nullable String resumedAt) {
         }
 
-        private final AtomicReference<State> state = new AtomicReference<>(new State(0, null, null));
+        private final AtomicReference<State> state = new AtomicReference<>(new State(0, null, false, null));
 
         @Nullable Checkpoint get() {
             return state.get().lostFrom();
+        }
+
+        // What a resume refuses with while a loss is recorded, or null
+        @Nullable CatchupCannotResumeException refusal(String subscriptionId) {
+            State seen = state.get();
+            return seen.lostFrom() == null ? null : HistoryLossMessages.resumeRefused(subscriptionId, seen.lostFrom(), seen.liveStart());
         }
 
         int clears() {
             return state.get().clears();
         }
 
-        // False when it was cleared since clearsWhenReported by a resume at a position other than lostFrom
-        boolean recordUnlessCleared(int clearsWhenReported, Checkpoint lostFrom) {
-            State before = state.getAndUpdate(it -> records(it, clearsWhenReported, lostFrom) ? new State(it.clears(), lostFrom, it.resumedAt()) : it);
+        // False when it was cleared since clearsWhenReported by a resume at a position other than lostFrom. liveStart says
+        // lostFrom is the live start a replay would go live from
+        boolean recordUnlessCleared(int clearsWhenReported, Checkpoint lostFrom, boolean liveStart) {
+            State before = state.getAndUpdate(it -> records(it, clearsWhenReported, lostFrom) ? new State(it.clears(), lostFrom, liveStart, it.resumedAt()) : it);
             return records(before, clearsWhenReported, lostFrom);
         }
 
@@ -383,9 +400,32 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
         // Keeps a loss of resumedAt itself. Returns the loss it cleared, or null.
         @Nullable Checkpoint clear(@Nullable Checkpoint resumedAt) {
+            return clearUntilPutBack(resumedAt).lost();
+        }
+
+        // As clear, and what putBack needs to undo it
+        Cleared clearUntilPutBack(@Nullable Checkpoint resumedAt) {
             String at = resumedAt == null ? null : resumedAt.asString();
-            State before = state.getAndUpdate(seen -> new State(seen.clears() + 1, isAt(seen.lostFrom(), at) ? seen.lostFrom() : null, at));
-            return isAt(before.lostFrom(), at) ? null : before.lostFrom();
+            while (true) {
+                State seen = state.get();
+                boolean kept = isAt(seen.lostFrom(), at);
+                State after = new State(seen.clears() + 1, kept ? seen.lostFrom() : null, kept && seen.liveStart(), at);
+                if (state.compareAndSet(seen, after)) {
+                    return new Cleared(seen, after);
+                }
+            }
+        }
+
+        // Undoes cleared, unless a loss was recorded or cleared since, which then stays
+        void putBack(Cleared cleared) {
+            state.compareAndSet(cleared.after(), cleared.before());
+        }
+
+        record Cleared(State before, State after) {
+            // The loss the clear removed, or null when there was none or it was kept
+            @Nullable Checkpoint lost() {
+                return after.lostFrom() == null ? before.lostFrom() : null;
+            }
         }
 
         private static boolean isAt(@Nullable Checkpoint lostFrom, @Nullable String position) {
@@ -774,12 +814,49 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Resumes the subscription the live delegate holds paused at {@code startAt}, through whichever
      * {@link RepositionableSubscriptions} the live delegate resolves to. Unlike {@link #resumeSubscription(String)}, it
-     * doesn't start this model first or run a parked replay, and it never replays, also not at a position a catch-up
-     * stores. The live delegate handles such a position as one it cannot open its live feed at. A replay that
-     * {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
-     * and ends once the live delegate has resumed the subscription, so the position given here wins over it, and a later
-     * {@link #resumeSubscription(String)} can replay again. When the live delegate throws, a replay this held runs again
-     * as it was, and this throws what the live delegate threw. When the replay is in the subscription's action or reads
+     * doesn't start this model first or run a parked replay, and for a subscription the live delegate holds it never
+     * replays, also not at a position a catch-up stores. The live delegate handles such a position as one it cannot open
+     * its live feed at. A subscription held before it reached the live delegate is the exception, described below.
+     * <p>
+     * A subscription this model made that runs is refused with {@link SubscriptionAlreadyRunningException} before
+     * anything is stored and before a dynamic {@code startAt} is asked. It runs when it isn't paused, the replay its
+     * {@code subscribe(..)} started didn't end before the live delegate got it, and no replay that
+     * {@link #resumeSubscription(String)} started runs for it or is about to start to take over a live start the live
+     * delegate lost. That includes one whose {@code subscribe(..)} replay still runs and one the live delegate is still
+     * opening. This model decides it from what it knows itself, since a live delegate can run a subscription before it
+     * reports it as running. In 0.34.0 the live delegate was asked to resume it and threw its own exception. A
+     * subscription paused while its {@code subscribe(..)} replay runs isn't refused, and the live delegate, which doesn't
+     * hold it yet, throws its own exception, as in 0.34.0. A subscription whose live delegate gave up restarting it after
+     * it went live still runs here, as it did on the MongoDB live delegates in 0.34.0. Pause it before you resume it at a
+     * position, or cancel it and subscribe it again.
+     * <p>
+     * A replay that {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
+     * and ends once the live delegate has resumed the subscription, so the position given here wins over it. With
+     * checkpoint storage, when the position stored for the subscription is one a catch-up replays from, such as the one
+     * that replay stored, it is replaced before the live delegate resumes the subscription, so a
+     * {@link #resumeSubscription(String)} after a later pause doesn't replay from it. While a replay that
+     * {@code subscribe(..)} started runs for a subscription a pause was asked for during that replay, nothing is stored
+     * and no present position is read, since that replay reads the stored position to decide where it goes live from
+     * when it hands over. It is replaced
+     * only by a position a restart starts reading at:
+     * <ul>
+     * <li>A checkpoint the live delegate answers {@code true} for in {@link RepositionableSubscriptions#restartsAt(Checkpoint)}
+     * is stored as given.</li>
+     * <li>A checkpoint this model replays from with a live start, or one at the beginning, is stored as given.</li>
+     * <li>A time after the beginning that this model replays from without a live start is stored with the present
+     * position as its live start. A DCB catch-up doesn't replay from a time, so it stores a time only by the first
+     * rule.</li>
+     * <li>A start from now stores the present position by the first rule, and the live delegate then resumes the
+     * subscription from that position.</li>
+     * </ul>
+     * The present position is read the way a paragraph below describes for a subscription held before it reached the
+     * live delegate. When no position is answered then, this throws {@link IllegalStateException} and changes nothing.
+     * A global position above 0 without a live start, a checkpoint the live delegate doesn't restart at and any other
+     * start store nothing, and the position stored before stays. A dynamic {@code startAt} is asked once for this
+     * model, and the live delegate resumes the subscription at the position it answered. When it answers nothing for
+     * this model, the live delegate asks it for itself. When
+     * the live delegate throws, the position stored before is put back as for that subscription, a replay this held
+     * runs again as it was, and this throws what the live delegate threw. When the replay is in the subscription's action or reads
      * history, this holds the replay and waits up to ten seconds for it to return before the live delegate resumes the
      * subscription, so the replay's action doesn't run alongside the action of the resumed subscription. After a
      * {@link #cancelSubscription(String)} that threw, it waits the same way for the replay that cancel
@@ -806,28 +883,53 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * the history is gone pauses it again when the live delegate reports the loss again, so nothing is skipped. When the
      * live delegate throws, it stays refused.
      * <p>
+     * A subscription is held before it reaches the live delegate when the replay its {@code subscribe(..)} started
+     * lost the live start it would go live from. This then subscribes it from {@code startAt}, with the filter and
+     * action it was made with, as a subscribe at {@code startAt} would, in place of resuming it in the live delegate.
+     * The replay it was held for doesn't run again. The position stored for the subscription is replaced by the rules
+     * above, whatever position it is, so a resume after a pause or a restart doesn't replay from where the held replay
+     * got to. A start that stores nothing by those rules keeps the position the held replay stored. When it starts now,
+     * the present position is the live start the event store reports, or the live delegate's present position when the
+     * event store reports none, and the subscription goes live from that position when it is stored, so an event that
+     * commits between the store and the subscribe is delivered. When that subscribe throws, the loss stays recorded, so
+     * a later {@link #resumeSubscription(String)} still refuses, and the position stored before is put back with the
+     * write condition the replacing write had, so a position another lease holder stored since refuses it. When nothing
+     * was stored before, the new position stays. When it starts now with checkpoint storage and neither the event store
+     * nor the live delegate answers a position, this throws {@link IllegalStateException} and changes nothing.
+     * <p>
+     * A loss the subscribe in place records, or the replay it starts records, is kept, so a later
+     * {@link #resumeSubscription(String)} refuses.
+     * <p>
      * {@link RepositionableSubscriptions#findIn} finds this model only when the live delegate is repositionable.
      *
-     * @throws UnsupportedOperationException if the live delegate is not itself repositionable.
+     * @throws UnsupportedOperationException      if the live delegate is not itself repositionable.
+     * @throws SubscriptionAlreadyRunningException if this model made the subscription and it runs, as described above.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-        return resumeSubscription(subscriptionId, startAt, List.of(this), () -> isRunning(subscriptionId) && !isPaused(subscriptionId));
+        return resumeSubscription(subscriptionId, startAt, List.of(this), () -> isRunning(subscriptionId), () -> isPaused(subscriptionId));
     }
 
     /**
      * Resumes {@code subscriptionId} at {@code startAt} as {@link #resumeSubscription(String, StartAt)} describes, ending
      * a replay in the way on any of {@code models}, which are this model or every child of the dispatcher this model is
-     * a child of. They share the claim, the live delegate and what runs a resume at a given position. {@code runs} tells
-     * whether the subscription reads as running and not paused on the model the caller called.
+     * a child of. They share the claim, the live delegate and what runs a resume at a given position. {@code running}
+     * and {@code paused} tell whether the subscription reads as running and as paused on the model the caller called.
      */
-    Subscription resumeSubscription(String subscriptionId, StartAt startAt, List<AbstractCatchupSubscriptionModel> models, BooleanSupplier runs) {
+    Subscription resumeSubscription(String subscriptionId, StartAt startAt, List<AbstractCatchupSubscriptionModel> models, BooleanSupplier running, BooleanSupplier paused) {
         SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
         RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(liveDelegate)
                 .orElseThrow(() -> new UnsupportedOperationException(liveDelegate.getClass().getSimpleName() + " is not repositionable"));
         try (Claim ignored = claim(subscriptionId)) {
+            boolean readsAsPaused = paused.getAsBoolean();
+            // Decided here and not by the live delegate, which can run the subscription before it reports it as running,
+            // as one that opens after its subscribe returned does
+            Subscribed known = subscribed.get(subscriptionId);
+            if (known != null && !known.didNotGoLive().get() && !readsAsPaused && !isReplayingToResume(subscriptionId)) {
+                throw new SubscriptionAlreadyRunningException(subscriptionId);
+            }
             // Only one that runs, so an unknown or paused one reads as it did, also when this fails
-            boolean marked = runs.getAsBoolean() && repositioning.add(subscriptionId);
+            boolean marked = !readsAsPaused && running.getAsBoolean() && repositioning.add(subscriptionId);
             try {
                 List<ReplayInTheWay> inTheWay = new ArrayList<>();
                 try {
@@ -848,11 +950,45 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 HandedOver dropped = handedOver.remove(subscriptionId);
                 // A held replay delivers nothing, and only a call holding the claim runs it again, so it ends only once
                 // the live delegate has resumed and is put back when that throws
+                // A replay a subscribe started never reached the live delegate, so the resume subscribes the catch-up at
+                // startAt in its place
+                ReplayInTheWay neverWentLive = inTheWay.stream().filter(ReplayInTheWay::neverWentLive).findFirst().orElse(null);
                 Subscription resumed;
+                StoredPositionReplaced replaced = null;
+                // The checkpoint this resume hands the live delegate, whose loss the clear below keeps. Null for a start
+                // the live delegate resolves itself, whose loss it reports again when it resumes the subscription again.
+                @Nullable Checkpoint givenPosition = resumedAt(startAt);
                 try {
-                    resumed = repositionable.resumeSubscription(subscriptionId, startAt);
+                    if (neverWentLive != null) {
+                        resumed = neverWentLive.subscribeInPlaceOfTheHeldReplay(startAt, repositionable);
+                    } else {
+                        // A position a catch-up replays from makes a later resume replay from it, and the live delegate
+                        // may not store one of its own over it, so the position given here replaces it when a restart
+                        // starts from it. A start from now goes live from the present position it stores, as the
+                        // subscribe in place does. The child
+                        // that made the subscription reads that position, since each child reads its own event store.
+                        Subscribed owned = subscribed.get(subscriptionId);
+                        AbstractCatchupSubscriptionModel owner = owned == null ? this : owned.owner();
+                        // A dynamic start is asked once here, and what it answered decides what is stored and where
+                        // the live delegate resumes. A wrapper is still asked whether it starts at all, as at a
+                        // subscribe. When it answers nothing here, the live delegate asks it for itself.
+                        StartAt answered = answeredForThisModel(startAt);
+                        @Nullable StartAt forThisModel = answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered;
+                        // Nothing is stored while a replay a subscribe started runs after a pause asked for during
+                        // it, since its handover reads what is stored to decide where it goes live from
+                        replaced = aSubscribeReplays(subscriptionId) ? null : owner.replaceTheStoredPosition(subscriptionId, forThisModel, true, repositionable);
+                        Checkpoint present = replaced == null ? null : replaced.present;
+                        StartAt liveStartAt = present != null ? StartAt.checkpoint(present) : forThisModel;
+                        if (liveStartAt != null) {
+                            givenPosition = resumedAt(liveStartAt);
+                        }
+                        resumed = repositionable.resumeSubscription(subscriptionId, liveStartAt == null ? startAt : goingLiveFrom(answered, liveStartAt));
+                    }
                 } catch (Throwable e) {
                     // Throwable, since a live delegate written in Kotlin can throw a checked exception
+                    if (replaced != null) {
+                        replaced.putBack(e);
+                    }
                     if (dropped != null) {
                         handedOver.putIfAbsent(subscriptionId, dropped);
                     }
@@ -864,12 +1000,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // this clear, and what it recorded before is cleared here, though its error may already be logged, so
                 // the log says that error no longer applies. A loss of the position given here is kept, since the
                 // run this resume started can report it, unless a late report of the old run replaced it first.
+                // The subscribe in place of a held replay cleared it before it started a replay of its own.
                 Subscribed made = subscribed.get(subscriptionId);
-                Checkpoint resumedAt = startAt instanceof StartAt.StartAtCheckpoint given ? given.checkpoint : null;
-                Checkpoint cleared = made == null ? null : made.historyLost().clear(resumedAt);
-                if (cleared != null) {
-                    String lost = cleared.asString();
-                    log.info(HistoryLossMessages.RESUMED_AFTER_LOSS_LOG, subscriptionId, startAt, lost);
+                if (neverWentLive == null && made != null) {
+                    logResumedAfterLoss(subscriptionId, startAt, made.historyLost().clear(givenPosition));
                 }
                 inTheWay.forEach(ReplayInTheWay::end);
                 models.forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
@@ -882,6 +1016,121 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
+    // Whether a replay a subscribe started runs for the id on any child of the dispatcher, which share the attempts. Only
+    // a replay a resume started runs again, so with the claim held none starts before the caller returns
+    private boolean aSubscribeReplays(String subscriptionId) {
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            CatchupAttempt running = currentAttempt.get(subscriptionId);
+            return running != null && !running.replay.resuming;
+        }
+    }
+
+    // Stores the checkpoint forThisModel gives, or the present position for a start from now, and null when it stores
+    // nothing. With onlyOverACatchupPosition only over a position a catch-up replays from, since only that makes a later
+    // resume replay. Stores only a position a restart starts from, as restartPosition decides
+    private @Nullable StoredPositionReplaced replaceTheStoredPosition(String subscriptionId, @Nullable StartAt forThisModel, boolean onlyOverACatchupPosition,
+                                                                      RepositionableSubscriptions liveDelegate) {
+        boolean startsNow = forThisModel != null && forThisModel.isNow();
+        if (!startsNow && !(forThisModel instanceof StartAt.StartAtCheckpoint)) {
+            return null;
+        }
+        return this.<StoredPositionReplaced, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+            Checkpoint previous = cfg.storage().read(subscriptionId);
+            if (onlyOverACatchupPosition && (previous == null || !isCatchupCheckpoint(previous))) {
+                return null;
+            }
+            Checkpoint present = startsNow ? presentPositionToResumeAt(subscriptionId, "StartAt.now()") : null;
+            Checkpoint given = forThisModel instanceof StartAt.StartAtCheckpoint at ? at.checkpoint : present;
+            Checkpoint position = restartPosition(subscriptionId, given, liveDelegate);
+            if (position == null) {
+                return null;
+            }
+            CheckpointWriteCondition writeCondition = writeConditionFor(cfg, subscriptionId);
+            cfg.storage().save(subscriptionId, position, writeCondition);
+            return new StoredPositionReplaced(subscriptionId, cfg, previous, writeCondition, present);
+        }).orElse(null);
+    }
+
+    // The position to store for a resume at given so a restart starts where the resume does, or null when none does. A
+    // position the live delegate doesn't restart at, and a global position above 0 without a live start, which a
+    // catch-up refuses to start after, are not stored, as in DurableSubscriptionModel. A time after the beginning that
+    // this model replays from without a live start gets the present position as its live start, since a restart refuses
+    // a stored time without one. A checkpoint this model doesn't replay from, such as a time on a DCB catch-up, is
+    // stored only when the live delegate restarts at it.
+    private @Nullable Checkpoint restartPosition(String subscriptionId, Checkpoint given, RepositionableSubscriptions liveDelegate) {
+        if (!replaysFrom(given)) {
+            return liveDelegate.restartsAt(given) ? given : null;
+        }
+        CatchupCheckpoints.Start start = CatchupCheckpoints.parse(given);
+        if (start.liveFrom() != null || originAfterTheBeginning(start) == null) {
+            return given;
+        }
+        if (start instanceof CatchupCheckpoints.Time time) {
+            return new StringBasedCheckpoint(CatchupCheckpoints.format(time.time(), time.replayOrigin(), presentPositionToResumeAt(subscriptionId, given.asString())));
+        }
+        return null;
+    }
+
+    // Puts back what was stored before, with the condition the replacing write had, so a position another lease holder
+    // stored since refuses it. With nothing stored before, the new position stays, since a delete could remove a position
+    // another lease holder stored since
+    private static final class StoredPositionReplaced {
+        private final String subscriptionId;
+        private final UseCheckpointInStorage cfg;
+        private final @Nullable Checkpoint previous;
+        private final CheckpointWriteCondition writeCondition;
+        // The present position stored for a start from now, null when a given checkpoint was stored
+        private final @Nullable Checkpoint present;
+
+        private StoredPositionReplaced(String subscriptionId, UseCheckpointInStorage cfg, @Nullable Checkpoint previous, CheckpointWriteCondition writeCondition, @Nullable Checkpoint present) {
+            this.subscriptionId = subscriptionId;
+            this.cfg = cfg;
+            this.previous = previous;
+            this.writeCondition = writeCondition;
+            this.present = present;
+        }
+
+        void putBack(Throwable subscribeFailure) {
+            if (previous == null) {
+                return;
+            }
+            try {
+                cfg.storage().save(subscriptionId, previous, writeCondition);
+            } catch (Throwable putBackFailure) {
+                // Throwable, since a storage written in Kotlin can throw a checked exception
+                if (putBackFailure != subscribeFailure) {
+                    subscribeFailure.addSuppressed(putBackFailure);
+                }
+            }
+        }
+    }
+
+    // The live start the event store reports, as a replay reads it, or the live delegate's present position when the
+    // event store reports none
+    private Checkpoint presentPositionToResumeAt(String subscriptionId, String requested) {
+        String liveStart;
+        try (ReplayScope<?> scope = openScope(null)) {
+            liveStart = scope.liveStart();
+        }
+        Checkpoint present = liveStart == null ? subscriptionModel.globalCheckpoint() : new StringBasedCheckpoint(liveStart);
+        if (present == null) {
+            throw new IllegalStateException("The live subscription model " + subscriptionModel.getClass().getName() + " answered nothing when asked for the current position, so subscription "
+                                            + subscriptionId + " can't be resumed at " + requested + " with the position stored. " + NOTHING_CHANGED);
+        }
+        return present;
+    }
+
+    private static @Nullable Checkpoint resumedAt(StartAt startAt) {
+        return startAt instanceof StartAt.StartAtCheckpoint given ? given.checkpoint : null;
+    }
+
+    private static void logResumedAfterLoss(String subscriptionId, StartAt startAt, @Nullable Checkpoint cleared) {
+        if (cleared != null) {
+            String lost = cleared.asString();
+            log.info(HistoryLossMessages.RESUMED_AFTER_LOSS_LOG, subscriptionId, startAt, lost);
+        }
+    }
+
     // Runs each replay in the way as it was before the resume at a given position held it, with what fails added to e
     private static void putBack(List<ReplayInTheWay> inTheWay, Throwable e) {
         try {
@@ -889,6 +1138,72 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         } catch (Throwable putBackFailure) {
             // Throwable, since runEach rethrows what a step threw as it was thrown
             addSuppressed(e, putBackFailure);
+        }
+    }
+
+    /**
+     * Tells {@code listener} about each subscription this model holds paused because the live delegate lost the live
+     * start its replay would go live from, and passes it on to the live delegate, so a start position the live delegate
+     * refuses still reaches it. This model is found before the live delegate when a caller looks the capability up, so
+     * without passing it on, those refusals would never reach the listener.
+     */
+    @Override
+    public void addStartRefusalListener(StartRefusalListener listener) {
+        Objects.requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
+        addHeldPausedListener(listener);
+        StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).ifPresent(liveDelegate -> liveDelegate.addStartRefusalListener(listener));
+    }
+
+    @Override
+    public void removeStartRefusalListener(StartRefusalListener listener) {
+        Objects.requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
+        removeHeldPausedListener(listener);
+        StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).ifPresent(liveDelegate -> liveDelegate.removeStartRefusalListener(listener));
+    }
+
+    /**
+     * True while the replay held for {@code refusal} is still parked, so a resume, a {@code start(true)} that runs it
+     * again, a resume at a given position or a cancel ends it. Asks the live delegate too, since the listener is passed
+     * on to it.
+     */
+    @Override
+    public boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
+        return holdsTheReplayHeldFor(subscriptionId, refusal)
+               || StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).map(liveDelegate -> liveDelegate.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
+    }
+
+    /**
+     * Answers what the live delegate answers, since only the live delegate refuses a start position after
+     * {@code subscribe} has returned, and {@code false} when it doesn't report its refusals.
+     */
+    @Override
+    public boolean reportsStartRefusals() {
+        return StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).map(StartRefusalReportingSubscriptions::reportsStartRefusals).orElse(false);
+    }
+
+    // Without asking the live delegate, for a dispatcher whose children share one
+    boolean holdsTheReplayHeldFor(String subscriptionId, CatchupCannotResumeException refusal) {
+        ParkedReplay parked = parkedReplays.get(subscriptionId);
+        return parked != null && parked.replay().heldFor == refusal;
+    }
+
+    // Without passing it on to the live delegate, for a dispatcher whose children share one
+    void addHeldPausedListener(StartRefusalListener listener) {
+        heldPausedListeners.add(listener);
+    }
+
+    void removeHeldPausedListener(StartRefusalListener listener) {
+        heldPausedListeners.remove(listener);
+    }
+
+    // On the replay's own thread, with no lock of this model held, as the listener contract says
+    private void reportHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+        for (StartRefusalListener listener : heldPausedListeners) {
+            try {
+                listener.handleHeldPaused(subscriptionId, refusal);
+            } catch (RuntimeException e) {
+                log.error("A start refusal listener threw when told that subscription {} is held paused.", subscriptionId, e);
+            }
         }
     }
 
@@ -936,9 +1251,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     @Nullable Subscription replayToResume(String subscriptionId, String whatChanged) {
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             Subscribed subscription = subscribed.get(subscriptionId);
-            Checkpoint historyLost = subscription == null || subscription.owner() != this ? null : subscription.historyLost().get();
+            CatchupCannotResumeException historyLost = subscription == null || subscription.owner() != this ? null : subscription.historyLost().refusal(subscriptionId);
             if (historyLost != null) {
-                throw HistoryLossMessages.historyLost(subscriptionId, historyLost);
+                throw historyLost;
             }
             Subscription takenOver = takeOverIfAsked(subscriptionId);
             if (takenOver != null) {
@@ -1068,14 +1383,23 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (currentAttempt.remove(subscriptionId, attempt)) {
                 runningCatchupSubscriptions.remove(subscriptionId);
             }
+            markDidNotGoLive(subscriptionId, false);
             live.complete(resumed);
             return attempt.replay.handle;
         }
         Subscription subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAtToUse, liveConsumer);
         attempt.wentLive = true;
+        markDidNotGoLive(subscriptionId, false);
         live.complete(subscription);
         applyPendingPauseIfAny(subscriptionId);
         return attempt.replay.handle;
+    }
+
+    private void markDidNotGoLive(String subscriptionId, boolean didNotGoLive) {
+        Subscribed made = subscribed.get(subscriptionId);
+        if (made != null) {
+            made.didNotGoLive().set(didNotGoLive);
+        }
     }
 
     /**
@@ -1095,6 +1419,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     // Asked for the subscription the live delegate didn't get, so it goes with it. Still under the lock
                     // the pause was recorded under, so no later subscription for the id has asked for one yet.
                     pauseRequestedDuringCatchup.remove(subscriptionId);
+                    if (!attempt.wentLive) {
+                        markDidNotGoLive(subscriptionId, true);
+                    }
                 }
                 attempt.decidedFailure = new DecidedFailure(failure, runAgainAfter(subscriptionId, attempt, failure));
                 throw failure;
@@ -1258,7 +1585,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         HistoryLost historyLost = subscription.historyLost();
         int clearsWhenReported = historyLost.clears();
         return HistoryLossHandling.takeOver(() -> {
-            if (historyLost.recordUnlessCleared(clearsWhenReported, lostFrom)) {
+            if (historyLost.recordUnlessCleared(clearsWhenReported, lostFrom, false)) {
                 String lost = lostFrom.asString();
                 log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, lost, lost);
             }
@@ -1279,18 +1606,48 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         if (firstStartAt.isDynamic() || !(firstStartAt instanceof StartAtCheckpoint at) || isCatchupCheckpoint(at.checkpoint) || subscriptionModel.canResumeFrom(at.checkpoint)) {
             return subscribeLive.apply(holdPaused);
         }
-        if (!LostStartHold.isAsked()) {
-            throw HistoryLossMessages.cannotStartFrom(subscriptionId, at.checkpoint);
+        return refuseOrHoldPaused(subscriptionId, HistoryLossMessages.cannotStartFrom(subscriptionId, at.checkpoint), at.checkpoint, false, () -> subscribeLive.apply(true));
+    }
+
+    /**
+     * Refuses the subscribe of {@code subscriptionId} before its replay starts when {@code firstStartAt} is a position a
+     * catch-up stored, the live delegate no longer has the history from the live start it holds, and the replay that
+     * stored it started after the beginning. A replay again from that origin, with a live start read now, would skip
+     * events, so the replay would only fail with the same {@link CatchupCannotResumeException} on its own thread. Found
+     * here, it is refused or held paused on the calling thread as {@link #subscribeLiveUnlessItsStartIsLost} does,
+     * with the live delegate holding the subscription paused at the lost live start. Returns {@code null} when the replay
+     * can start.
+     */
+    protected @Nullable Subscription refuseOrHoldIfItsStoredLiveStartIsLost(String subscriptionId, StartAt firstStartAt, Function<StartAt, Subscription> subscribeLivePausedAt) {
+        if (firstStartAt.isDynamic() || !(firstStartAt instanceof StartAtCheckpoint at) || !isCatchupCheckpoint(at.checkpoint)) {
+            return null;
         }
-        Subscription heldPaused = subscribeLive.apply(true);
+        CatchupCheckpoints.Start stored = CatchupCheckpoints.parse(at.checkpoint);
+        Checkpoint liveFrom = stored.liveFrom();
+        String origin = originAfterTheBeginning(stored);
+        if (liveFrom == null || origin == null || subscriptionModel.canResumeFrom(liveFrom)) {
+            return null;
+        }
+        return refuseOrHoldPaused(subscriptionId, liveStartLostAfterTheBeginning(subscriptionId, origin, liveFrom), liveFrom, true,
+                () -> subscribeLivePausedAt.apply(StartAt.checkpoint(liveFrom)));
+    }
+
+    // Throws refusal, or, when LostStartHold asks it on this thread, has the live delegate hold the subscription paused
+    // and records lost, since a resume would skip events, so a resume refuses until the subscription is cancelled or
+    // resumed at a given position. liveStart says lost is the live start the replay would go live from
+    private Subscription refuseOrHoldPaused(String subscriptionId, CatchupCannotResumeException refusal, Checkpoint lost, boolean liveStart, Supplier<Subscription> subscribeLivePaused) {
+        if (!LostStartHold.isAsked()) {
+            throw refusal;
+        }
+        Subscription heldPaused = subscribeLivePaused.get();
         LostStartHold.heldPaused();
         // The subscribe holds the claim, so no resumeSubscription, pause or cancel of the id comes between the live
         // delegate holding it paused and the loss being recorded. A start(true) takes no claim and can resume it in
         // that window. MongoDB then reports the loss when the change stream opens, which pauses it again
         Subscribed made = subscribed.get(subscriptionId);
-        if (made != null && made.owner() == this && made.historyLost().recordUnlessCleared(made.historyLost().clears(), at.checkpoint)) {
-            String lost = at.checkpoint.asString();
-            log.error(HistoryLossMessages.TERMINAL_FAILURE_LOG, subscriptionId, lost, lost);
+        if (made != null && made.owner() == this && made.historyLost().recordUnlessCleared(made.historyLost().clears(), lost, liveStart)) {
+            String at = lost.asString();
+            log.error(HistoryLossMessages.terminalFailureLog(liveStart), subscriptionId, at, at);
         }
         return heldPaused;
     }
@@ -1471,6 +1828,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // Set under the handover lock while a replay a resume started waits to run again after it failed, so a pause
         // holds it instead of waiting for a handover
         private volatile boolean backingOff = false;
+        // Set under the handover lock once runAgainAfter held this attempt's replay because the live delegate lost its
+        // live start. The attempt's thread then fails the caller's handle with that loss and reports it.
+        private volatile boolean heldForLostLiveStart = false;
         // Set once the live delegate has the subscription of a replay a subscribe started. Read and written only on
         // this attempt's own thread, as is decidedFailure.
         private boolean wentLive = false;
@@ -1509,6 +1869,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // Set by cancelRunningCatchup, and when a new subscription for the id drops the replay, so no attempt at it
         // stores a position any more, also one that stop() took the replay from
         private volatile boolean cancelled = false;
+        // Set under the handover lock once the live delegate lost the live start it would go live from and the replay
+        // is held for it. Its thread fails its handle only after it lets go of that lock, so whatever runs it again
+        // reads this, not whether the handle is done yet.
+        private volatile boolean lostItsLiveStart = false;
+        // What its handle failed with and the held-paused listeners were told, set along with lostItsLiveStart
+        private volatile @Nullable CatchupCannotResumeException heldFor;
         // The last position an attempt at this replay stored, which the next attempt replays from
         private final AtomicReference<@Nullable Checkpoint> lastStored = new AtomicReference<>();
         // Whether a resume started it, so it resumes the subscription the live delegate holds instead of subscribing it
@@ -1540,6 +1906,25 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             this.handle = takenOver == null ? new LiveHandle(subscriptionId, takeoversFollow) : takenOver.replay().handle;
             this.replaysAgainBefore = takenOver == null ? 0 : takenOver.replay().replaysAgain + 1;
             this.longestReplay = takenOver == null ? new LongestReplay() : takenOver.replay().longestReplay;
+        }
+
+        private ReplayState(ReplayState held) {
+            this.catchup = held.catchup;
+            this.result = new CompletableFuture<>();
+            this.resuming = held.resuming;
+            this.takesOver = held.takesOver;
+            this.handle = held.handle;
+            this.longestReplay = held.longestReplay;
+            this.lastStored.set(held.lastStored.get());
+        }
+
+        // The replay a resume runs again once the live delegate lost the live start of this one and its handle failed
+        private ReplayState again() {
+            ReplayState again = new ReplayState(this);
+            if (takesOver) {
+                again.handle.follow(again.result);
+            }
+            return again;
         }
 
         // FIRST_BACKOFF, doubled with each failure in a row up to MAX_BACKOFF. Called with the handover lock held.
@@ -1807,11 +2192,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
     /**
      * Runs every replay this model has parked again, or parks it once more if this model is stopped by then. Each one
-     * under its {@link #claim}, and a failure to claim one is thrown once the others have run.
+     * under its {@link #claim}, and a failure to claim one is thrown once the others have run. A replay held after a
+     * loss of its live start that a resume would skip events after stays held, and its
+     * {@link CatchupCannotResumeException} is thrown the same way.
      */
     public void relaunchParkedReplays() {
         runEach(List.copyOf(parkedReplays.keySet()), subscriptionId -> {
             try (Claim ignored = claim(subscriptionId, STARTED_BUT_NOT_RUN_AGAIN)) {
+                Subscribed made = subscribed.get(subscriptionId);
+                CatchupCannotResumeException lost = made == null || made.owner() != this ? null : made.historyLost().refusal(subscriptionId);
+                if (lost != null && hasParkedReplay(subscriptionId)) {
+                    throw lost;
+                }
                 relaunchParkedReplay(subscriptionId);
             }
         });
@@ -1844,9 +2236,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         final ParkedReplay parked;
         // Locked, so a cancelRunningCatchup either finds the replay still parked or finds the attempt that runs it
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
-            parked = parkedReplays.remove(subscriptionId);
-            if (parked == null) {
+            // A loss a resume would skip events after stays parked, and resumeSubscription refuses it
+            if (recordedHistoryLoss(subscriptionId) != null) {
                 return null;
+            }
+            ParkedReplay held = parkedReplays.remove(subscriptionId);
+            if (held == null) {
+                return null;
+            }
+            // Its handle fails, or already failed, when the live delegate lost its live start, so it runs again with a
+            // handle of its own
+            parked = held.replay().lostItsLiveStart || held.replay().result.isDone() ? new ParkedReplay(held.replay().again(), held.earlierAttemptsDone()) : held;
+            if (parked.replay() != held.replay() && parked.replay().resuming) {
+                ReplayState again = parked.replay();
+                resumeReplays.add(again);
+                again.result.whenComplete((subscription, failure) -> resumeReplays.remove(again));
             }
             if (resuming) {
                 pauseRequestedDuringCatchup.remove(subscriptionId);
@@ -1860,6 +2264,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     private record RunAgain(ReplayState replay, boolean runs) {
+    }
+
+    // The position the live delegate lost the history from for a subscription of this model, where a resume would skip
+    // events, or null
+    private @Nullable Checkpoint recordedHistoryLoss(String subscriptionId) {
+        Subscribed subscription = subscribed.get(subscriptionId);
+        return subscription == null || subscription.owner() != this ? null : subscription.historyLost().get();
     }
 
     /**
@@ -2236,13 +2647,27 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         if (subscriptionModel.canResumeFrom(storedLiveFrom)) {
             return new TimeReplayStart(time, storedLiveFrom, replayOrigin, noLive);
         }
-        if (!replayOrigin.isBeginningOfTime()) {
-            throw liveStartLostAfterTheBeginning(subscriptionId, "time " + replayOrigin.asString(), storedLiveFrom);
+        String origin = originAfterTheBeginning(stored);
+        if (origin != null) {
+            throw liveStartLostAfterTheBeginning(subscriptionId, origin, storedLiveFrom);
         }
         log.warn("The subscription model no longer has the history from the live start stored for catch-up subscription {}, so the catch-up replays again from time {} instead of {} and redelivers the events in between. Live start: {}",
                 subscriptionId, replayOrigin.asString(), time.asString(), storedLiveFrom.asString());
         countReplayAgainFromOrigin();
         return new TimeReplayStart(replayOrigin, captureLiveResumeCheckpoint(liveStart), replayOrigin, noLive);
+    }
+
+    // The origin the replay that stored a checkpoint started from, as a refusal names it, or null when it started at
+    // position 0 or the beginning of time, where a replay again skips nothing. One rule for a subscribe that checks a
+    // stored checkpoint and for the replay that starts from it.
+    private static @Nullable String originAfterTheBeginning(CatchupCheckpoints.Start stored) {
+        return switch (stored) {
+            case CatchupCheckpoints.Position position -> position.replayOrigin() > 0 ? "position " + position.replayOrigin() : null;
+            case CatchupCheckpoints.Time time -> {
+                TimeBasedCheckpoint origin = timeOf(time.replayOrigin());
+                yield origin.isBeginningOfTime() ? null : "time " + origin.asString();
+            }
+        };
     }
 
     private static TimeBasedCheckpoint timeOf(String time) {
@@ -2280,8 +2705,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         if (subscriptionModel.canResumeFrom(storedLiveFrom)) {
             return new PositionReplayStart(stored.position(), storedLiveFrom, replayOrigin, stored.replayTo(), noLive);
         }
-        if (replayOrigin > 0) {
-            throw liveStartLostAfterTheBeginning(subscriptionId, "position " + replayOrigin, storedLiveFrom);
+        String origin = originAfterTheBeginning(stored);
+        if (origin != null) {
+            throw liveStartLostAfterTheBeginning(subscriptionId, origin, storedLiveFrom);
         }
         log.warn("The subscription model no longer has the history from the live start stored for catch-up subscription {}, so the catch-up replays again from position {} instead of {} and redelivers the events in between. Live start: {}",
                 subscriptionId, replayOrigin, stored.position(), storedLiveFrom.asString());
@@ -2386,6 +2812,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
+     * Opens the {@link ReplayScope} of one replay, as {@link ReplayScopes#open} describes.
+     */
+    protected abstract ReplayScope<?> openScope(@Nullable String notBefore);
+
+    /**
      * The reads of one replay and the live start they are consistent with. Closing it releases what the event store
      * holds for the replay.
      *
@@ -2409,9 +2840,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     private static CatchupCannotResumeException liveStartLostEachTime(String subscriptionId, int replays, Checkpoint lastLiveStart, LongestReplay longestReplay) {
-        return new CatchupCannotResumeException("Cannot hand catch-up subscription " + subscriptionId + " over to live delivery, because the subscription model lost the live start during or right after each of its "
+        return HistoryLossMessages.liveStartLost("Cannot hand catch-up subscription " + subscriptionId + " over to live delivery, because the subscription model lost the live start during or right after each of its "
                 + replays + " replays. The longest replay took " + longestReplay.longest().toMillis() + " ms from reading its live start to checking it, so size the change stream history, such as the MongoDB oplog, to reach back at least that far. Last live start: "
-                + lastLiveStart.asString());
+                + lastLiveStart.asString(), lastLiveStart, true);
     }
 
     private static CatchupCannotResumeException startsAfterPositionWithoutLiveStart(String subscriptionId, long position) {
@@ -2424,9 +2855,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // A replay again from an origin after the beginning, with a live start read now, skips an event before the origin
     // that was written after the lost live start was read
     private static CatchupCannotResumeException liveStartLostAfterTheBeginning(String subscriptionId, String origin, Checkpoint lostLiveStart) {
-        return new CatchupCannotResumeException("Cannot replay catch-up subscription " + subscriptionId + " again from " + origin + ", because the subscription model no longer has the history from its live start,"
+        return HistoryLossMessages.liveStartLost("Cannot replay catch-up subscription " + subscriptionId + " again from " + origin + ", because the subscription model no longer has the history from its live start,"
                 + " and a replay from there with a live start read now would never deliver an event before " + origin + " that was written after the lost live start was read."
-                + " Cancel the subscription first, which deletes the checkpoint stored for it. Start the subscription from the beginning again, and size the change stream history, such as the MongoDB oplog, to reach back across the replay. Lost live start: " + lostLiveStart.asString());
+                + " Cancel the subscription first, which deletes the checkpoint stored for it. Start the subscription from the beginning again, and size the change stream history, such as the MongoDB oplog, to reach back across the replay. Lost live start: " + lostLiveStart.asString(), lostLiveStart, false);
     }
 
     // Null when the wrapped model can still resume from the live start, or when this attempt should no longer replay
@@ -2477,6 +2908,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     protected static boolean isCatchupCheckpoint(Checkpoint checkpoint) {
         return GlobalCheckpoint.isGlobalCheckpoint(checkpoint) || StreamCatchupSubscriptionModel.isTimeBasedCheckpoint(checkpoint);
+    }
+
+    // Whether this model replays from given when a subscription starts at it, so a positioned resume stores it as a
+    // catch-up position rather than as a position of the live delegate
+    protected boolean replaysFrom(Checkpoint given) {
+        return isCatchupCheckpoint(given);
     }
 
     /**
@@ -2570,7 +3007,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (made != null) {
                 // Before the cancel under way is removed, so one of them always has the replay. Kept in place, also when
                 // a cancel the live delegate's cancel made for the same id on this thread went through.
-                Subscribed kept = new Subscribed(made.owner(), made.filter(), made.startAt(), made.action(), current.replaysReturned, made.lostLiveStart(), made.historyLost());
+                Subscribed kept = new Subscribed(made.owner(), made.filter(), made.startAt(), made.action(), current.replaysReturned, made.lostLiveStart(), made.historyLost(), made.didNotGoLive());
                 if (subscribed.compute(subscriptionId, (id, now) -> now == null || now == made ? kept : now) == kept) {
                     current.kept = kept;
                 }
@@ -2663,7 +3100,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 running = null;
             }
             ParkedReplay parked = parkedReplays.get(subscriptionId);
-            if (parked != null && !parked.replay().resuming) {
+            // A replay a subscribe started is in the way only once the live delegate lost its live start, since the
+            // live delegate then holds nothing for the id, and the resume subscribes the catch-up at the given position
+            // in its place
+            if (parked != null && !parked.replay().resuming && !parked.replay().lostItsLiveStart) {
                 parked = null;
             }
             // A stop takes a cancelled replay out of currentAttempt and parkedReplays while it can still be in the action
@@ -2716,6 +3156,50 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             this.held = held;
             this.heldByTheResume = heldByTheResume;
             this.actionReturned = actionReturned;
+        }
+
+        // A replay a subscribe started that is held because the live delegate lost its live start, so the live delegate
+        // has no subscription for the id to resume
+        boolean neverWentLive() {
+            return held != null && !held.replay().resuming;
+        }
+
+        // Subscribes the id from startAt with the filter and action it was made with, as a subscribe at startAt would,
+        // in place of a resume of the live delegate. Under the handover lock, as a subscribe is, so a replay for the id
+        // can't hand over or fail while it subscribes.
+        Subscription subscribeInPlaceOfTheHeldReplay(StartAt startAt, RepositionableSubscriptions liveDelegate) {
+            try (HandoverLock ignored = lockHandover(subscriptionId)) {
+                Subscribed made = subscribed.get(subscriptionId);
+                if (held == null || made == null || made.owner() != AbstractCatchupSubscriptionModel.this || parkedReplays.get(subscriptionId) != held) {
+                    throw new IllegalStateException("Cannot resume subscription " + subscriptionId + " from the given position, because the catch-up replay it was held for is gone. " + NOTHING_CHANGED);
+                }
+                StartAt answered = answeredForThisModel(startAt);
+                // The held replay stored the position it replayed to, and a resume after a pause or a restart would
+                // replay from there again. The position given here replaces it when a restart starts from it. A start
+                // from now goes live from the present position it stores, as a durable model's resume at now does, so an event that commits
+                // between the store and the subscribe is delivered. A dynamic start is decided by what it answers this
+                // model, which answered holds, so its function doesn't run again here.
+                @Nullable StartAt forThisModel = answered.isDynamic() ? answered.get(generateSubscriptionModelContext()) : answered;
+                StoredPositionReplaced replaced = replaceTheStoredPosition(subscriptionId, forThisModel, false, liveDelegate);
+                // Cleared before the subscribe, so a loss the replay it starts records is kept, whether the subscribe
+                // records it on this thread or the replay records it once this lets go of the handover lock
+                HistoryLost.Cleared cleared = made.historyLost().clearUntilPutBack(resumedAt(startAt));
+                Checkpoint present = replaced == null ? null : replaced.present;
+                StartAt subscribeAt = present == null ? answered : goingLiveFrom(answered, StartAt.checkpoint(present));
+                Subscription subscription;
+                try {
+                    subscription = subscribe(subscriptionId, made.filter(), subscribeAt, made.action(), false);
+                } catch (Throwable e) {
+                    // Throwable, since a live model written in Kotlin can throw a checked exception
+                    made.historyLost().putBack(cleared);
+                    if (replaced != null) {
+                        replaced.putBack(e);
+                    }
+                    throw e;
+                }
+                logResumedAfterLoss(subscriptionId, startAt, cleared.lost());
+                return subscription;
+            }
         }
 
         // The replay stores nothing more and doesn't hand over, and waitUntilStarted on its subscriber's handle returns
@@ -3168,6 +3652,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // when what decides its failure throws, so endUndecidedAttempt reads the flag again under the lock.
         Thread.ofVirtual().name("occurrent-catchup-" + subscriptionId).start(() -> {
             CURRENT_ATTEMPT.set(attempt);
+            CatchupCannotResumeException heldPaused = null;
             try {
                 Subscription subscription = replayUntilHandedOver(subscriptionId, attempt);
                 if (!attempt.parked) {
@@ -3183,10 +3668,20 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                             attempt.replay.result.completeExceptionally(failure);
                         }
                     }
+                } else if (attempt.heldForLostLiveStart) {
+                    // A startup that waits for the handle fails as it did before the hold, and a resume that runs the
+                    // replay again gets a handle of its own
+                    attempt.replay.result.completeExceptionally(failure);
+                    heldPaused = (CatchupCannotResumeException) failure;
                 }
             } finally {
                 CURRENT_ATTEMPT.remove();
                 attempt.earlierAttemptsDone.whenComplete((ignored, alsoIgnored) -> attempt.done.complete(null));
+            }
+            // Once this thread no longer reads as the replay's and the attempt is done, so a listener can resume or pause
+            // the subscription it is told about
+            if (heldPaused != null) {
+                reportHeldPaused(subscriptionId, heldPaused);
             }
         });
     }
@@ -3246,6 +3741,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             CatchupAttempt owner = currentAttempt.get(subscriptionId);
             boolean current = owner == attempt;
+            if (current && !attempt.abandoned() && !shuttingDown && failure != null && HistoryLossMessages.isHistoryLost(failure)) {
+                holdForLostLiveStart(subscriptionId, attempt, failure);
+                return null;
+            }
             if (current && attempt.replay.resuming && !attempt.abandoned() && !shuttingDown && !(failure instanceof SubscriptionAlreadyRunningException)) {
                 if (stopped) {
                     attempt.backingOff = false;
@@ -3292,6 +3791,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 currentAttempt.remove(subscriptionId, attempt);
                 runningCatchupSubscriptions.remove(subscriptionId);
                 pauseRequestedDuringCatchup.remove(subscriptionId);
+                if (!attempt.replay.resuming && !attempt.wentLive && !attempt.parked && !attempt.abandoned()) {
+                    markDidNotGoLive(subscriptionId, true);
+                }
             }
             // Logged as well as reported, since a caller that never calls waitUntilStarted, such as the Spring Boot
             // starter by default for a subscription that replays history, would otherwise lose the subscription
@@ -3305,6 +3807,34 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                         : "the subscription did not go live");
             }
             return null;
+        }
+    }
+
+    /**
+     * Holds the replay of {@code attempt} paused, whether a subscribe or a resume started it, once the live delegate
+     * lost the live start the replay would go live from. Running it again at once would fail the same way, and ending it
+     * would leave a subscription that neither runs nor is held, with a competing-consumer lease nobody uses. When the
+     * replay started after the beginning, a replay again from its origin with a live start read now would skip events,
+     * so the loss is recorded. Recorded means a resume would skip events, and a resume or a {@code start(true)} refuses with {@link CatchupCannotResumeException}
+     * until the subscription is cancelled or resumed at a given position. A replay that started at the beginning skips
+     * nothing when it runs again, so that loss is not recorded, and a resume or a {@code start(true)} replays again.
+     * Called with the handover lock held.
+     */
+    private void holdForLostLiveStart(String subscriptionId, CatchupAttempt attempt, Throwable failure) {
+        attempt.backingOff = false;
+        pauseRequestedDuringCatchup.remove(subscriptionId);
+        attempt.heldForLostLiveStart = true;
+        attempt.replay.lostItsLiveStart = true;
+        attempt.replay.heldFor = (CatchupCannotResumeException) failure;
+        hold(subscriptionId, attempt);
+        Checkpoint lost = HistoryLossMessages.lostFromWhereAResumeSkipsEvents(failure);
+        Subscribed made = subscribed.get(subscriptionId);
+        if (lost != null && made != null && made.owner() == this && made.historyLost().recordUnlessCleared(made.historyLost().clears(), lost, true)) {
+            String at = lost.asString();
+            log.error(HistoryLossMessages.LIVE_START_LOST_LOG, subscriptionId, at, at, failure);
+        } else {
+            logFailure(subscriptionId, failure, lost == null ? "the subscription is held paused, and resuming it or start(true) on this model replays again from the beginning"
+                    : "the subscription is held paused");
         }
     }
 

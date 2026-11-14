@@ -26,6 +26,7 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
@@ -121,7 +122,7 @@ import java.util.stream.Stream;
  * </p>
  */
 @NullMarked
-public class CatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions {
+public class CatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions, StartRefusalReportingSubscriptions {
 
     private static final int DEFAULT_CACHE_SIZE = CatchupSubscriptionModelConfig.DEFAULT_HANDOVER_CACHE_SIZE;
 
@@ -477,41 +478,61 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     }
 
     /**
-     * Forwards to whichever {@link RepositionableSubscriptions} the wrapped model resolves to. Unlike
-     * {@link #resumeSubscription(String)}, it doesn't start this model first or run a parked replay, and it never
-     * replays, also not at a position a catch-up stores. The wrapped model handles such a position as one it cannot
-     * open its live feed at. A replay that {@link #resumeSubscription(String)} started for the subscription, running
-     * or waiting to run again, is held first and ends once the wrapped model has resumed the subscription, so the
-     * position given here wins over it, and a later {@link #resumeSubscription(String)} can replay again. When the
-     * wrapped model throws, a replay this held runs again as it was, and this throws what the wrapped model threw. When
-     * the replay is in the subscription's action or reads history, this holds the replay and waits up to ten seconds for
-     * it to return before the wrapped model resumes the subscription, so the replay's action doesn't run alongside the
-     * action of the resumed subscription. After a {@link #cancelSubscription(String)} that threw, it
-     * waits the same way for the replay that cancel ended, which nothing runs again, also when a {@link #stop()} came
-     * before or after the cancel. When the replay doesn't return in time, this logs at {@code ERROR}, runs a replay it
-     * held again as it was and throws {@link IllegalStateException}, with what running it again threw added as
-     * suppressed. A replay this held stays held instead of running again when this model was stopped meanwhile or the
-     * {@link CatchupListener} throws as it starts, and the {@link IllegalStateException} says so. It runs again on a
-     * resume or a start that resumes. Called from inside the action, on the replay's own thread, this throws
-     * {@link IllegalStateException} at once and changes nothing. An action that hands the call to another thread and
-     * waits for it fails once the ten seconds have passed.
-     * <p>
-     * It runs alone. A pause, resume, cancel or subscribe for the
-     * same id waits until it returns, for up to ten seconds, and then acts on what it left. While it runs, a subscription
-     * that read as running when it began reads as running and not paused, also while it waits for the action, so a
-     * caller that pauses what runs calls {@link #pauseSubscription(String)}, which pauses it once this has returned. One
-     * that read as paused reads as paused until this returns.
-     * <p>
-     * Once the wrapped model returns from the resume, this model is started again if a start whose live delegate threw
-     * stopped it, so a subscription made afterwards replays at once. After {@link #stop()} it stays stopped.
+     * Resumes the subscription the wrapped model holds paused at {@code startAt}, as
+     * {@link StreamCatchupSubscriptionModel#resumeSubscription(String, StartAt)} describes, with the wrapped model as the
+     * live delegate. The catch-up of this model that made the subscription decides what is stored and subscribes in
+     * place of a replay held because the wrapped model lost its live start, and a replay in the way on any catch-up of
+     * this model is held or waited for as that description says.
      * <p>
      * {@link RepositionableSubscriptions#findIn} finds this model only when the wrapped model is repositionable.
      *
      * @throws UnsupportedOperationException if the wrapped model is not itself repositionable.
+     * @throws org.occurrent.subscription.SubscriptionAlreadyRunningException if a catch-up of this model made the
+     *         subscription and it runs, as that description says. In 0.34.0 the wrapped model was asked to resume it and
+     *         threw its own exception.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-        return anyCatchupModel().resumeSubscription(subscriptionId, startAt, presentCatchupModels().toList(), () -> isRunning(subscriptionId) && !isPaused(subscriptionId));
+        return anyCatchupModel().resumeSubscription(subscriptionId, startAt, presentCatchupModels().toList(), () -> isRunning(subscriptionId), () -> isPaused(subscriptionId));
+    }
+
+    /**
+     * Tells {@code listener} about each subscription a catch-up of this model holds paused because the wrapped model lost
+     * the live start its replay would go live from, and passes it on to the wrapped model, so a start position the
+     * wrapped model refuses still reaches it. This model is found before the wrapped model when a caller looks the
+     * capability up, so without passing it on, those refusals would never reach the listener.
+     */
+    @Override
+    public void addStartRefusalListener(StartRefusalListener listener) {
+        Objects.requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
+        presentCatchupModels().forEach(model -> model.addHeldPausedListener(listener));
+        StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(wrapped -> wrapped.addStartRefusalListener(listener));
+    }
+
+    @Override
+    public void removeStartRefusalListener(StartRefusalListener listener) {
+        Objects.requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
+        presentCatchupModels().forEach(model -> model.removeHeldPausedListener(listener));
+        StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(wrapped -> wrapped.removeStartRefusalListener(listener));
+    }
+
+    /**
+     * True while a catch-up of this model still holds the replay it reported with {@code refusal}, or the wrapped model
+     * still holds the subscription for it, since listeners are passed on to the wrapped model too.
+     */
+    @Override
+    public boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
+        return presentCatchupModels().anyMatch(model -> model.holdsTheReplayHeldFor(subscriptionId, refusal))
+               || StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(wrapped -> wrapped.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
+    }
+
+    /**
+     * Answers what the wrapped model answers, since only the wrapped model refuses a start position after
+     * {@code subscribe} has returned, and {@code false} when it doesn't report its refusals.
+     */
+    @Override
+    public boolean reportsStartRefusals() {
+        return StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(StartRefusalReportingSubscriptions::reportsStartRefusals).orElse(false);
     }
 
     /**

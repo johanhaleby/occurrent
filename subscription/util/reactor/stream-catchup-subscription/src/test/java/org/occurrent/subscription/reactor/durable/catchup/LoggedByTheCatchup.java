@@ -25,13 +25,13 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 
 /**
- * The errors the catch-up classes log from when this is created until it is closed.
+ * The errors and warnings the catch-up classes log from when this is created until it is closed.
  */
-final class ErrorsLoggedByTheCatchup implements AutoCloseable {
+final class LoggedByTheCatchup implements AutoCloseable {
     private final List<Logger> loggers = List.of((Logger) LoggerFactory.getLogger(NamedCatchupSupport.class), (Logger) LoggerFactory.getLogger(PositionCatchupPipeline.class));
     private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
 
-    ErrorsLoggedByTheCatchup() {
+    LoggedByTheCatchup() {
         appender.start();
         loggers.forEach(logger -> logger.addAppender(appender));
     }
@@ -40,10 +40,21 @@ final class ErrorsLoggedByTheCatchup implements AutoCloseable {
      * The formatted messages logged at error level.
      */
     List<String> errors() {
+        return messagesAt(Level.ERROR);
+    }
+
+    /**
+     * The formatted messages logged at warn level.
+     */
+    List<String> warnings() {
+        return messagesAt(Level.WARN);
+    }
+
+    private List<String> messagesAt(Level level) {
         // The appender appends while holding its own monitor
         synchronized (appender) {
             return appender.list.stream()
-                    .filter(event -> event.getLevel().equals(Level.ERROR))
+                    .filter(event -> event.getLevel().equals(level))
                     .map(ILoggingEvent::getFormattedMessage)
                     .toList();
         }

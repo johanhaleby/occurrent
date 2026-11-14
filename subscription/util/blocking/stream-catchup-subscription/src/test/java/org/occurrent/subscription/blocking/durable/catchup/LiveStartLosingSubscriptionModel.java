@@ -82,6 +82,7 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     private final Map<String, Held> runningWhereItWasHeld = new ConcurrentHashMap<>();
     private final AtomicInteger liveStartsRead = new AtomicInteger();
     private final Set<Checkpoint> lost = ConcurrentHashMap.newKeySet();
+    private final Set<Checkpoint> opensElsewhere = ConcurrentHashMap.newKeySet();
     private final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
     private final Map<String, Held> paused = new ConcurrentHashMap<>();
 
@@ -91,6 +92,7 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     final List<Checkpoint> restartedFromThePresent = new CopyOnWriteArrayList<>();
     final List<Checkpoint> resumeProbes = new CopyOnWriteArrayList<>();
     final AtomicInteger resumeCalls = new AtomicInteger();
+    final List<String> resumedInTheDelegate = new CopyOnWriteArrayList<>();
     final AtomicInteger takeOversAsked = new AtomicInteger();
 
     LiveStartLosingSubscriptionModel(InMemorySubscriptionModel delegate, boolean restartSubscriptionsOnHistoryLost, boolean opensOnTheCallingThread, Runnable writtenInTheGap) {
@@ -102,6 +104,25 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     LiveStartLosingSubscriptionModel losingEveryOpen() {
         losesEveryOpen = true;
+        return this;
+    }
+
+    // Positions it opens somewhere else than at, as a MongoDB model does with a resume token it can't read
+    LiveStartLosingSubscriptionModel notRestartingAt(Checkpoint checkpoint) {
+        opensElsewhere.add(checkpoint);
+        return this;
+    }
+
+    // The next open keeps its live start too, which it otherwise loses once, as the first open of a model made after a restart
+    LiveStartLosingSubscriptionModel neverLosingAnOpen() {
+        losesTheNextOpen.set(false);
+        losesEveryOpen = false;
+        return this;
+    }
+
+    // From now on an open at a live start it has not lost already keeps it, as once the history reaches back far enough
+    LiveStartLosingSubscriptionModel keepingEveryOpen() {
+        losesEveryOpen = false;
         return this;
     }
 
@@ -292,6 +313,12 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
         return !lost.contains(checkpoint);
     }
 
+    // As the MongoDB models answer: it opens at any checkpoint but a catch-up's position, which it doesn't recognize
+    @Override
+    public boolean restartsAt(Checkpoint checkpoint) {
+        return !AbstractCatchupSubscriptionModel.isCatchupCheckpoint(checkpoint) && !opensElsewhere.contains(checkpoint);
+    }
+
     @Override
     public void stop() {
         delegate.stop();
@@ -330,6 +357,12 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
+        // An open the delegate made runs there, so a pause pauses it there and a resume resumes it there
+        if (!paused.containsKey(subscriptionId) && delegate.isPaused(subscriptionId)) {
+            resumeCalls.incrementAndGet();
+            resumedInTheDelegate.add(subscriptionId);
+            return delegate.resumeSubscription(subscriptionId);
+        }
         Runnable beforeTheResumedOpen = resumesWhereItWasHeldOnceThisReturns;
         return beforeTheResumedOpen == null ? resumeSubscription(subscriptionId, StartAt.now()) : resume(subscriptionId, Held::heldAt, beforeTheResumedOpen);
     }

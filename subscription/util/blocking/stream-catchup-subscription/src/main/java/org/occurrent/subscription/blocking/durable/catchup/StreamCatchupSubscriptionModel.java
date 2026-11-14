@@ -209,6 +209,11 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             firstStartAt = requestedStartAt;
         }
         refuseGlobalPositionWithoutPositions(subscriptionId, firstStartAt);
+        Subscription heldPaused = refuseOrHoldIfItsStoredLiveStartIsLost(subscriptionId, firstStartAt,
+                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, liveStart), action, true));
+        if (heldPaused != null) {
+            return heldPaused;
+        }
 
         CatchupReplay replay = replayFrom(subscriptionId, filter, startAt, action, firstStartAt);
         if (replay == null) {
@@ -306,8 +311,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      */
     static boolean startsAtExplicitGlobalPosition(StartAt startAt, Class<?> contextType) {
         StartAt start = startAt.get(new SubscriptionModelContext(contextType));
-        return start instanceof StartAtCheckpoint position
-                && !CatchupCheckpoints.isMarkedTime(position.checkpoint) && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
+        return start instanceof StartAtCheckpoint position && CatchupCheckpoints.isPosition(position.checkpoint);
     }
 
     private CatchupReplay streamPositionReplay(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt positionStartAt) {
@@ -381,7 +385,8 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         });
     }
 
-    private ReplayScope<CatchupReadScope> openScope(@Nullable String notBefore) {
+    @Override
+    protected ReplayScope<CatchupReadScope> openScope(@Nullable String notBefore) {
         CatchupReadScope scope = catchupReads.openCatchupReadScope(notBefore);
         return new ReplayScope<>(scope, scope.liveStart(), scope::close);
     }

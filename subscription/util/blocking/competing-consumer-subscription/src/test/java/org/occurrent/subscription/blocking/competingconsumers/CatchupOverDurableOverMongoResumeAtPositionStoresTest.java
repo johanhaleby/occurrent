@@ -37,14 +37,19 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
+import org.occurrent.subscription.blocking.durable.catchup.TimeBasedCheckpoint;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -56,7 +61,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -186,6 +193,41 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
 
     @Test
     @Timeout(60)
+    void a_restart_with_the_default_start_starts_after_a_resume_at_a_global_position_over_a_stored_catch_up_position() {
+        // Given a paused subscription with a catch-up position stored for it, which has a live start
+        Checkpoint storedBefore = pausedWithACatchupPositionStored();
+
+        // When it is resumed at a global position above the beginning, which the MongoDB model beneath can't continue from
+        RepositionableSubscriptions.findIn(catchup).orElseThrow().resumeSubscription(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(5)));
+
+        // Then what is stored is still a position a restart starts from, and a restart with the default start starts
+        assertThat(checkpointStorage.read(subscriptionId)).as("stored position").isEqualTo(storedBefore);
+        assertARestartWithTheDefaultStartStarts();
+    }
+
+    @Test
+    @Timeout(60)
+    void a_restart_with_the_default_start_starts_after_a_resume_at_a_time_over_a_stored_catch_up_position() {
+        // Given a paused subscription with a catch-up position stored for it, which has a live start
+        pausedWithACatchupPositionStored();
+        Checkpoint resumedAt = TimeBasedCheckpoint.from(OffsetDateTime.of(2026, 1, 1, 0, 0, 1, 0, UTC));
+
+        // When it is resumed at a time after the beginning of time
+        RepositionableSubscriptions.findIn(catchup).orElseThrow().resumeSubscription(subscriptionId, StartAt.checkpoint(resumedAt));
+
+        // Then what is stored is that time with the live start, which a restart starts from, and a restart with the default start starts
+        Checkpoint stored = requireNonNull(checkpointStorage.read(subscriptionId));
+        assertThat(CatchupCheckpoints.isMarkedTime(stored)).as("stored position is a marked time").isTrue();
+        CatchupCheckpoints.Time storedTime = (CatchupCheckpoints.Time) CatchupCheckpoints.parse(stored);
+        assertAll(
+                () -> assertThat(storedTime.time()).as("stored time").isEqualTo(((CatchupCheckpoints.Time) CatchupCheckpoints.parse(resumedAt)).time()),
+                () -> assertThat(storedTime.liveFrom()).as("live start stored with the time").isNotNull()
+        );
+        assertARestartWithTheDefaultStartStarts();
+    }
+
+    @Test
+    @Timeout(60)
     void a_competing_consumer_model_over_the_stack_finds_no_model_to_resume_a_subscription_at_a_position() {
         // Given a competing consumer model over the catch-up model, with a subscription paused through it
         competing = competingOver(catchup);
@@ -227,6 +269,28 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
                 () -> assertThat(competing.isRunning(subscriptionId)).as("running in the competing consumer model after the resume").isTrue(),
                 () -> assertThat(competing.isPaused(subscriptionId)).as("paused in the competing consumer model after the resume").isFalse()
         );
+    }
+
+    // A running subscription paused, with three events written while it was paused and a catch-up position stored for it
+    // that has a live start, as one a replay stores for a subscription it takes over from the live model
+    private Checkpoint pausedWithACatchupPositionStored() {
+        catchup.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), delivered::add).waitUntilStarted();
+        catchup.pauseSubscription(subscriptionId);
+        Checkpoint liveStart = requireNonNull(mongoModel.globalCheckpoint());
+        eventStore.write(streamId, serialize(new NameDefined("e1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "seed")));
+        eventStore.write(streamId, serialize(new NameWasChanged("e2", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "one")));
+        eventStore.write(streamId, serialize(new NameWasChanged("e3", LocalDateTime.of(2026, 1, 1, 0, 0, 2), "name", "two")));
+        Checkpoint stored = new StringBasedCheckpoint(CatchupCheckpoints.format(1, 0, 3, liveStart));
+        checkpointStorage.save(subscriptionId, stored, CheckpointWriteCondition.any());
+        return stored;
+    }
+
+    // A new stack over the same storage, as a restart makes, which starts the subscription
+    private void assertARestartWithTheDefaultStartStarts() {
+        catchup.shutdown();
+        catchup = catchupOver(springModel());
+        boolean started = catchup.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), delivered::add).waitUntilStarted(Duration.ofSeconds(10));
+        assertThat(started).as("the restart started").isTrue();
     }
 
     private List<String> ids() {

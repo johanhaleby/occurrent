@@ -17,6 +17,7 @@
 package org.occurrent.subscription.api.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 
 import java.util.Optional;
@@ -30,6 +31,9 @@ import java.util.Optional;
  * position for. By then {@code subscribe} has returned, so the caller only learns about it from
  * {@link Subscription#waitUntilStarted(java.time.Duration)}. A model that passes its subscriptions to such a model and
  * keeps state for them, such as a lease, needs to know so it can let go of that state.
+ * <p>
+ * A catch-up subscription model holds a subscription paused on its replay thread when the history the subscription
+ * would go live from is gone, and tells a listener through {@link StartRefusalListener#handleHeldPaused}.
  * <p>
  * Not every subscription model implements this, so reach it with {@link #findIn(SubscriptionModelCapability)}.
  */
@@ -52,6 +56,37 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
     void removeStartRefusalListener(StartRefusalListener listener);
 
     /**
+     * Whether this model still holds {@code subscriptionId} paused for the hold it told
+     * {@link StartRefusalListener#handleHeldPaused} about with {@code refusal}. A resume or a {@code start(true)} that runs
+     * the subscription again ends that hold, and so does a cancel, so this answers {@code false} from then on, also once
+     * a pause or a stop holds the subscription paused again. A listener that acts on the hold later than the call can
+     * ask this first. A model that never holds a subscription paused this way answers {@code false}, which this default
+     * does.
+     *
+     * @param subscriptionId The subscription the model reported as held paused.
+     * @param refusal        The exact instance the model passed to {@link StartRefusalListener#handleHeldPaused}.
+     * @return {@code true} while that hold lasts.
+     */
+    default boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
+        return false;
+    }
+
+    /**
+     * Whether this model tells a listener through {@link StartRefusalListener#handleStartRefusal} about a start position
+     * it refuses. A catch-up subscription model refuses none itself. It passes each listener on to the model it wraps
+     * and reports only the subscriptions it holds paused, so it answers what that model answers, and {@code false} when
+     * that model doesn't implement this interface. A listener that waits for a refusal report after a handle threw the
+     * refusal waits only when this answers {@code true}, since nothing would report it otherwise. This default answers
+     * {@code true}.
+     *
+     * @return {@code true} when this model calls {@link StartRefusalListener#handleStartRefusal} for the start positions
+     * it refuses after {@code subscribe} has returned.
+     */
+    default boolean reportsStartRefusals() {
+        return true;
+    }
+
+    /**
      * Finds the {@link StartRefusalReportingSubscriptions} capability behind {@code subscriptionModel}, unwrapping a
      * {@link SubscriptionModelWrapper} chain until one is found.
      *
@@ -63,9 +98,9 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
     }
 
     /**
-     * Told about a start position the model refused after {@code subscribe} returned.
+     * Told about a start position the model refused after {@code subscribe} returned, and about a subscription the model
+     * holds paused because the history it would go live from is gone.
      */
-    @FunctionalInterface
     interface StartRefusalListener {
         /**
          * Called once the model has refused the start position of {@code subscriptionId}. The model removed the
@@ -82,5 +117,23 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
          * @param refusal        What the model refused the start position with.
          */
         void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal);
+
+        /**
+         * Called once the model holds {@code subscriptionId} paused because the subscription model under it no longer
+         * has the history from the position the subscription would go live from, as a catch-up does when it finds that
+         * during or after its replay. Unlike {@link #handleStartRefusal}, the model keeps the subscription and its id, so a
+         * {@code subscribe} with the same id is refused until the subscription is cancelled. A handle of the
+         * subscription that waits for it to start throws {@code refusal}. Whether a resume runs it again depends on the
+         * model. A catch-up replays again when its replay started at the beginning, since that skips nothing, and
+         * refuses with {@link CatchupCannotResumeException} otherwise.
+         * <p>
+         * Called the same way as {@link #handleStartRefusal}: on the thread that would have read the subscription,
+         * without any lock of the model, in the order the listeners were added, and a listener that throws a
+         * {@link RuntimeException} is logged.
+         *
+         * @param subscriptionId The subscription the model holds paused.
+         * @param refusal        What a handle that waits for the subscription to start throws.
+         */
+        void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal);
     }
 }
