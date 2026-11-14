@@ -53,10 +53,14 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions.HistoryLossListener;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -81,6 +85,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import static java.time.ZoneOffset.UTC;
@@ -479,6 +484,42 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         assertThat(handled).containsExactly(e1.eventId());
         assertThat(callsTo("startAtOperationTime", opened.get(0))).containsExactly(checkpoint.operationTime);
         assertThat(refused).isEmpty();
+    }
+
+    @Test
+    void a_history_loss_listener_is_asked_about_the_resume_token_the_empty_read_recorded_and_the_subscription_it_takes_over_ends_paused() {
+        // Given: a subscription at now whose read of the change stream is empty and gives a resume token, and a listener that takes it over
+        BsonDocument resumeToken = realResumeToken();
+        presentRead.set(() -> cursorReading(null, resumeToken));
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        List<Checkpoint> askedAbout = new CopyOnWriteArrayList<>();
+        AtomicInteger restarts = new AtomicInteger();
+        subscriptionModel.addHistoryLossListener(new HistoryLossListener() {
+            @Override
+            public HistoryLossHandling handleHistoryLoss(String subscriptionId, Checkpoint lostFrom) {
+                askedAbout.add(lostFrom);
+                return HistoryLossHandling.takeOver(() -> {
+                });
+            }
+
+            @Override
+            public void restartingAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom, BooleanSupplier stillCurrent) {
+                restarts.incrementAndGet();
+            }
+        });
+        String subscriptionId = UUID.randomUUID().toString();
+
+        // When: the history is lost on the first read of the subscription's change stream, before any batch came back
+        historyLost.set(true);
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
+        });
+        waitAtMostFor(TEN_SECONDS, () -> !askedAbout.isEmpty() && subscriptionModel.isPaused(subscriptionId));
+
+        // Then
+        assertThat(askedAbout).as("positions the listener was asked about").containsExactly(new MongoResumeTokenCheckpoint(resumeToken));
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+        assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isFalse();
+        assertThat(restarts).as("restarts from now the listener was told about").hasValue(0);
     }
 
     @Test

@@ -17,7 +17,14 @@
 package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoCommandException;
+import com.mongodb.ServerAddress;
+import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -25,6 +32,10 @@ import com.mongodb.client.MongoDatabase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.awaitility.core.ConditionTimeoutException;
+import org.bson.BsonDocument;
+import org.bson.BsonElement;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
 import org.bson.Document;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -40,13 +51,18 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions.HistoryLossListener;
+import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
@@ -65,6 +81,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
@@ -72,6 +89,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.TEN_SECONDS;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
@@ -99,6 +120,8 @@ class NativeMongoSubscriptionModelStuckActionTest {
     private final CountDownLatch releaseFirstCallOfE1 = new CountDownLatch(1);
     private final AtomicBoolean firstCallOfE1 = new AtomicBoolean(true);
     private final AtomicReference<Thread> stuckThread = new AtomicReference<>();
+    // Loses the history as the next change stream opens
+    private final AtomicBoolean historyLostWhenOpening = new AtomicBoolean();
     private final AtomicInteger inFlight = new AtomicInteger();
     private final AtomicInteger mostInFlight = new AtomicInteger();
     private final CopyOnWriteArrayList<String> calls = new CopyOnWriteArrayList<>();
@@ -126,7 +149,7 @@ class NativeMongoSubscriptionModelStuckActionTest {
             executorThreads.add(thread);
             return thread;
         });
-        subscriptionModel = new NativeMongoSubscriptionModel(database, eventCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor, NativeMongoSubscriptionModelConfig.withConfig());
+        subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatLosesItsHistoryWhenOpening(), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor, NativeMongoSubscriptionModelConfig.withConfig());
     }
 
     @AfterEach
@@ -329,12 +352,134 @@ class NativeMongoSubscriptionModelStuckActionTest {
         assertThat(stuckThread.get().isAlive()).as("thread of the stuck call, which ignores interrupts").isTrue();
     }
 
+    @Test
+    void a_history_loss_as_the_resumed_run_opens_asks_the_listener_only_once_the_stuck_call_has_returned() {
+        // Given: the first call for E1 is stuck, and a listener that takes a subscription over when its history is lost
+        List<Checkpoint> askedAbout = new CopyOnWriteArrayList<>();
+        subscriptionModel.addHistoryLossListener(takingOver(askedAbout));
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, StartAt.now(), this::action).waitUntilStarted(Duration.ofSeconds(10));
+        mongoEventStore.write("1", 0, serialize(e1));
+        await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
+        subscriptionModel.pauseSubscription(subscriptionId);
+
+        // When: resumed, and its history is lost as the resumed run opens its change stream
+        historyLostWhenOpening.set(true);
+        subscriptionModel.resumeSubscription(subscriptionId);
+        waitAtMostFor(Duration.ofSeconds(3), () -> !askedAbout.isEmpty());
+
+        // Then: the listener was not asked while the first call for E1 is stuck
+        assertThat(askedAbout).as("positions the listener was asked about while the first call for E1 is stuck").isEmpty();
+        releaseFirstCallOfE1.countDown();
+        waitAtMostFor(TEN_SECONDS, () -> !askedAbout.isEmpty());
+        assertThat(askedAbout).as("positions the listener was asked about once the stuck call was released").singleElement().isNotNull();
+        waitAtMostFor(FIVE_SECONDS, () -> subscriptionModel.isPaused(subscriptionId));
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused after the listener took it over").isTrue();
+        assertThat(mostInFlight).as("most calls running at once").hasValue(1);
+    }
+
+    @Test
+    void a_start_while_the_resumed_run_that_lost_its_history_as_it_opened_waits_for_the_stuck_call_returns_promptly() {
+        // Given: the first call for E1 is stuck, and a listener that takes a subscription over when its history is lost
+        List<Checkpoint> askedAbout = new CopyOnWriteArrayList<>();
+        subscriptionModel.addHistoryLossListener(takingOver(askedAbout));
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, StartAt.now(), this::action).waitUntilStarted(Duration.ofSeconds(10));
+        mongoEventStore.write("1", 0, serialize(e1));
+        await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
+        subscriptionModel.stop();
+
+        // When: started, and the history is lost as the resumed run opens its change stream
+        historyLostWhenOpening.set(true);
+        CompletableFuture<Void> starting = CompletableFuture.runAsync(() -> subscriptionModel.start(true));
+
+        // Then: the start didn't wait for the stuck call, which the run that never started waits for
+        assertThat(starting).as("start while the first call for E1 is stuck").succeedsWithin(Duration.ofSeconds(5));
+        assertThat(askedAbout).as("positions the listener was asked about while the first call for E1 is stuck").isEmpty();
+    }
+
+    @Test
+    void a_resumed_run_that_waits_for_the_stuck_call_logs_the_wait_and_then_that_it_goes_on() {
+        // Given: the first call for E1 is stuck
+        Logger modelLog = (Logger) LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        modelLog.addAppender(appender);
+        try {
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), this::action).waitUntilStarted(Duration.ofSeconds(10));
+            mongoEventStore.write("1", 0, serialize(e1));
+            await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
+            subscriptionModel.pauseSubscription(subscriptionId);
+
+            // When: resumed, which makes a run that waits for the stuck call
+            assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(2))).as("resumed run started").isTrue();
+            waitAtMostFor(FIVE_SECONDS, () -> messagesAt(appender, Level.WARN).stream().anyMatch(message -> message.contains("waits for an action call")));
+
+            // Then: it said so while the call was stuck, naming the subscription, and said it went on once the call returned
+            assertThat(messagesAt(appender, Level.WARN)).as("warnings while the first call for E1 is stuck").singleElement().satisfies(message -> {
+                assertThat(message).contains(subscriptionId);
+                assertThat(message).contains("waits for an action call");
+            });
+            releaseFirstCallOfE1.countDown();
+            waitAtMostFor(FIVE_SECONDS, () -> messagesAt(appender, Level.WARN).size() > 1);
+            assertThat(messagesAt(appender, Level.WARN)).as("warnings once the stuck call was released").hasSize(2).last().satisfies(message -> {
+                assertThat(message).contains(subscriptionId);
+                assertThat(message).containsPattern("waited \\d+ ms");
+            });
+        } finally {
+            modelLog.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
     // The executor thread that runs the resumed run, which is in the code of the model while it waits for the stuck call
     private @Nullable Thread threadOfTheResumedRun() {
         return executorThreads.stream()
                 .filter(thread -> thread != stuckThread.get() && thread.isAlive())
                 .filter(thread -> Arrays.stream(thread.getStackTrace()).anyMatch(frame -> frame.getClassName().contains("ChangeStreamSubscriptions")))
                 .findFirst().orElse(null);
+    }
+
+    private static List<String> messagesAt(ListAppender<ILoggingEvent> appender, Level level) {
+        return appender.list.stream().filter(event -> event.getLevel() == level).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    private static HistoryLossListener takingOver(List<Checkpoint> askedAbout) {
+        return new HistoryLossListener() {
+            @Override
+            public HistoryLossHandling handleHistoryLoss(String subscriptionId, Checkpoint lostFrom) {
+                askedAbout.add(lostFrom);
+                return HistoryLossHandling.takeOver(() -> {
+                });
+            }
+
+            @Override
+            public void restartingAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom, BooleanSupplier stillCurrent) {
+            }
+        };
+    }
+
+    // Opens the change streams of the real collection, except that the next one the model opens throws that its history was lost
+    @SuppressWarnings("unchecked")
+    private MongoCollection<Document> collectionThatLosesItsHistoryWhenOpening() {
+        MongoCollection<Document> wrapped = spy(eventCollection);
+        doAnswer(invocation -> {
+            ChangeStreamIterable<Document> recorded = spy((ChangeStreamIterable<Document>) invocation.callRealMethod());
+            doAnswer(cursorInvocation -> {
+                if (historyLostWhenOpening.compareAndSet(true, false)) {
+                    throw historyLostError();
+                }
+                return cursorInvocation.callRealMethod();
+            }).when(recorded).cursor();
+            return recorded;
+        }).when(wrapped).watch(anyList(), eq(Document.class));
+        return wrapped;
+    }
+
+    private static MongoCommandException historyLostError() {
+        List<BsonElement> elements = List.of(new BsonElement("code", new BsonInt32(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE)), new BsonElement("codeName", new BsonString("ChangeStreamHistoryLost")));
+        return new MongoCommandException(new BsonDocument(elements), new ServerAddress());
     }
 
     private void action(CloudEvent cloudEvent) {
