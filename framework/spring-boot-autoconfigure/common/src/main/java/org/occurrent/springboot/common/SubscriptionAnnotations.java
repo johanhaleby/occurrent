@@ -67,7 +67,9 @@ public final class SubscriptionAnnotations {
     }
 
     /**
-     * A classified subscription handler parameter: its declared type and what it binds to.
+     * A classified subscription handler parameter, with its type as the class the handler runs on sees it and what it
+     * binds to. A parameter declared with a type variable, such as {@code E} in {@code on(E event)} on {@code Base<E>},
+     * has the type that class gives {@code E}.
      */
     public record HandlerParameter(Class<?> type, HandlerParameterKind kind) {
     }
@@ -248,8 +250,9 @@ public final class SubscriptionAnnotations {
      * <p>
      * Two proxies are left proxied by {@link #ultimateTarget}, because their target source is not a fixed singleton.
      * A JDK interface proxy runs the factory through the proxy, by the method {@link HandlerScan#invocableMethodOn} selects, when
-     * one of the proxy's interfaces declares the factory the scan read from the class behind it, and refuses any other
-     * method, since the proxy does not implement it. A CGLIB proxy passes the check above, since {@code getUserClass} of the proxy's own
+     * one of the proxy's interfaces declares the factory the scan read, and refuses any other method, since the proxy
+     * does not implement it. The scan reads such a proxy's own class, so the factory it reads comes from one of the
+     * proxy's interfaces. A CGLIB proxy passes the check above, since {@code getUserClass} of the proxy's own
      * class is the class it subclasses, so a factory invoked through it still runs its advice. It refuses an inherited
      * instance {@code method} the proxy cannot override, one that is private, final, or package-private and declared in
      * another package than that class, since invoking it would run the method's body on the proxy instance instead of

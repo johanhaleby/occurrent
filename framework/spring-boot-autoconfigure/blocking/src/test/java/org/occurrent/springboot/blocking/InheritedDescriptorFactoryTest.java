@@ -22,6 +22,9 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.aopalliance.intercept.MethodInterceptor;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.annotation.Catchup;
 import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Saga;
@@ -29,6 +32,8 @@ import org.occurrent.annotation.Snapshot;
 import org.occurrent.annotation.Source;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
+import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
+import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaStateStore;
@@ -39,9 +44,13 @@ import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.EventStore;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.aop.TargetSource;
 import org.springframework.aop.framework.ProxyFactory;
@@ -65,7 +74,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.mockingDetails;
 
 /**
@@ -160,6 +172,26 @@ class InheritedDescriptorFactoryTest {
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean(RecordingSagaStateStoreProvider.class).stateTypes()).containsExactly(OrderState.class);
                 });
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("projectionPathsThatReadTheStateType")
+    void a_projection_factory_inherited_from_a_generic_superclass_gives_the_default_store_the_state_type_the_bean_binds_on_every_path(String path, Class<?> collaborators, Class<?> factoryClass) {
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(collaborators, RecordingProviderConfiguration.class)
+                .withBean(factoryClass)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(RecordingProjectionStoreProvider.class).stateTypes()).containsExactly(ViewState.class);
+                });
+    }
+
+    static Stream<Arguments> projectionPathsThatReadTheStateType() {
+        return Stream.of(
+                Arguments.of("push subscription model", PushModelCollaboratorsConfiguration.class, BoundPushModelProjectionFactory.class),
+                Arguments.of("dcb projection", DcbCollaboratorsConfiguration.class, BoundDcbProjectionFactory.class),
+                Arguments.of("polled projection", PolledCollaboratorsConfiguration.class, BoundPolledProjectionFactory.class));
     }
 
     @Test
@@ -267,6 +299,118 @@ class InheritedDescriptorFactoryTest {
                     .id(event -> "k")
                     .on(TestEvent.class, (state, event) -> state)
                     .build();
+        }
+    }
+
+    abstract static class GenericPushModelProjectionFactory<S> {
+        private final S initial;
+
+        GenericPushModelProjectionFactory(S initial) {
+            this.initial = initial;
+        }
+
+        @Projection(id = "generic-push-model-projection", source = Source.PUSH, catchup = Catchup.NONE)
+        org.occurrent.dsl.projection.Projection<S, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<S, TestEvent, String>builder(initial)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state)
+                    .build();
+        }
+    }
+
+    static class BoundPushModelProjectionFactory extends GenericPushModelProjectionFactory<ViewState> {
+        BoundPushModelProjectionFactory() {
+            super(new ViewState());
+        }
+    }
+
+    abstract static class GenericDcbProjectionFactory<S> {
+        private final S initial;
+
+        GenericDcbProjectionFactory(S initial) {
+            this.initial = initial;
+        }
+
+        @Projection(id = "generic-dcb-projection")
+        DcbProjection<S, TestEvent, String> projection() {
+            return new DcbProjection<>(org.occurrent.dsl.projection.Projection.<S, TestEvent, String>builder(initial)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state)
+                    .build(), DcbCriteria.all());
+        }
+    }
+
+    static class BoundDcbProjectionFactory extends GenericDcbProjectionFactory<ViewState> {
+        BoundDcbProjectionFactory() {
+            super(new ViewState());
+        }
+    }
+
+    abstract static class GenericPolledProjectionFactory<S> {
+        private final S initial;
+
+        GenericPolledProjectionFactory(S initial) {
+            this.initial = initial;
+        }
+
+        @Projection(id = "generic-polled-projection")
+        org.occurrent.dsl.projection.Projection<S, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<S, TestEvent, String>builder(initial)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state)
+                    .build();
+        }
+    }
+
+    static class BoundPolledProjectionFactory extends GenericPolledProjectionFactory<ViewState> {
+        BoundPolledProjectionFactory() {
+            super(new ViewState());
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class PushModelCollaboratorsConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> cloudEventConverter() {
+            return new TestEventConverter();
+        }
+
+        @Bean
+        PushSubscriptionModel pushSubscriptionModel() {
+            return new PushSubscriptionModel();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class PolledCollaboratorsConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> cloudEventConverter() {
+            return new TestEventConverter();
+        }
+
+        @Bean
+        Subscriptions<TestEvent> subscriptions(CloudEventConverter<TestEvent> converter) {
+            Subscribable model = mock(Subscribable.class);
+            when(model.subscribe(anyString(), any(), any(org.occurrent.subscription.StartAt.class), any())).thenReturn(mock(Subscription.class));
+            return new Subscriptions<>(model, converter);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class DcbCollaboratorsConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> cloudEventConverter() {
+            return new TestEventConverter();
+        }
+
+        @Bean
+        DcbSubscriptions<TestEvent> dcbSubscriptions(CloudEventConverter<TestEvent> converter) {
+            SubscriptionModel model = mock(SubscriptionModel.class);
+            when(model.subscribe(anyString(), any(), any(org.occurrent.subscription.StartAt.class), any())).thenReturn(mock(Subscription.class));
+            return new DcbSubscriptions<>(model, converter);
         }
     }
 

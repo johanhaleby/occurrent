@@ -983,22 +983,19 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void handlerMethod_keys_the_interface_method_of_a_generic_handler_differently_from_the_class_method_of_the_class_a_jdk_proxys_target_source_names() throws Exception {
+    void handlerMethod_scans_the_proxy_class_of_a_jdk_proxy_over_a_target_source_that_is_not_fixed_so_a_generic_handler_is_the_interface_method() throws Exception {
         ProxyFactory proxyFactory = new ProxyFactory();
         proxyFactory.setTargetSource(new AlwaysFreshTargetSource(GenericHandlerBean.class));
         proxyFactory.setInterfaces(GenericHandler.class);
         proxyFactory.setProxyTargetClass(false);
         Object proxy = proxyFactory.getProxy();
         Class<?> scanned = HandlerScan.implementationClassOf(proxy);
-        assertThat(scanned).describedAs("the class the target source names").isEqualTo(GenericHandlerBean.class);
+        assertThat(scanned).describedAs("the proxy's own class, not the class the target source names").isEqualTo(proxy.getClass());
 
         Set<Method> handlers = HandlerScan.handlerMethods(scanned, MARKERS);
-        Method fromTheProxy = handlers.iterator().next();
         Method interfaceMethod = GenericHandler.class.getDeclaredMethod("on", Object.class);
 
-        assertThat(HandlerMethod.in(handlers, interfaceMethod).signature())
-                .describedAs("the interface method keys differently from the class method, so a scan that read it would register a second handler")
-                .isNotEqualTo(HandlerMethod.in(handlers, fromTheProxy).signature());
+        assertThat(handlers).describedAs("the interface method is the one handler").containsExactly(interfaceMethod);
     }
 
     @Test

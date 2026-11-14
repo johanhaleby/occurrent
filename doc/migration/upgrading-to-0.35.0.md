@@ -167,10 +167,6 @@ other sections compile fine and behave differently, so read them first.
   a subclass, or when a bean behind a CGLIB proxy inherits a final one. A method that shares its name and parameters
   with a package-private annotated method in another package fails at startup instead of running in that method's
   place. Compiles unchanged.
-- [A JDK proxy that a `FactoryBean` returns is scanned in the class its target source names](#a-jdk-proxy-that-a-factorybean-returns-is-scanned-in-the-class-its-target-source-names).
-  A generic interface handler on such a proxy subscribes to the type the class gives its type variable instead of to
-  the bound, and a handler annotated only on the class registers, or fails the bean when the proxy can't run it.
-  Compiles unchanged.
 
 ### Brokers
 
@@ -2142,10 +2138,12 @@ Applications on either starter with one of these:
 ### What changes
 
 - An inherited handler, other than the bridge kind above, starts running on the first start after the upgrade, from
-  its own start settings. It never ran, so nothing is stored for its id. With `startAt = BEGINNING`, or
-  `startAt = BEGINNING_OF_TIME` on `@StreamSubscription`, it replays the whole history. So does a `@Snapshot`, whose
-  `startAt` is `BEGINNING` by default, and a `@Projection` or `@Saga` with `source = PUSH`, which replays the event
-  store's history before it goes live unless it sets `catchup = NONE`.
+  its own start settings. When nothing is stored for its id, `startAt = BEGINNING`, or `startAt = BEGINNING_OF_TIME`
+  on `@StreamSubscription`, replays the whole history. So does a `@Snapshot`, whose `startAt` is `BEGINNING` by
+  default, and a `@Projection` or `@Saga` with `source = PUSH`, which replays the event store's history before it goes
+  live unless it sets `catchup = NONE`. When a handler with that id ran before, for example before the method moved
+  into a superclass, its position is stored, and under the default `resumeBehavior` it resumes from there. It then
+  gets every event written since that handler last ran.
 - A handler declared with a type variable, such as `on(E event)` on `Base<E>`, takes its event type from the bean's
   class. A class that extends `Base<Placed>` subscribes to `Placed`. An inherited factory method declared with a type
   variable reads its state type the same way.
@@ -2206,45 +2204,6 @@ methods. For each one a bean inherits without overriding it:
 The code compiles unchanged, and nothing stored changes. There is no OpenRewrite recipe, because nothing in the code
 says whether an inherited handler was meant to run. See
 [ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md).
-
-## A JDK proxy that a `FactoryBean` returns is scanned in the class its target source names
-
-Both Spring Boot starters read the handlers of a `FactoryBean`'s product from the class the product runs. In 0.34.0
-they read them from the product's own class. For a JDK interface proxy over a target source that isn't a fixed
-singleton, such as a `LazyInitTargetSource`, that was the proxy class, so only the annotations on the proxy's
-interfaces counted, and a generic interface method was read with its erased parameter type. Now the starters read the
-class the target source names.
-
-### Who is affected
-
-Applications on either starter with a `FactoryBean` whose product is such a proxy, and with one of these:
-
-- a handler declared on a generic interface with a type variable, such as `on(E event)` on
-  `Handler<E extends OrderEvent>`, that the product's class implements as `Handler<Placed>`
-- a handler or factory annotation on the product's class that its interface doesn't have
-
-A target source whose `getTargetClass()` returns `null` names no class, so the starters still read the proxy class,
-as before.
-
-### What changes
-
-- The generic handler subscribed to `E`'s bound, `OrderEvent`, together with the types it permits when it is a
-  sealed interface. It now subscribes to `Placed`, the type the class gives `E`, so events of the other types no
-  longer reach it.
-- A handler annotated only on the class never registered, and now does. When the proxy's interfaces don't declare it,
-  creating the bean fails with `SubscriptionHandlerNotInvocableException`, since the proxy can't run it.
-- A `@Projection`, `@Snapshot` or `@Saga` factory method annotated only on the class is found too. When the proxy's
-  interfaces don't declare it, the application fails at startup with an `IllegalStateException` that says the proxy
-  does not implement the class that declares the factory.
-
-### What to do
-
-- If the generic handler should still get every type under the bound, implement the interface with the bound, as in
-  `Handler<OrderEvent>`.
-- If a handler or factory method annotated only on the class shouldn't run, remove the annotation, since it never ran
-  in 0.34.0. If it should, declare the method on one of the proxy's interfaces.
-
-The code compiles unchanged, and nothing stored changes.
 
 ## `ComposedDefaultStartPosition` and its bean are removed
 

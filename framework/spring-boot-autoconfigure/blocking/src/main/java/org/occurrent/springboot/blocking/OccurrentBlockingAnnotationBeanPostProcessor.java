@@ -90,10 +90,12 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // What keeps the late path safe is therefore two things together, and both have to stay true. No lock is held
     // across a late registration, and every collection such a registration appends to is concurrent and drained by
     // polling rather than by iterating and then clearing, in the three registrars as well as here. No test
-    // demonstrates either. The interleaving cannot be staged, because parking a thread inside a bean factory
-    // serialises other singleton creation at the Spring level, so the two threads the hazard needs never overlap.
-    // LateRegistrationConcurrencyContractTest asserts the types instead, which catches the way this realistically
-    // regresses rather than the hazard itself.
+    // demonstrates either across a bean factory. The interleaving cannot be staged there, because parking a thread
+    // inside a bean factory serialises other singleton creation at the Spring level, so the two threads the hazard
+    // needs never overlap. LateRegistrationConcurrencyContractTest asserts the types instead, which catches the way
+    // this realistically regresses rather than the hazard itself. Its
+    // concurrent_registrations_of_one_handler_register_it_once races registeredHandlers directly, since the
+    // registry needs no bean factory.
     private final RegisteredHandlers registeredHandlers = new RegisteredHandlers();
     private final Object registrationLock = new Object();
     // A bean another thread finishes while the startup scan is still running is recorded here, because the scan
@@ -175,7 +177,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         // Only a FactoryBean's product is recorded here. Every other bean was recorded by the callback above, from
         // the instance before any proxy wrapped it, and overwriting that with what arrives here would record a
-        // proxy class for a proxy whose target source names no target class. A product is what reaches this
+        // proxy class for a proxy ultimateTarget cannot unwrap. A product is what reaches this
         // callback without reaching that one, since the container passes the factory itself under this name there.
         //
         // containsBeanDefinition first, because not everything that reaches this callback is a bean. Spring's test
