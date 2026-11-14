@@ -114,6 +114,13 @@ proxy's interfaces bind. When `Handler<E extends OrderEvent>` declares it and th
 subscribes to the bound, `OrderEvent`. 0.34.0 read the proxy class's own method, which has only the erased types, so it
 subscribed to the bound in both cases. A factory method's state type is read through the same binding.
 
+Two interfaces of such a JDK proxy can each declare an annotated method with the same name and parameter types. The
+proxy class has one method for both, and 0.34.0 found the annotation of the first interface the proxy lists on it, so
+only that handler registered. When the two annotations have the same type and differ in an attribute, such as the id,
+the order of the interfaces decided which handler ran, and the other never did, with nothing logged. The scan now keeps
+one method when the two annotations are equal in every attribute, and fails startup with an `IllegalArgumentException`
+naming both methods when they differ in their type or in any attribute.
+
 When a post-processor wraps the bean in such a JDK proxy instead, the startup scan reads the class the bean had before
 the proxy wrapped it. A handler the proxy doesn't implement then fails startup with
 `SubscriptionHandlerNotInvocableException`, as in 0.34.0, and so does a handler that overrides a generic interface
@@ -219,6 +226,9 @@ I rejected three smaller changes:
   the interfaces give the variable or a subtype of it, startup now fails with an `IllegalStateException`. A factory
   method of that kind found no state type in 0.34.0 either, so it keeps the store it named or the one bean of the
   store type it got, and where it failed, it now gets the zero-config store for the type the interfaces bind.
+- A JDK proxy that can't be unwrapped, with two interfaces that declare a method of the same name and parameter types
+  under one handler annotation with different attributes, such as two ids, now fails startup with an
+  `IllegalArgumentException`. 0.34.0 registered only the handler of the first interface the proxy lists.
 - A static method that hides an annotated static superclass method ran under that method's annotation in 0.34.0. Now
   the application fails at startup when the hiding method has no annotation of its own, and registers both when it
   repeats the annotation. A hidden static subscription handler, refused before too, now fails with the scan's

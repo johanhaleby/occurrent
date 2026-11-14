@@ -2165,6 +2165,8 @@ Applications on either starter with one of these:
   variable
 - a bean that is a JDK proxy of the kind above with a handler or factory method declared with a type variable on a
   generic interface, when one of the proxy's interfaces binds that variable
+- a bean that is a JDK proxy of the kind above, when two of its interfaces declare a method with the same name and
+  parameters, each with the same handler annotation but with different attributes, such as the id
 
 ### What changes
 
@@ -2193,6 +2195,11 @@ Applications on either starter with one of these:
   method of that kind found no state type either, so it failed at startup unless it named its store or the
   application had one bean of the store type. It keeps that store, and where it failed, it now gets the zero-config
   store for the type the interfaces bind.
+- When two interfaces of the JDK proxy kind above declare a method with the same name and parameters, the proxy has
+  one method for both. 0.34.0 found the annotation of the first interface the proxy lists on it, so only that handler
+  registered, and the order of the interfaces decided which. When the two annotations differ in any attribute, such
+  as the id, the application now fails at startup with an `IllegalArgumentException` that names both methods. When
+  they're equal in every attribute, the handler registers once, as before.
 - Two beans that run one annotated method register two handlers with the same id, so the application fails at
   startup with `DuplicateSubscriptionIdException`. That holds when both inherit it, and when one of them is a bean of
   the class that declares it. The id is the key the subscription's checkpoint is stored under,
@@ -2287,6 +2294,9 @@ methods. For each one a bean inherits without overriding it:
   A bean of the class that declares it keeps the original id. If the method is private, or package-private and
   declared in another package than a subclass, the subclasses can't override it, so first make it protected or public,
   or move its annotation to the subclass methods.
+- If two interfaces of a JDK proxy declare a method with the same name and parameters and their annotations differ,
+  keep the annotation on the method of the first interface the proxy lists, whose handler ran in 0.34.0, and remove
+  it from the other. Or give both the same attributes.
 
 The code compiles unchanged. An inherited handler that starts running writes what a new handler writes, such as its
 checkpoint and, for a `@Projection`, `@Snapshot` or `@Saga`, its state. There is no OpenRewrite recipe, because nothing in the code

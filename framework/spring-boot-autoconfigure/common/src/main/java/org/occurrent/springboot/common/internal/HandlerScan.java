@@ -344,7 +344,8 @@ public final class HandlerScan {
      *                               a superclass or interface declares a handler no method {@code type} declares runs,
      *                               or has a class file that can't be read
      * @throws IllegalArgumentException when {@code type} is a JDK proxy and two of its interfaces declare a method of
-     *                                  the same name and parameter types with different handler annotations
+     *                                  the same name and parameter types with different handler annotations, or with
+     *                                  one handler annotation whose attributes differ
      */
     public static Set<Method> handlerMethods(Class<?> type, List<Class<? extends Annotation>> annotationTypes) {
         if (!AnnotationUtils.isCandidateClass(type, annotationTypes)) {
@@ -772,24 +773,44 @@ public final class HandlerScan {
     // interface it lists that has that signature, so two annotated interface methods of one signature are one method
     // the proxy runs. MethodIntrospector gives the methods in the order the proxy lists its interfaces, so the first
     // annotated one is kept, the way an annotation search on a class implementing those interfaces finds the first.
-    // When the two have different handler annotations, keeping either would let the order of the interfaces decide
-    // how the handler runs, so the scan refuses them, as the post-processors refuse a method with both annotations
+    // When the two differ in a handler annotation or in any attribute of one, such as the id, keeping either would let
+    // the order of the interfaces decide which handler registers, so the scan refuses them. The attributes compared are
+    // the ones the post-processors read, through AnnotationUtils.findAnnotation
     private static Set<Method> firstOfEachSignature(Class<?> type, Set<Method> methods, List<Class<? extends Annotation>> annotationTypes) {
         Map<List<Object>, Method> bySignature = new LinkedHashMap<>();
         for (Method method : methods) {
             Method kept = bySignature.putIfAbsent(List.of(method.getName(), List.of(method.getParameterTypes())), method);
-            if (kept != null && !handlerAnnotationsOf(kept, annotationTypes).equals(handlerAnnotationsOf(method, annotationTypes))) {
-                throw new IllegalArgumentException("Method %s#%s is annotated with %s and %s#%s with %s, and JDK proxy %s runs them as one method since they have the same name and parameter types, use only one annotation."
-                        .formatted(kept.getDeclaringClass().getName(), kept.getName(), String.join(" and ", handlerAnnotationsOf(kept, annotationTypes)),
-                                method.getDeclaringClass().getName(), method.getName(), String.join(" and ", handlerAnnotationsOf(method, annotationTypes)), type.getName()));
+            if (kept == null) {
+                continue;
+            }
+            List<Annotation> keptAnnotations = handlerAnnotationsOf(kept, annotationTypes);
+            List<Annotation> annotations = handlerAnnotationsOf(method, annotationTypes);
+            if (!keptAnnotations.equals(annotations)) {
+                throw new IllegalArgumentException("Method %s#%s is annotated with %s and %s#%s with %s, and JDK proxy %s runs them as one method since they have the same name and parameter types, so only one of them would register. Annotate only one of them, or give both the same annotation with the same attributes."
+                        .formatted(kept.getDeclaringClass().getName(), kept.getName(), describe(keptAnnotations),
+                                method.getDeclaringClass().getName(), method.getName(), describe(annotations), type.getName()));
             }
         }
         return new LinkedHashSet<>(bySignature.values());
     }
 
-    private static List<String> handlerAnnotationsOf(Method method, List<Class<? extends Annotation>> annotationTypes) {
-        MergedAnnotations annotations = MergedAnnotations.from(method, SearchStrategy.TYPE_HIERARCHY);
-        return annotationTypes.stream().filter(annotations::isPresent).map(annotationType -> "@" + annotationType.getSimpleName()).toList();
+    private static List<Annotation> handlerAnnotationsOf(Method method, List<Class<? extends Annotation>> annotationTypes) {
+        List<Annotation> annotations = new ArrayList<>();
+        for (Class<? extends Annotation> annotationType : annotationTypes) {
+            Annotation annotation = AnnotationUtils.findAnnotation(method, annotationType);
+            if (annotation != null) {
+                annotations.add(annotation);
+            }
+        }
+        return annotations;
+    }
+
+    private static String describe(List<Annotation> annotations) {
+        return annotations.stream().map(annotation -> {
+            String text = annotation.toString();
+            int attributes = text.indexOf('(');
+            return attributes < 0 ? text : "@" + annotation.annotationType().getSimpleName() + text.substring(attributes);
+        }).collect(Collectors.joining(" and "));
     }
 
     // The method the JVM runs when method is invoked on an instance of type, bridges resolved to the method they

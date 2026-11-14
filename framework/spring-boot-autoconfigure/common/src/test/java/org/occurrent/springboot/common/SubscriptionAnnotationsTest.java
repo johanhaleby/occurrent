@@ -25,6 +25,7 @@ import net.bytebuddy.implementation.StubMethod;
 import org.aopalliance.intercept.MethodInterceptor;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Projection;
+import org.occurrent.annotation.StartPosition;
 import org.occurrent.annotation.StreamId;
 import org.occurrent.annotation.StreamVersion;
 import org.occurrent.cloudevents.EventMetadata;
@@ -2024,9 +2025,14 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void handlerMethods_gives_one_method_for_a_jdk_proxy_listing_an_unrelated_interface_before_a_sub_interface_redeclaring_the_handler_of_another() throws Exception {
-        assertThat(HandlerScan.handlerMethods(jdkProxyClassOver(UnrelatedProxiedHandler.class, ProxiedRedeclaringHandler.class), List.of(Subscription.class)))
-                .containsExactly(UnrelatedProxiedHandler.class.getDeclaredMethod("on", String.class));
+    void handlerMethods_refuses_a_jdk_proxy_listing_an_unrelated_interface_before_a_sub_interface_redeclaring_the_handler_of_another_with_a_different_id() {
+        Class<?> proxyClass = jdkProxyClassOver(UnrelatedProxiedHandler.class, ProxiedRedeclaringHandler.class);
+
+        assertThatThrownBy(() -> HandlerScan.handlerMethods(proxyClass, List.of(Subscription.class)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("same name and parameter types")
+                .hasMessageContaining("proxied-unrelated")
+                .hasMessageContaining("proxied-base");
     }
 
     interface ProxiedRedeclaringHandlerWithOwnId extends ProxiedBaseHandler {
@@ -2052,9 +2058,46 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void handlerMethods_gives_one_method_for_a_jdk_proxy_listing_two_sub_interfaces_that_each_redeclare_the_same_handler() throws Exception {
-        assertThat(HandlerScan.handlerMethods(jdkProxyClassOver(ProxiedRedeclaringHandlerWithOwnId.class, ProxiedSiblingRedeclaringHandlerWithOwnId.class), List.of(Subscription.class)))
-                .containsExactly(ProxiedRedeclaringHandlerWithOwnId.class.getDeclaredMethod("on", String.class));
+    void handlerMethods_refuses_a_jdk_proxy_listing_two_sub_interfaces_that_each_redeclare_the_same_handler_with_a_different_id() {
+        Class<?> proxyClass = jdkProxyClassOver(ProxiedRedeclaringHandlerWithOwnId.class, ProxiedSiblingRedeclaringHandlerWithOwnId.class);
+
+        assertThatThrownBy(() -> HandlerScan.handlerMethods(proxyClass, List.of(Subscription.class)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("same name and parameter types")
+                .hasMessageContaining("proxied-redeclared-b")
+                .hasMessageContaining("proxied-redeclared-c");
+    }
+
+    interface ProxiedHandlerStartingAtBeginning {
+        @Subscription(id = "proxied-same-id", startAt = StartPosition.BEGINNING)
+        void on(String event);
+    }
+
+    interface ProxiedHandlerStartingAtNow {
+        @Subscription(id = "proxied-same-id", startAt = StartPosition.NOW)
+        void on(String event);
+    }
+
+    interface ProxiedHandlerAlsoStartingAtBeginning {
+        @Subscription(id = "proxied-same-id", startAt = StartPosition.BEGINNING)
+        void on(String event);
+    }
+
+    @Test
+    void handlerMethods_refuses_a_jdk_proxy_listing_two_interfaces_declaring_the_same_handler_with_the_same_id_but_a_different_start_position() {
+        Class<?> proxyClass = jdkProxyClassOver(ProxiedHandlerStartingAtBeginning.class, ProxiedHandlerStartingAtNow.class);
+
+        assertThatThrownBy(() -> HandlerScan.handlerMethods(proxyClass, List.of(Subscription.class)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("same name and parameter types")
+                .hasMessageContaining("startAt=BEGINNING")
+                .hasMessageContaining("startAt=NOW");
+    }
+
+    @Test
+    void handlerMethods_gives_the_first_interface_method_for_a_jdk_proxy_listing_two_interfaces_declaring_the_same_handler_with_equal_annotations() throws Exception {
+        assertThat(HandlerScan.handlerMethods(jdkProxyClassOver(ProxiedHandlerStartingAtBeginning.class, ProxiedHandlerAlsoStartingAtBeginning.class), List.of(Subscription.class)))
+                .containsExactly(ProxiedHandlerStartingAtBeginning.class.getDeclaredMethod("on", String.class));
     }
 
     interface ProxiedAsynchronousOn {

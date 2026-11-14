@@ -24,6 +24,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.DcbSubscription;
+import org.occurrent.annotation.StartPosition;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
@@ -2175,6 +2176,102 @@ class InheritedHandlerRegistrationTest {
             });
             return (NoTargetClassHandler) proxyFactory.getProxy();
         }
+    }
+
+    @Test
+    void a_jdk_proxy_over_two_interfaces_declaring_the_same_handler_with_different_ids_fails_startup() {
+        runner.withUserConfiguration(TwoInterfacesWithDifferentIdsProxyConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("same name and parameter types")
+                    .hasMessageContaining("proxy-conflict-a")
+                    .hasMessageContaining("proxy-conflict-b");
+        });
+    }
+
+    @Test
+    void a_jdk_proxy_over_two_interfaces_declaring_the_same_handler_with_the_same_id_but_different_start_positions_fails_startup() {
+        runner.withUserConfiguration(TwoInterfacesWithDifferentStartPositionsProxyConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("same name and parameter types")
+                    .hasMessageContaining("proxy-conflict-same-id")
+                    .hasMessageContaining("startAt=BEGINNING")
+                    .hasMessageContaining("startAt=NOW");
+        });
+    }
+
+    interface ProxyConflictA {
+        @Subscription(id = "proxy-conflict-a")
+        void on(TestEvent event);
+    }
+
+    interface ProxyConflictB {
+        @Subscription(id = "proxy-conflict-b")
+        void on(TestEvent event);
+    }
+
+    interface ProxyConflictStartingAtBeginning {
+        @Subscription(id = "proxy-conflict-same-id", startAt = StartPosition.BEGINNING)
+        void on(TestEvent event);
+    }
+
+    interface ProxyConflictStartingAtNow {
+        @Subscription(id = "proxy-conflict-same-id", startAt = StartPosition.NOW)
+        void on(TestEvent event);
+    }
+
+    static class ProxyConflictTarget implements ProxyConflictA, ProxyConflictB, ProxyConflictStartingAtBeginning, ProxyConflictStartingAtNow {
+        @Override
+        public void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class TwoInterfacesWithDifferentIdsProxyConfiguration {
+        @Bean
+        Object conflictingHandler() {
+            return jdkProxyOverTwoInterfaces(ProxyConflictA.class, ProxyConflictB.class);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class TwoInterfacesWithDifferentStartPositionsProxyConfiguration {
+        @Bean
+        Object conflictingHandler() {
+            return jdkProxyOverTwoInterfaces(ProxyConflictStartingAtBeginning.class, ProxyConflictStartingAtNow.class);
+        }
+    }
+
+    private static Object jdkProxyOverTwoInterfaces(Class<?> first, Class<?> second) {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setInterfaces(first, second);
+        proxyFactory.setTargetSource(new TargetSource() {
+            @Override
+            public Class<?> getTargetClass() {
+                return null;
+            }
+
+            @Override
+            public boolean isStatic() {
+                return false;
+            }
+
+            @Override
+            public Object getTarget() {
+                return new ProxyConflictTarget();
+            }
+
+            @Override
+            public void releaseTarget(Object target) {
+            }
+        });
+        Object proxy = proxyFactory.getProxy();
+        assertThat(Proxy.isProxyClass(proxy.getClass())).describedAs("the bean is a JDK proxy").isTrue();
+        assertThat(proxy.getClass().getInterfaces()).describedAs("the proxy lists both interfaces").contains(first, second);
+        return proxy;
     }
 
     @Test
