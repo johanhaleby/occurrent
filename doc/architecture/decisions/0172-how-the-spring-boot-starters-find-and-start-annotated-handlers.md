@@ -14,8 +14,9 @@ here and gets a pointer in its Status section.
 Both starters, `OccurrentBlockingAnnotationBeanPostProcessor` and `OccurrentReactiveAnnotationBeanPostProcessor`,
 read a bean's handlers from `getDeclaredMethods()` of the bean's class. That lists the methods the class declares
 itself and none that it inherits. So an annotated method on a superclass that the class doesn't override never
-registered, and neither did an annotated default method on an interface the class implements. Nothing was logged, and
-the application ran without that handler.
+registered, and neither did an annotated default method on an interface the class implements, except on a bean behind
+a JDK proxy whose target can't be unwrapped, since the scan read the proxy's class, which declares every method of its
+interfaces. Nothing was logged, and the application ran without that handler.
 
 That covers `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@SynchronousSubscription`, `@Projection` and
 `@Snapshot` on both starters, and `@Saga` on the blocking one. An override was found, because the class declares it,
@@ -106,14 +107,18 @@ keeps running on the instance the scan built.
 as Spring's `@EventListener` does.
 
 The key that tells whether a handler is already registered is the bean name, the method's name and its parameter
-types, as in 0.34.0, and each key records the methods registered under it. A later pass of the scan over the same bean
-skips a method that is the same handler as a recorded one. That is the recorded method itself, a method that
-overrides it or that it overrides, or a method of a class unrelated to its class, as in 0.34.0. So a prototype whose
-factory returns two unrelated classes, each with a private handler of one signature, registers the handler of the
-first class only. A private method on a superclass and a method of the same signature on the bean's class don't
-override each other, so they register as two handlers, in whichever order the instances come. The relation between
-the methods decides this, not what one scan found, since successive instances of a prototype can be of different
-classes in one class tree.
+types, as in 0.34.0, and each key records the methods registered under it, each with the class its scan read. A later
+pass of the scan over the same bean skips a method that is the same handler as a recorded one. When the two scans read
+one class, or one class extends the other, the two methods are one handler when an instance of the class further down
+runs one method for both. So a private method on a superclass and a method of the same signature on the bean's class
+are two handlers, in whichever order the instances come, and so are a private superclass method and an interface
+default method of the same signature. When the two scans read unrelated classes, the methods are one handler, as in
+0.34.0, so a prototype whose factory returns two unrelated classes, each with a private handler of one signature,
+registers the handler of the first class only. That makes the outcome depend on the order of the instances when a
+factory returns `A` with a private handler, `B` that extends `A` and declares a handler of the same signature, and an
+unrelated `U`. When `A` or `B` comes first, the handlers of both register and the one of `U` doesn't. When `U` comes
+first, only its handler registers. No rule keeps two unrelated classes as one handler and makes this independent of order,
+since `U` is one handler with `A` and one with `B`, while `A` and `B` are two.
 
 `invokeDescriptorFactory` runs a factory method that the bean's class declares or inherits unchanged. It refuses a bean
 whose class overrides the method, since that runs code the scan didn't read. Two proxies can't be unwrapped to their
@@ -178,8 +183,10 @@ I rejected three smaller changes:
   can't be unwrapped.
 - A handler declared with a type variable on a superclass subscribes to the type the bean's class gives the variable.
   That includes a handler of the bridge kind, which 0.34.0 subscribed to the variable's bound, so it stops getting
-  events of the bound's other types. A factory method of that kind found no state type in 0.34.0 and failed at
-  startup unless it named its store, and now gets the zero-config store.
+  events of the bound's other types. When its `eventTypes` lists a type that isn't the one the bean's
+  class gives the variable or a subtype of it, startup now fails with an `IllegalStateException`. A factory method of
+  that kind found no state type in 0.34.0, so it failed at startup unless it named its store or the application had
+  one bean of the store type. It keeps that store, and where it failed, it now gets the zero-config store.
 - A static method that hides an annotated static superclass method ran under that method's annotation in 0.34.0. Now
   the application fails at startup when the hiding method has no annotation of its own, and registers both when it
   repeats the annotation. A hidden static subscription handler, refused before too, now fails with the scan's

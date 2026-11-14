@@ -2115,11 +2115,13 @@ for how to recover it.
 
 Both Spring Boot starters used to read a bean's handlers only from the methods its class declares. An annotated method
 that the class inherits from a superclass, or gets as an interface default method, never registered when the class
-didn't override it, and nothing was logged. Both starters now register it. One kind did register in 0.34.0. When a
+didn't override it, and nothing was logged. Both starters now register it. Two kinds did register in 0.34.0. When a
 public class inherits a public annotated method from a superclass that isn't public, the compiler adds a bridge
 method to the class that calls the inherited method and has its annotation, and 0.34.0 found that bridge. Such a
 handler keeps running under the same id. When it is declared with a type variable, its types now come from the bean's
-class, see What changes below.
+class, see What changes below. The other is an annotated interface default method on a bean behind a JDK proxy whose
+target can't be unwrapped. 0.34.0 read the proxy's class, which declares every method of its interfaces, so it found
+that method, and it still does.
 
 This covers `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@SynchronousSubscription`, `@Projection` and
 `@Snapshot`, and `@Saga` on the blocking starter. An inherited `@Projection`, `@Snapshot` or `@Saga` factory method,
@@ -2150,7 +2152,7 @@ Applications on either starter with one of these:
 
 ### What changes
 
-- An inherited handler, other than the bridge kind above, starts running on the first start after the upgrade, from
+- An inherited handler, other than the two kinds above, starts running on the first start after the upgrade, from
   its own start settings. When nothing is stored for its id, `startAt = BEGINNING`, or `startAt = BEGINNING_OF_TIME`
   on `@StreamSubscription`, replays the whole history. So does a `@Snapshot`, whose `startAt` is `BEGINNING` by
   default, and a `@Projection` or `@Saga` with `source = PUSH`, which replays the event store's history before it goes
@@ -2161,8 +2163,11 @@ Applications on either starter with one of these:
   class. A class that extends `Base<Placed>` subscribes to `Placed`. An inherited factory method declared with a type
   variable reads its state type the same way. This changes the bridge kind above too. 0.34.0 read its types from the
   bridge, which has only the erased types. So with `Base<E extends OrderEvent>`, such a handler subscribed to
-  `OrderEvent` and now subscribes to `Placed` only, under the same id. Such a factory method found no state type and
-  failed at startup unless it named its store, and now it gets the zero-config store.
+  `OrderEvent` and now subscribes to `Placed` only, under the same id. When its annotation's `eventTypes` lists a
+  type that isn't `Placed` or a subtype of it, the application now fails at startup with an `IllegalStateException`,
+  where 0.34.0 subscribed it to those types. Such a factory method found no state type, so it failed at startup
+  unless it named its store or the application had one bean of the store type. It keeps that store, and where it
+  failed, it now gets the zero-config store.
 - Two beans that run one annotated method register two handlers with the same id, so the application fails at
   startup with `DuplicateSubscriptionIdException`. That holds when both inherit it, and when one of them is a bean of
   the class that declares it. The id is the key the subscription's checkpoint is stored under,
@@ -2215,7 +2220,7 @@ methods. For each one a bean inherits without overriding it:
 
 - If the handler should run, check where its `startAt` starts it. `BEGINNING` replays the history it missed, and
   `NOW` starts at the present.
-- If it shouldn't run on any bean, remove the annotation from the method. A handler of the bridge kind above keeps
+- If it shouldn't run on any bean, remove the annotation from the method. A handler of the two kinds above keeps
   its annotation, since it ran in 0.34.0 and removing the annotation stops a subscription that has a stored
   checkpoint.
 - If only some of the classes that inherit it should run it, move the annotation off the superclass method. Then
@@ -2240,12 +2245,14 @@ methods. For each one a bean inherits without overriding it:
   annotation. To run the subclass's method, which is what ran before, put the annotation on it and remove it from the
   superclass method. To run the superclass method instead, rename the subclass's method.
 - If it's a handler of the bridge kind above declared with a type variable, check that the type the bean's class gives
-  the variable is the one it should get, since events of the bound's other types stop reaching it. A factory method of
-  that kind that named its store keeps it.
+  the variable is the one it should get, since events of the bound's other types stop reaching it. Remove from its
+  `eventTypes` the types that aren't that type or a subtype of it, or the application fails at startup. A factory
+  method of that kind keeps the store it named, or the one bean of the store type it got.
 - If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
   A bean of the class that declares it keeps the original id.
 
-The code compiles unchanged, and nothing stored changes. There is no OpenRewrite recipe, because nothing in the code
+The code compiles unchanged. An inherited handler that starts running writes what a new handler writes, such as its
+checkpoint and, for a `@Projection`, `@Snapshot` or `@Saga`, its state. There is no OpenRewrite recipe, because nothing in the code
 says whether an inherited handler was meant to run. See
 [ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md).
 
