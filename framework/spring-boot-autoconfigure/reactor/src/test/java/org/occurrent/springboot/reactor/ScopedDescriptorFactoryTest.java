@@ -22,11 +22,17 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Projection;
+import org.occurrent.annotation.Snapshot;
 import org.occurrent.annotation.Source;
+import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.reactor.DomainEventFeed;
+import org.occurrent.dsl.snapshot.SnapshotView;
+import org.occurrent.dsl.snapshot.reactor.ReactiveSnapshotStore;
+import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
@@ -48,15 +54,19 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
- * A {@code @Projection} factory on a scoped bean runs once, on the instance the scope held when the scan read it, never
- * through the scoped proxy (issue #1492). A proxy of {@code ScopedProxyMode.INTERFACES} has no factory the class alone
- * declares, so a factory reached through it would be refused. The descriptor is read once at startup, so a later
- * refresh runs it no more. Every descriptor kind reads its instance through the same lookup, so projection stands for
- * {@code @Snapshot} and {@code @Saga} too. This test needs no Docker, an empty domain-feed reader is all a
- * {@code source = PUSH} projection needs to register.
+ * A {@code @Projection} or {@code @Snapshot} factory on a scoped bean runs once, on the instance the scope held when
+ * the scan read it, never through the scoped proxy (issue #1492). A proxy of {@code ScopedProxyMode.INTERFACES} has no
+ * factory the class alone declares, so a factory reached through it would be refused. The descriptor is read once at
+ * startup, so a later refresh runs it no more. Each descriptor kind reads its instance at its own call site, so each
+ * has a test of its own: the target-class mode is covered for {@code @Projection} only, and the interfaces mode for
+ * both. {@code @Saga} is blocking-only, so the reactor starter has no call site for it. This test needs no Docker, an
+ * empty domain-feed reader is all a {@code source = PUSH} projection needs to register, and a mocked store all a
+ * {@code @Snapshot} needs.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ScopedDescriptorFactoryTest {
@@ -87,6 +97,19 @@ class ScopedDescriptorFactoryTest {
     void a_projection_factory_only_the_class_declares_on_an_interfaces_scoped_bean_runs_on_the_target_instead_of_through_the_proxy() {
         reset();
         runner.withUserConfiguration(InterfacesConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            scope.refresh();
+            context.getBean(Marker.class).toString();
+
+            assertThat(FACTORY_RAN_ON).containsExactly("instance-1");
+        });
+    }
+
+    @Test
+    void a_snapshot_factory_only_the_class_declares_on_an_interfaces_scoped_bean_runs_on_the_target_instead_of_through_the_proxy() {
+        reset();
+        runner.withUserConfiguration(SnapshotInfrastructureConfiguration.class, InterfacesSnapshotConfiguration.class).run(context -> {
             assertThat(context).hasNotFailed();
 
             scope.refresh();
@@ -127,6 +150,56 @@ class ScopedDescriptorFactoryTest {
         @Projection(id = "scoped-interfaces-projection", source = Source.PUSH)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return projectionFrom(instance);
+        }
+    }
+
+    static class InterfacesSnapshotHolder implements Marker {
+        private final String instance = "instance-" + INSTANCES.incrementAndGet();
+
+        // startAt = NOW for the reason SnapshotAnnotationJdkProxyTest gives: the default BEGINNING would fail for an
+        // unrelated one.
+        @Snapshot(id = "scoped-interfaces-snapshot", startAt = StartPosition.NOW)
+        SnapshotView<TestState, TestEvent> snapshot() {
+            FACTORY_RAN_ON.add(instance);
+            return SnapshotView.<TestState, TestEvent>builder(new TestState())
+                    .on(TestEvent.class, (state, event) -> state)
+                    .build();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class InterfacesSnapshotConfiguration {
+        @Bean
+        @Scope(value = RefreshableScope.NAME, proxyMode = ScopedProxyMode.INTERFACES)
+        InterfacesSnapshotHolder interfacesSnapshotHolder() {
+            return new InterfacesSnapshotHolder();
+        }
+    }
+
+    // A mocked store, event store and Subscriptions are all a @Snapshot registration needs, the container-free setup
+    // SnapshotAnnotationJdkProxyTest uses. The Subscribable and the converter come from DomainFeedConfiguration.
+    @Configuration(proxyBeanMethods = false)
+    static class SnapshotInfrastructureConfiguration {
+        @SuppressWarnings("unchecked")
+        @Bean
+        ReactiveSnapshotStore<TestState> reactiveSnapshotStore() {
+            return mock(ReactiveSnapshotStore.class);
+        }
+
+        @Bean
+        EventStore eventStore() {
+            return mock(EventStore.class);
+        }
+
+        @SuppressWarnings("unchecked")
+        @Bean
+        Subscriptions<TestEvent> subscriptions() {
+            Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
+            org.occurrent.subscription.api.reactor.Subscription subscription = mock(org.occurrent.subscription.api.reactor.Subscription.class);
+            when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
+            when(subscriptions.subscribe(any(String.class), any(org.occurrent.subscription.AgnosticSubscriptionFilter.class),
+                    any(org.occurrent.subscription.StartAt.class), any(kotlin.jvm.functions.Function2.class))).thenReturn(subscription);
+            return subscriptions;
         }
     }
 
@@ -207,5 +280,8 @@ class ScopedDescriptorFactoryTest {
     }
 
     record TestEvent() {
+    }
+
+    record TestState() {
     }
 }

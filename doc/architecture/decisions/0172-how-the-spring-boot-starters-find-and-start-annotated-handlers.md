@@ -131,9 +131,19 @@ exception.
 
 A bean with a scoped proxy has two bean definitions, the proxy's and its target's under the `scopedTarget.` name. The
 scan skips the target's and reads the handlers under the proxy's name, from the class of the instance the scope holds at
-startup. The handlers register once, under the proxy's name, and each delivery goes through the proxy, as with Spring's
-`@EventListener`, so it reaches the instance the scope holds at that moment. In a scope that replaces its instance, such
-as a refresh scope, a handler runs on the new instance after a refresh. A delivery while the scope isn't active fails
+startup. The handlers register once, under the proxy's name, and each delivery to a handler the proxy's class has goes
+through the proxy, as with Spring's `@EventListener`, so it reaches the instance the scope holds at that moment. In a
+scope that replaces its instance, such as a refresh scope, a handler runs on the new instance after a refresh.
+
+A handler the proxy's class doesn't have runs on the bean the container returns for the target's `scopedTarget.` name,
+asked for on every delivery, which is the instance the proxy would reach. A CGLIB proxy subclasses the type the target's
+definition declares, so it lacks a handler declared only below that type, as for a `@Bean` method declared to return a
+base class. A JDK proxy, from `ScopedProxyMode.INTERFACES` or a type declared as an interface, implements only
+interfaces, so it lacks a handler only the class declares. Such a handler skips the interceptors on the proxy itself,
+such as the lock Spring Cloud takes around each call through the proxy of a `@RefreshScope` bean. `@EventListener`
+always calls through the proxy, so this is where the starters depart from it.
+
+A delivery while the scope isn't active fails
 with the exception the scope throws. I haven't tested what that does to a durable subscription's checkpoint. The scan
 asks the scope for the instance only when the target's class shows an Occurrent annotation, the class of a target
 already built when there is one and the predicted class otherwise. So a bean in request or session scope fails startup
@@ -146,11 +156,12 @@ at startup and then one per delivery. When the predicted class shows no annotati
 to return an interface or a base class while the class it returns declares a handler, the scan doesn't ask at startup.
 The handlers register when the target is first built, by a call through the proxy or by the scope, under the proxy's
 name and from that instance. Until something builds the target its handlers don't run, as for a lazy bean whose
-predicted class shows no annotation. A bean that is only named `scopedTarget.` plus another bean's name, with no
-scoped proxy decorating it, is scanned as any other bean. With `ScopedProxyMode.INTERFACES` the proxy implements only the bean's interfaces, so a handler that only the class declares
-is refused with `SubscriptionHandlerNotInvocableException`, as for any JDK proxy. I've tested that refusal at startup,
-not for a target the scan didn't ask for. A `@Projection`, `@Saga` or `@Snapshot` factory method runs once, on the
-instance the scan asked the scope for or on the first target built, so a refresh doesn't change its descriptor ([#1492](https://github.com/johanhaleby/occurrent/issues/1492)).
+predicted class shows no annotation. In request or session scope building that target fails instead, in the request
+that builds it, with the same `IllegalStateException`, since no subscription thread has a request or a session bound.
+A bean in any other scope registers, and a delivery while its scope isn't active fails as described above. A bean that is only named `scopedTarget.` plus another bean's name, with no
+scoped proxy decorating it, is scanned as any other bean. A `@Projection`, `@Saga` or `@Snapshot` factory method runs once, on the
+instance the scan asked the scope for or on the first target built, so a refresh doesn't change its descriptor. That
+descriptor keeps handling events after a refresh replaces the instance it came from ([#1492](https://github.com/johanhaleby/occurrent/issues/1492)).
 
 A prototype bean without a scoped proxy runs every delivery on the one instance the scan asked for, as in 0.34.0.
 Asking the container per delivery, as `@EventListener` does, would build the bean and its collaborators for each event

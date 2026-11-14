@@ -22,13 +22,19 @@ import kotlin.jvm.functions.Function2;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.aopalliance.intercept.MethodInterceptor;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.aop.scope.ScopedProxyUtils;
+import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.config.BeanDefinitionHolder;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.support.AbstractBeanDefinition;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.RootBeanDefinition;
@@ -101,13 +107,38 @@ class ScopedBeanDeliveryTest {
     }
 
     @Test
-    void an_interfaces_scoped_proxy_fails_startup_for_a_handler_only_the_class_declares_because_the_proxy_does_not_implement_it() {
+    void an_interfaces_scoped_proxy_delivers_a_handler_only_the_class_declares_to_the_instance_its_scope_holds_then_and_registers_the_id_once() {
         runner.withUserConfiguration(InterfacesClassOnlyHandlerConfiguration.class).run(context -> {
-            assertThat(context).hasFailed();
-            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
-                    .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
-                    .hasMessageContaining(ClassOnlyHandler.class.getName() + ".on")
-                    .hasMessageContaining("The proxy does not implement it");
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            Function2<EventMetadata, TestEvent, Unit> handler = handlerFor(subscriptions, "class-only-handler");
+
+            handler.invoke(null, new TestEvent());
+            scope.refresh();
+            handler.invoke(null, new TestEvent());
+
+            assertThat(context.getBean(Deliveries.class).ranOn()).containsExactly("instance-1", "instance-2");
+            assertThat(subscribedIds(subscriptions)).containsExactly("class-only-handler");
+        });
+    }
+
+    @Test
+    void a_handler_the_scoped_proxy_has_runs_through_the_proxy_and_a_handler_only_the_class_declares_runs_on_the_target_past_it() {
+        runner.withUserConfiguration(InterceptedProxyConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            List<String> proxyCalls = context.getBean(ProxyCallRecorder.class).calls();
+            Deliveries deliveries = context.getBean(Deliveries.class);
+
+            handlerFor(subscriptions, "intercepted-interface-handler").invoke(null, new TestEvent());
+
+            assertThat(deliveries.ranOn()).containsExactly("instance-1:interface");
+            assertThat(proxyCalls).containsExactly("on");
+
+            handlerFor(subscriptions, "intercepted-class-only-handler").invoke(null, new TestEvent());
+
+            assertThat(deliveries.ranOn()).containsExactly("instance-1:interface", "instance-1:class-only");
+            assertThat(proxyCalls).containsExactly("on");
         });
     }
 
@@ -266,7 +297,59 @@ class ScopedBeanDeliveryTest {
             assertThat(subscribedIds(subscriptions)).containsExactly("unannotated-interface-handler");
             Function2<EventMetadata, TestEvent, Unit> handler = handlerFor(subscriptions, "unannotated-interface-handler");
             handler.invoke(null, new TestEvent());
-            assertThat(context.getBean(Deliveries.class).ranOn()).hasSize(1);
+            assertThat(context.getBean(Deliveries.class).ranOn()).containsExactly("instance-3");
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"request", "session"})
+    void a_scoped_proxy_declared_as_an_unannotated_interface_in_a_request_or_session_scope_fails_the_call_that_builds_its_target_and_registers_nothing(String scopeName) {
+        String proxyName = scopeName + "ScopedPortHandler";
+        runner.withInitializer(context -> {
+            context.getBeanFactory().registerScope("request", scope);
+            context.getBeanFactory().registerScope("session", scope);
+        }).withUserConfiguration(RequestAndSessionScopedConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            UnannotatedPort proxy = context.getBean(proxyName, UnannotatedPort.class);
+
+            assertThatThrownBy(proxy::name).satisfies(failure -> assertThat(causeChain(failure))
+                    .filteredOn(cause -> cause instanceof IllegalStateException && String.valueOf(cause.getMessage()).startsWith("Bean '" + proxyName + "' has a scoped proxy"))
+                    .singleElement()
+                    .satisfies(cause -> assertThat(cause)
+                            .hasMessageContaining("its scoped target 'scopedTarget." + proxyName + "' was built after startup with a class that declares Occurrent handlers")
+                            .hasMessageContaining("but the target's scope is '" + scopeName + "'")));
+            assertThat(subscribedIds(context.getBean(Subscriptions.class))).isEmpty();
+        });
+    }
+
+    @Test
+    void a_scoped_target_built_by_name_after_startup_registers_the_handler_its_class_declares_although_nothing_asked_for_its_proxy() {
+        runner.withUserConfiguration(NeverAskedForProxyConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThatCode(() -> context.getBean("scopedTarget.neverAskedForProxyHandler")).doesNotThrowAnyException();
+
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            assertThat(subscribedIds(subscriptions)).containsExactly("never-asked-for-proxy-handler");
+            Function2<EventMetadata, TestEvent, Unit> handler = handlerFor(subscriptions, "never-asked-for-proxy-handler");
+            handler.invoke(null, new TestEvent());
+            assertThat(context.getBean(Deliveries.class).ranOn()).containsExactly("instance-1");
+        });
+    }
+
+    @Test
+    void a_target_class_scoped_proxy_declared_as_a_base_class_registers_the_handler_only_the_built_subclass_declares_once_a_call_through_the_proxy_builds_the_target() {
+        runner.withUserConfiguration(BaseClassDeclaredConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            BaseClassPort proxy = context.getBean(BaseClassPort.class);
+
+            assertThatCode(proxy::name).doesNotThrowAnyException();
+
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            assertThat(subscribedIds(subscriptions)).containsExactly("subclass-only-handler");
+            Function2<EventMetadata, TestEvent, Unit> handler = handlerFor(subscriptions, "subclass-only-handler");
+            handler.invoke(null, new TestEvent());
+            assertThat(context.getBean(Deliveries.class).ranOn()).containsExactly("instance-1");
         });
     }
 
@@ -345,8 +428,67 @@ class ScopedBeanDeliveryTest {
     }
 
     static class ClassOnlyHandler implements PlainMarker {
+        private final String name;
+        private final Deliveries deliveries;
+
+        ClassOnlyHandler(String name, Deliveries deliveries) {
+            this.name = name;
+            this.deliveries = deliveries;
+        }
+
         @Subscription(id = "class-only-handler")
         public void on(TestEvent event) {
+            deliveries.ranOn().add(name);
+        }
+    }
+
+    interface InterceptedPort {
+        @Subscription(id = "intercepted-interface-handler")
+        void on(TestEvent event);
+    }
+
+    static class InterceptedHandler implements InterceptedPort {
+        private final String name;
+        private final Deliveries deliveries;
+
+        InterceptedHandler(String name, Deliveries deliveries) {
+            this.name = name;
+            this.deliveries = deliveries;
+        }
+
+        @Override
+        public void on(TestEvent event) {
+            deliveries.ranOn().add(name + ":interface");
+        }
+
+        @Subscription(id = "intercepted-class-only-handler")
+        public void onClassOnly(TestEvent event) {
+            deliveries.ranOn().add(name + ":class-only");
+        }
+    }
+
+    /**
+     * Records every call that passes through the scoped proxy of the bean named {@code interceptedHandler}, and none
+     * made on its {@code scopedTarget.} bean.
+     */
+    static class ProxyCallRecorder implements BeanPostProcessor {
+        private final List<String> calls = new CopyOnWriteArrayList<>();
+
+        List<String> calls() {
+            return calls;
+        }
+
+        @Override
+        public Object postProcessAfterInitialization(Object bean, String beanName) {
+            if (!beanName.equals("interceptedHandler") || bean instanceof FactoryBean<?>) {
+                return bean;
+            }
+            ProxyFactory factory = new ProxyFactory(bean);
+            factory.addAdvice((MethodInterceptor) invocation -> {
+                calls.add(invocation.getMethod().getName());
+                return invocation.proceed();
+            });
+            return factory.getProxy();
         }
     }
 
@@ -468,6 +610,21 @@ class ScopedBeanDeliveryTest {
     }
 
     @Configuration(proxyBeanMethods = false)
+    static class RequestAndSessionScopedConfiguration {
+        @Bean
+        @Scope(value = "request", proxyMode = ScopedProxyMode.INTERFACES)
+        UnannotatedPort requestScopedPortHandler(InstanceCounter counter, Deliveries deliveries) {
+            return new UnannotatedPortHandler(counter.nextName(), deliveries);
+        }
+
+        @Bean
+        @Scope(value = "session", proxyMode = ScopedProxyMode.INTERFACES)
+        UnannotatedPort sessionScopedPortHandler(InstanceCounter counter, Deliveries deliveries) {
+            return new UnannotatedPortHandler(counter.nextName(), deliveries);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
     static class EarlyBuiltConfiguration {
         @Bean
         @Scope(value = RefreshableScope.NAME, proxyMode = ScopedProxyMode.TARGET_CLASS)
@@ -512,8 +669,22 @@ class ScopedBeanDeliveryTest {
     static class InterfacesClassOnlyHandlerConfiguration {
         @Bean
         @Scope(value = RefreshableScope.NAME, proxyMode = ScopedProxyMode.INTERFACES)
-        ClassOnlyHandler classOnlyHandler() {
-            return new ClassOnlyHandler();
+        ClassOnlyHandler classOnlyHandler(InstanceCounter counter, Deliveries deliveries) {
+            return new ClassOnlyHandler(counter.nextName(), deliveries);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class InterceptedProxyConfiguration {
+        @Bean
+        static ProxyCallRecorder proxyCallRecorder() {
+            return new ProxyCallRecorder();
+        }
+
+        @Bean
+        @Scope(value = RefreshableScope.NAME, proxyMode = ScopedProxyMode.INTERFACES)
+        InterceptedHandler interceptedHandler(InstanceCounter counter, Deliveries deliveries) {
+            return new InterceptedHandler(counter.nextName(), deliveries);
         }
     }
 
@@ -532,6 +703,70 @@ class ScopedBeanDeliveryTest {
         @Scope("prototype")
         PrototypeHandler prototypeHandler(InstanceCounter counter, Deliveries deliveries) {
             return new PrototypeHandler(counter.nextName(), deliveries);
+        }
+    }
+
+    interface NeverAskedForProxyPort {
+        void on(TestEvent event);
+    }
+
+    static class NeverAskedForProxyHandler implements NeverAskedForProxyPort {
+        private final String name;
+        private final Deliveries deliveries;
+
+        NeverAskedForProxyHandler(String name, Deliveries deliveries) {
+            this.name = name;
+            this.deliveries = deliveries;
+        }
+
+        @Override
+        @Subscription(id = "never-asked-for-proxy-handler")
+        public void on(TestEvent event) {
+            deliveries.ranOn().add(name);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class NeverAskedForProxyConfiguration {
+        @Bean
+        @Scope(value = RefreshableScope.NAME, proxyMode = ScopedProxyMode.INTERFACES)
+        NeverAskedForProxyPort neverAskedForProxyHandler(InstanceCounter counter, Deliveries deliveries) {
+            return new NeverAskedForProxyHandler(counter.nextName(), deliveries);
+        }
+    }
+
+    public static class BaseClassPort {
+        public String name() {
+            return "base";
+        }
+    }
+
+    public static class SubclassOnlyHandler extends BaseClassPort {
+        private final String name;
+        private final Deliveries deliveries;
+
+        SubclassOnlyHandler(String name, Deliveries deliveries) {
+            this.name = name;
+            this.deliveries = deliveries;
+        }
+
+        @Subscription(id = "subclass-only-handler")
+        public void on(TestEvent event) {
+            deliveries.ranOn().add(name);
+        }
+
+        @Override
+        public String name() {
+            return name;
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class BaseClassDeclaredConfiguration {
+        @Bean
+        @Scope(value = RefreshableScope.NAME, proxyMode = ScopedProxyMode.TARGET_CLASS)
+        BaseClassPort baseClassDeclaredHandler(InstanceCounter counter, Deliveries deliveries) {
+            return new SubclassOnlyHandler(counter.nextName(), deliveries);
         }
     }
 
