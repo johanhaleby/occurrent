@@ -2325,8 +2325,10 @@ When that read returns neither an event nor a resume token, the subscription can
   when it starts the subscription. The message says MongoDB gave neither an operation time nor a change stream
   position. The subscription is removed from the model, and the listeners added through
   `StartRefusalReportingSubscriptions` are told, as for a catch-up's checkpoint.
-* A `resumeSubscription(id, StartAt.now())` does the read when the resumed change stream opens, and is refused the same
-  way. A subscription that had already run is then removed from the model too, and has to be subscribed again.
+* A `resumeSubscription(id, StartAt.now())` does the read when the resumed change stream opens. When it gets neither,
+  the subscription is held paused and stays in the model, `waitUntilStarted(..)` on the handle the resume returned
+  throws the `UnsupportedStartAtException`, and no listener is told. `resumeSubscription(id)` reads the change stream
+  again. A `StartAt.dynamic(..)` resume that resolves to the present as its change stream opens is held the same way.
 * With `restartSubscriptionsOnChangeStreamHistoryLost` on, a restart from the present after the history was lost that
   gets neither holds the subscription paused. `isPaused(id)` answers `true`, an error in the log names it, and
   `resumeSubscription(id)` reads the change stream again. Under a `CompetingConsumerSubscriptionModel` the node that

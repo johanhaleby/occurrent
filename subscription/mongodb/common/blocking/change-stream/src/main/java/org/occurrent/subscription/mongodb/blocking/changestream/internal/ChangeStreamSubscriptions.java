@@ -252,7 +252,7 @@ public final class ChangeStreamSubscriptions {
         StartAt subscribedAt = MongoCommons.refusingCatchupPositionUntilOpened(ownInstanceOf(startAt), subscriptionId, firstStart::hasStarted);
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(subscribedAt);
         PresentAtSubscribe presentAtSubscribe = new PresentAtSubscribe(subscribedAt, (present, cancelled) -> recordThePresent(subscriptionId, currentStartAt, present, cancelled));
-        InternalSubscription internalSubscription = new InternalSubscription(log, currentStartAt, action, changeStreamPipeline, presentAtSubscribe, firstStart, new AtomicReference<>());
+        InternalSubscription internalSubscription = new InternalSubscription(log, currentStartAt, action, changeStreamPipeline, presentAtSubscribe, firstStart);
         // Known from here on rather than once its change stream opens, so a pause or a cancel reaches it while MongoDB
         // cannot be reached, and a wrapper asking which subscriptions the model runs gets the right answer. On a
         // running model a run that opens at the present asks for it first.
@@ -501,13 +501,12 @@ public final class ChangeStreamSubscriptions {
                 // nothing else would say why the node went quiet.
                 log.error("Checkpoint write for subscription {} was refused: {}. A node with a newer lease has already written this subscription's checkpoint, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it. The refused write was for an event, or for a position reached while no event matched.", subscriptionId, e.getMessage(), e);
                 throw e;
-            } else if (e instanceof NoPositionAtThePresent noPosition && internalSubscription.opensWhereAHistoryLossRestartedIt()) {
-                // Held paused, since a retry asks the same server and a run left neither running nor paused can't be
-                // resumed. Also when the loss came as this run first opened, as after a resume of a long paused
-                // subscription, and when a resume without a position opens there again
-                heldPausedAfterARefusedRestart(subscriptionId, internalSubscription, noPosition);
-            } else if (e instanceof NoPositionAtThePresent noPosition) {
+            } else if (e instanceof NoPositionAtThePresent noPosition && internalSubscription.presentAtSubscribe.gave(noPosition)) {
                 refuseStart(subscriptionId, internalSubscription, noPosition.refusalOf(subscriptionId, currentStartAt.get()));
+            } else if (e instanceof NoPositionAtThePresent noPosition) {
+                // Read by this run for a position a resume gave, or for a restart after a loss of history. Held paused,
+                // since a retry asks the same server and a run left neither running nor paused can't be resumed
+                heldPausedWithoutAPosition(subscriptionId, internalSubscription, noPosition);
             } else if (cursor == null && e instanceof UnsupportedStartAtException unsupportedStartAt && MongoCommons.isCatchupPosition(unsupportedStartAt.startAt())) {
                 // Only a catch-up's position before the cursor exists, since an action can throw this type too, as can
                 // the function with another position, and those restart like any other failure
@@ -577,12 +576,14 @@ public final class ChangeStreamSubscriptions {
     }
 
     // No listener is told. A start refusal listener is told the id is free, and this run keeps it. The history loss
-    // listeners were asked about this loss before the restart, and there is no position to tell them it restarts from
-    private void heldPausedAfterARefusedRestart(String subscriptionId, InternalSubscription internalSubscription, NoPositionAtThePresent refusal) {
+    // listeners were asked about a loss before the restart, and there is no position to tell them it restarts from. A
+    // waiter for this run to start, such as the handle a resume returned, is told the refusal, since it never starts
+    private void heldPausedWithoutAPosition(String subscriptionId, InternalSubscription internalSubscription, NoPositionAtThePresent noPosition) {
         if (pausedAfterHistoryLoss(subscriptionId, internalSubscription)) {
-            log.error("Cannot restart subscription {} from the present after its history was lost: {} It is paused, and resuming it asks MongoDB again.", subscriptionId, refusal.getMessage(), refusal);
+            internalSubscription.refusedWhileHeld(noPosition.refusalOf(subscriptionId, internalSubscription.currentStartAt.get()));
+            log.error("Cannot open the change stream of subscription {} at the present: {} It is paused, and resuming it asks MongoDB again.", subscriptionId, noPosition.getMessage(), noPosition);
         } else {
-            log.debug("Cannot restart subscription {} from the present after its history was lost, but it was paused, resumed or cancelled meanwhile, so it isn't held.", subscriptionId, refusal);
+            log.debug("Cannot open the change stream of subscription {} at the present, but it was paused, resumed or cancelled meanwhile, so it isn't held.", subscriptionId, noPosition);
         }
     }
 
@@ -1254,6 +1255,11 @@ public final class ChangeStreamSubscriptions {
             noPosition = refusal;
         }
 
+        // Whether this is the answer the question got, rather than what a run that read for itself got
+        boolean gave(NoPositionAtThePresent refusal) {
+            return refusal == noPosition;
+        }
+
         // Only for the position the subscription was made with, which the answer is for
         @Nullable NoPositionAtThePresent noPositionAt(StartAt position) {
             return position == subscribedAt ? noPosition : null;
@@ -1415,9 +1421,6 @@ public final class ChangeStreamSubscriptions {
         final AtomicReference<StartAt> currentStartAt;
         // Shared by every run of the subscription
         final PresentAtSubscribe presentAtSubscribe;
-        // Shared by every run of the subscription. The position the last restart after a loss of history moved it to,
-        // told apart from any other StartAt.now() by identity
-        private final AtomicReference<@Nullable StartAt> restartedAfterHistoryLossAt;
         final Consumer<CloudEvent> action;
         private volatile boolean intentionallyClosed = false;
         // Not a monitor, since a pause waits on it for the action to return
@@ -1435,15 +1438,13 @@ public final class ChangeStreamSubscriptions {
         // stop delivering
         private volatile @Nullable InternalSubscription previous;
 
-        private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, FirstStart firstStart,
-                                     AtomicReference<@Nullable StartAt> restartedAfterHistoryLossAt) {
+        private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, FirstStart firstStart) {
             this.log = log;
             this.pipeline = pipeline;
             this.currentStartAt = currentStartAt;
             this.presentAtSubscribe = presentAtSubscribe;
             this.action = action;
             this.firstStart = firstStart;
-            this.restartedAfterHistoryLossAt = restartedAfterHistoryLossAt;
         }
 
         // Under the same lock as movedUnlessReplacedTo, so an action of this run that returns after the pause waited
@@ -1456,7 +1457,7 @@ public final class ChangeStreamSubscriptions {
                     // In one step, since the operation time asked for at subscribe can be recorded meanwhile
                     currentStartAt.updateAndGet(reposition);
                 }
-                InternalSubscription next = new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStart, restartedAfterHistoryLossAt);
+                InternalSubscription next = new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStart);
                 next.previous = this;
                 return next;
             } finally {
@@ -1602,17 +1603,11 @@ public final class ChangeStreamSubscriptions {
             lock.lock();
             try {
                 if (!replaced) {
-                    restartedAfterHistoryLossAt.set(position);
                     currentStartAt.set(position);
                 }
             } finally {
                 lock.unlock();
             }
-        }
-
-        // True until a read, a resume's own position or a later restart moves the subscription off that position
-        boolean opensWhereAHistoryLossRestartedIt() {
-            return currentStartAt.get() == restartedAfterHistoryLossAt.get();
         }
 
         // False when this run was closed, and the position is then left as it is
@@ -1641,6 +1636,15 @@ public final class ChangeStreamSubscriptions {
                 startFailure = failure;
             }
             firstStart.recordFailure(failure);
+        }
+
+        // Only the waiters for this run, since the subscription stays known and a later resume can start it. Not the
+        // waiters for the first start, which a later run can still release
+        void refusedWhileHeld(UnsupportedStartAtException refusal) {
+            if (startedLatch.getCount() > 0) {
+                startFailure = refusal;
+                startedLatch.countDown();
+            }
         }
 
         // Does nothing for a run that recorded no failure, because it had started or something else took it out of the map
