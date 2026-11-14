@@ -4,7 +4,7 @@ Date: 2026-11-14
 
 ## Status
 
-Proposed. Part of [#1257](https://github.com/johanhaleby/occurrent/issues/1257). Amends
+Accepted. Part of [#1257](https://github.com/johanhaleby/occurrent/issues/1257). Amends
 [ADR 131](0131-a-per-id-lock-closes-the-blocking-catchup-handover-race.md), whose handover lock registry is never
 reclaimed, and [ADR 146](0146-a-catch-up-takes-over-a-live-start-the-wrapped-model-loses-as-it-opens.md), whose
 takeover resume fails when the wrapped model holds the subscription paused again. Applies to the blocking and reactor
@@ -104,8 +104,8 @@ The serial result of each call, as one step on that state:
 Three more rows decide what a failure means:
 
 * A `start(..)` whose wrapped model throws before it started leaves the model stopped, as if the call never happened.
-  One that throws after the wrapped model started leaves the model running, with what the wrapped model resumed
-  running. A replay parked by a stop stays parked until the next `start(true)` or a resume of its id.
+  One that throws after the wrapped model started leaves everything as a successful `start(..)` would, and the
+  caller still gets the exception.
 * A replay whose live start is lost is held paused. A resume of it with an origin above the beginning refuses with
   `CatchupCannotResumeException` until it is cancelled or resumed at a given position.
 * A takeover that the wrapped model holds paused again takes over again. Each takeover counts toward the 3 replays
