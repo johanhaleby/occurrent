@@ -77,7 +77,8 @@ public enum DcbAppendConditionModel {
      * </ul>
      * Through a mongos a MongoDB store queries the events in a read-only snapshot transaction of its own, whatever
      * transaction the append runs in. It refuses when that snapshot shows a marker of the criteria under another epoch or
-     * at an earlier version than the append's transaction read, and when it can't run that transaction.
+     * at an earlier version than the append's transaction read, and when it can't run that transaction. As on a replica
+     * set, it also refuses when a marker was deleted after the read or 0.34 wrote it (ADR 149).
      */
     MARKERS_THEN_EVENTS,
 

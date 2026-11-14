@@ -817,7 +817,9 @@ read each shard at another point in time, so the store doesn't query the events 
 starts a read-only transaction of its own on a second session, at read concern `snapshot` and write concern `majority`,
 reads the markers of the criteria again in it, and queries the events in it. When that snapshot shows a marker under
 another epoch or at an earlier version than the append's transaction read, or when the store can't run that
-transaction, the condition fails with no matching event.
+transaction, the condition fails with no matching event. It also fails there for the reasons it does on a replica set,
+after a marker was deleted, when a 0.34.0 node incremented a marker, or when the read saw a marker only 0.34.0 had
+written.
 
 The check works the same in the store's own transaction, in one that `SpringTransactionExecutor` or
 `SpringReactiveTransactionExecutor` opened and in a transaction of your own. The store doesn't change the read concern

@@ -122,8 +122,9 @@ version.
   match them, the refusal is one with no matching event.
 - The type marker stripes of [ADR 162](0162-a-dcb-type-marker-is-split-into-stripes.md) change only the keys of an item
   without tags, which already select on every moved key in every scope. This ADR changes step 3 only for items with
-  tags, whose keys the stripes don't touch. I checked this by reading the stripes change in
-  [#1488](https://github.com/johanhaleby/occurrent/pull/1488) at `7bc6adfe0`. No test combines the two yet.
+  tags, whose keys the stripes don't touch. The stripes change is
+  [#1488](https://github.com/johanhaleby/occurrent/pull/1488), merged as `5dffc2757`. The unit tests of the check run
+  an item without tags over striped type markers in both scopes, and no test on a sharded cluster turns the stripes on.
 - This doesn't make a plain read through a mongos safe. A token can still hold E's markers while the read misses E, and
   then no marker moves and the append passes. That's [#1479](https://github.com/johanhaleby/occurrent/issues/1479),
   and the check alone can't see it.

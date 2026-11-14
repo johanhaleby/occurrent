@@ -403,8 +403,9 @@ public class EventStoreConfig {
          * primary included.
          * <p>
          * Through a mongos it also bounds the read-only transaction in which a conditional append queries the events
-         * (ADR 175). An append whose transaction doesn't commit within it is refused with
-         * {@code DcbAppendConditionNotFulfilledException}.
+         * (ADR 175). An append whose read-only transaction doesn't commit within it is refused with
+         * {@code DcbAppendConditionNotFulfilledException}. The append's own transaction keeps the options it was started
+         * with.
          *
          * @param markerVersionsCommitTimeout at least 1 millisecond
          * @return The same {@code Builder} instance.

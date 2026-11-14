@@ -18,7 +18,8 @@ Amended by [ADR 175](0175-a-conditional-dcb-append-through-a-mongos-queries-the-
 Through a mongos the MongoDB stores no longer refuse every append whose markers moved. They query the events in a
 read-only snapshot transaction of their own, so an event that doesn't match the criteria doesn't make them refuse there
 either. They still refuse when that snapshot shows a marker under another epoch or at an earlier version than the
-append's transaction read, and when they can't run that transaction.
+append's transaction read, and when they can't run that transaction. As on a replica set, they also refuse when a
+marker was deleted after the read or 0.34 wrote it.
 
 ## Context
 
