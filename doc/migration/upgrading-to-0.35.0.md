@@ -167,8 +167,10 @@ other sections compile fine and behave differently, so read them first.
   a subclass, or when a bean behind a CGLIB proxy inherits a final subscription handler. A method without a handler
   annotation that shares its name and parameters with a package-private annotated method in another package fails at
   startup instead of running in that method's place. A method that repeats the handler annotation of such a method, or
-  of a private superclass method, runs together with it, and with the same id the application fails at startup.
-  Compiles unchanged.
+  of a private superclass method, runs together with it, and with the same id the application fails at startup. A
+  static method that hides an annotated static factory method of a superclass fails at startup the same way. A
+  handler declared with a type variable gets only the type the bean's class gives it, which narrows the one kind of
+  inherited handler that ran in 0.34.0. Compiles unchanged.
 
 ### Brokers
 
@@ -2116,7 +2118,8 @@ that the class inherits from a superclass, or gets as an interface default metho
 didn't override it, and nothing was logged. Both starters now register it. One kind did register in 0.34.0. When a
 public class inherits a public annotated method from a superclass that isn't public, the compiler adds a bridge
 method to the class that calls the inherited method and has its annotation, and 0.34.0 found that bridge. Such a
-handler keeps running as before, under the same id.
+handler keeps running under the same id. When it is declared with a type variable, its types now come from the bean's
+class, see What changes below.
 
 This covers `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@SynchronousSubscription`, `@Projection` and
 `@Snapshot`, and `@Saga` on the blocking starter. An inherited `@Projection`, `@Snapshot` or `@Saga` factory method,
@@ -2140,6 +2143,10 @@ Applications on either starter with one of these:
   superclass in another package declares
 - a bean whose class repeats a handler annotation on a method with the same name and parameters as a private annotated
   superclass method
+- a bean whose class declares a static method with the same name and parameters as an annotated static method of a
+  superclass
+- a bean whose class inherits a handler or factory method of the bridge kind above that is declared with a type
+  variable
 
 ### What changes
 
@@ -2152,7 +2159,10 @@ Applications on either starter with one of these:
   gets every event written since that handler last ran.
 - A handler declared with a type variable, such as `on(E event)` on `Base<E>`, takes its event type from the bean's
   class. A class that extends `Base<Placed>` subscribes to `Placed`. An inherited factory method declared with a type
-  variable reads its state type the same way.
+  variable reads its state type the same way. This changes the bridge kind above too. 0.34.0 read its types from the
+  bridge, which has only the erased types. So with `Base<E extends OrderEvent>`, such a handler subscribed to
+  `OrderEvent` and now subscribes to `Placed` only, under the same id. Such a factory method found no state type and
+  failed at startup unless it named its store, and now it gets the zero-config store.
 - Two beans that run one annotated method register two handlers with the same id, so the application fails at
   startup with `DuplicateSubscriptionIdException`. That holds when both inherit it, and when one of them is a bean of
   the class that declares it. The id is the key the subscription's checkpoint is stored under,
@@ -2188,6 +2198,15 @@ Applications on either starter with one of these:
   `void on(Placed event)` with no annotation. A `Sub` bean ran `Sub.on` under id `h`. The application now fails at
   startup, and the error names both methods. A `@Projection`, `@Snapshot` or `@Saga` factory method changes the same
   way.
+- A static method doesn't override a static method of a superclass with the same name and parameters, it hides it,
+  but both starters ran it under that method's annotation. Say `Base` declares `@Projection(id = "p")` on a static
+  `projection()`, and `Sub` extends it and declares a static `projection()` with no annotation. A `Sub` bean ran
+  `Sub.projection` as projection `p`. The application now fails at startup with an `IllegalStateException` that names
+  both methods. When `Sub.projection` repeats `@Projection(id = "p")`, both methods register, so the application
+  fails at startup with `DuplicateSubscriptionIdException`, and with different ids `Base.projection` starts running
+  too. This covers `@Projection` and `@Snapshot`, and `@Saga` on the blocking starter. A static subscription handler
+  failed at startup in 0.34.0 too, and when a subclass hides it, the error is now that `IllegalStateException`
+  instead of `SubscriptionHandlerNotInvocableException`.
 
 ### What to do
 
@@ -2196,8 +2215,9 @@ methods. For each one a bean inherits without overriding it:
 
 - If the handler should run, check where its `startAt` starts it. `BEGINNING` replays the history it missed, and
   `NOW` starts at the present.
-- If it shouldn't run on any bean, remove the annotation from the method. A handler of the bridge kind above needs
-  no change, since it ran in 0.34.0 and removing its annotation stops a subscription that has a stored checkpoint.
+- If it shouldn't run on any bean, remove the annotation from the method. A handler of the bridge kind above keeps
+  its annotation, since it ran in 0.34.0 and removing the annotation stops a subscription that has a stored
+  checkpoint.
 - If only some of the classes that inherit it should run it, move the annotation off the superclass method. Then
   override the method in each class that should run it and repeat the annotation there. An override without the
   annotation runs under the annotation of the method it overrides, so leaving the annotation on the superclass keeps
@@ -2215,6 +2235,13 @@ methods. For each one a bean inherits without overriding it:
   method with the same name and parameters that repeats the handler annotation, both methods run. To keep only the
   subclass's method, which is what ran before, make both methods protected or public, so the subclass's method
   overrides the superclass method, or remove the annotation from the superclass method.
+- If it's a static `@Projection`, `@Snapshot` or `@Saga` factory method and a subclass declares a static method with
+  the same name and parameters, the application fails at startup, or registers both when that method repeats the
+  annotation. To run the subclass's method, which is what ran before, put the annotation on it and remove it from the
+  superclass method. To run the superclass method instead, rename the subclass's method.
+- If it's a handler of the bridge kind above declared with a type variable, check that the type the bean's class gives
+  the variable is the one it should get, since events of the bound's other types stop reaching it. A factory method of
+  that kind that named its store keeps it.
 - If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
   A bean of the class that declares it keeps the original id.
 

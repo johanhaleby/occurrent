@@ -18,7 +18,6 @@
 package org.occurrent.springboot.common.internal;
 
 import java.lang.reflect.Method;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,12 +27,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * The handlers an annotation post-processor has registered, so a later scan of the same bean skips them. A handler is
  * keyed by its bean name and its {@link HandlerMethod#signature()}, and each key records the methods registered under
- * it. A recorded method is skipped. A method that isn't recorded counts as the handler already registered under its
- * signature, as in 0.34.0, so a non-singleton bean whose factory returns C1 and then an unrelated C2, each with a
- * private handler of one signature, registers the handler of C1 only. The method registers when nothing is recorded
- * under its signature, or when the scan that found it also found a recorded method of that signature, which puts the
- * two in one class tree, such as a private handler of A and a handler of the same signature that its subclass B
- * declares.
+ * it. A method registers unless one of those methods is the same handler, which is the method itself, a method it
+ * overrides or that overrides it, or a method of a class unrelated to its own. A non-singleton bean whose factory
+ * returns C1 and then an unrelated C2, each with a private handler of one signature, registers the handler of C1 only,
+ * as in 0.34.0. A private handler of A and a handler of the same signature that its subclass B declares don't override
+ * each other, so they are two handlers, and both register in whichever order instances of A and B come. When B is
+ * recorded and a later instance is of C, which extends B and overrides the handler, C's method is skipped, since it is
+ * the handler B registered.
  * <p>
  * Every scan reads {@link HandlerScan#implementationClassOf}, so a later instance behind a proxy that is unwrapped, or
  * behind a CGLIB proxy, keys its handlers the way a scan of the plain instance did. A JDK proxy whose target source
@@ -85,9 +85,8 @@ public final class RegisteredHandlers {
         });
     }
 
-    // A key is only there while it records a method, so a recorded set is never empty
     private static boolean registers(Set<Method> recorded, HandlerMethod handler) {
-        return !recorded.contains(handler.method()) && !Collections.disjoint(recorded, handler.sameSignature());
+        return recorded.stream().noneMatch(method -> HandlerScan.isSameHandler(method, handler.method()));
     }
 
     private record Key(String beanName, String signature) {

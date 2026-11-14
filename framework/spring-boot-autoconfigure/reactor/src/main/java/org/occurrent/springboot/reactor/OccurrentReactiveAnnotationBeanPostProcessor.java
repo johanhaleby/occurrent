@@ -359,7 +359,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
             Set<Method> handlerMethods = HandlerScan.handlerMethods(type, subscribableExists ? HANDLER_ANNOTATIONS : SUBSCRIPTION_ANNOTATIONS);
             for (Method method : handlerMethods) {
-                HandlerMethod handler = HandlerMethod.in(handlerMethods, method);
+                HandlerMethod handler = new HandlerMethod(method);
                 if (registeredHandlers.isRegistered(beanName, handler)) {
                     continue;
                 }

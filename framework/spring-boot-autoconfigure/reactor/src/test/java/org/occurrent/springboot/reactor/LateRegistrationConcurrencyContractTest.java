@@ -95,7 +95,7 @@ class LateRegistrationConcurrencyContractTest {
     void concurrent_registrations_of_one_handler_register_it_once() throws Exception {
         RegisteredHandlers registeredHandlers = (RegisteredHandlers) valueOf(new OccurrentReactiveAnnotationBeanPostProcessor(), "registeredHandlers");
         Method method = RegisteringHandler.class.getDeclaredMethod("on", String.class);
-        HandlerMethod handler = HandlerMethod.in(Set.of(method), method);
+        HandlerMethod handler = new HandlerMethod(method);
         int threads = 16;
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         try {

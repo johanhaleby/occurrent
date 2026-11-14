@@ -65,12 +65,17 @@ method as the one the bean's class actually runs:
   the JVM runs it. When the method in between is public or protected, a CGLIB proxy of the bean's class runs that
   method instead, so such a handler is refused at startup on a bean behind one.
 - A static method an interface declares is left out, since a class doesn't inherit it. A static method a superclass
-  declares is a handler, and it's refused the way a static method the bean's class declares is.
+  declares is a handler, and it's refused the way a static method the bean's class declares is. A static method of
+  the same signature below it hides it and doesn't override it, so when Spring's search gives that method the
+  superclass method's annotation, it's refused at startup like the package-private case above. When it repeats the
+  annotation, both methods are handlers.
 
 A handler's event type and a factory's state type are read against the bean's class with Spring's `ResolvableType`.
 So `on(E event)` on `Base<E>` subscribes to `Placed` on a class that extends `Base<Placed>`. When the class doesn't give
 `E` a type, as a raw `extends Base` doesn't, a handler gets the erasure of `E` as before, and a factory whose state type
-is a type variable fails at startup with the error it gave before.
+is a type variable fails at startup with the error it gave before. The bridge the compiler adds to a public class for
+a public method it inherits from a superclass that isn't public has only the erased types, so the types are read from
+the method the bridge calls.
 
 The scan reads the class behind a proxy it can unwrap, as in 0.34.0. A handler found on that class runs through the
 proxy, so advice such as `@Transactional` still applies. When a JDK interface proxy doesn't have that method, because
@@ -102,11 +107,13 @@ as Spring's `@EventListener` does.
 
 The key that tells whether a handler is already registered is the bean name, the method's name and its parameter
 types, as in 0.34.0, and each key records the methods registered under it. A later pass of the scan over the same bean
-skips a recorded method. A method of the same signature that isn't recorded counts as the same handler, as in 0.34.0,
-unless the scan that found it also found a recorded method of that signature. So a prototype whose factory returns two
-unrelated classes, each with a private handler of one signature, registers the handler of the first class only. A
-private method on a superclass and a private method of the same signature on the bean's class register as two
-handlers, since a scan of the bean's class finds both.
+skips a method that is the same handler as a recorded one. That is the recorded method itself, a method that
+overrides it or that it overrides, or a method of a class unrelated to its class, as in 0.34.0. So a prototype whose
+factory returns two unrelated classes, each with a private handler of one signature, registers the handler of the
+first class only. A private method on a superclass and a method of the same signature on the bean's class don't
+override each other, so they register as two handlers, in whichever order the instances come. The relation between
+the methods decides this, not what one scan found, since successive instances of a prototype can be of different
+classes in one class tree.
 
 `invokeDescriptorFactory` runs a factory method that the bean's class declares or inherits unchanged. It refuses a bean
 whose class overrides the method, since that runs code the scan didn't read. Two proxies can't be unwrapped to their
@@ -170,6 +177,13 @@ I rejected three smaller changes:
   when the bean that inherits it is behind a CGLIB proxy. A factory method there fails only when the proxy's target
   can't be unwrapped.
 - A handler declared with a type variable on a superclass subscribes to the type the bean's class gives the variable.
+  That includes a handler of the bridge kind, which 0.34.0 subscribed to the variable's bound, so it stops getting
+  events of the bound's other types. A factory method of that kind found no state type in 0.34.0 and failed at
+  startup unless it named its store, and now gets the zero-config store.
+- A static method that hides an annotated static superclass method ran under that method's annotation in 0.34.0. Now
+  the application fails at startup when the hiding method has no annotation of its own, and registers both when it
+  repeats the annotation. A hidden static subscription handler, refused before too, now fails with the scan's
+  `IllegalStateException` instead of `SubscriptionHandlerNotInvocableException`.
 - An application with a class that overrides a generic handler with a concrete parameter type starts, and the handler
   registers once.
 - A method without a handler annotation that shares its name and parameters with a package-private annotated method

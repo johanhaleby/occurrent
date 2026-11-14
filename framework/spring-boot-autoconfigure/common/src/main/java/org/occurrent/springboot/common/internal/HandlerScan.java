@@ -68,7 +68,7 @@ public final class HandlerScan {
      * inherits from a generic superclass or interface, such as {@code on(E event)} in a {@code Base<E>} that
      * {@code implementation} extends as {@code Base<OrderPlaced>}, then has {@code OrderPlaced} as its event type. A type
      * variable that {@code implementation} does not bind, through a raw supertype for example, keeps the type the
-     * method declares, its bound or {@code Object}.
+     * method declares, its bound or {@code Object}. A bridge method's types are read from the method it bridges.
      *
      * @param method                  the handler method
      * @param implementation          the class whose instances the handler runs on, see {@link #implementationClassOf(Object)}
@@ -77,6 +77,26 @@ public final class HandlerScan {
      * @return the classified parameters, in declaration order
      */
     public static List<HandlerParameter> analyzeParameters(Method method, Class<?> implementation, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
+        // The bridge javac adds to a public class for a public method it inherits from a superclass that isn't public
+        // has the erased parameter types and no generic signature, so the types are read from the method it bridges
+        return classifyParameters(method, BridgeMethodResolver.findBridgedMethod(method), implementation, isMetadataParameter, supportsStreamAccessors);
+    }
+
+    /**
+     * Classify each parameter of a subscription handler, reading each parameter's type from {@code method} itself as
+     * its declaring class sees it, so a type variable gives its bound and a bridge method its erased types, as
+     * {@link SubscriptionAnnotations#analyzeParameters(Method, Predicate, boolean)} did in 0.34.0.
+     *
+     * @param method                  the handler method
+     * @param isMetadataParameter     whether a parameter type is a metadata parameter
+     * @param supportsStreamAccessors whether {@code @StreamId}/{@code @StreamVersion} parameters are allowed
+     * @return the classified parameters, in declaration order
+     */
+    public static List<HandlerParameter> analyzeDeclaredParameters(Method method, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
+        return classifyParameters(method, method, method.getDeclaringClass(), isMetadataParameter, supportsStreamAccessors);
+    }
+
+    private static List<HandlerParameter> classifyParameters(Method method, Method typeSource, Class<?> implementation, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
         List<HandlerParameter> parameters = new ArrayList<>();
         boolean hasEvent = false;
         boolean hasMetadata = false;
@@ -85,7 +105,7 @@ public final class HandlerScan {
         Parameter[] declaredParameters = method.getParameters();
         for (int index = 0; index < declaredParameters.length; index++) {
             Parameter parameter = declaredParameters[index];
-            Class<?> type = ResolvableType.forMethodParameter(method, index, implementation).resolve(parameter.getType());
+            Class<?> type = ResolvableType.forMethodParameter(typeSource, index, implementation).resolve(typeSource.getParameterTypes()[index]);
             boolean streamIdAnnotated = parameter.isAnnotationPresent(StreamId.class);
             boolean streamVersionAnnotated = parameter.isAnnotationPresent(StreamVersion.class);
             if (streamIdAnnotated && streamVersionAnnotated) {
@@ -224,7 +244,8 @@ public final class HandlerScan {
      * own for example, or one the method itself declares
      */
     public static @Nullable Class<?> returnTypeArgument(Method method, Class<?> implementation, int index) {
-        if (!(method.getGenericReturnType() instanceof ParameterizedType returnType) || returnType.getActualTypeArguments().length <= index) {
+        // A bridge has the raw return type, so it is read from the method the bridge calls, as analyzeParameters does
+        if (!(BridgeMethodResolver.findBridgedMethod(method).getGenericReturnType() instanceof ParameterizedType returnType) || returnType.getActualTypeArguments().length <= index) {
             return null;
         }
         Type argument = returnType.getActualTypeArguments()[index];
@@ -445,6 +466,26 @@ public final class HandlerScan {
             }
         }
         return false;
+    }
+
+    // Whether two methods of one name and parameter types, from scans of instances of one bean, are one handler. They
+    // are when one overrides the other, or when their classes are unrelated, since a bean whose instances come from
+    // either class has one handler of that signature, as in 0.34.0. A private method and a method of the same
+    // signature that its subclass declares don't override each other, so they are two handlers. The methods of one
+    // class with one signature are that class's method and the bridges the compiler adds for it
+    static boolean isSameHandler(Method a, Method b) {
+        Class<?> aClass = a.getDeclaringClass();
+        Class<?> bClass = b.getDeclaringClass();
+        if (aClass == bClass) {
+            return true;
+        }
+        if (bClass.isAssignableFrom(aClass)) {
+            return overrides(a, b);
+        }
+        if (aClass.isAssignableFrom(bClass)) {
+            return overrides(b, a);
+        }
+        return true;
     }
 
     // Whether type or a superclass of type below method's declaring class declares an instance method of method's

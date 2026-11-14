@@ -105,7 +105,7 @@ public final class SubscriptionAnnotations {
      * parameter is rejected, because a DCB handler's stream id/version are internal partition values, not domain ones.
      */
     public static List<HandlerParameter> analyzeParameters(Method method, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
-        return HandlerScan.analyzeParameters(method, method.getDeclaringClass(), isMetadataParameter, supportsStreamAccessors);
+        return HandlerScan.analyzeDeclaredParameters(method, isMetadataParameter, supportsStreamAccessors);
     }
 
     public static Class<?> eventTypeOf(List<HandlerParameter> parameters) {
