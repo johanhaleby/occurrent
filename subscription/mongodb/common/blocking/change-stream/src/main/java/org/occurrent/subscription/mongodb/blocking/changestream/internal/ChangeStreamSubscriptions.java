@@ -196,7 +196,8 @@ public final class ChangeStreamSubscriptions {
     // A refused checkpoint write must never be retried, on either retry loop below. The call sites already pass
     // their own predicate, which RetryExecution combines with the strategy's own.
     private static final Predicate<Throwable> NOT_A_REFUSED_CHECKPOINT_WRITE = e -> !(e instanceof CheckpointWriteConditionNotFulfilledException);
-    // Nor a server that gives no position to record for the present, since asking again gets the same answer
+    // Nor a read of the present that gave no position. A start at the present is refused and a restart after a loss of
+    // history is held paused until a resume reads again, although a read after the next write could give a position
     private static final Predicate<Throwable> NOT_WITHOUT_A_POSITION = e -> !(e instanceof NoPositionAtThePresent);
     private final Predicate<Throwable> RETRYABLE = NOT_SHUTDOWN.and(NOT_A_REFUSED_CHECKPOINT_WRITE).and(NOT_WITHOUT_A_POSITION);
 
