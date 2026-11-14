@@ -2290,11 +2290,11 @@ affected too.
 
 * While the earlier call runs, the resumed subscription calls the action for no event. An action that never returns
   holds the resumed subscription back for as long as it runs, where 0.34.0 delivered the events after it.
-* `resumeSubscription(id)` and `start(true)` return, and `waitUntilStarted(..)` answers `true`, once the change stream
-  has opened, without waiting for that call.
+* `start(true)` returns, and `waitUntilStarted(..)` answers `true`, once the change stream has opened, without waiting
+  for that call. `resumeSubscription(id)` returns without waiting for either.
 * When MongoDB reports as the resumed change stream opens that the history is lost, the subscription waits for that
-  call too, before it does anything about the loss. It counts as started once it waits, so `resumeSubscription(id)`,
-  `start(true)` and `waitUntilStarted(..)` don't wait for that call there either.
+  call too, before it does anything about the loss. It counts as started once it waits, so `start(true)` and
+  `waitUntilStarted(..)` don't wait for that call there either.
 * A warning in the log names the subscription when it starts to wait, and another says how long it waited once the call
   returns.
 * Under a `CompetingConsumerSubscriptionModel` the node whose subscription waits keeps the lease meanwhile, so no other
