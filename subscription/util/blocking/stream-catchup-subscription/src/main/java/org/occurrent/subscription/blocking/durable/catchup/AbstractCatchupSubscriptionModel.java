@@ -350,10 +350,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      *                                with {@link CatchupCannotResumeException} until the subscription is cancelled, or
      *                                until {@link AbstractCatchupSubscriptionModel#resumeSubscription(String, StartAt)}
      *                                resumes it at a position the live delegate still has the history from.
+     * @param didNotGoLive            Set once a replay its subscribe started ended before the live delegate got the
+     *                                subscription, at its handover too, and cleared once a replay hands it over, so a
+     *                                resume at a given position doesn't refuse it as running.
      */
-    // didNotGoLive is set once a replay its subscribe started ended before the live delegate got the subscription, at
-    // its handover too, and cleared once a replay hands it over, so a resume at a given position doesn't refuse it as
-    // running
     private record Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action,
                               CompletableFuture<Void> cancelledReplayReturned, AtomicReference<@Nullable Checkpoint> lostLiveStart,
                               HistoryLost historyLost, AtomicBoolean didNotGoLive) {
@@ -1400,6 +1400,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
+    private void didNotGoLive(String subscriptionId) {
+        Subscribed made = subscribed.get(subscriptionId);
+        if (made != null) {
+            made.didNotGoLive().set(true);
+        }
+    }
+
     /**
      * Runs {@code handover}, the handover of the calling attempt, under the handover lock of {@code subscriptionId}.
      * When it throws, what comes of the attempt is decided before the lock is released, as {@link #runAgainAfter}
@@ -1417,9 +1424,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     // Asked for the subscription the live delegate didn't get, so it goes with it. Still under the lock
                     // the pause was recorded under, so no later subscription for the id has asked for one yet.
                     pauseRequestedDuringCatchup.remove(subscriptionId);
-                    Subscribed made = subscribed.get(subscriptionId);
-                    if (made != null && !attempt.wentLive) {
-                        made.didNotGoLive().set(true);
+                    if (!attempt.wentLive) {
+                        didNotGoLive(subscriptionId);
                     }
                 }
                 attempt.decidedFailure = new DecidedFailure(failure, runAgainAfter(subscriptionId, attempt, failure));
@@ -3790,9 +3796,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 currentAttempt.remove(subscriptionId, attempt);
                 runningCatchupSubscriptions.remove(subscriptionId);
                 pauseRequestedDuringCatchup.remove(subscriptionId);
-                Subscribed made = subscribed.get(subscriptionId);
-                if (made != null && !attempt.replay.resuming && !attempt.wentLive && !attempt.parked && !attempt.abandoned()) {
-                    made.didNotGoLive().set(true);
+                if (!attempt.replay.resuming && !attempt.wentLive && !attempt.parked && !attempt.abandoned()) {
+                    didNotGoLive(subscriptionId);
                 }
             }
             // Logged as well as reported, since a caller that never calls waitUntilStarted, such as the Spring Boot
