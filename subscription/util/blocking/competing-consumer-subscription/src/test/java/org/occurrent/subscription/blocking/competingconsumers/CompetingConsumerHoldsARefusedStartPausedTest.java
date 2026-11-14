@@ -120,7 +120,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         model.onConsumeProhibited(ID, NODE);
         await().during(NO_FURTHER_CALLS_FOR).atMost(NO_FURTHER_CALLS_FOR.plusSeconds(5)).untilAsserted(() ->
                 assertThat(wrapped.calls.get()).as("calls into the wrapped model after the refusal").isEqualTo(callsAfterTheRefusal));
-        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+        assertThat(errorsLogged()).as("errors logged").singleElement().asString().contains("is refused again");
     }
 
     @Test
@@ -461,7 +461,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         assertThat(thrown).as("thrown by the grant to the strategy").isNull();
         assertThat(wrapped.callNames).as("calls into the wrapped model").containsExactly("resumeSubscription");
         assertHeldPaused();
-        assertThat(errorsLogged()).as("errors logged").hasSize(1);
+        assertThat(errorsLogged()).as("errors logged").singleElement().asString().contains("is refused again");
     }
 
     @Test
