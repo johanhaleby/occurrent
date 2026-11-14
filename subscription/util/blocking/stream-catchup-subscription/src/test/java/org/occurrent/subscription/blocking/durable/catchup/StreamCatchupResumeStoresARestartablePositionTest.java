@@ -167,12 +167,13 @@ class StreamCatchupResumeStoresARestartablePositionTest {
         liveModel.notRestartingAt(LATER_TOKEN);
 
         // When
-        catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN));
+        Subscription resumed = catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN));
 
         // Then
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10))).as("the resumed subscription started").isTrue();
         assertAll(
                 () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(storedBefore),
-                () -> await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(liveModel.openedAt).as("the live starts the live model opened").containsExactly(LATER_TOKEN))
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").containsExactly(LATER_TOKEN)
         );
     }
 
@@ -182,12 +183,13 @@ class StreamCatchupResumeStoresARestartablePositionTest {
         heldTakeoverReplayWithACatchupPositionStored();
 
         // When
-        catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN));
+        Subscription resumed = catchup.resumeSubscription(ID, StartAt.checkpoint(LATER_TOKEN));
 
         // Then
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10))).as("the resumed subscription started").isTrue();
         assertAll(
                 () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(LATER_TOKEN),
-                () -> await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(liveModel.openedAt).as("the live starts the live model opened").containsExactly(LATER_TOKEN))
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").containsExactly(LATER_TOKEN)
         );
     }
 
@@ -202,13 +204,14 @@ class StreamCatchupResumeStoresARestartablePositionTest {
         });
 
         // When
-        catchup.resumeSubscription(ID, dynamic);
+        Subscription resumed = catchup.resumeSubscription(ID, dynamic);
 
         // Then
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10))).as("the resumed subscription started").isTrue();
         long askedForTheCatchup = askedFor.stream().filter(StreamCatchupSubscriptionModel.class::equals).count();
         assertAll(
                 () -> assertThat(askedForTheCatchup).as("times the function was asked for the catch-up's context").isEqualTo(1),
-                () -> await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(liveModel.openedAt).as("the live starts the live model opened, the position stored").containsExactly(storage.read(ID)))
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened, the position stored").containsExactly(storage.read(ID))
         );
     }
 
@@ -220,11 +223,12 @@ class StreamCatchupResumeStoresARestartablePositionTest {
         StartAt dynamic = StartAt.dynamic(context -> StreamCatchupSubscriptionModel.class.equals(context.subscriptionModelType()) ? null : StartAt.checkpoint(answeredTheLiveModel));
 
         // When
-        catchup.resumeSubscription(ID, dynamic);
+        Subscription resumed = catchup.resumeSubscription(ID, dynamic);
 
         // Then
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10))).as("the resumed subscription started").isTrue();
         assertAll(
-                () -> await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(liveModel.openedAt).as("the live starts the live model opened, the position the function answered it").containsExactly(answeredTheLiveModel)),
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened, the position the function answered it").containsExactly(answeredTheLiveModel),
                 () -> assertThat(storage.read(ID)).as("stored position").isEqualTo(storedBefore)
         );
     }
