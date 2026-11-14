@@ -847,7 +847,9 @@ the reservation, as [the next section](#an-append-on-mongodb-waits-for-majority-
 Through a mongos, a read without `withVersions()` reads the markers and the events in separate operations, which can
 reach different shards. Outside a transaction or session of yours, the store reads the markers, the position counter
 and the events in a causally consistent session of its own. When the markers read sees a marker that a matching event
-moved, the events read waits for that event's commit on the shard that holds the events, and returns the event.
+moved, the events read waits for that event's commit on the shard that holds the events, and returns the event. I tested
+that only with no read concern or read preference set, so that the reads go to the primary. With one set on the client,
+the database, the template or in a Spring store's query options, the read may still miss the event.
 
 Such a read can take as long as that commit. A marker in its token that's on the shard holding the events can still be
 from before the event.

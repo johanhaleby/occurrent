@@ -42,7 +42,8 @@ ADR 175 considered reading the token and the events in one snapshot transaction,
 Through a mongos, a plain read that runs outside any session of the caller's reads the markers, the counter and the
 events in one causally consistent `ClientSession` of the store's own, in that order, and closes the session afterwards.
 The events read then sends an `afterClusterTime` at or above the markers read, so when the markers read saw a marker
-E incremented, the events' shard waits for E's commit before it answers.
+E incremented, the events' shard waits for E's commit before it answers. The probe showed that at the primary at read
+concern local and majority, and the tests show it at the primary with no read concern or read preference set.
 
 What counts as outside a session of the caller's differs per store.
 
@@ -93,11 +94,15 @@ The rest stays as it was.
 
 ## Consequences
 
-- Through a mongos, when the markers read of a plain read outside a caller's session sees a marker E incremented, the
-  read returns E. A test on two shards for each store holds E's commit on the events' shard, starts the read, releases
-  the hold after up to 2 seconds and asserts that the read waited and returns E. It does so for criteria whose only
-  tag marker is on the first shard, for `DcbCriteria.all()` after E was appended with an `all()` condition, and for
-  criteria with a tag marker on each shard. All three returned no events before this change.
+- Through a mongos, at the default read concern and read preference, when the markers read of a plain read outside a
+  caller's session sees a marker E incremented, the read returns E. A test on two shards for each store holds E's
+  commit on the events' shard, starts the read, releases the hold after up to 2 seconds and asserts that the read
+  waited and returns E. It does so for criteria whose only tag marker is on the first shard, for `DcbCriteria.all()`
+  after E was appended with an `all()` condition, and for criteria with a tag marker on each shard. All three returned no events before this change.
+- A read concern or read preference set on the client, the database, the template or in a Spring store's query options
+  isn't covered, and the read may still miss E there. The Spring stores apply their query options to the events query
+  and not to the markers query, as 0.34.0 did, so a `Query` there can read the events at another read concern or read
+  preference than the markers. That gap is older than this decision and has an issue of its own.
 - The token isn't one point in time. The markers read is the session's first operation and sends no
   `afterClusterTime`, so a marker on the events' shard can be from before E. The test with a tag marker on each shard
   asserts that the read returns E with `course:c1` at version 1 and `student:s1` at version 0.

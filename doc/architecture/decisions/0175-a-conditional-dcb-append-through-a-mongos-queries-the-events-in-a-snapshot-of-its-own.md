@@ -133,7 +133,7 @@ version.
 - This doesn't make a plain read through a mongos safe. A token can still hold E's markers while the read misses E, and
   then no marker moves and the append passes. That's [#1479](https://github.com/johanhaleby/occurrent/issues/1479),
   and the check alone can't see it. [ADR 176](0176-a-plain-dcb-read-through-a-mongos-reads-in-a-causally-consistent-session-of-its-own.md) decides
-  it for a plain read outside a session of the caller's.
+  it for a plain read outside a session of the caller's, at the default read concern and read preference.
 
 ## Open point: a condition without a token in a caller's transaction
 

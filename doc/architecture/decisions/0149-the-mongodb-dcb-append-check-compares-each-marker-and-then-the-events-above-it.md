@@ -164,7 +164,7 @@ same probe it blocked during the window and the append was refused. A stream tha
 plain read, and then has the hole. In that probe, holding E's commit for 9 seconds made the read give up on its snapshot
 after 5 seconds, report no versions and let the append pass. ADR 148 has the other reasons a read reports none.
 [ADR 176](0176-a-plain-dcb-read-through-a-mongos-reads-in-a-causally-consistent-session-of-its-own.md) makes a plain read through a mongos outside a session of the caller's wait for E's
-commit on the events' shard.
+commit on the events' shard, at the default read concern and read preference.
 
 ### Why a matching event can't get through
 
