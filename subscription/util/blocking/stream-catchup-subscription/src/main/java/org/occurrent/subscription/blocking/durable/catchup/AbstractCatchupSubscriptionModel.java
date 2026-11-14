@@ -824,8 +824,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * <li>A checkpoint the live delegate answers {@code true} for in {@link RepositionableSubscriptions#restartsAt(Checkpoint)}
      * is stored as given.</li>
      * <li>A catch-up checkpoint with a live start, or one at the beginning, is stored as given.</li>
-     * <li>A catch-up time without a live start is stored with the present position as its live start. A DCB catch-up
-     * replays only from a position, so it stores a time only by the first rule.</li>
+     * <li>A catch-up time without a live start is stored with the present position as its live start, except on a DCB
+     * catch-up. A DCB catch-up replays only from a position, so it stores a time only by the first rule.</li>
      * <li>A start from now stores the present position by the first rule, and the live delegate then resumes the
      * subscription from that position.</li>
      * </ul>
