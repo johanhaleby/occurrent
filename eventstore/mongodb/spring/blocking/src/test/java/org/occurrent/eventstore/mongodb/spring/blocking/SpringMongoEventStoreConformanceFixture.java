@@ -53,13 +53,23 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
     private final SpringMongoEventStore eventStore;
     private final String collection;
     private final TimeRepresentation timeRepresentation;
+    private final boolean spreadTypeMarkerWrites;
 
     SpringMongoEventStoreConformanceFixture(ConnectionString connectionString) {
         this(connectionString, TimeRepresentation.RFC_3339_STRING);
     }
 
     SpringMongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation) {
+        this(connectionString, timeRepresentation, false);
+    }
+
+    static SpringMongoEventStoreConformanceFixture spreadingTypeMarkerWrites(ConnectionString connectionString) {
+        return new SpringMongoEventStoreConformanceFixture(connectionString, TimeRepresentation.RFC_3339_STRING, true);
+    }
+
+    private SpringMongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation, boolean spreadTypeMarkerWrites) {
         this.timeRepresentation = timeRepresentation;
+        this.spreadTypeMarkerWrites = spreadTypeMarkerWrites;
         this.mongoClient = MongoClients.create(connectionString);
         String database = requireNonNull(connectionString.getDatabase());
         this.collection = connectionString.getCollection();
@@ -70,6 +80,7 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
                 .transactionConfig(transactionManager)
                 .timeRepresentation(timeRepresentation)
                 .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                .spreadTypeMarkerWrites(spreadTypeMarkerWrites)
                 .build();
         this.eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
     }
@@ -145,6 +156,7 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
                     .transactionConfig(new HoldingTransactionTemplate(transactionManager, hold))
                     .timeRepresentation(timeRepresentation)
                     .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                    .spreadTypeMarkerWrites(spreadTypeMarkerWrites)
                     .build();
             SpringMongoEventStore holding = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
             return HeldAppend.of(hold, holding, () -> {

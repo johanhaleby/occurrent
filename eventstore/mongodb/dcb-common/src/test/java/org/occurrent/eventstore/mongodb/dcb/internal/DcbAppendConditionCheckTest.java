@@ -31,6 +31,7 @@ import org.occurrent.eventstore.api.dcb.DcbConsistencyToken.MarkerObservation;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.ItemQuery;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.KeySelection;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Pass;
@@ -58,8 +59,6 @@ class DcbAppendConditionCheckTest {
     private static final String KEY_A = "tag:a:1";
     private static final String KEY_B = "tag:b:1";
     private static final String KEY_Z = "tag:z:1";
-    private static final String KEY_X = "type:X";
-    private static final String KEY_Y = "type:Y";
     private static final DcbCriterion TAGS_A = DcbCriteria.tags(Tag.of("a", "1"));
     private static final DcbCriterion TAGS_A_AND_B = DcbCriteria.tags(Tag.of("a", "1"), Tag.of("b", "1"));
     private static final DcbCriterion TAGS_A_AND_Z = DcbCriteria.tags(Tag.of("a", "1"), Tag.of("z", "1"));
@@ -175,19 +174,19 @@ class DcbAppendConditionCheckTest {
     @Test
     void skips_an_item_without_tags_when_none_of_its_type_markers_moved_and_asks_only_for_the_item_that_moved() {
         DcbCriteria criteria = DcbCriteria.anyOf(TYPE_X, TAGS_A);
-        Map<String, MarkerObservation> read = read(KEY_X, observation(E1, 1), KEY_A, observation(E2, 1));
-        Map<String, MarkerObservation> now = read(KEY_X, observation(E1, 1), KEY_A, observation(E2, 2));
+        Map<String, MarkerObservation> read = with(stripes("X", observation(E1, 1)), KEY_A, observation(E2, 1));
+        Map<String, MarkerObservation> now = with(stripes("X", observation(E1, 1)), KEY_A, observation(E2, 2));
 
         DcbAppendConditionCheck.Outcome outcome = check(criteria, read, now);
 
-        assertThat(outcome).as("a matching event of type X increments type:X").isEqualTo(query(TAGS_A, new KeySelection(KEY_A, 1)));
+        assertThat(outcome).as("a matching event of type X increments one stripe of type X").isEqualTo(query(TAGS_A, new KeySelection(KEY_A, 1)));
     }
 
     @Test
     void passes_when_the_only_moved_marker_belongs_to_an_item_with_tags_that_another_tag_marker_rules_out() {
         DcbCriteria criteria = DcbCriteria.anyOf(TYPE_X, TAGS_A_AND_B);
-        Map<String, MarkerObservation> read = read(KEY_X, observation(E1, 1), KEY_A, observation(E2, 1), KEY_B, observation(E2, 1));
-        Map<String, MarkerObservation> now = read(KEY_X, observation(E1, 1), KEY_A, observation(E2, 2), KEY_B, observation(E2, 1));
+        Map<String, MarkerObservation> read = with(with(stripes("X", observation(E1, 1)), KEY_A, observation(E2, 1)), KEY_B, observation(E2, 1));
+        Map<String, MarkerObservation> now = with(with(stripes("X", observation(E1, 1)), KEY_A, observation(E2, 2)), KEY_B, observation(E2, 1));
 
         DcbAppendConditionCheck.Outcome outcome = check(criteria, read, now);
 
@@ -196,12 +195,14 @@ class DcbAppendConditionCheckTest {
 
     @Test
     void asks_for_the_events_above_each_moved_type_marker_of_an_item_without_tags_and_not_for_the_unmoved_ones() {
-        Map<String, MarkerObservation> read = read(KEY_X, observation(E1, 3), KEY_Y, observation(E2, 5));
-        Map<String, MarkerObservation> now = read(KEY_X, observation(E1, 3), KEY_Y, observation(E2, 6));
+        String movedStripe = DcbMarkerVersionsSupport.stripeKey("Y", 3);
+        Map<String, MarkerObservation> read = new LinkedHashMap<>(stripes("X", observation(E1, 3)));
+        read.putAll(stripes("Y", observation(E2, 5)));
+        Map<String, MarkerObservation> now = with(read, movedStripe, observation(E2, 6));
 
         DcbAppendConditionCheck.Outcome outcome = check(TYPES_X_AND_Y, read, now);
 
-        assertThat(outcome).as("an event of type Y matches, and one of type X would have moved type:X").isEqualTo(query(TYPES_X_AND_Y, new KeySelection(KEY_Y, 5)));
+        assertThat(outcome).as("an event of type Y matches, and it moved one stripe of Y while no stripe of X moved").isEqualTo(query(TYPES_X_AND_Y, new KeySelection(movedStripe, 5)));
     }
 
     @Test
@@ -442,6 +443,20 @@ class DcbAppendConditionCheckTest {
     private static Map<String, MarkerObservation> read(String key1, MarkerObservation observation1, String key2, MarkerObservation observation2, String key3, MarkerObservation observation3) {
         Map<String, MarkerObservation> map = read(key1, observation1, key2, observation2);
         map.put(key3, observation3);
+        return map;
+    }
+
+    private static Map<String, MarkerObservation> stripes(String type, MarkerObservation observation) {
+        Map<String, MarkerObservation> map = new LinkedHashMap<>();
+        for (int stripe = 0; stripe < DcbMarkerVersionsSupport.STRIPES; stripe++) {
+            map.put(DcbMarkerVersionsSupport.stripeKey(type, stripe), observation);
+        }
+        return map;
+    }
+
+    private static Map<String, MarkerObservation> with(Map<String, MarkerObservation> observed, String key, MarkerObservation observation) {
+        Map<String, MarkerObservation> map = new LinkedHashMap<>(observed);
+        map.put(key, observation);
         return map;
     }
 

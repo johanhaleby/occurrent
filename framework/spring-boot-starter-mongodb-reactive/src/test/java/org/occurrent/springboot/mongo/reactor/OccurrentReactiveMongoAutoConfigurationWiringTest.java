@@ -38,6 +38,7 @@ import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
 import org.occurrent.eventstore.mongodb.spring.reactor.CommitRetryingReactiveMongoTransactionManager;
+import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
@@ -261,6 +262,24 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).doesNotHaveBean(ReactorDurableSubscriptionModel.class);
+                });
+    }
+
+    @Test
+    void does_not_spread_type_marker_writes_when_the_property_is_unset() {
+        contextRunner().run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(EventStoreConfig.class).spreadTypeMarkerWrites).isFalse();
+        });
+    }
+
+    @Test
+    void spreads_type_marker_writes_when_the_property_is_true() {
+        contextRunner()
+                .withPropertyValues("occurrent.event-store.mongodb.spread-type-marker-writes=true")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(EventStoreConfig.class).spreadTypeMarkerWrites).isTrue();
                 });
     }
 

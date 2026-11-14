@@ -209,6 +209,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final boolean requireBackfilledPosition;
     private final boolean requireRepairedEvents;
     private final boolean resumeFromMarkerVersions;
+    private final boolean spreadTypeMarkerWrites;
     private final boolean runsOnReplicaSet;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final Duration markerVersionsCommitTimeout;
@@ -239,6 +240,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         this.requireBackfilledPosition = config.requireBackfilledPosition;
         this.requireRepairedEvents = config.requireRepairedEvents;
         this.resumeFromMarkerVersions = config.resumeFromMarkerVersions;
+        this.spreadTypeMarkerWrites = config.spreadTypeMarkerWrites;
         this.markerVersionsTransactionOptions = DcbMarkerVersionsDocuments.readOnlySnapshotTransactionOptions(config.markerVersionsCommitTimeout);
         this.markerVersionsCommitTimeout = config.markerVersionsCommitTimeout;
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
@@ -620,6 +622,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private static Criteria markerVersionsCriteria(List<DcbMarkerVersionsDocuments.Selection> selections) {
+        if (selections.isEmpty()) {
+            return where(ID).in(List.of());
+        }
         List<Criteria> elements = selections.stream()
                 .map(selection -> where(DcbMarkerModel.EVENT_MARKER_VERSIONS).elemMatch(
                         where(DcbMarkerModel.EVENT_MARKER_VERSIONS_KEY).is(selection.key())
@@ -696,6 +701,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             // is minted unconditionally, unlike the stream write path. Minted inside this defer, per subscription, so
             // a reused publisher gets a fresh id for every append execution instead of reusing the one from its first.
             AppendId appendId = AppendId.mint();
+            // The same stripe for every event and every attempt of this append, since the append id is created once
+            int stripe = DcbMarkerModel.stripeOf(appendId, spreadTypeMarkerWrites);
 
             return reservePositions(eventCount).flatMap(firstPosition -> {
                 long lastPosition = firstPosition + eventCount - 1;
@@ -703,17 +710,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                         currentStreamVersion(streamId).flatMap(currentStreamVersion -> {
                             final Mono<Map<String, Document>> conditionAndMarkers;
                             if (condition != null) {
-                                conditionAndMarkers = enforceAppendCondition(condition, eventsToAppend, lastPosition);
+                                conditionAndMarkers = enforceAppendCondition(condition, eventsToAppend, lastPosition, stripe);
                             } else {
                                 // An unconditional append still increments its events' markers, so a concurrent conditional append whose
                                 // criteria match one of these events, other than DcbCriteria.all() (ADR 0030), shares a marker with it,
                                 // serializes against it, and its check observes it. Without this, nothing forces a write-write conflict
                                 // and a concurrent conditional append's snapshot could miss this append (write skew). See ADR 0021.
-                                conditionAndMarkers = incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
+                                conditionAndMarkers = incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend, stripe), lastPosition);
                             }
                             return conditionAndMarkers.flatMap(markers -> {
                                 List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition, appendId);
-                                DcbMarkerVersionsDocuments.stampMarkerVersions(documents, eventsToAppend, markers);
+                                DcbMarkerVersionsDocuments.stampMarkerVersions(documents, eventsToAppend, markers, stripe);
                                 Optional<DcbMarkerVersions> markerVersions = resumeFromMarkerVersions ? DcbMarkerVersionsDocuments.appendedVersions(condition, markers) : Optional.empty();
                                 return insertAllDcb(streamId, currentStreamVersion, documents).thenReturn(new DcbAppendResult(firstPosition, lastPosition, eventCount, Optional.of(appendId), markerVersions));
                             });
@@ -726,7 +733,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         });
     }
 
-    private Mono<Map<String, Document>> enforceAppendCondition(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition) {
+    private Mono<Map<String, Document>> enforceAppendCondition(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition, int stripe) {
         Optional<DcbConsistencyToken> expectedToken = condition.consistencyToken();
         final Mono<Boolean> conflictMono;
         if (expectedToken.isPresent()) {
@@ -756,9 +763,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             // Increment a marker per key for the union of the query's keys and the appended events' keys. Always
             // increment the query's markers so a concurrent append whose events match the query is serialized even
             // when this append's own events do not match it. A query with DcbCriteria.all() is the exception, since no
-            // event has the match-all key among its own keys (ADR 0030).
+            // event has the match-all key among its own keys (ADR 0030). An item without tags has every stripe of its
+            // types among the query's keys, so this append shares a marker with an append of any of those types,
+            // whichever stripe that one writes.
             TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.criteria()));
-            markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
+            markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend, stripe));
             return incrementConflictMarkers(markerKeys, lastPosition);
         });
     }

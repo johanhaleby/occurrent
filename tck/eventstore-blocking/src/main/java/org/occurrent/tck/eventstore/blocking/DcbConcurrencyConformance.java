@@ -232,6 +232,24 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
 
     @Test
     @Timeout(120)
+    void two_type_scoped_conditions_on_the_same_type_cannot_both_win_when_their_events_share_no_tag() {
+        for (int iteration = 0; iteration < ITERATIONS; iteration++) {
+            String type = RESERVED + iteration;
+
+            // The two events have different tags on purpose. A shared tag would put a common tag marker under both
+            // writers and serialise them whatever the type markers do, so only the type is left to conflict on.
+            DcbCriteria byType = DcbCriteria.types(type);
+            DcbAppendCondition first = failIfEventsMatch(dcbEventStore().read(byType).consistencyToken());
+            DcbAppendCondition second = failIfEventsMatch(dcbEventStore().read(byType).consistencyToken());
+
+            assertExactlyOneWinnerOfTwo(iteration, "two type-scoped conditions on one type with disjoint event tags", byType,
+                    taggedEventWithId("first-" + iteration, type, "show:first-" + iteration), first,
+                    taggedEventWithId("second-" + iteration, type, "show:second-" + iteration), second);
+        }
+    }
+
+    @Test
+    @Timeout(120)
     void two_overlapping_tag_scoped_conditions_cannot_both_win() {
         for (int iteration = 0; iteration < ITERATIONS; iteration++) {
             String show = "show:" + iteration;

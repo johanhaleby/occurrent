@@ -55,13 +55,23 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
     private final BlockingEventStoreOverReactive bridge;
     private final String collection;
     private final TimeRepresentation timeRepresentation;
+    private final boolean spreadTypeMarkerWrites;
 
     ReactorMongoEventStoreConformanceFixture(ConnectionString connectionString) {
         this(connectionString, RFC_3339_STRING);
     }
 
     ReactorMongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation) {
+        this(connectionString, timeRepresentation, false);
+    }
+
+    static ReactorMongoEventStoreConformanceFixture spreadingTypeMarkerWrites(ConnectionString connectionString) {
+        return new ReactorMongoEventStoreConformanceFixture(connectionString, RFC_3339_STRING, true);
+    }
+
+    private ReactorMongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation, boolean spreadTypeMarkerWrites) {
         this.timeRepresentation = timeRepresentation;
+        this.spreadTypeMarkerWrites = spreadTypeMarkerWrites;
         this.mongoClient = MongoClients.create(connectionString);
         String database = requireNonNull(connectionString.getDatabase());
         this.collection = connectionString.getCollection();
@@ -72,6 +82,7 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
                 .transactionConfig(transactionManager)
                 .timeRepresentation(timeRepresentation)
                 .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                .spreadTypeMarkerWrites(spreadTypeMarkerWrites)
                 .build();
         this.bridge = BlockingEventStoreOverReactive.of(new ReactorMongoEventStore(mongoTemplate, eventStoreConfig));
     }
@@ -149,6 +160,7 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
                             : Mono.empty()))
                     .timeRepresentation(timeRepresentation)
                     .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                    .spreadTypeMarkerWrites(spreadTypeMarkerWrites)
                     .build();
             BlockingEventStoreOverReactive holding = BlockingEventStoreOverReactive.of(new ReactorMongoEventStore(mongoTemplate, eventStoreConfig));
             return HeldAppend.of(hold, holding, () -> {

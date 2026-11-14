@@ -20,6 +20,7 @@ import com.mongodb.WriteConcern;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.eventstore.api.AppendId;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
@@ -119,8 +120,8 @@ public final class DcbMarkerModel {
         return markerId.substring(MARKER_ID_PREFIX.length());
     }
 
-    // A key per tag for an item with tags, since every event the item matches has all of them, and a key per type for
-    // an item without tags. NEVER combine a tag and a type into a single "type:X+tag:t" key. Skew-safety (ADR 0021)
+    // A key per tag for an item with tags, since every event the item matches has all of them, and every stripe of
+    // each type for an item without tags. NEVER combine a tag and a type into a single "type:X+tag:t" key. Skew-safety (ADR 0021)
     // depends on it, because an event's own keys are one per tag and one per type, so an unconditional append would
     // never touch a combined key. The derivation is shared with the in-memory store.
     public static Set<String> queryMarkerKeys(DcbCriteria criteria) {
@@ -132,8 +133,16 @@ public final class DcbMarkerModel {
         return DcbMarkerVersionsSupport.items(criteria);
     }
 
-    public static Set<String> eventMarkerKeys(List<CloudEvent> events) {
-        return DcbMarkerVersionsSupport.eventMarkerKeys(events);
+    public static Set<String> eventMarkerKeys(List<CloudEvent> events, int stripe) {
+        return DcbMarkerVersionsSupport.eventMarkerKeys(events, stripe);
+    }
+
+    /**
+     * The stripe an append increments for each type of its events. It's the stripe its {@code appendId} picks when
+     * {@code spreadTypeMarkerWrites} is on, and stripe 0 when it's off.
+     */
+    public static int stripeOf(AppendId appendId, boolean spreadTypeMarkerWrites) {
+        return spreadTypeMarkerWrites ? DcbMarkerVersionsSupport.stripeOf(appendId) : 0;
     }
 
     public static Set<Tag> tagsOf(List<CloudEvent> events) {

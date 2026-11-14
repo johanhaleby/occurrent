@@ -40,6 +40,7 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -50,6 +51,7 @@ import java.util.function.Supplier;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
@@ -133,6 +135,17 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
             Optional<DcbAppendResult> result = executeWithVersions(store);
 
             assertThat(result.orElseThrow().markerVersions()).isEmpty();
+        }
+
+        @Test
+        void drops_the_versions_when_the_read_reported_the_key_as_absent_and_the_append_wrote_it() {
+            var absent = DcbMarkerVersions.of(CRITERIA, Map.of(KEY, MarkerVersion.absent()));
+            var store = new ScriptedStore(Optional.of(absent), Optional.of(versions("epoch-1", 1)));
+            AtomicReference<Optional<DcbAppendResult>> result = new AtomicReference<>();
+
+            assertThatCode(() -> result.set(executeWithVersions(store))).doesNotThrowAnyException();
+
+            assertThat(result.get().orElseThrow().markerVersions()).isEmpty();
         }
 
         @Test

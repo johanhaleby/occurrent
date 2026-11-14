@@ -18,6 +18,8 @@ package org.occurrent.eventstore.api.dcb.internal;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+import org.occurrent.eventstore.api.AppendId;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken.MarkerObservation;
 
@@ -37,14 +39,23 @@ public final class DcbMarkerVersionsSupport {
      */
     public static final String MATCH_ALL_MARKER_KEY = "all";
 
+    /**
+     * How many stripes the marker of an event type is split into. Every node that shares a store has to agree on it,
+     * so it's a constant and not a setting.
+     */
+    public static final int STRIPES = 8;
+
+    private static final String TYPE_KEY_PREFIX = "type:";
+    private static final String STRIPE_KEY_PREFIX = "typestripe:";
+
     private DcbMarkerVersionsSupport() {
     }
 
     /**
      * The marker keys of {@code criteria}, or {@link #MATCH_ALL_MARKER_KEY} for {@link DcbCriteria.MatchAll}. An item
      * with at least one tag gives one key per tag and none for its types, since every event it matches has all of its
-     * tags. An item without tags gives one key per type. Never combine a tag and a type into one key, ADR 21
-     * depends on it.
+     * tags. An item without tags gives every stripe of each of its types, whatever any setting says, since an event it
+     * matches increments one stripe of its type. Never combine a tag and a type into one key, ADR 21 depends on it.
      */
     public static Set<String> queryMarkerKeys(DcbCriteria criteria) {
         requireNonNull(criteria, "Criteria cannot be null");
@@ -54,7 +65,7 @@ public final class DcbMarkerVersionsSupport {
         TreeSet<String> keys = new TreeSet<>();
         for (DcbCriterion item : items(criteria)) {
             if (item.tags().isEmpty()) {
-                item.types().forEach(type -> keys.add(typeKey(type)));
+                item.types().forEach(type -> keys.addAll(stripeKeys(type)));
             } else {
                 item.tags().forEach(tag -> keys.add(tagKey(tag)));
             }
@@ -74,42 +85,73 @@ public final class DcbMarkerVersionsSupport {
     }
 
     /**
-     * The marker keys of one event, one per tag and one for its type.
+     * The marker keys of one event, one per tag and one for its type, on {@code stripe}.
      */
-    public static SortedSet<String> eventMarkerKeys(CloudEvent event) {
+    public static SortedSet<String> eventMarkerKeys(CloudEvent event, int stripe) {
         TreeSet<String> keys = new TreeSet<>();
         DcbCloudEvents.getTags(event).forEach(tag -> keys.add(tagKey(tag)));
-        keys.add(typeKey(event.getType()));
+        keys.add(stripeKey(event.getType(), stripe));
         return keys;
     }
 
     /**
-     * The union of the marker keys of {@code events}.
+     * The union of the marker keys of {@code events}, with each type on {@code stripe}.
      */
-    public static SortedSet<String> eventMarkerKeys(List<CloudEvent> events) {
+    public static SortedSet<String> eventMarkerKeys(List<CloudEvent> events, int stripe) {
         TreeSet<String> keys = new TreeSet<>();
-        events.forEach(event -> keys.addAll(eventMarkerKeys(event)));
+        events.forEach(event -> keys.addAll(eventMarkerKeys(event, stripe)));
         return keys;
+    }
+
+    /**
+     * The stripe an append increments for each type of its events when type marker writes are spread, the same for
+     * every event and every attempt of the append.
+     */
+    public static int stripeOf(AppendId appendId) {
+        return Math.floorMod(appendId.value().hashCode(), STRIPES);
     }
 
     /**
      * The marker keys a read after versions selects the events of {@code item} by. An event matching the item carries
-     * all its tags, so the item's first tag key in canonical order selects all of them. An item without tags has one
-     * key per type instead, and an event matching it has one of them.
+     * all its tags, so the item's first tag key in canonical order selects all of them. An item without tags has
+     * every stripe of each type instead, and an event matching it has one of them.
      */
     public static List<String> selectionKeys(DcbCriterion item) {
         if (!item.tags().isEmpty()) {
             return List.of(item.tags().stream().map(DcbMarkerVersionsSupport::tagKey).min(Comparator.naturalOrder()).orElseThrow());
         }
-        return item.types().stream().map(DcbMarkerVersionsSupport::typeKey).sorted().toList();
+        return item.types().stream().flatMap(type -> stripeKeys(type).stream()).sorted().toList();
     }
 
     public static String tagKey(Tag tag) {
         return "tag:" + tag.canonical();
     }
 
-    public static String typeKey(String type) {
-        return "type:" + type;
+    /**
+     * The marker key of stripe {@code stripe} of {@code type}, from 0 to {@link #STRIPES} - 1. Stripe 0 is the key a
+     * 0.34 node uses for the type. A prefix of its own keeps the other stripes from colliding with the key of a type
+     * whose name looks like a stripe.
+     */
+    public static String stripeKey(String type, int stripe) {
+        if (stripe < 0 || stripe >= STRIPES) {
+            throw new IllegalArgumentException("Stripe must be from 0 to " + (STRIPES - 1) + ", was " + stripe);
+        }
+        return stripe == 0 ? TYPE_KEY_PREFIX + type : STRIPE_KEY_PREFIX + stripe + ":" + type;
+    }
+
+    /**
+     * Whether {@code key} is a stripe key of some type, stripe 0 included.
+     */
+    public static boolean isTypeKey(String key) {
+        return key.startsWith(TYPE_KEY_PREFIX) || key.startsWith(STRIPE_KEY_PREFIX);
+    }
+
+    private static List<String> stripeKeys(String type) {
+        List<String> keys = new ArrayList<>(STRIPES);
+        for (int stripe = 0; stripe < STRIPES; stripe++) {
+            keys.add(stripeKey(type, stripe));
+        }
+        return keys;
     }
 
     /**
@@ -128,7 +170,8 @@ public final class DcbMarkerVersionsSupport {
 
     /**
      * The versions of {@code keys}, the marker keys of {@code criteria}, present only when every key has a reportable
-     * marker in {@code observed}.
+     * marker in {@code observed}. The exception is a type key whose marker is missing or has version 0, which is
+     * reported as absent.
      */
     public static Optional<DcbMarkerVersions> versionsOf(DcbCriteria criteria, Set<String> keys, Map<String, MarkerObservation> observed) {
         requireNonNull(criteria, "Criteria cannot be null");
@@ -138,6 +181,10 @@ public final class DcbMarkerVersionsSupport {
         Map<String, DcbMarkerVersions.MarkerVersion> versions = new TreeMap<>();
         for (String key : keys) {
             MarkerObservation marker = observed.get(key);
+            if (isAbsent(marker) && isTypeKey(key)) {
+                versions.put(key, DcbMarkerVersions.MarkerVersion.absent());
+                continue;
+            }
             if (marker == null || !reportable(marker)) {
                 return Optional.empty();
             }
@@ -151,6 +198,8 @@ public final class DcbMarkerVersionsSupport {
      * markers in {@code observed}. That needs {@code saved} to be read with {@code criteria}, the saved keys to be the
      * marker keys of {@code criteria}, and for each key
      * a marker with an epoch, the saved epoch, a version at or above the saved one, and the saved unstamped count.
+     * A saved entry may be absent for a type key only. A type marker that is still missing then passes, and one that
+     * exists now needs an epoch and an unstamped count of 0.
      */
     public static void requireResumable(DcbCriteria criteria, DcbMarkerVersions saved, Map<String, MarkerObservation> observed) {
         if (criteria instanceof DcbCriteria.MatchAll) {
@@ -173,7 +222,22 @@ public final class DcbMarkerVersionsSupport {
         for (String key : keys) {
             DcbMarkerVersions.MarkerVersion savedVersion = saved.get(key).orElseThrow();
             MarkerObservation marker = observed.get(key);
-            if (marker == null || marker.version() == 0) {
+            if (savedVersion.equals(DcbMarkerVersions.MarkerVersion.absent())) {
+                if (!isTypeKey(key)) {
+                    throw new DcbSnapshotInvalidException(criteria, saved, "The saved marker versions have an absent entry for marker key " + key + ", which isn't a type marker key");
+                }
+                if (isAbsent(marker)) {
+                    continue;
+                }
+                if (marker.epoch() == null) {
+                    throw new DcbSnapshotInvalidException(criteria, saved, "The marker for marker key " + key + " has no epoch");
+                }
+                if (marker.unstamped() != 0) {
+                    throw new DcbSnapshotInvalidException(criteria, saved, "The marker for marker key " + key + " was incremented by a writer that wrote no marker versions");
+                }
+                continue;
+            }
+            if (isAbsent(marker)) {
                 throw new DcbSnapshotInvalidException(criteria, saved, "There is no marker for marker key " + key);
             }
             if (marker.epoch() == null) {
@@ -189,6 +253,10 @@ public final class DcbMarkerVersionsSupport {
                 throw new DcbSnapshotInvalidException(criteria, saved, "The marker for marker key " + key + " was incremented by a writer that wrote no marker versions");
             }
         }
+    }
+
+    private static boolean isAbsent(@Nullable MarkerObservation marker) {
+        return marker == null || marker.version() == 0;
     }
 
     // A marker can be reported when it has an epoch and values a DcbMarkerVersions.MarkerVersion accepts

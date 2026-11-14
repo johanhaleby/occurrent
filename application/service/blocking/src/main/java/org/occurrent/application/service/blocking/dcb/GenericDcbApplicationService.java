@@ -313,7 +313,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
     // The append's versions are kept only when the read of the same attempt reported every marker key with the same
     // epoch, since a marker created again in between has a new epoch, and versions under it don't describe what the
-    // read returned
+    // read returned. A key the read reported as absent has no epoch, so it never matches
     private static DcbAppendResult withCheckedVersions(DcbAppendResult appendResult, boolean versionsRequested, DcbEventStream eventStream) {
         if (appendResult.markerVersions().isEmpty()) {
             return appendResult;
@@ -321,7 +321,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         DcbMarkerVersions appended = appendResult.markerVersions().get();
         boolean sameEpochs = versionsRequested && eventStream.markerVersions()
                 .map(read -> appended.markers().entrySet().stream().allMatch(entry -> read.get(entry.getKey())
-                        .map(readVersion -> readVersion.epoch().equals(entry.getValue().epoch()))
+                        .map(readVersion -> readVersion.epoch() != null && readVersion.epoch().equals(entry.getValue().epoch()))
                         .orElse(false)))
                 .orElse(false);
         return sameEpochs ? appendResult : new DcbAppendResult(appendResult.firstSequencePosition(), appendResult.lastSequencePosition(),

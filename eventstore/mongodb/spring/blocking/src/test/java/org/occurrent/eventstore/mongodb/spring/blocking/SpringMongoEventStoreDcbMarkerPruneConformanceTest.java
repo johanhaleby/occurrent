@@ -53,7 +53,11 @@ class SpringMongoEventStoreDcbMarkerPruneConformanceTest extends DcbMarkerPruneC
 
     @Override
     protected EventStoreFixture createFixture() {
-        return new SpringMongoEventStoreConformanceFixture(connectionString());
+        return spreadTypeMarkerWrites() ? SpringMongoEventStoreConformanceFixture.spreadingTypeMarkerWrites(connectionString()) : new SpringMongoEventStoreConformanceFixture(connectionString());
+    }
+
+    protected boolean spreadTypeMarkerWrites() {
+        return false;
     }
 
     @Override

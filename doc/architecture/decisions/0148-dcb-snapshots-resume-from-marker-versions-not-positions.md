@@ -13,7 +13,9 @@ both stacks and the DCB `@Snapshot` view. Amends [ADR 61](0061-first-class-snaps
 version is a position. Amends [ADR 21](0021-dcb-write-path-query-scoped-concurrency.md) on what pruning markers costs.
 Extends [ADR 84](0084-what-a-position-guarantees.md) with what a position can't be used for. Amended by
 [ADR 167](0167-a-dcb-read-reports-marker-versions-as-the-first-operation-of-a-transaction-the-service-opened.md),
-where the DCB application services read every command in the executor again.
+where the DCB application services read every command in the executor again. Amended by
+[ADR 162](0162-a-dcb-type-marker-is-split-into-stripes.md) on what a marker key looks like and on which keys saved
+versions need a marker for.
 
 ## Context
 
