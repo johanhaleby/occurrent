@@ -409,10 +409,11 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
-    // False when the run stops here, closed or refused. Only a position that takes the answer is refused here. A dynamic
-    // position goes on without the present, since it can resolve to a checkpoint, and is refused as its change stream
-    // opens if it resolves to the present then. A position a resume gave, or a restart from the present after a loss of
-    // history, goes on and reads the present for itself as its change stream opens
+    // False when the run stops here, closed or refused. Only the fixed position the subscription was made with is
+    // refused here. A dynamic position goes on without the present, since it can resolve to a checkpoint, and is
+    // refused as its change stream opens if it resolves to the present then. A fixed position a resume gave, or a
+    // restart from the present after a loss of history, goes on and reads the present for itself as its change stream
+    // opens
     private boolean awaitedThePresent(String subscriptionId, InternalSubscription internalSubscription) {
         try {
             return internalSubscription.presentAtSubscribe.awaitedBy(internalSubscription);
@@ -551,8 +552,9 @@ public final class ChangeStreamSubscriptions {
     // failure, and without the model's monitor, since whoever holds it may be waiting for this handle. Waiters are
     // released after the update, so the id is free before a released waiter throws. A timed wait that runs out during
     // the update can read the failure before that. The start refusal listeners are told last, and only when this run
-    // was still in the map.
+    // was still in the map. Logged at debug level before the update, and at error level only once it refused this run
     private void refuseStart(String subscriptionId, InternalSubscription internalSubscription, UnsupportedStartAtException refusal) {
+        log.debug("Cannot open the change stream of subscription {} at its start position.", subscriptionId, refusal);
         AtomicBoolean refused = new AtomicBoolean();
         runningSubscriptions.computeIfPresent(subscriptionId, (__, current) -> {
             if (current != internalSubscription) {
@@ -567,7 +569,7 @@ public final class ChangeStreamSubscriptions {
             log.error("Cannot open the change stream of subscription {} at its start position, will not restart subscription!", subscriptionId, refusal);
             startRefused(subscriptionId, refusal);
         } else {
-            log.debug("Cannot open the change stream of subscription {} at its start position, but it was paused, resumed or cancelled meanwhile, so it isn't refused.", subscriptionId, refusal);
+            log.debug("Subscription {} was paused, resumed or cancelled while its change stream failed to open, so it isn't refused.", subscriptionId);
         }
     }
 
