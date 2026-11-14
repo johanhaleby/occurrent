@@ -62,7 +62,8 @@ public final class DcbConsistencyToken {
     /**
      * What a read saw of one marker. A marker the read didn't find is {@link #absent()}. It's separate from
      * {@link DcbMarkerVersions.MarkerVersion}, which holds either an epoch and a version of at least 1 or no epoch and
-     * version 0, because a token also has to hold a marker that had a version and no epoch.
+     * version 0, because a token also has to hold what a read saw of a marker that {@code MarkerVersion} refuses, such
+     * as one with a version and no epoch.
      *
      * @param epoch     the marker's epoch, {@code null} when the marker has none
      * @param version   the marker's version
