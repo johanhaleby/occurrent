@@ -164,9 +164,11 @@ other sections compile fine and behave differently, so read them first.
   method that a bean's class inherits from a superclass, or gets as an interface default method, starts running, and
   replays the history on its first start when its `startAt` or `source = PUSH` asks for that. The application fails
   at startup when two beans run one annotated method, for example a bean of the class that declares it and a bean of
-  a subclass, or when a bean behind a CGLIB proxy inherits a final one. A method that shares its name and parameters
-  with a package-private annotated method in another package fails at startup instead of running in that method's
-  place. Compiles unchanged.
+  a subclass, or when a bean behind a CGLIB proxy inherits a final subscription handler. A method without a handler
+  annotation that shares its name and parameters with a package-private annotated method in another package fails at
+  startup instead of running in that method's place. A method that repeats the handler annotation of such a method, or
+  of a private superclass method, runs together with it, and with the same id the application fails at startup.
+  Compiles unchanged.
 
 ### Brokers
 
@@ -2121,7 +2123,9 @@ This covers `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Synchr
 which was never found either, runs too.
 
 An override registered before and still does. Without an annotation of its own, it runs under the overridden method's
-annotation, and when it repeats the annotation, it uses its own.
+annotation, and when it repeats the annotation, it uses its own. A method with the same name and parameters as a
+private superclass method, or as a package-private one in a superclass in another package, doesn't override it. When
+both have a handler annotation, both now register, see What changes below.
 
 ### Who is affected
 
@@ -2134,6 +2138,8 @@ Applications on either starter with one of these:
   declares it, or that class and a subclass, each a bean
 - a bean whose class declares a method with the same name and parameters as a package-private annotated method that a
   superclass in another package declares
+- a bean whose class repeats a handler annotation on a method with the same name and parameters as a private annotated
+  superclass method
 
 ### What changes
 
@@ -2151,6 +2157,11 @@ Applications on either starter with one of these:
   startup with `DuplicateSubscriptionIdException`. That holds when both inherit it, and when one of them is a bean of
   the class that declares it. The id is the key the subscription's checkpoint is stored under,
   so two handlers can't share it.
+- A bean's class can repeat a handler annotation on a method with the same name and parameters as an annotated
+  superclass method that it doesn't override, because the superclass method is private, or package-private in a
+  superclass in another package. In 0.34.0 only the class's method ran. Now both methods register. When the two ids
+  differ, the superclass method starts running too, as an inherited handler does above. When the ids are the same,
+  the application fails at startup with `DuplicateSubscriptionIdException`.
 - An inherited subscription handler that is static fails at startup with `SubscriptionHandlerNotInvocableException`.
   So does one on a bean behind a CGLIB proxy when it is private, final, or package-private in another package than
   the bean's class, since the proxy can't override it. It also fails there when it is package-private and a class in
@@ -2163,9 +2174,10 @@ Applications on either starter with one of these:
   built with a custom `TargetSource` whose `isStatic()` returns `false`. A factory method the bean's class declares
   runs there as before, and a static factory method always runs, since it reads no bean.
 - In Kotlin a superclass method is final unless it is marked `open`, and the `kotlin-spring` plugin opens a class only
-  when the class itself has a Spring annotation such as `@Component`. So an annotated method on a plain Kotlin
+  when the class itself has a Spring annotation such as `@Component`. So a subscription handler on a plain Kotlin
   superclass fails at startup when the bean that inherits it is behind a CGLIB proxy, for example because it has a
-  `@Transactional` method.
+  `@Transactional` method. A `@Projection`, `@Snapshot` or `@Saga` factory method there fails only when the proxy's
+  target can't be unwrapped, as above.
 - A class that overrides a generic handler with a concrete parameter type, such as `on(String event)` in a class that
   extends `Base<String>` and overrides `on(E event)`, failed at startup with `DuplicateSubscriptionIdException`. The
   scan also found the bridge method `on(Object)` that the compiler adds, under the same id. The handler now registers
@@ -2190,14 +2202,19 @@ methods. For each one a bean inherits without overriding it:
   override the method in each class that should run it and repeat the annotation there. An override without the
   annotation runs under the annotation of the method it overrides, so leaving the annotation on the superclass keeps
   it running everywhere.
-- If it's static, make it an instance method. If the bean is behind a CGLIB proxy and the method is private, final,
-  or package-private in another package, make it public or protected and not final. In Kotlin, mark it `open`. If it's
-  package-private and the proxy runs a public or protected method of the same name and parameters from a class in
-  another package, rename one of the two methods.
+- If it's a static subscription handler, make it an instance method. If the bean is behind a CGLIB proxy and the
+  method is private, final, or package-private in another package, make it public or protected and not final. In
+  Kotlin, mark it `open`. If it's package-private and the proxy runs a public or protected method of the same name and
+  parameters from a class in another package, rename one of the two methods. For a `@Projection`, `@Snapshot` or
+  `@Saga` factory method, this is needed only when the proxy's target can't be unwrapped.
 - If it's package-private and a subclass in another package declares a method with the same name and parameters and
   no handler annotation of its own, the application fails at startup. To keep the subclass's method as the handler,
   which is what ran before, make both methods protected or public, so the subclass's method overrides the superclass
   method. To run the superclass method instead, rename the subclass's method.
+- If it's private, or package-private and declared in another package than a subclass, and the subclass declares a
+  method with the same name and parameters that repeats the handler annotation, both methods run. To keep only the
+  subclass's method, which is what ran before, make both methods protected or public, so the subclass's method
+  overrides the superclass method, or remove the annotation from the superclass method.
 - If two or more beans run it, override the method in each subclass and repeat the annotation with an id of its own.
   A bean of the class that declares it keeps the original id.
 

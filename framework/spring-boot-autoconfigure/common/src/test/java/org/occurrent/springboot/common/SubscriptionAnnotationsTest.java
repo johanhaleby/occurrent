@@ -17,6 +17,11 @@
 
 package org.occurrent.springboot.common;
 
+import net.bytebuddy.ByteBuddy;
+import net.bytebuddy.description.modifier.Visibility;
+import net.bytebuddy.dynamic.scaffold.MethodGraph;
+import net.bytebuddy.dynamic.loading.ClassLoadingStrategy;
+import net.bytebuddy.implementation.StubMethod;
 import org.aopalliance.intercept.MethodInterceptor;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.StreamId;
@@ -60,6 +65,7 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.List;
@@ -1403,6 +1409,31 @@ class SubscriptionAnnotationsTest {
         Method handler = A.class.getDeclaredMethod("on", String.class);
 
         assertThat(HandlerScan.methodACglibProxyRunsInsteadOf(handler, LeafOfPrivate.class)).isNull();
+    }
+
+    @Test
+    void methodACglibProxyRunsInsteadOf_gives_null_when_the_method_below_the_package_private_handler_is_private_and_in_the_handlers_package() throws Exception {
+        Method handler = A.class.getDeclaredMethod("on", String.class);
+
+        assertThat(HandlerScan.methodACglibProxyRunsInsteadOf(handler, leafBelowAPrivateOnInThePackageOf(A.class))).isNull();
+    }
+
+    // javac refuses a private method with the name and parameters of a package-private method in a superclass
+    // of its own package, so the classes are generated
+    private static Class<?> leafBelowAPrivateOnInThePackageOf(Class<?> handlerClass) throws IllegalAccessException {
+        ClassLoadingStrategy<ClassLoader> intoTheHandlersPackage = ClassLoadingStrategy.UsingLookup.of(MethodHandles.privateLookupIn(handlerClass, MethodHandles.lookup()));
+        Class<?> mid = new ByteBuddy()
+                .with(MethodGraph.Compiler.ForDeclaredMethods.INSTANCE)
+                .subclass(handlerClass)
+                .defineMethod("on", void.class, Visibility.PRIVATE).withParameters(String.class).intercept(StubMethod.INSTANCE)
+                .make()
+                .load(handlerClass.getClassLoader(), intoTheHandlersPackage)
+                .getLoaded();
+        return new ByteBuddy()
+                .subclass(mid)
+                .make()
+                .load(handlerClass.getClassLoader(), intoTheHandlersPackage)
+                .getLoaded();
     }
 
     @Test

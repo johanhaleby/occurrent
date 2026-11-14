@@ -1310,6 +1310,110 @@ class InheritedHandlerRegistrationTest {
     }
 
     // ------------------------------------------------------------------------------------------------------
+    // A generic interface handler a bean overrides, behind a JDK proxy over the bean as a fixed target
+    // ------------------------------------------------------------------------------------------------------
+
+    @Test
+    void a_generic_interface_handler_overridden_by_the_bean_behind_a_jdk_proxy_over_a_fixed_target_registers_once_for_the_concrete_event_type_and_runs_through_the_advice() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        AtomicInteger adviceCalls = new AtomicInteger();
+        jdkProxyingFixedTarget(GenericInterfaceOverrider.class, adviceCalls)
+                .withBean("subscriber", GenericInterfaceOverrider.class, () -> new GenericInterfaceOverrider(bodies))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(Proxy.isProxyClass(context.getBean("subscriber").getClass())).describedAs("the bean is a JDK proxy").isTrue();
+                    Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+                    assertThat(subscribedIds(subscriptions)).containsExactly("overriding-generic-handler");
+                    assertThat(argumentOf(subscriptions, "subscribe", "overriding-generic-handler")).isEqualTo(AgnosticSubscriptionFilter.filter(Filter.type("Placed")));
+                    adviceCalls.set(0);
+
+                    anyHandlerFor(subscriptions, "overriding-generic-handler").invoke(null, new Placed());
+
+                    assertThat(bodies).containsExactly("overrider-body");
+                    assertThat(adviceCalls).hasValue(1);
+                });
+    }
+
+    @Test
+    void a_generic_interface_handler_overridden_by_the_bean_behind_a_jdk_proxy_over_a_fixed_target_runs_the_override_and_not_an_overload_from_an_interface_the_proxy_lists_first() {
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        AtomicInteger adviceCalls = new AtomicInteger();
+        jdkProxyingFixedTarget(GenericInterfaceOverriderBesideAnOverload.class, adviceCalls)
+                .withBean("subscriber", GenericInterfaceOverriderBesideAnOverload.class, () -> new GenericInterfaceOverriderBesideAnOverload(bodies))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean("subscriber").getClass().getInterfaces()).describedAs("the proxy lists the overload's interface first")
+                            .startsWith(OrderEventListener.class, GenericPlacedHandler.class);
+                    adviceCalls.set(0);
+
+                    anyHandlerFor(context.getBean(Subscriptions.class), "generic-handler-beside-an-overload").invoke(null, new Placed());
+
+                    assertThat(bodies).containsExactly("overrider-body");
+                    assertThat(adviceCalls).hasValue(1);
+                });
+    }
+
+    interface OrderEventListener {
+        void on(OrderEvent event);
+    }
+
+    static class GenericInterfaceOverriderBesideAnOverload implements OrderEventListener, GenericPlacedHandler<Placed> {
+        private final List<String> bodies;
+
+        GenericInterfaceOverriderBesideAnOverload(List<String> bodies) {
+            this.bodies = bodies;
+        }
+
+        @Override
+        public void on(OrderEvent event) {
+            bodies.add("overload-body");
+        }
+
+        @Override
+        @Subscription(id = "generic-handler-beside-an-overload")
+        public void on(Placed event) {
+            bodies.add("overrider-body");
+        }
+    }
+
+    private ApplicationContextRunner jdkProxyingFixedTarget(Class<?> proxied, AtomicInteger adviceCalls) {
+        return runner.withBean(FixedTargetJdkProxyingPostProcessor.class, () -> new FixedTargetJdkProxyingPostProcessor(proxied, adviceCalls));
+    }
+
+    // Wraps the bean in a JDK proxy of its interfaces, in the order the bean's class lists them, over the bean as a
+    // fixed singleton target, so the scan unwraps the proxy and reads the bean's class. Runs before the Occurrent post
+    // processor, so that is the instance it is handed.
+    static class FixedTargetJdkProxyingPostProcessor implements BeanPostProcessor, PriorityOrdered {
+        private final Class<?> proxied;
+        private final AtomicInteger adviceCalls;
+
+        FixedTargetJdkProxyingPostProcessor(Class<?> proxied, AtomicInteger adviceCalls) {
+            this.proxied = proxied;
+            this.adviceCalls = adviceCalls;
+        }
+
+        @Override
+        public Object postProcessAfterInitialization(Object bean, String beanName) {
+            if (!proxied.isInstance(bean)) {
+                return bean;
+            }
+            ProxyFactory proxyFactory = new ProxyFactory();
+            proxyFactory.setInterfaces(bean.getClass().getInterfaces());
+            proxyFactory.setTarget(bean);
+            proxyFactory.addAdvice((MethodInterceptor) invocation -> {
+                adviceCalls.incrementAndGet();
+                return invocation.proceed();
+            });
+            return proxyFactory.getProxy();
+        }
+
+        @Override
+        public int getOrder() {
+            return HIGHEST_PRECEDENCE;
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------
     // A prototype whose factory returns an instance of another class than before
     // ------------------------------------------------------------------------------------------------------
 

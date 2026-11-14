@@ -151,6 +151,11 @@ I rejected three smaller changes:
   subclass, each a bean. Both handlers have the same id, and the id is the key a subscription's
   checkpoint is stored under, so they can't share it. Overriding the method in each subclass and repeating the
   annotation with an id of its own fixes it.
+- **A class that repeats a handler annotation on a method it doesn't override registers both methods.** The
+  superclass method is private, or package-private in another package, and the class's method has the same name and
+  parameters. In 0.34.0 only the class's method ran. With different ids the superclass method starts running too, and
+  with the same id the application fails at startup with `DuplicateSubscriptionIdException`. Both methods run on the
+  bean, so the scan registers both, as it does for any two methods of one class tree that the bean runs.
 - A subscription annotation on a superclass method that is static fails startup with
   `SubscriptionHandlerNotInvocableException`. So does one on a bean behind a CGLIB proxy when the method is private,
   final, or package-private in another package than the bean's class, since the proxy can't override it. It is refused
@@ -161,16 +166,18 @@ I rejected three smaller changes:
   runs on the unwrapped bean. A factory method the bean's class declares keeps running on such a proxy, as it did
   before, so no factory that worked in 0.34.0 starts failing.
 - In Kotlin a superclass method is final unless it is marked `open`, and the `kotlin-spring` plugin opens a class only
-  when the class itself has a Spring annotation. So an annotated method on a plain Kotlin superclass fails startup when
-  the bean that inherits it is behind a CGLIB proxy.
+  when the class itself has a Spring annotation. So a subscription handler on a plain Kotlin superclass fails startup
+  when the bean that inherits it is behind a CGLIB proxy. A factory method there fails only when the proxy's target
+  can't be unwrapped.
 - A handler declared with a type variable on a superclass subscribes to the type the bean's class gives the variable.
 - An application with a class that overrides a generic handler with a concrete parameter type starts, and the handler
   registers once.
-- A method that shares its name and parameters with a package-private annotated method of a superclass in another
-  package ran under that method's annotation in 0.34.0, though it doesn't override it. Now the application fails at
-  startup. Running the annotated method instead would swap one handler body for another, and a user who missed the
-  upgrade guide would get no signal of it. Making both methods protected or public lets the subclass's method
-  override the superclass method, which keeps the 0.34.0 handler. Renaming the subclass's method runs the superclass method.
+- A method without a handler annotation that shares its name and parameters with a package-private annotated method
+  of a superclass in another package ran under that method's annotation in 0.34.0, though it doesn't override it.
+  Now the application fails at startup. Running the annotated method instead would swap one handler body for another,
+  and a user who missed the upgrade guide would get no signal of it. Making both methods protected or public lets the
+  subclass's method override the superclass method, which keeps the 0.34.0 handler. Renaming the subclass's method
+  runs the superclass method.
 - There is no OpenRewrite recipe, because nothing in the code says whether an inherited handler was meant to run. The
   code compiles unchanged. [The upgrade guide](../../migration/upgrading-to-0.35.0.md#a-handler-method-the-bean-inherits-is-registered)
   says who is affected and what to do.

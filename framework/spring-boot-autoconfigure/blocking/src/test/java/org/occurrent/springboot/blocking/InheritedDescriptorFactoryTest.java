@@ -56,6 +56,7 @@ import org.springframework.aop.TargetSource;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.SmartFactoryBean;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -64,7 +65,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Scope;
 import org.springframework.core.NestedExceptionUtils;
+import org.springframework.core.PriorityOrdered;
 
+import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
@@ -502,6 +505,91 @@ class InheritedDescriptorFactoryTest {
         public <S> SagaStateStore<S> createDefaultSagaStateStore(String sagaId, Class<S> stateType) {
             stateTypes.add(stateType);
             return SagaStateStore.inMemory();
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // A factory the bean's class declares for an interface, behind a JDK proxy a post-processor adds
+    // ------------------------------------------------------------------------------------------------------
+
+    private static final AtomicInteger INTERFACE_SNAPSHOT_FACTORY_INVOCATIONS = new AtomicInteger();
+    private static final AtomicInteger INTERFACE_SNAPSHOT_FACTORY_ADVICE_CALLS = new AtomicInteger();
+
+    @Test
+    void a_snapshot_factory_the_beans_class_declares_for_an_interface_runs_and_subscribes_through_a_jdk_proxy_a_post_processor_adds_over_a_target_source_that_is_not_fixed() {
+        INTERFACE_SNAPSHOT_FACTORY_INVOCATIONS.set(0);
+        INTERFACE_SNAPSHOT_FACTORY_ADVICE_CALLS.set(0);
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withBean(NonFixedTargetJdkProxyingPostProcessor.class, NonFixedTargetJdkProxyingPostProcessor::new)
+                .withUserConfiguration(SnapshotInfrastructureConfiguration.class)
+                .withBean("snapshotFactory", InterfaceSnapshotFactoryImpl.class, InterfaceSnapshotFactoryImpl::new)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(Proxy.isProxyClass(context.getBean("snapshotFactory").getClass())).describedAs("the bean is a JDK proxy").isTrue();
+                    assertThat(INTERFACE_SNAPSHOT_FACTORY_INVOCATIONS).hasValue(1);
+                    assertThat(INTERFACE_SNAPSHOT_FACTORY_ADVICE_CALLS).describedAs("the factory ran through the proxy").hasValue(1);
+                    assertThat(mockingDetails(context.getBean(Subscriptions.class)).getInvocations())
+                            .anyMatch(invocation -> invocation.getMethod().getName().equals("subscribe") && "interface-declared-snapshot".equals(invocation.getRawArguments()[0]));
+                });
+    }
+
+    interface InterfaceSnapshotFactory {
+        @Snapshot(id = "interface-declared-snapshot")
+        SnapshotView<TestState, TestEvent> snapshot();
+    }
+
+    // Public, so invoking this class's method on the proxy fails on the receiver and not on the access check
+    public static class InterfaceSnapshotFactoryImpl implements InterfaceSnapshotFactory {
+        @Override
+        public SnapshotView<TestState, TestEvent> snapshot() {
+            INTERFACE_SNAPSHOT_FACTORY_INVOCATIONS.incrementAndGet();
+            return SnapshotView.<TestState, TestEvent>builder(new TestState())
+                    .on(TestEvent.class, (state, event) -> state)
+                    .build();
+        }
+    }
+
+    // Wraps the factory bean in a JDK proxy of its interface over a target source that is not static, so nothing
+    // unwraps the proxy to a target. The scan reads the class the bean had before this post-processor ran.
+    static class NonFixedTargetJdkProxyingPostProcessor implements BeanPostProcessor, PriorityOrdered {
+        @Override
+        public Object postProcessAfterInitialization(Object bean, String beanName) {
+            if (!(bean instanceof InterfaceSnapshotFactoryImpl)) {
+                return bean;
+            }
+            ProxyFactory proxyFactory = new ProxyFactory();
+            proxyFactory.addInterface(InterfaceSnapshotFactory.class);
+            proxyFactory.setTargetSource(new TargetSource() {
+                @Override
+                public Class<?> getTargetClass() {
+                    return bean.getClass();
+                }
+
+                @Override
+                public boolean isStatic() {
+                    return false;
+                }
+
+                @Override
+                public Object getTarget() {
+                    return bean;
+                }
+
+                @Override
+                public void releaseTarget(Object target) {
+                }
+            });
+            proxyFactory.addAdvice((MethodInterceptor) invocation -> {
+                INTERFACE_SNAPSHOT_FACTORY_ADVICE_CALLS.incrementAndGet();
+                return invocation.proceed();
+            });
+            return proxyFactory.getProxy();
+        }
+
+        @Override
+        public int getOrder() {
+            return HIGHEST_PRECEDENCE;
         }
     }
 

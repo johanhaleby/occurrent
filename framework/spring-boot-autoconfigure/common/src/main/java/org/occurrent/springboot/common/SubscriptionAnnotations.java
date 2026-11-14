@@ -67,9 +67,11 @@ public final class SubscriptionAnnotations {
     }
 
     /**
-     * A classified subscription handler parameter, with its type as the class the handler runs on sees it and what it
-     * binds to. A parameter declared with a type variable, such as {@code E} in {@code on(E event)} on {@code Base<E>},
-     * has the type that class gives {@code E}.
+     * A classified subscription handler parameter, with its type and what it binds to. {@link #analyzeParameters} gives
+     * each parameter the type the method declares, so a parameter declared with a type variable, such as {@code E} in
+     * {@code on(E event)} on {@code Base<E>}, has the bound of {@code E}. {@link #resolveTypeFilter} reads the types as
+     * the class of the bean the handler runs on sees them, so there the parameter has the type that class gives
+     * {@code E}.
      */
     public record HandlerParameter(Class<?> type, HandlerParameterKind kind) {
     }
@@ -249,9 +251,9 @@ public final class SubscriptionAnnotations {
      * {@code method}, which would run code the scan never read.
      * <p>
      * Two proxies are left proxied by {@link #ultimateTarget}, because their target source is not a fixed singleton.
-     * A JDK interface proxy runs the factory through the proxy, by the method {@link HandlerScan#invocableMethodOn} selects, when
-     * one of the proxy's interfaces declares the factory the scan read, and refuses any other method, since the proxy
-     * does not implement it. When the proxy is the bean, the scan reads the proxy's own class, so the factory it reads
+     * A JDK interface proxy runs the factory through the proxy, by the method of one of the proxy's interfaces that
+     * the factory the scan read is or implements, and refuses a factory no interface of the proxy declares, since the
+     * proxy does not implement it. When the proxy is the bean, the scan reads the proxy's own class, so the factory it reads
      * comes from one of the proxy's interfaces. When a post-processor wrapped the bean, the scan reads the class the
      * bean had before, so a factory only that class declares is refused. A CGLIB proxy passes the check above, since
      * {@code getUserClass} of the proxy's own
