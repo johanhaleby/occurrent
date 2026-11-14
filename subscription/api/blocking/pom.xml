@@ -45,6 +45,12 @@
             <artifactId>occurrent-eventstore-api-dcb</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- AttemptNotMade appears in RedeliveringSubscriptions, the contract of this module's public API -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-retry</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>

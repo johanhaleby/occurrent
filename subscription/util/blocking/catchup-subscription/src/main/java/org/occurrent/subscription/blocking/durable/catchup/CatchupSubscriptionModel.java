@@ -27,6 +27,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
+import org.occurrent.subscription.api.blocking.RedeliveringSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
@@ -122,7 +123,7 @@ import java.util.stream.Stream;
  * </p>
  */
 @NullMarked
-public class CatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions, StartRefusalReportingSubscriptions {
+public class CatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions, StartRefusalReportingSubscriptions, RedeliveringSubscriptions {
 
     private static final int DEFAULT_CACHE_SIZE = CatchupSubscriptionModelConfig.DEFAULT_HANDOVER_CACHE_SIZE;
 
@@ -536,13 +537,24 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     }
 
     /**
-     * Answers {@link RepositionableSubscriptions} only when the wrapped model has it, since
-     * {@link #resumeSubscription(String, StartAt)} resumes the subscription there, so this model is found where the
-     * wrapped model would be, and nothing is found where nothing was. Answers every other capability as any model does.
+     * What the wrapped model answers, and {@code false} when it doesn't declare it. A stream or DCB catch-up runs a replay
+     * whose action threw {@code AttemptNotMade} again from the last position it stored, and the wrapped model delivers a
+     * live event again.
+     */
+    @Override
+    public boolean redeliversAnAttemptNotMade() {
+        return RedeliveringSubscriptions.findIn(getWrappedSubscriptionModel()).map(RedeliveringSubscriptions::redeliversAnAttemptNotMade).orElse(false);
+    }
+
+    /**
+     * Answers {@link RepositionableSubscriptions} and {@link RedeliveringSubscriptions} only when the wrapped model has
+     * it, since {@link #resumeSubscription(String, StartAt)} resumes the subscription there, and a live event is delivered
+     * again only when the wrapped model delivers it again. So this model is found where the wrapped model would be, and
+     * nothing is found where nothing was. Answers every other capability as any model does.
      */
     @Override
     public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
-        if (type == RepositionableSubscriptions.class && !getWrappedSubscriptionModel().hasCapability(RepositionableSubscriptions.class)) {
+        if ((type == RepositionableSubscriptions.class || type == RedeliveringSubscriptions.class) && !getWrappedSubscriptionModel().hasCapability(type)) {
             return Optional.empty();
         }
         return SubscriptionModel.super.capability(type);

@@ -83,8 +83,10 @@ public interface CompetingConsumerStrategy {
      * {@code CompetingConsumerSubscriptionModel} calls this before it hands each event of a competing subscription to
      * the action, and holds the event while this returns {@code false} or throws, until it returns {@code true} or the
      * model calls the wrapped subscription model for the subscription, for instance to pause it, which lets the event
-     * through. Answer from what this strategy keeps in memory rather than by asking a database, and answer
-     * {@code false} once the lock could have expired.
+     * through or withdraws it. Answer from what this strategy keeps in memory rather than by asking a database, and
+     * answer {@code false} once the lock could have expired. A strategy answers {@code false} while it still owes its
+     * listeners an {@code onConsumeProhibited} for a lock the subscriber lost, also when the subscriber holds the lock
+     * again by then.
      * <p>
      * The MongoDB lease strategies answer {@code false} three quarters of the lease time after the request that last
      * set the lease was sent, timed by this node's monotonic clock, while MongoDB expires the lease by its own clock.

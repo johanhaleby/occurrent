@@ -37,6 +37,7 @@ import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
+import org.occurrent.subscription.api.blocking.RedeliveringSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
@@ -78,7 +79,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, StartRefusalReportingSubscriptions, CommitOrderedSubscriptions, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, StartRefusalReportingSubscriptions, CommitOrderedSubscriptions, RedeliveringSubscriptions, SmartLifecycle {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -109,6 +110,18 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public boolean deliversEveryEventInCommitOrder() {
         return subscriptions.deliversEveryEventInCommitOrder();
+    }
+
+    /**
+     * {@code true}. A subscription's position moves past an event only once its action has returned normally, and an
+     * action that throws {@code AttemptNotMade} is neither retried nor reported to the retry strategy's listeners. A
+     * resume opens the change stream at the subscription's position, so the event is delivered again. Asking about a
+     * subscription and starting the model never wait for an action, and a pause or a stop waits at most a second for a
+     * running one.
+     */
+    @Override
+    public boolean redeliversAnAttemptNotMade() {
+        return true;
     }
 
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);

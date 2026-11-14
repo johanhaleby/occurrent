@@ -19,6 +19,7 @@ package org.occurrent.subscription.blocking.durable.catchup;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.retry.AttemptNotMade;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
@@ -40,6 +41,7 @@ import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions.HistoryLossListener;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
+import org.occurrent.subscription.api.blocking.RedeliveringSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
@@ -84,7 +86,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * stream module both modes build against.
  */
 @NullMarked
-abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions, StartRefusalReportingSubscriptions {
+abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions, StartRefusalReportingSubscriptions, RedeliveringSubscriptions {
 
     private static final Logger log = LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
 
@@ -1208,13 +1210,26 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Answers {@link RepositionableSubscriptions} only when the live delegate has it, since
-     * {@link #resumeSubscription(String, StartAt)} resumes the subscription there, so this model is found where the live
-     * delegate would be, and nothing is found where nothing was. Answers every other capability as any model does.
+     * What the live delegate answers, and {@code false} when it doesn't declare it. A replay stores the position of an
+     * event only once the action has returned normally. A replay whose action threw {@code AttemptNotMade} runs again
+     * from the last position it stored, once the subscription is resumed or this model is started with
+     * {@code start(true)}, or after a backoff when nothing paused or stopped it. Once live, the live delegate delivers
+     * the event again.
+     */
+    @Override
+    public boolean redeliversAnAttemptNotMade() {
+        return RedeliveringSubscriptions.findIn(getWrappedSubscriptionModel()).map(RedeliveringSubscriptions::redeliversAnAttemptNotMade).orElse(false);
+    }
+
+    /**
+     * Answers {@link RepositionableSubscriptions} and {@link RedeliveringSubscriptions} only when the live delegate has
+     * it, since {@link #resumeSubscription(String, StartAt)} resumes the subscription there, and a live event is
+     * delivered again only when the live delegate delivers it again. So this model is found where the live delegate
+     * would be, and nothing is found where nothing was. Answers every other capability as any model does.
      */
     @Override
     public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
-        if (type == RepositionableSubscriptions.class && !getWrappedSubscriptionModel().hasCapability(RepositionableSubscriptions.class)) {
+        if ((type == RepositionableSubscriptions.class || type == RedeliveringSubscriptions.class) && !getWrappedSubscriptionModel().hasCapability(type)) {
             return Optional.empty();
         }
         return SubscriptionModel.super.capability(type);
@@ -1837,6 +1852,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // Set once a replay a subscribe started gives up the id to hand the subscription to the live delegate, while its
         // handover holds the handover lock. Read and written only on this attempt's own thread.
         private boolean handingOver = false;
+        // Set under the handover lock once runAgainAfter found that the action withdrew an event of a replay a subscribe
+        // started, so the replay runs again as one a resume started does
+        private volatile boolean withdrawn = false;
         private @Nullable DecidedFailure decidedFailure;
         private final String subscriptionId;
         private final AbstractCatchupSubscriptionModel owner;
@@ -3729,7 +3747,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * call for the id either comes before this decides or finds what it decided.
      * <p>
      * Only a replay a resume started runs again, since the live delegate holds its subscription paused and nothing else
-     * would resume it. It runs again while it is still the current attempt, and nothing asked it to stop. A cancel, a
+     * would resume it, and a replay a subscribe started whose action threw {@link AttemptNotMade}, since the event it
+     * withdrew would otherwise never be delivered here. It runs again from the last position it stored, while it is still the current attempt, and nothing asked it to stop. A cancel, a
      * resume at a given position or a shutdown ends it, which the caller asked for. A stop, a pause asked for during the
      * replay or while it waits, or a {@link CatchupListener} that throws as the replay runs again, holds it until a
      * resume or a start that resumes. So does a {@link CatchupCannotResumeException}, without a backoff, since the
@@ -3745,7 +3764,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 holdForLostLiveStart(subscriptionId, attempt, failure);
                 return null;
             }
-            if (current && attempt.replay.resuming && !attempt.abandoned() && !shuttingDown && !(failure instanceof SubscriptionAlreadyRunningException)) {
+            if (current && !attempt.abandoned() && !shuttingDown && failure instanceof AttemptNotMade) {
+                attempt.withdrawn = true;
+            }
+            if (current && (attempt.replay.resuming || attempt.withdrawn) && !attempt.abandoned() && !shuttingDown && !(failure instanceof SubscriptionAlreadyRunningException)) {
                 if (stopped) {
                     attempt.backingOff = false;
                     parkIfStillCurrent(subscriptionId, attempt);
@@ -3839,7 +3861,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     private static void logFailure(String subscriptionId, @Nullable Throwable failure, String outcome) {
-        if (failure != null) {
+        // A withdrawn event is no failure of the replay
+        if (failure instanceof AttemptNotMade) {
+            log.debug("The action withdrew an event of the catch-up replay for subscription {}, so {}.", subscriptionId, outcome, failure);
+        } else if (failure != null) {
             log.error("The catch-up replay for subscription {} failed, so {}.", subscriptionId, outcome, failure);
         }
     }

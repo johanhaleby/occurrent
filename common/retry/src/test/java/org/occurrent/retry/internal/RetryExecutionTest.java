@@ -17,6 +17,7 @@
 package org.occurrent.retry.internal;
 
 import org.junit.jupiter.api.Test;
+import org.occurrent.retry.AttemptNotMade;
 import org.occurrent.retry.RetryStrategy;
 
 import java.util.ArrayList;
@@ -222,13 +223,13 @@ class RetryExecutionTest {
             if (calls.incrementAndGet() == 1) {
                 throw new IllegalStateException("failed");
             }
-            throw new RetryExecution.AttemptNotMade("not made");
+            throw new AttemptNotMade("not made");
         };
 
         Runnable retrying = RetryExecution.executeWithRetry(function, __ -> true, retryStrategy, millis -> {
         });
 
-        assertThatThrownBy(retrying::run).isInstanceOf(RetryExecution.AttemptNotMade.class).hasMessage("not made");
+        assertThatThrownBy(retrying::run).isInstanceOf(AttemptNotMade.class).hasMessage("not made");
         assertThat(calls).as("calls of the function").hasValue(2);
         assertThat(told).as("what the retry strategy was told").containsExactly("retryIf failed", "onError failed", "onRetryableError failed", "onBeforeRetry failed");
     }

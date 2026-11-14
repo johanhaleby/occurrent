@@ -137,6 +137,8 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
     private final Storage storage;
     private final Map<String, Candidate> mine = new ConcurrentHashMap<>();
     private final Map<String, Boolean> lastReported = new ConcurrentHashMap<>();
+    // Prohibitions whose listeners have not all returned yet, per key
+    private final Map<String, Integer> prohibitionsBeingTold = new ConcurrentHashMap<>();
     private final Set<CompetingConsumerListener> listeners = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final ScheduledExecutorService coordinator =
             Executors.newSingleThreadScheduledExecutor(runnable -> Thread.ofPlatform().daemon().unstarted(runnable));
@@ -189,7 +191,8 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
     @Override
     public boolean hasLock(String subscriptionId, String subscriberId) {
         Candidate candidate = mine.get(key(subscriptionId, subscriberId));
-        return candidate != null && storage.holds(candidate, System.nanoTime());
+        return candidate != null && !prohibitionsBeingTold.containsKey(key(subscriptionId, subscriberId))
+                && storage.holds(candidate, System.nanoTime());
     }
 
     @Override
@@ -226,13 +229,23 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
         boolean holdsIt = storage.holds(candidate, System.nanoTime());
         Boolean reported = lastReported.put(key(candidate.subscriptionId, candidate.subscriberId), holdsIt);
         if (reported == null || reported != holdsIt) {
-            listeners.forEach(listener -> {
-                if (holdsIt) {
-                    listener.onConsumeGranted(candidate.subscriptionId, candidate.subscriberId);
-                } else {
-                    listener.onConsumeProhibited(candidate.subscriptionId, candidate.subscriberId);
+            String key = key(candidate.subscriptionId, candidate.subscriberId);
+            if (!holdsIt) {
+                prohibitionsBeingTold.merge(key, 1, Integer::sum);
+            }
+            try {
+                listeners.forEach(listener -> {
+                    if (holdsIt) {
+                        listener.onConsumeGranted(candidate.subscriptionId, candidate.subscriberId);
+                    } else {
+                        listener.onConsumeProhibited(candidate.subscriptionId, candidate.subscriberId);
+                    }
+                });
+            } finally {
+                if (!holdsIt) {
+                    prohibitionsBeingTold.computeIfPresent(key, (__, telling) -> telling == 1 ? null : telling - 1);
                 }
-            });
+            }
         }
         return holdsIt;
     }

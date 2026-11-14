@@ -79,7 +79,7 @@ import static java.util.Objects.requireNonNull;
  * @see #stoppedByDefault(SubscriptionModel)
  */
 @NullMarked
-public final class ManualStartSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, IntrospectableSubscriptions, CommitOrderedSubscriptions {
+public final class ManualStartSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, IntrospectableSubscriptions, CommitOrderedSubscriptions, RedeliveringSubscriptions {
 
     private final SubscriptionModel delegate;
     private final @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource;
@@ -493,6 +493,15 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     @Override
     public boolean deliversEveryEventInCommitOrder() {
         return CommitOrderedSubscriptions.findIn(delegate).map(CommitOrderedSubscriptions::deliversEveryEventInCommitOrder).orElse(false);
+    }
+
+    /**
+     * What the delegate answers, and {@code false} when it doesn't declare it. This model hands each action to the
+     * delegate unchanged.
+     */
+    @Override
+    public boolean redeliversAnAttemptNotMade() {
+        return RedeliveringSubscriptions.findIn(delegate).map(RedeliveringSubscriptions::redeliversAnAttemptNotMade).orElse(false);
     }
 
     /**
