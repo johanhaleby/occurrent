@@ -91,6 +91,14 @@ public final class CatchupCheckpoints {
     }
 
     /**
+     * Whether {@code checkpoint} is a position a replay by position starts from, a {@link GlobalCheckpoint} with or
+     * without a live start, and not the marked form of a time replay, which starts with the same prefix.
+     */
+    public static boolean isPosition(Checkpoint checkpoint) {
+        return !isMarkedTime(checkpoint) && GlobalCheckpoint.isGlobalCheckpoint(checkpoint);
+    }
+
+    /**
      * Reads where a catch-up replay starts from {@code checkpoint}: a marked form, a {@link GlobalCheckpoint} with or
      * without a live start, a {@link CatchupTimeCheckpoint}, or a bare RFC 3339 time. Each is read by its string form,
      * so the same checkpoint read back from storage as a {@link StringBasedCheckpoint} reads the same.

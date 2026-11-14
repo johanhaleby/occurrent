@@ -311,8 +311,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      */
     static boolean startsAtExplicitGlobalPosition(StartAt startAt, Class<?> contextType) {
         StartAt start = startAt.get(new SubscriptionModelContext(contextType));
-        return start instanceof StartAtCheckpoint position
-                && !CatchupCheckpoints.isMarkedTime(position.checkpoint) && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
+        return start instanceof StartAtCheckpoint position && CatchupCheckpoints.isPosition(position.checkpoint);
     }
 
     private CatchupReplay streamPositionReplay(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt positionStartAt) {

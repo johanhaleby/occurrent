@@ -191,8 +191,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     private static boolean startsAtExplicitDcbPosition(StartAt startAt) {
         StartAt resolved = startAt.get(new StartAt.SubscriptionModelContext(ReactorCatchupSubscriptionModel.class));
         // The marked form of a time replay starts with the position prefix, and goes to the stream model, which refuses it
-        return resolved instanceof StartAtCheckpoint position
-                && !CatchupCheckpoints.isMarkedTime(position.checkpoint) && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
+        return resolved instanceof StartAtCheckpoint position && CatchupCheckpoints.isPosition(position.checkpoint);
     }
 
     @Override

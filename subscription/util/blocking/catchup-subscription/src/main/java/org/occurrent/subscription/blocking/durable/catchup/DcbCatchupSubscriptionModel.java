@@ -308,7 +308,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     // restarts at it, and never as a time this model would refuse to replay from
     @Override
     protected boolean replaysFrom(Checkpoint given) {
-        return GlobalCheckpoint.isGlobalCheckpoint(given) && !CatchupCheckpoints.isMarkedTime(given);
+        return CatchupCheckpoints.isPosition(given);
     }
 
     // firstStartAt is already resolved (non-dynamic) by the time this runs, so the context class used to call get()
