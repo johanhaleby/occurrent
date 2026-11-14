@@ -63,6 +63,30 @@ class HandlerScanScopedProxyTest {
         assertThat(HandlerScan.isScopedProxy(beanFactory, "x")).isFalse();
     }
 
+    @Test
+    void isScopedTarget_is_true_when_a_scoped_proxy_decorates_the_definition_under_the_scoped_target_name() {
+        defineDecorating("x", ScopedProxyUtils.getTargetBeanName("x"));
+        beanFactory.registerBeanDefinition(ScopedProxyUtils.getTargetBeanName("x"), new RootBeanDefinition(Object.class));
+
+        assertThat(HandlerScan.isScopedTarget(beanFactory, ScopedProxyUtils.getTargetBeanName("x"))).isTrue();
+    }
+
+    @Test
+    void isScopedTarget_is_false_for_a_plain_bean_that_is_only_named_scoped_target_plus_another_beans_name() {
+        beanFactory.registerBeanDefinition("x", new RootBeanDefinition(Object.class));
+        beanFactory.registerBeanDefinition(ScopedProxyUtils.getTargetBeanName("x"), new RootBeanDefinition(Object.class));
+
+        assertThat(HandlerScan.isScopedTarget(beanFactory, ScopedProxyUtils.getTargetBeanName("x"))).isFalse();
+    }
+
+    @Test
+    void isScopedTarget_is_false_for_a_name_without_the_scoped_target_prefix_even_when_it_is_a_scoped_proxy() {
+        defineDecorating("x", ScopedProxyUtils.getTargetBeanName("x"));
+        beanFactory.registerBeanDefinition(ScopedProxyUtils.getTargetBeanName("x"), new RootBeanDefinition(Object.class));
+
+        assertThat(HandlerScan.isScopedTarget(beanFactory, "x")).isFalse();
+    }
+
     private void defineDecorating(String beanName, String decoratedName) {
         RootBeanDefinition proxyDefinition = new RootBeanDefinition(Object.class);
         proxyDefinition.setDecoratedDefinition(new BeanDefinitionHolder(new RootBeanDefinition(Object.class), decoratedName));
