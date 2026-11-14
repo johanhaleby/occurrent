@@ -50,7 +50,8 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * A store can answer from the events as they are when the append runs. A matching event committed after the read that
  * was deleted by then, or changed so that it no longer matches, may not make the append fail. The in-memory store
- * answers that way, and so do the MongoDB stores on a replica set when the markers don't refuse first.
+ * answers that way, and so do the MongoDB stores on a replica set and through a mongos when the markers don't refuse
+ * first.
  * <p>
  * A token belongs to the criteria it was read with, so the constructor throws {@link IllegalArgumentException} when the
  * token's criteria aren't the same as {@code criteria}. Every factory goes through the constructor, so this happens

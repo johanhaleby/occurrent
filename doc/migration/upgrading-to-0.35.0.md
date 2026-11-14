@@ -824,6 +824,12 @@ The check works the same in the store's own transaction, in one that `SpringTran
 or the write concern of any of them. The commit of its own read-only transaction waits for majority for at most
 `markerVersionsCommitTimeout`, 5 seconds by default.
 
+The read-only transaction takes a second connection from the client's pool while the append's transaction is open. With
+`loadBalanced=true` the driver keeps every transaction on one connection until it ends, so when as many conditional appends
+as `maxPoolSize` reach the query at once, each one waits for a connection that none of the others gives back. Each check
+then fails after about `markerVersionsCommitTimeout`, and its append is refused. On a load-balanced deployment, set
+`maxPoolSize` above the number of conditional appends you run at the same time.
+
 A condition can also miss a matching event when the read's token covers that event and the read's events don't hold it.
 Through a mongos, a plain read can do this when the markers and the events are on different shards, and a read with
 `withVersions()` doesn't when its stream reports `markerVersions()`, because it read both in one snapshot transaction.
@@ -922,7 +928,7 @@ describes it.
 ### What stays the same
 
 - A conditional append on criteria with tags is still refused when an event that matches them committed after the
-  read. On a replica set the check reads the events as they are when the append runs, so an event deleted by then, or
+  read. On a replica set and through a mongos the check reads the events as they are when the append runs, so an event deleted by then, or
   changed so that it no longer matches, may not fail it. A read can also miss such an event and let the append through,
   as [What else a token holds on MongoDB](#what-else-a-token-holds-on-mongodb) says.
 - Every append still increments a marker for each type and each tag of its events, so by default two appends of one
