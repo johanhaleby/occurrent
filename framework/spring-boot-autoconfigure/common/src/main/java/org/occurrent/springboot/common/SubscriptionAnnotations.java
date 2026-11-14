@@ -28,15 +28,16 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
+import org.occurrent.springboot.common.internal.HandlerScan;
 import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
+import org.springframework.core.BridgeMethodResolver;
 import org.springframework.util.ClassUtils;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.lang.reflect.Parameter;
 import java.util.*;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -66,7 +67,11 @@ public final class SubscriptionAnnotations {
     }
 
     /**
-     * A classified subscription handler parameter: its declared type and what it binds to.
+     * A classified subscription handler parameter, with its type and what it binds to. {@link #analyzeParameters} gives
+     * each parameter the type the method declares, so a parameter declared with a type variable, such as {@code E} in
+     * {@code on(E event)} on {@code Base<E>}, has the bound of {@code E}. {@link #resolveTypeFilter} reads the types as
+     * the class of the bean the handler runs on sees them, so there the parameter has the type that class gives
+     * {@code E}.
      */
     public record HandlerParameter(Class<?> type, HandlerParameterKind kind) {
     }
@@ -100,59 +105,7 @@ public final class SubscriptionAnnotations {
      * parameter is rejected, because a DCB handler's stream id/version are internal partition values, not domain ones.
      */
     public static List<HandlerParameter> analyzeParameters(Method method, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
-        List<HandlerParameter> parameters = new ArrayList<>();
-        boolean hasEvent = false;
-        boolean hasMetadata = false;
-        boolean hasStreamId = false;
-        boolean hasStreamVersion = false;
-        for (Parameter parameter : method.getParameters()) {
-            Class<?> type = parameter.getType();
-            boolean streamIdAnnotated = parameter.isAnnotationPresent(StreamId.class);
-            boolean streamVersionAnnotated = parameter.isAnnotationPresent(StreamVersion.class);
-            if (streamIdAnnotated && streamVersionAnnotated) {
-                throw new IllegalArgumentException("A subscription parameter may not be annotated with both @StreamId and @StreamVersion, but %s#%s declares one that is.".formatted(method.getDeclaringClass().getName(), method.getName()));
-            }
-            HandlerParameterKind kind;
-            if (streamIdAnnotated) {
-                if (!supportsStreamAccessors) {
-                    throw new IllegalArgumentException("@StreamId is only supported on @Subscription, @StreamSubscription, and @SynchronousSubscription handlers, but %s#%s declares it.".formatted(method.getDeclaringClass().getName(), method.getName()));
-                }
-                if (type != String.class) {
-                    throw new IllegalArgumentException("A @StreamId parameter must be of type String, but %s#%s declares it as %s.".formatted(method.getDeclaringClass().getName(), method.getName(), type.getName()));
-                }
-                if (hasStreamId) {
-                    throw new IllegalArgumentException("A subscription method may declare at most one @StreamId parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
-                }
-                hasStreamId = true;
-                kind = HandlerParameterKind.STREAM_ID;
-            } else if (streamVersionAnnotated) {
-                if (!supportsStreamAccessors) {
-                    throw new IllegalArgumentException("@StreamVersion is only supported on @Subscription, @StreamSubscription, and @SynchronousSubscription handlers, but %s#%s declares it.".formatted(method.getDeclaringClass().getName(), method.getName()));
-                }
-                if (type != long.class && type != Long.class) {
-                    throw new IllegalArgumentException("A @StreamVersion parameter must be of type long or Long, but %s#%s declares it as %s.".formatted(method.getDeclaringClass().getName(), method.getName(), type.getName()));
-                }
-                if (hasStreamVersion) {
-                    throw new IllegalArgumentException("A subscription method may declare at most one @StreamVersion parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
-                }
-                hasStreamVersion = true;
-                kind = HandlerParameterKind.STREAM_VERSION;
-            } else if (isMetadataParameter.test(type)) {
-                if (hasMetadata) {
-                    throw new IllegalArgumentException("A subscription method may declare at most one metadata parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
-                }
-                hasMetadata = true;
-                kind = HandlerParameterKind.METADATA;
-            } else {
-                if (hasEvent) {
-                    throw new IllegalArgumentException("A subscription method may declare only one event parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
-                }
-                hasEvent = true;
-                kind = HandlerParameterKind.EVENT;
-            }
-            parameters.add(new HandlerParameter(type, kind));
-        }
-        return parameters;
+        return HandlerScan.analyzeDeclaredParameters(method, isMetadataParameter, supportsStreamAccessors);
     }
 
     public static Class<?> eventTypeOf(List<HandlerParameter> parameters) {
@@ -194,7 +147,7 @@ public final class SubscriptionAnnotations {
      * {@link #buildDcbCriteria(List, List)} instead.
      *
      * @param id                            the subscription id
-     * @param bean                          the bean declaring the handler
+     * @param bean                          the bean the handler runs on, whose class the event parameter's type is read against
      * @param method                        the handler method
      * @param eventTypesSpecifiedInAnnotation the annotation's {@code eventTypes} (empty to derive from the parameter)
      * @param annotationName                the annotation name, for error messages
@@ -206,7 +159,7 @@ public final class SubscriptionAnnotations {
         if (method.getParameterCount() < 1) {
             throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
         }
-        List<HandlerParameter> parameters = analyzeParameters(method, SubscriptionAnnotations::isStreamMetadataParameter, true);
+        List<HandlerParameter> parameters = HandlerScan.analyzeParameters(method, HandlerScan.implementationClassOf(bean), SubscriptionAnnotations::isStreamMetadataParameter, true);
         @SuppressWarnings("unchecked")
         Class<E> specifiedEventType = (Class<E>) eventTypeOf(parameters);
         List<Class<E>> domainEventTypes = resolveDomainEventTypes(id, bean, method, specifiedEventType, eventTypesSpecifiedInAnnotation, annotationName);
@@ -290,32 +243,63 @@ public final class SubscriptionAnnotations {
      * both stacks, so the unwrap only has to be right in one place.
      * <p>
      * A descriptor factory runs exactly once at startup to build a value, so there is no request for advice to
-     * usefully observe, and invoking it through a proxy is a hazard rather than a feature. Every registrar records
-     * {@code method} from the exact class the scan resolved, never a supertype, so on a legitimate target the
-     * unwrapped target's own user class, {@link ClassUtils#getUserClass}, equals {@code method}'s declaring class
-     * exactly, not merely a subtype of it, since a subtype could override {@code method} with a different
-     * implementation the scan never saw. When it does, {@code method} runs directly on the unwrapped target,
-     * bypassing any advice on a fixed target. When it does not, the factory refuses instead of guessing which
-     * method to run, because the mismatch itself is the defect, either an interface proxy that could not be
-     * unwrapped to a fixed target, or a factory bean that built a different implementation than the one the scan
-     * recorded. A CGLIB proxy left proxied by {@link #ultimateTarget}, because its target source is not a fixed
-     * singleton, still passes this check, since {@code getUserClass} of the proxy's own class equals the same
-     * declaring class, so a factory invoked through such a proxy still runs its advice.
+     * usefully observe, and invoking it through a proxy is a hazard rather than a feature. The scan reads
+     * {@code method} from the bean's class, its superclasses and its interfaces, so the factory runs when the
+     * unwrapped target's own user class, {@link ClassUtils#getUserClass}, declares {@code method} or inherits it
+     * unchanged. Otherwise the factory refuses instead of guessing which method to run. That happens for a factory
+     * bean that built a different implementation than the one the scan recorded, such as a subclass overriding
+     * {@code method}, which would run code the scan never read.
+     * <p>
+     * Two proxies are left proxied by {@link #ultimateTarget}, because their target source is not a fixed singleton.
+     * A JDK interface proxy runs the factory through the proxy, by the method of one of the proxy's interfaces that
+     * the factory the scan read is or implements, and refuses a factory no interface of the proxy declares, since the
+     * proxy does not implement it. When the proxy is the bean, the scan reads the proxy's own class, so the factory it reads
+     * comes from one of the proxy's interfaces. When a post-processor wrapped the bean, the scan reads the class the
+     * bean had before, so a factory only that class declares is refused. A CGLIB proxy passes the check above, since
+     * {@code getUserClass} of the proxy's own
+     * class is the class it subclasses, so a factory invoked through it still runs its advice. It refuses an inherited
+     * instance {@code method} the proxy cannot override, one that is private, final, or package-private and declared in
+     * another package than that class, since invoking it would run the method's body on the proxy instance instead of
+     * on a target. A private or final factory that class declares runs on the proxy instance, as it did before
+     * inherited factories were found, and a static factory runs, since it reads no instance.
      *
      * @param annotationName the annotation name for error messages, for example {@code "@Projection"}
      * @param bean           the (possibly proxied) bean the factory method was found on
-     * @param method         the no-argument factory method found by scanning {@code bean}'s declared or predicted type
+     * @param method         the no-argument factory method the scan found for {@code bean}
      * @return the descriptor the factory method returned, never {@code null}
      */
     public static Object invokeDescriptorFactory(String annotationName, Object bean, Method method) {
         Object target = ultimateTarget(bean);
-        Class<?> targetUserClass = ClassUtils.getUserClass(target.getClass());
-        if (!method.getDeclaringClass().equals(targetUserClass)) {
-            throw new IllegalStateException("%s factory %s#%s cannot run because %s does not implement %s. This happens when the bean is an interface proxy whose target is not a fixed singleton, so it cannot be unwrapped safely (set spring.aop.proxy-target-class=true so this bean is proxied by subclassing instead of by interface, or move the factory method off the advised bean), or when the factory bean built a different implementation than the one the scan recorded (return the same implementation on every call).".formatted(annotationName, bean.getClass().getName(), method.getName(), targetUserClass.getName(), method.getDeclaringClass().getName()));
+        Class<?> declaringClass = method.getDeclaringClass();
+        Method invoked = method;
+        if (java.lang.reflect.Proxy.isProxyClass(target.getClass())) {
+            try {
+                invoked = HandlerScan.invocableMethodOn(target, method);
+            } catch (IllegalStateException e) {
+                throw new IllegalStateException("%s factory %s#%s cannot run because the bean is a JDK interface proxy whose target is not a fixed singleton, so it cannot be unwrapped safely, and the proxy does not implement %s, which declares the factory. Set spring.aop.proxy-target-class=true so this bean is proxied by subclassing instead of by interface, or move the factory method off the advised bean.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName()));
+            }
+        } else {
+            Class<?> targetUserClass = ClassUtils.getUserClass(target.getClass());
+            if (!runsUnchanged(targetUserClass, method)) {
+                throw new IllegalStateException("%s factory %s#%s cannot run because %s does not run the factory the scan read from %s, it either overrides it or does not inherit it. This happens when the factory bean built a different implementation than the one the scan recorded, so return the same implementation on every call.".formatted(annotationName, bean.getClass().getName(), method.getName(), targetUserClass.getName(), declaringClass.getName()));
+            }
+            int modifiers = method.getModifiers();
+            if (AopUtils.isCglibProxy(target) && !Modifier.isStatic(modifiers) && !declaringClass.equals(targetUserClass)) {
+                if (Modifier.isPrivate(modifiers) || Modifier.isFinal(modifiers)) {
+                    throw new IllegalStateException("%s factory %s#%s cannot run because it is inherited from %s and %s, so the CGLIB proxy around the bean cannot override it and would run it on the proxy instead of on the bean. Make the method public or protected and not final, or declare the factory on %s.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName(), Modifier.isPrivate(modifiers) ? "private" : "final", targetUserClass.getName()));
+                }
+                if (HandlerScan.isPackagePrivateOutsidePackageOf(method, targetUserClass)) {
+                    throw new IllegalStateException("%s factory %s#%s cannot run because it is package-private and declared in %s, outside the package of %s, so the CGLIB proxy around the bean cannot override it and would run it on the proxy instead of on the bean. Make the method public or protected.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName(), targetUserClass.getName()));
+                }
+                Method runInstead = HandlerScan.methodACglibProxyRunsInsteadOf(method, targetUserClass);
+                if (runInstead != null) {
+                    throw new IllegalStateException("%s factory %s#%s cannot run because it is package-private and declared in %s, and %s declares a method of the same name and parameter types without overriding it, so the CGLIB proxy around the bean runs that method instead. Rename one of the two methods.".formatted(annotationName, bean.getClass().getName(), method.getName(), declaringClass.getName(), runInstead.getDeclaringClass().getName()));
+                }
+            }
         }
         try {
-            method.setAccessible(true);
-            Object result = method.invoke(target);
+            invoked.setAccessible(true);
+            Object result = invoked.invoke(target);
             if (result == null) {
                 throw new IllegalStateException("%s factory %s#%s returned null.".formatted(annotationName, target.getClass().getName(), method.getName()));
             }
@@ -390,9 +374,15 @@ public final class SubscriptionAnnotations {
         if (java.lang.reflect.Proxy.isProxyClass(target.getClass())) {
             return true;
         }
-        Class<?> implementation = ClassUtils.getUserClass(target.getClass());
+        return runsUnchanged(ClassUtils.getUserClass(target.getClass()), method);
+    }
+
+    // methodTheJvmRuns answers with the method a bridge stands for, so the method is compared the same way. A public
+    // class that inherits a public method from a package-private superclass gets a bridge method from javac, and the
+    // scan reads the handler from that bridge
+    private static boolean runsUnchanged(Class<?> implementation, Method method) {
         return method.getDeclaringClass().isAssignableFrom(implementation)
-                && ClassUtils.getMostSpecificMethod(method, implementation).equals(method);
+                && HandlerScan.methodTheJvmRuns(method, implementation).equals(HandlerScan.bridgedMethod(method));
     }
 
     /**

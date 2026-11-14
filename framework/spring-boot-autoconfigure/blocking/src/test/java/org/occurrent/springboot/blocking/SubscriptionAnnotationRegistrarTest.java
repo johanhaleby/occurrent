@@ -27,6 +27,7 @@ import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
+import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
@@ -64,10 +65,10 @@ class SubscriptionAnnotationRegistrarTest {
         SubscriptionAnnotationRegistrar registrar = new SubscriptionAnnotationRegistrar(context, mock(StartPositionSupport.class));
 
         TwoStartPositionsSubscriber bean = new TwoStartPositionsSubscriber();
-        List<Method> validFirst = List.of(
-                TwoStartPositionsSubscriber.class.getDeclaredMethod("valid", TestEvent.class),
-                TwoStartPositionsSubscriber.class.getDeclaredMethod("twoStartPositions", TestEvent.class));
-        Set<Method> reservedHandlers = ConcurrentHashMap.newKeySet();
+        List<HandlerMethod> validFirst = List.of(
+                handlerOf(TwoStartPositionsSubscriber.class, "valid"),
+                handlerOf(TwoStartPositionsSubscriber.class, "twoStartPositions"));
+        Set<HandlerMethod> reservedHandlers = ConcurrentHashMap.newKeySet();
         Set<String> claimedIds = ConcurrentHashMap.newKeySet();
 
         assertThatThrownBy(() -> registrar.registerSubscriptions(bean, validFirst, () -> bean, false,
@@ -97,10 +98,10 @@ class SubscriptionAnnotationRegistrarTest {
         SubscriptionAnnotationRegistrar registrar = new SubscriptionAnnotationRegistrar(context, mock(StartPositionSupport.class));
 
         SubscriptionBesideDcbSubscriber bean = new SubscriptionBesideDcbSubscriber();
-        List<Method> validFirst = List.of(
-                SubscriptionBesideDcbSubscriber.class.getDeclaredMethod("valid", TestEvent.class),
-                SubscriptionBesideDcbSubscriber.class.getDeclaredMethod("dcb", TestEvent.class));
-        Set<Method> reservedHandlers = ConcurrentHashMap.newKeySet();
+        List<HandlerMethod> validFirst = List.of(
+                handlerOf(SubscriptionBesideDcbSubscriber.class, "valid"),
+                handlerOf(SubscriptionBesideDcbSubscriber.class, "dcb"));
+        Set<HandlerMethod> reservedHandlers = ConcurrentHashMap.newKeySet();
         Set<String> claimedIds = ConcurrentHashMap.newKeySet();
 
         assertThatThrownBy(() -> registrar.registerSubscriptions(bean, validFirst, () -> bean, false,
@@ -116,6 +117,11 @@ class SubscriptionAnnotationRegistrarTest {
         verify(subscriptions, never()).subscribe(any(String.class), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
         assertThat(reservedHandlers).isEmpty();
         assertThat(claimedIds).isEmpty();
+    }
+
+    private static HandlerMethod handlerOf(Class<?> scanned, String name) throws Exception {
+        Method method = scanned.getDeclaredMethod(name, TestEvent.class);
+        return new HandlerMethod(method, scanned);
     }
 
     static class SubscriptionBesideDcbSubscriber {

@@ -42,6 +42,7 @@ import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
@@ -55,8 +56,6 @@ import reactor.util.function.Tuple2;
 import reactor.util.function.Tuples;
 
 import java.lang.reflect.Method;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.BiFunction;
@@ -112,14 +111,14 @@ class SnapshotAnnotationRegistrar {
             throw new IllegalArgumentException("@Snapshot '%s' everyNEvents must be at least 1, but was %d.".formatted(id, everyNEvents));
         }
         if (descriptor instanceof DcbSnapshotView<?, ?> rawDcb) {
-            processDcbSnapshot(id, annotation, synchronous, converter, (DcbSnapshotView<S, E>) rawDcb, this.<S>resolveReactiveSnapshotStore(annotation, method, id), everyNEvents, mayBlock, subscribeCall);
+            processDcbSnapshot(id, annotation, synchronous, converter, (DcbSnapshotView<S, E>) rawDcb, this.<S>resolveReactiveSnapshotStore(annotation, method, HandlerScan.implementationClassOf(bean), id), everyNEvents, mayBlock, subscribeCall);
             return;
         }
         if (!(descriptor instanceof SnapshotView<?, ?>)) {
             throw new IllegalArgumentException("@Snapshot '%s' method %s#%s must return a SnapshotView or DcbSnapshotView, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor.getClass().getName()));
         }
         SnapshotView<S, E> snapshotView = (SnapshotView<S, E>) descriptor;
-        ReactiveSnapshotStore<S> store = resolveReactiveSnapshotStore(annotation, method, id);
+        ReactiveSnapshotStore<S> store = resolveReactiveSnapshotStore(annotation, method, HandlerScan.implementationClassOf(bean), id);
         int schemaVersion = snapshotView.schemaVersion();
         View<S, E> view = snapshotView.view();
         Filter eventFilter = snapshotFilterFor(converter, snapshotView);
@@ -271,7 +270,7 @@ class SnapshotAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <S> ReactiveSnapshotStore<S> resolveReactiveSnapshotStore(org.occurrent.annotation.Snapshot annotation, Method factoryMethod, String id) {
+    private <S> ReactiveSnapshotStore<S> resolveReactiveSnapshotStore(org.occurrent.annotation.Snapshot annotation, Method factoryMethod, Class<?> implementation, String id) {
         Class<?> storeType = annotation.store();
         String storeName = annotation.storeName();
         boolean typeSet = storeType != Void.class;
@@ -292,7 +291,7 @@ class SnapshotAnnotationRegistrar {
         }
         // The state type is reflected first, so a factory that declares none reports that (the actionable fix) rather
         // than a missing provider.
-        Class<S> stateType = (Class<S>) reflectSnapshotStateType(factoryMethod, id);
+        Class<S> stateType = (Class<S>) reflectSnapshotStateType(factoryMethod, implementation, id);
         // getIfAvailable() applies @Primary and @Fallback resolution and only throws when the container genuinely
         // cannot pick, so an ambiguous seam is reported with the annotation id rather than as a bare Spring failure.
         final DefaultReactiveSnapshotStoreProvider provider;
@@ -373,19 +372,10 @@ class SnapshotAnnotationRegistrar {
     }
 
 
-    private static Class<?> reflectSnapshotStateType(Method factoryMethod, String id) {
-        Type returnType = factoryMethod.getGenericReturnType();
-        if (returnType instanceof ParameterizedType parameterizedType) {
-            Type[] arguments = parameterizedType.getActualTypeArguments();
-            if (arguments.length >= 1) {
-                Type stateArgument = arguments[0];
-                if (stateArgument instanceof Class<?> stateClass) {
-                    return stateClass;
-                }
-                if (stateArgument instanceof ParameterizedType stateParameterized && stateParameterized.getRawType() instanceof Class<?> rawState) {
-                    return rawState;
-                }
-            }
+    private static Class<?> reflectSnapshotStateType(Method factoryMethod, Class<?> implementation, String id) {
+        Class<?> stateType = HandlerScan.returnTypeArgument(factoryMethod, implementation, 0);
+        if (stateType != null) {
+            return stateType;
         }
         throw new IllegalArgumentException(("@Snapshot '%s' needs a snapshot store: either name one with store or storeName (a ReactiveSnapshotStore bean), " +
                 "or declare the factory return type with a concrete state type (for example SnapshotView<MyState, MyEvent>) so the snapshot can use the store's zero-config default.").formatted(id));

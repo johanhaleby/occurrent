@@ -96,6 +96,11 @@ import java.lang.annotation.*;
  * rather than a domain stream id/version, the same values {@code EventMetadata.getStreamId()}/{@code getStreamVersion()}
  * expose there.
  * </p>
+ * <p>
+ * The Spring Boot starter finds this annotation on a method the bean's class declares, inherits from a superclass, or
+ * gets as an interface default method. An override without an annotation of its own runs under the overridden
+ * method's annotation, and an override that repeats the annotation uses its own.
+ * </p>
  */
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
