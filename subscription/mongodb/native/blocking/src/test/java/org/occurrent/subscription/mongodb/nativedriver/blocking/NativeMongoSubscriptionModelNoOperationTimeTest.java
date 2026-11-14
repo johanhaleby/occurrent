@@ -960,8 +960,8 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
     }
 
     @Test
-    void a_dynamic_resume_that_falls_back_to_a_dynamic_position_that_now_resolves_to_the_present_opens_at_the_present_the_resume_recorded_and_is_not_refused_when_the_read_at_the_subscribe_gave_no_position() {
-        // Given: a subscription made at a dynamic position that fails until released and then resolves to the present, whose read at the subscribe gave no position, and that is paused before it opened
+    void a_dynamic_resume_that_falls_back_to_a_dynamic_position_that_now_resolves_to_the_present_is_refused_and_skips_no_event_written_since_when_the_read_at_the_subscribe_gave_no_position() {
+        // Given: a subscription made at a dynamic position that fails until released and then resolves to the present, whose read at the subscribe gave no position, that is paused before it opened, and an event written since
         BsonDocument recorded = realResumeToken();
         AtomicBoolean released = new AtomicBoolean();
         AtomicInteger evaluations = new AtomicInteger();
@@ -983,20 +983,95 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         subscriptionModel.pauseSubscription(subscriptionId);
         released.set(true);
         presentRead.set(() -> cursorReading(null, recorded));
+        mongoEventStore.write("1", 0, serialize(nameDefined("written since the subscribe")));
 
         // When: it is resumed at a position that resolves to a checkpoint the change stream can't open at, once the server gives a position
         Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId, StartAt.dynamic(ctx -> StartAt.checkpoint(GlobalCheckpoint.of(7))));
         Throwable thrown = catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(10)));
-        NameDefined e1 = nameDefined("name1");
-        mongoEventStore.write("1", 0, serialize(e1));
-        waitAtMostFor(TEN_SECONDS, () -> handled.contains(e1.eventId()));
+        waitAtMostFor(FIVE_SECONDS, () -> refused.contains(subscriptionId));
 
-        // Then
-        assertThat(thrown).as("thrown by the resume handle").isNull();
-        assertThat(refused).as("start refusals told").isEmpty();
-        assertThat(presentReads).as("reads of the change stream that records the present, the resume's question the second").hasValue(2);
-        assertThat(opened.stream().flatMap(iterable -> callsTo("startAfter", iterable).stream()).toList()).as("positions the change streams opened after").containsExactly(recorded);
-        assertThat(handled).as("events delivered").containsExactly(e1.eventId());
+        // Then: refused, and not opened at a present later than the subscribe, which would skip the event
+        assertThat(thrown).as("thrown by the resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
+        assertThat(refused).as("start refusals told").containsExactly(subscriptionId);
+        assertThat(presentReads).as("reads of the change stream that records the present").hasValue(1);
+        assertThat(cursorsOpened()).as("cursors of the subscription's change streams opened").isZero();
+        assertThat(handled).as("events delivered").isEmpty();
+    }
+
+    @Test
+    void a_dynamic_position_that_resolves_to_the_present_is_refused_when_it_is_paused_and_resumed_before_it_opened_and_the_read_at_the_subscribe_gave_no_position() {
+        // Given: a subscription made at a dynamic position that fails until released and then resolves to the present, whose read at the subscribe gave no position, that is paused before it opened, and an event written since
+        BsonDocument recorded = realResumeToken();
+        AtomicBoolean released = new AtomicBoolean();
+        AtomicInteger evaluations = new AtomicInteger();
+        presentRead.set(() -> cursorReading(null, null));
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        List<String> refused = new CopyOnWriteArrayList<>();
+        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.dynamic(ctx -> {
+            evaluations.incrementAndGet();
+            if (!released.get()) {
+                throw new IllegalStateException("not yet");
+            }
+            return StartAt.now();
+        }), cloudEvent -> handled.add(cloudEvent.getId()));
+        waitAtMostFor(FIVE_SECONDS, () -> presentReads.get() == 1 && evaluations.get() > 0);
+        assertThat(presentReads).as("reads of the change stream that records the present at the subscribe").hasValue(1);
+        subscriptionModel.pauseSubscription(subscriptionId);
+        released.set(true);
+        presentRead.set(() -> cursorReading(null, recorded));
+        mongoEventStore.write("1", 0, serialize(nameDefined("written since the subscribe")));
+
+        // When: it is resumed, once the server gives a position
+        Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+        Throwable thrown = catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(10)));
+        waitAtMostFor(FIVE_SECONDS, () -> refused.contains(subscriptionId));
+
+        // Then: refused, and not opened at a present later than the subscribe, which would skip the event
+        assertThat(thrown).as("thrown by the resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
+        assertThat(refused).as("start refusals told").containsExactly(subscriptionId);
+        assertThat(presentReads).as("reads of the change stream that records the present").hasValue(1);
+        assertThat(cursorsOpened()).as("cursors of the subscription's change streams opened").isZero();
+        assertThat(handled).as("events delivered").isEmpty();
+    }
+
+    @Test
+    void a_subscription_at_now_that_is_paused_while_the_read_at_the_subscribe_runs_is_refused_when_resumed_and_the_read_gave_no_position() {
+        // Given: a subscription at now whose read at the subscribe is held, then paused, and the read let go to give no position
+        BsonDocument recorded = realResumeToken();
+        CountDownLatch released = new CountDownLatch(1);
+        heldReads.add(released);
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> held = cursorHeldUntil(released, null);
+        AtomicInteger reads = new AtomicInteger();
+        presentRead.set(() -> reads.getAndIncrement() == 0 ? held : cursorReading(null, recorded));
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        List<String> refused = new CopyOnWriteArrayList<>();
+        subscriptionModel.addStartRefusalListener((id, refusal) -> refused.add(id));
+        CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> handled.add(cloudEvent.getId()));
+        waitAtMostFor(FIVE_SECONDS, () -> presentReads.get() == 1);
+        assertThat(presentReads).as("reads of the change stream that records the present at the subscribe, held").hasValue(1);
+        subscriptionModel.pauseSubscription(subscriptionId);
+        released.countDown();
+        waitAtMostFor(FIVE_SECONDS, () -> mockingDetails(held).getInvocations().stream().anyMatch(invocation -> invocation.getMethod().getName().equals("getResumeToken")));
+        // The read has answered, and the subscription takes its answer in a few more steps that nothing shows
+        waitAtMostFor(Duration.ofMillis(300), () -> false);
+        mongoEventStore.write("1", 0, serialize(nameDefined("written since the subscribe")));
+
+        // When: it is resumed, once the server gives a position
+        Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+        Throwable thrown = catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(10)));
+        waitAtMostFor(FIVE_SECONDS, () -> refused.contains(subscriptionId));
+
+        // Then: refused, and not opened at a present later than the subscribe, which would skip the event
+        assertThat(thrown).as("thrown by the resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
+        assertThat(refused).as("start refusals told").containsExactly(subscriptionId);
+        assertThat(presentReads).as("reads of the change stream that records the present").hasValue(1);
+        assertThat(cursorsOpened()).as("cursors of the subscription's change streams opened").isZero();
+        assertThat(handled).as("events delivered").isEmpty();
     }
 
     private long cursorsOpened() {
