@@ -388,9 +388,9 @@ class ReactorMongoEventStoreDcbTwoShardClusterTest {
         Throwable second = TransactionalOperator.create(new ReactiveMongoTransactionManager(databaseFactory)).execute(status -> {
             status.setRollbackOnly();
             return eventStore.append(List.of(taggedEventWithId("first", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token))
-                    .then(Mono.defer(() -> eventStore.append(List.of(taggedEventWithId("second", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token))))
-                    .then(Mono.<Throwable>empty())
-                    .onErrorResume(Mono::just);
+                    .then(Mono.defer(() -> eventStore.append(List.of(taggedEventWithId("second", TICKET_SOLD, CONCERT_K1)), failIfEventsMatch(token))
+                            .then(Mono.<Throwable>empty())
+                            .onErrorResume(Mono::just)));
         }).blockFirst();
 
         assertThat(second)
