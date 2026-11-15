@@ -49,8 +49,9 @@ other sections compile fine and behave differently, so read them first.
   under the default `REQUIRED`, and an unreadable `streamid` or `streamversion` fails the delivery. Compiles unchanged.
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
   A saga keeps the highest applied version per stream and event type, and applies a late version instead of skipping
-  it. Saga instances store a new `streamMarks` field. Breaks the build only for a record pattern over `SagaEnvelope` or
-  `SagaRunnerConfig`.
+  it. Saga instances store a new `streamMarks` field, and an `ACTIVE` instance that holds it is stored as
+  `ACTIVE_MARKED`, which 0.34.0 can't read. Roll every saga node in one rollout, and run one update before going back
+  to 0.34.0. Breaks the build only for a record pattern over `SagaEnvelope` or `SagaRunnerConfig`.
 - [A saga's quarantine budget runs per failing event](#a-sagas-quarantine-budget-runs-per-failing-event). Each failing
   event keeps its own clock. Compiles unchanged.
 - [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
@@ -287,8 +288,9 @@ A saga instance saved by 0.31.0 to 0.34.0 may hold a `positionWatermark`. 0.35.0
 is gone from that instance's document after its next save. A document without the field reads as `null`, and
 `SagaEnvelope.positionWatermark()` is deprecated.
 
-A 0.34.0 node reads a document that 0.35.0 saved, and the other way round. A rolling upgrade works, and so does going
-back to 0.34.0.
+0.35.0 reads a document that 0.34.0 saved. 0.34.0 can't read an instance that 0.35.0 stored as `ACTIVE_MARKED`, and
+going back to 0.34.0 needs one step for those, as
+[the stored saga state for late versions](#stored-saga-state-1) describes.
 
 A failure record whose input is `position:N` was written for a position-only event. On an `ACTIVE` instance 0.35.0
 treats it as no record, so the next failure starts a fresh budget and the next successful delivery clears it.
@@ -522,10 +524,40 @@ A document saved by 0.31.0 to 0.34.0, or by an earlier 0.35.0 build, has no `str
 each stream's watermark, so everything the instance has already seen stays skipped, and a version above the watermark
 is applied as before. Late versions are recognised from the instance's next save on.
 
-`streamWatermarks` is still written with the highest version of each stream. A 0.34.0 node reads a document that
-0.35.0 saved, ignores `streamMarks`, and replaces the document without it on its next save. The next 0.35.0 node then
-reads it as an old document. A rolling upgrade works, and so does going back to 0.34.0, which loses late events on that
-stretch as it did before.
+`streamWatermarks` is still written with the highest version of each stream. 0.34.0 saves the whole document and
+knows nothing of `streamMarks`, so a save from a 0.34.0 node would drop them. The next 0.35.0 node would then skip a
+version that failed and waits to be applied again, or a late version, as applied already. To stop that, 0.35.0 stores
+an `ACTIVE` instance that holds `streamMarks` with the status `ACTIVE_MARKED` (`SpringMongoSagaStateStore.ACTIVE_MARKED`)
+and reads it back as `SagaStatus.ACTIVE`. Every event with a stream version adds marks, so that is every instance a
+0.35.0 node has handled such an event for, and the instance keeps the status while it holds marks. 0.34.0 decodes the
+status with `SagaStatus.valueOf` and throws on `ACTIVE_MARKED`, so a 0.34.0 node fails on such an instance and retries
+instead of saving it.
+
+During a rolling upgrade a 0.34.0 node therefore stalls on the first event for an instance a 0.35.0 node has handled,
+the same way it stalls on a quarantined instance, as
+[Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it) describes.
+Its timer poller asks for `ACTIVE` instances only, so the timers of an `ACTIVE_MARKED` instance wait while a 0.34.0 node
+holds the timer lease. Roll every saga node to 0.35.0 in one rollout, without a long canary.
+
+`findByStatus(ACTIVE, ..)` matches both strings. A query you wrote by hand for `status: "ACTIVE"`, and an alert built
+on one, doesn't find an `ACTIVE_MARKED` instance, so match both strings:
+
+```javascript
+db.getCollection("saga-order-fulfilment")
+  .find({ status: { $in: ["ACTIVE", "ACTIVE_MARKED"] } }, { state: 0 })
+```
+
+To go back to 0.34.0, stop every 0.35.0 node, then give the `ACTIVE_MARKED` instances back their plain status before
+a 0.34.0 node starts:
+
+```javascript
+db.getCollection("saga-order-fulfilment")
+  .updateMany({ status: "ACTIVE_MARKED" }, { $set: { status: "ACTIVE" } })
+```
+
+0.34.0 ignores the marks and its first save of each instance drops them. A version that failed and waits to be applied
+again is then never applied, and a late version below the stream's watermark is skipped, as on 0.34.0. Upgrading again
+reads such an instance as an old document.
 
 ### A record pattern over `SagaEnvelope` or `SagaRunnerConfig` stops compiling
 
@@ -750,21 +782,22 @@ upgrade does. A replay that a resume started runs again from its last stored che
 The 0.34.0 node keeps the saga's competing-consumer lease while it retries, because the lease is refreshed on a
 schedule of its own whatever the subscription is doing, so the saga's subscription stalls. The node gives the lease up
 when it is stopped for its upgrade, but the next node to take it may still run 0.34.0 and stall on the same event, so
-the stall ends once a 0.35.0 node holds the lease. It also ends when a 0.35.0 node releases the instance or deletes it,
-because the 0.34.0 node reads the instance again on every retry. A released instance is `ACTIVE` and is stored with
-that plain status, which 0.34.0 decodes, and a deleted one is not there to decode. A catch-up replay that a subscribe
-started is not retried, so a node whose replay failed doesn't go live until it restarts, whatever happens to the
-instance.
+the stall ends once a 0.35.0 node holds the lease. It also ends when a 0.35.0 node deletes the instance, because the
+0.34.0 node reads the instance again on every retry and a deleted one is not there to decode. A release doesn't end
+it, because a released instance keeps the stream marks of every event with a stream version it has handled, so it is stored
+as `ACTIVE_MARKED`, which 0.34.0 can't decode either, as [the stored saga state for late versions](#stored-saga-state-1) describes. A catch-up
+replay that a subscribe started is not retried, so a node whose replay failed doesn't go live until it restarts,
+whatever happens to the instance.
 
 Without a competing-consumer strategy every node runs the saga's subscription. The 0.35.0 nodes handle the event, and
-only the 0.34.0 node's own subscription stalls, until the node is upgraded or the instance is released or deleted.
+only the 0.34.0 node's own subscription stalls, until the node is upgraded or the instance is deleted.
 
 The subscription delivers one event at a time, so the stall holds up every later event of that saga subscription, for
 every instance of the saga, not only the events of the quarantined instance.
 
-After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease or to release the instance, so the stall
-lasts until the instance is deleted, with competing consumers or without. A node whose catch-up stopped on the event
-also has to restart before its subscription goes live. To downgrade without that stall, do this on 0.35.0:
+After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease, so the stall lasts until the instance is
+deleted, with competing consumers or without. A node whose catch-up stopped on the event also has to restart before its
+subscription goes live. To downgrade without that stall, do steps 1 to 4 on 0.35.0:
 
 1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or
    `occurrent.saga.quarantine-enabled=false`, and have that running on every node before step 2. A node that still has
@@ -775,12 +808,13 @@ also has to restart before its subscription goes live. To downgrade without that
    `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
    longer decodes or an event store read that failed, and release the instance again, or delete it.
-5. Downgrade.
+5. Stop every 0.35.0 node, and set every `ACTIVE_MARKED` instance back to `ACTIVE` with the `updateMany` in
+   [the stored saga state for late versions](#stored-saga-state-1). A released instance is one of them. That section
+   says what 0.34.0 then loses.
+6. Start the 0.34.0 nodes.
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already
 released.
-
-<!-- Q2: downgrade rewrite result pending -->
 
 ## A saga timer that keeps failing waits behind the timers already due
 
@@ -829,7 +863,8 @@ report is [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
 Nothing to migrate. A 0.34.0 document has no `nextAttemptAtEpochMilli`, which reads as a timer that has not failed,
 and its `nextTimerFiresAt` is already the earliest due time. During a rolling deploy 0.34.0 reads only `name` and
 `firesAtEpochMilli` from a timer subdocument, so it ignores the new field, and a 0.34.0 write drops it, which gives
-that instance the 0.34.0 order again.
+that instance the 0.34.0 order again. A 0.34.0 node never saves an instance stored as `ACTIVE_MARKED`, see
+[the stored saga state for late versions](#stored-saga-state-1).
 
 ## The deprecated `accept(..)` on the projection feeds is removed
 

@@ -318,7 +318,7 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
             Document raw = rawDocument();
             assertAll(
                     () -> assertThat(raw.getString("failureInput")).isEqualTo(SAGA_ID + "@2"),
-                    () -> assertThat(raw.getString("status")).isEqualTo("ACTIVE"),
+                    () -> assertThat(raw.getString("status")).isEqualTo("ACTIVE_MARKED"),
                     () -> assertThat(raw.get("state")).isEqualTo("awaiting-payment"),
                     () -> assertThat(raw.containsKey(POSITION_WATERMARK)).isFalse()
             );

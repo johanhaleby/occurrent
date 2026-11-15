@@ -32,14 +32,19 @@ import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -191,19 +196,37 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
     }
 
     @Test
-    void the_sorted_due_query_is_served_in_order_by_the_status_and_nextTimerFiresAt_index_without_an_in_memory_sort() {
+    void the_sorted_due_query_the_store_runs_is_served_in_order_by_the_status_and_nextTimerFiresAt_index_without_an_in_memory_sort() {
+        AtomicReference<Query> dueQuery = new AtomicReference<>();
+        InvocationHandler recordTheDueQuery = (proxy, method, args) -> {
+            if (method.getName().equals("find") && args.length == 3 && args[0] instanceof Query query) {
+                dueQuery.set(query);
+            }
+            try {
+                return method.invoke(mongoOperations, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+        };
+        MongoOperations recording = (MongoOperations) Proxy.newProxyInstance(MongoOperations.class.getClassLoader(),
+                new Class<?>[]{MongoOperations.class}, recordTheDueQuery);
+        SagaStateStore<String> recordingStore = new SpringMongoSagaStateStore<>(recording, COLLECTION, String.class);
         for (int i = 0; i < 5; i++) {
-            stateStore.compareAndSave("s" + i, instanceWith("s" + i, List.of(new TimerEntry("t", BASE - 5_000 + i))), 0);
+            recordingStore.compareAndSave("s" + i, instanceWith("s" + i, List.of(new TimerEntry("t", BASE - 5_000 + i))), 0);
+            recordingStore.compareAndSave("m" + i, new SagaEnvelope<>("m" + i, "awaiting-payment", SagaStatus.ACTIVE, 1,
+                    List.of(new TimerEntry("t", BASE - 5_000 + i)), Map.of(), null, NOW, NOW, null, null, true, null,
+                    Map.of("order", new SagaEnvelope.StreamMarks(1, Map.of()))), 0);
         }
-        Document filter = new Document("status", "ACTIVE").append("nextTimerFiresAt", new Document("$lte", BASE));
+        recordingStore.findWithDueTimers(NOW, 3);
+        Query query = requireNonNull(dueQuery.get(), "findWithDueTimers ran no find");
 
-        Document explain = mongoOperations.getCollection(COLLECTION).find(filter).sort(new Document("nextTimerFiresAt", 1)).limit(3).explain();
+        Document explain = mongoOperations.getCollection(COLLECTION).find(query.getQueryObject()).sort(query.getSortObject()).limit(query.getLimit()).explain();
 
         String plan = explain.get("queryPlanner", Document.class).get("winningPlan", Document.class).toJson();
         assertAll(
                 () -> assertThat(plan).contains("IXSCAN"),
                 () -> assertThat(plan).doesNotContain("\"SORT\"").doesNotContain("SORT_KEY_GENERATOR"),
-                () -> assertThat(plan).contains("\"status\": 1").contains("\"nextTimerFiresAt\": 1")
+                () -> assertThat(plan).contains("\"indexName\": \"status_1_nextTimerFiresAt_1\"")
         );
     }
 

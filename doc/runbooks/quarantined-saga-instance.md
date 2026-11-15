@@ -453,6 +453,10 @@ Or against MongoDB, where a released instance no longer matches:
 db.getCollection("saga-order-fulfilment").countDocuments({ _id: "order-4711", status: { $in: ["QUARANTINED", "QUARANTINED_RECORDING"] } })
 ```
 
+The document of a released `ACTIVE` instance usually reads `ACTIVE_MARKED` in MongoDB, which `find` reads back as
+`ACTIVE`. The
+[0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#stored-saga-state-1) says why.
+
 After a delete, the instance is gone:
 
 ```java
@@ -518,9 +522,10 @@ A 0.34.0 node throws on every event addressed to an instance that 0.35.0 stored 
 so no input is lost. On a live subscription it retries the event in place and keeps the saga's competing-consumer
 lease while it does, so the saga's subscription stalls. The stall holds up every later event of that saga
 subscription, not only the events of the quarantined instance. It ends when a 0.35.0 node takes the lease, or when a
-0.35.0 node releases or deletes the instance. A node whose catch-up replay failed on the event also has to restart
-before its subscription goes live. After a downgrade no 0.35.0 node is left to take the lease or release the instance,
-so the stall lasts until the instance is deleted. To downgrade without that stall, do this on 0.35.0:
+0.35.0 node deletes the instance. A release doesn't end it, because a released instance is stored as `ACTIVE_MARKED`,
+which 0.34.0 can't decode either. A node whose catch-up replay failed on the event also has to restart before its
+subscription goes live. After a downgrade no 0.35.0 node is left to take the lease, so the stall lasts until the
+instance is deleted. To downgrade without that stall, do steps 1 to 4 on 0.35.0:
 
 1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or
    `occurrent.saga.quarantine-enabled=false`, and have that running on every node before step 2. A node that still has
@@ -531,13 +536,14 @@ so the stall lasts until the instance is deleted. To downgrade without that stal
    `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
    longer decodes or an event store read that failed, and release the instance again, or delete it.
-5. Downgrade.
+5. Stop every 0.35.0 node, and set every `ACTIVE_MARKED` instance back to `ACTIVE`, released ones included, as
+   [the 0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#stored-saga-state-1) describes. It also says what
+   0.34.0 then loses.
+6. Start the 0.34.0 nodes.
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already
 released. The
 [0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#rolling-upgrades-from-0340-and-rolling-back-to-it) also
 covers a rolling upgrade from 0.34.0.
-
-<!-- Q2: downgrade rewrite result pending -->
 
 Deleting an instance is not reversible from inside Occurrent. Take a backup of the collection first if you want one.

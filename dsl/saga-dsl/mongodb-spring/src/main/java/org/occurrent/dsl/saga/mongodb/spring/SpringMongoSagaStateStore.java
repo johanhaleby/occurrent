@@ -90,6 +90,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * <p>
  * An instance quarantined with a quarantine id is stored with the status {@value #QUARANTINED_RECORDING} rather than
  * {@code QUARANTINED}, and both read back as {@link SagaStatus#QUARANTINED}. See {@link #QUARANTINED_RECORDING} for why.
+ * In the same way an active instance that holds stream marks is stored with the status {@value #ACTIVE_MARKED}, and
+ * reads back as {@link SagaStatus#ACTIVE}. See {@link #ACTIVE_MARKED} for why.
  *
  * @param <S> the user state type
  */
@@ -156,6 +158,17 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      */
     public static final String QUARANTINED_RECORDING = "QUARANTINED_RECORDING";
     private static final List<String> QUARANTINED_STATUSES = List.of(SagaStatus.QUARANTINED.name(), QUARANTINED_RECORDING);
+
+    /**
+     * The status an {@link SagaStatus#ACTIVE} instance is stored with while it holds stream marks, which every input
+     * with a stream version adds. It reads back as {@link SagaStatus#ACTIVE}. 0.34.0 saves the whole document and
+     * knows nothing of the marks, so a save from a 0.34.0 node drops them, and 0.35.0 then skips a pending or late input
+     * as applied already. 0.34.0 throws on this string the same way it does on {@link #QUARANTINED_RECORDING}, so a
+     * 0.34.0 node that meets such an instance during a rolling upgrade fails on it and retries it instead of saving it.
+     * Its timer poller matches only {@code ACTIVE}, so the timers of such an instance wait for a 0.35.0 node.
+     */
+    public static final String ACTIVE_MARKED = "ACTIVE_MARKED";
+    private static final List<String> ACTIVE_STATUSES = List.of(SagaStatus.ACTIVE.name(), ACTIVE_MARKED);
 
     // Fields of a document in the skipped inputs collection
     private static final String SKIPPED_SAGA_ID = "sagaId";
@@ -414,8 +427,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
         Objects.requireNonNull(now, "now cannot be null");
-        // Sorted on the field it filters on, so the (status, nextTimerFiresAt) index serves the order as well as the match
-        Query query = Query.query(where(STATUS).is(SagaStatus.ACTIVE.name()).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
+        // Sorted on the field it filters on, so the (status, nextTimerFiresAt) index serves the order as well as the match.
+        // ACTIVE is two strings, and Mongo merges the two index ranges in nextTimerFiresAt order.
+        Query query = Query.query(statusIs(SagaStatus.ACTIVE).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
                 .with(Sort.by(Sort.Direction.ASC, NEXT_TIMER_FIRES_AT))
                 .limit(limit);
         // Project only the fields the poller needs to decide which timers are due. This deliberately excludes the state
@@ -467,9 +481,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return retryStrategy.execute(read).stream().map(document -> document.getString(ID)).toList();
     }
 
-    // QUARANTINED is stored as either of two strings, see QUARANTINED_RECORDING
+    // ACTIVE and QUARANTINED are each stored as either of two strings, see ACTIVE_MARKED and QUARANTINED_RECORDING
     private static Criteria statusIs(SagaStatus status) {
-        return status == SagaStatus.QUARANTINED ? where(STATUS).in(QUARANTINED_STATUSES) : where(STATUS).is(status.name());
+        return switch (status) {
+            case ACTIVE -> where(STATUS).in(ACTIVE_STATUSES);
+            case QUARANTINED -> where(STATUS).in(QUARANTINED_STATUSES);
+            default -> where(STATUS).is(status.name());
+        };
     }
 
     @Override
@@ -627,11 +645,21 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     private static String storedStatus(SagaEnvelope<?> envelope) {
-        return envelope.quarantineId() != null ? QUARANTINED_RECORDING : envelope.status().name();
+        if (envelope.quarantineId() != null) {
+            return QUARANTINED_RECORDING;
+        }
+        if (envelope.status() == SagaStatus.ACTIVE && !envelope.streamMarks().isEmpty()) {
+            return ACTIVE_MARKED;
+        }
+        return envelope.status().name();
     }
 
     private static SagaStatus readStatus(String stored) {
-        return QUARANTINED_RECORDING.equals(stored) ? SagaStatus.QUARANTINED : SagaStatus.valueOf(stored);
+        return switch (stored) {
+            case QUARANTINED_RECORDING -> SagaStatus.QUARANTINED;
+            case ACTIVE_MARKED -> SagaStatus.ACTIVE;
+            default -> SagaStatus.valueOf(stored);
+        };
     }
 
     // Serialize the state. A flow saga's FlowState is written field by field with its received events as CloudEvents (see
