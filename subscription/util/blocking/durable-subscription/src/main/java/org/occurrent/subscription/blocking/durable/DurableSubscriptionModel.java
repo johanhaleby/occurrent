@@ -591,10 +591,19 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
             track(subscriptionId, registration);
             if (askedOnce instanceof StartAt.StartAtCheckpoint && RepositionableSubscriptions.findIn(getWrappedSubscriptionModel()).isPresent()) {
-                // Unknown until the read returns, so after an Error from the read a resume still goes on from the wrapped model's
-                // own position
+                // Unknown until the read returns, so when an Error from the read is followed by a failed cancel, a resume of
+                // the subscription the wrapped model still holds goes on from that model's own position
                 registration.ownStartAfter(StoredBefore.UNKNOWN);
-                registration.ownStartAfter(storedBeforeOwnStart(subscriptionId));
+                try {
+                    registration.ownStartAfter(storedBeforeOwnStart(subscriptionId));
+                } catch (Error readFailure) {
+                    // The caller sees the subscribe fail, so the subscription the wrapped model accepted is untracked and
+                    // cancelled. A failed cancel tracks it again
+                    registrations.remove(subscriptionId, registration);
+                    checkpointedSubscriptions.remove(subscriptionId);
+                    cancelAfterFailedSubscribe(subscriptionId, registration, readFailure);
+                    throw readFailure;
+                }
             }
             return subscription;
         });
@@ -856,9 +865,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     // Read once the subscribe is tracked, so a registration it replaced has stopped writing and what is read was stored
-    // before this run or by it. The version is read first, as a resume reads it. After a failed read, a plain resume goes
-    // on from the wrapped model's own position until this subscribe has stored a checkpoint, which can deliver an event
-    // twice but never skips one
+    // before this run or by it. The version is read first, as a resume reads it. After a read that threw an Exception, a
+    // plain resume goes on from the wrapped model's own position until this subscribe has stored a checkpoint, which can
+    // deliver an event twice but never skips one. An Error reaches subscribe, which cancels the subscription
     private StoredBefore storedBeforeOwnStart(String subscriptionId) {
         try {
             OptionalLong writeVersion = storage.writeVersion(subscriptionId);

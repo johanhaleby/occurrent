@@ -30,6 +30,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
@@ -97,22 +98,53 @@ class DurableSubscriptionModelOwnStartSnapshotTest {
     }
 
     @Test
-    void a_plain_resume_goes_on_from_the_wrapped_models_own_position_after_an_Error_escaped_from_the_snapshot_read_of_a_subscribe_at_a_checkpoint() {
-        // Given a checkpoint an earlier run stored, and a subscribe at a checkpoint whose snapshot read threw an Error after the wrapped model had the subscription
+    void a_subscribe_at_a_checkpoint_whose_snapshot_read_threw_an_Error_leaves_no_delivery_running_and_no_registration_behind() {
+        // Given a subscribe at a checkpoint whose snapshot read throws an Error after the wrapped model accepted the subscription
+        ProbingStorage storage = new ProbingStorage();
+        Error crash = new Error("the storage crashed");
+        storage.readFailure = crash;
+
+        // When, then
+        assertNothingIsLeftBehindBy(storage, crash);
+    }
+
+    @Test
+    void a_subscribe_at_a_checkpoint_whose_snapshot_write_version_read_threw_an_Error_leaves_no_delivery_running_and_no_registration_behind() {
+        // Given a subscribe at a checkpoint whose snapshot write version read throws an Error after the wrapped model accepted the subscription
+        ProbingStorage storage = new ProbingStorage();
+        Error crash = new Error("the storage crashed");
+        storage.writeVersionFailure = crash;
+
+        // When, then
+        assertNothingIsLeftBehindBy(storage, crash);
+    }
+
+    @Test
+    void a_plain_resume_goes_on_from_the_wrapped_models_own_position_when_the_wrapped_cancel_failed_after_an_Error_escaped_from_the_snapshot_read_of_a_subscribe_at_a_checkpoint() {
+        // Given a checkpoint an earlier run stored, and a wrapped model whose cancel fails
         ProbingStorage storage = new ProbingStorage();
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-by-an-earlier-run"));
-        storage.readFailure = new Error("the storage crashed");
+        Error crash = new Error("the storage crashed");
+        storage.readFailure = crash;
         RepositionableStub wrapped = new RepositionableStub();
+        IllegalStateException cancelFailure = new IllegalStateException("cannot cancel");
+        wrapped.cancelFailure = cancelFailure;
         DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage, EVERY_EVENT);
-        assertThat(catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, null, X, cloudEvent -> {
-        }))).isSameAs(storage.readFailure);
-        storage.readFailure = null;
 
-        // When it is paused and resumed with a plain resume
+        // When a subscribe at a checkpoint has its snapshot read throw an Error, and the wrapped model still holds the subscription
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, null, X, cloudEvent -> {
+        }));
+        storage.readFailure = null;
+        wrapped.cancelFailure = null;
+
+        // Then the Error escapes with the cancel failure as the cause of a suppressed IllegalStateException
+        assertThat(thrown).isSameAs(crash);
+        assertThat(thrown.getSuppressed()).as("suppressed by the Error").singleElement().isInstanceOfSatisfying(IllegalStateException.class,
+                suppressed -> assertThat(suppressed).hasCause(cancelFailure));
+
+        // And a pause and a plain resume of the subscription the wrapped model holds go on from the wrapped model's own position
         durable.pauseSubscription(SUBSCRIPTION_ID);
         durable.resumeSubscription(SUBSCRIPTION_ID);
-
-        // Then it goes on from the wrapped model's own position, which can deliver an event again but never skips one
         assertThat(wrapped.plainResumes.get()).as("plain resumes of the wrapped model").isEqualTo(1);
         assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was repositioned to").isEmpty();
     }
@@ -320,6 +352,25 @@ class DurableSubscriptionModelOwnStartSnapshotTest {
         assertThat(storage.exists(SUBSCRIPTION_ID)).as("whether a checkpoint is stored").isFalse();
     }
 
+    private static void assertNothingIsLeftBehindBy(ProbingStorage storage, Throwable crash) {
+        HistoryLossReportingStub wrapped = new HistoryLossReportingStub();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage, EVERY_EVENT);
+
+        // When the subscribe fails with the Error, and the storage then works
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, null, X, cloudEvent -> {
+        }));
+        storage.readFailure = null;
+        storage.writeVersionFailure = null;
+
+        // Then the Error escapes, and the wrapped model's subscription was cancelled
+        assertThat(thrown).isSameAs(crash);
+        assertThat(wrapped.cancelAttempts).as("ids cancelled in the wrapped model").containsExactly(SUBSCRIPTION_ID);
+
+        // And the id is not tracked
+        assertThat(wrapped.listeners).hasSize(1);
+        assertThat(wrapped.listeners.getFirst().storesRestartPositionOf(SUBSCRIPTION_ID)).as("whether a restart position is stored for the id").isFalse();
+    }
+
     private static CloudEvent event(String id, String checkpoint) {
         CloudEvent cloudEvent = CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("test.event").build();
         return new CheckpointAwareCloudEvent(cloudEvent, new StringBasedCheckpoint(checkpoint));
@@ -401,6 +452,7 @@ class DurableSubscriptionModelOwnStartSnapshotTest {
         final AtomicInteger plainResumes = new AtomicInteger();
         volatile boolean failNextSubscribe;
         volatile @Nullable Runnable whileSubscribing;
+        final List<String> cancelAttempts = new CopyOnWriteArrayList<>();
         volatile @Nullable RuntimeException cancelFailure;
 
         @Override
@@ -461,6 +513,7 @@ class DurableSubscriptionModelOwnStartSnapshotTest {
 
         @Override
         public void cancelSubscription(String subscriptionId) {
+            cancelAttempts.add(subscriptionId);
             RuntimeException failure = cancelFailure;
             if (failure != null) {
                 throw failure;
@@ -482,11 +535,25 @@ class DurableSubscriptionModelOwnStartSnapshotTest {
         }
     }
 
-    private static final class RepositionableStub extends NotRepositionableStub implements RepositionableSubscriptions {
+    private static class RepositionableStub extends NotRepositionableStub implements RepositionableSubscriptions {
         @Override
         public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
             resumedAt.add(((StartAt.StartAtCheckpoint) startAt).checkpoint.asString());
             return dummySubscription(subscriptionId);
+        }
+    }
+
+    private static final class HistoryLossReportingStub extends RepositionableStub implements HistoryLossReportingSubscriptions {
+        final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void addHistoryLossListener(HistoryLossListener listener) {
+            listeners.add(listener);
+        }
+
+        @Override
+        public void removeHistoryLossListener(HistoryLossListener listener) {
+            listeners.remove(listener);
         }
     }
 }
