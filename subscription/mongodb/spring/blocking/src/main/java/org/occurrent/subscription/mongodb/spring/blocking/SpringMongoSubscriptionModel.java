@@ -66,6 +66,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -342,7 +343,16 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      */
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint) {
-        return subscriptions.canResumeFrom(eventCollection, checkpoint);
+        return canResumeFrom(checkpoint, () -> true);
+    }
+
+    /**
+     * {@link #canResumeFrom(Checkpoint)}, except that a transient failure is also thrown, instead of retried, once
+     * {@code stillWanted} answers {@code false}.
+     */
+    @Override
+    public boolean canResumeFrom(Checkpoint checkpoint, BooleanSupplier stillWanted) {
+        return subscriptions.canResumeFrom(eventCollection, checkpoint, stillWanted);
     }
 
     // Life-cycle implementation

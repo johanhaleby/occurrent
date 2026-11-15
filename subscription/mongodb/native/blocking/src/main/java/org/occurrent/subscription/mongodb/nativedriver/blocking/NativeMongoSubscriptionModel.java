@@ -57,6 +57,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -446,7 +447,16 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      */
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint) {
-        return subscriptions.canResumeFrom(eventCollection.getNamespace().getCollectionName(), checkpoint);
+        return canResumeFrom(checkpoint, () -> true);
+    }
+
+    /**
+     * {@link #canResumeFrom(Checkpoint)}, except that a transient failure is also thrown, instead of retried, once
+     * {@code stillWanted} answers {@code false}.
+     */
+    @Override
+    public boolean canResumeFrom(Checkpoint checkpoint, BooleanSupplier stillWanted) {
+        return subscriptions.canResumeFrom(eventCollection.getNamespace().getCollectionName(), checkpoint, stillWanted);
     }
 
 

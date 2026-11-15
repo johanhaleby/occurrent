@@ -53,6 +53,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntConsumer;
@@ -273,6 +275,33 @@ class SpringMongoSubscriptionModelCanResumeFromTest {
             assertThat(event.getFormattedMessage()).contains("events", "MongoSocketReadException");
             assertThat(event.getThrowableProxy().getClassName()).isEqualTo(MongoSocketReadException.class.getName());
         });
+    }
+
+    @Test
+    void stops_retrying_a_transient_failure_between_attempts_once_stillWanted_turns_false_and_throws_the_last_failure() {
+        AtomicInteger probes = new AtomicInteger();
+        MongoSocketReadException failure = transientFailure();
+        useModelWhoseProbe(RetryStrategy.fixed(Duration.ofMillis(10)), probes, failOnTheFirstAttempts(3, failure));
+        Checkpoint checkpoint = requireNonNull(subscriptionModel.globalCheckpoint());
+
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () ->
+                assertThatThrownBy(() -> subscriptionModel.canResumeFrom(checkpoint, () -> probes.get() < 2)).isSameAs(failure));
+        assertThat(probes).hasValue(2);
+    }
+
+    @Test
+    void stops_retrying_partway_through_a_backoff_once_stillWanted_turns_false_and_throws_the_last_failure() {
+        AtomicInteger probes = new AtomicInteger();
+        AtomicInteger answers = new AtomicInteger();
+        MongoSocketReadException failure = transientFailure();
+        useModelWhoseProbe(RetryStrategy.fixed(Duration.ofMinutes(5)), probes, failOnTheFirstAttempt(failure));
+        Checkpoint checkpoint = requireNonNull(subscriptionModel.globalCheckpoint());
+
+        // The first answer is the one after the failed attempt, the second is the first poll during the backoff
+        CompletableFuture<Boolean> asked = CompletableFuture.supplyAsync(() -> subscriptionModel.canResumeFrom(checkpoint, () -> answers.incrementAndGet() < 2));
+        assertThat(asked).failsWithin(Duration.ofSeconds(10)).withThrowableOfType(ExecutionException.class).havingCause().isSameAs(failure);
+        assertThat(answers).hasValue(2);
+        assertThat(probes).hasValue(1);
     }
 
     private static MongoCommandException commandFailure(int code) {

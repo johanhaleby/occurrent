@@ -1087,9 +1087,20 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         return subscriptionModel.globalCheckpoint();
     }
 
+    @Nullable
+    @Override
+    public Checkpoint globalCheckpoint(BooleanSupplier stillWanted) {
+        return subscriptionModel.globalCheckpoint(stillWanted);
+    }
+
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint) {
         return subscriptionModel.canResumeFrom(checkpoint);
+    }
+
+    @Override
+    public boolean canResumeFrom(Checkpoint checkpoint, BooleanSupplier stillWanted) {
+        return subscriptionModel.canResumeFrom(checkpoint, stillWanted);
     }
 
     @Override
