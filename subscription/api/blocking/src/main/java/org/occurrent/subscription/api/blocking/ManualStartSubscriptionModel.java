@@ -37,6 +37,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -79,7 +80,7 @@ import static java.util.Objects.requireNonNull;
  * @see #stoppedByDefault(SubscriptionModel)
  */
 @NullMarked
-public final class ManualStartSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, IntrospectableSubscriptions, CommitOrderedSubscriptions {
+public final class ManualStartSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, IntrospectableSubscriptions, CommitOrderedSubscriptions, RedeliveringSubscriptions {
 
     private final SubscriptionModel delegate;
     private final @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource;
@@ -493,6 +494,27 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     @Override
     public boolean deliversEveryEventInCommitOrder() {
         return CommitOrderedSubscriptions.findIn(delegate).map(CommitOrderedSubscriptions::deliversEveryEventInCommitOrder).orElse(false);
+    }
+
+    /**
+     * What the delegate answers, and {@code false} when it doesn't declare it. This model hands each action to the
+     * delegate unchanged.
+     */
+    @Override
+    public boolean redeliversAnAttemptNotMade() {
+        return RedeliveringSubscriptions.findIn(delegate).map(RedeliveringSubscriptions::redeliversAnAttemptNotMade).orElse(false);
+    }
+
+    /**
+     * Empty for {@link RedeliveringSubscriptions} when the delegate doesn't declare it, as {@code DurableSubscriptionModel}
+     * and the catch-up models answer, so this model is found to declare it only when the delegate does.
+     */
+    @Override
+    public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+        if (type == RedeliveringSubscriptions.class && RedeliveringSubscriptions.findIn(delegate).isEmpty()) {
+            return Optional.empty();
+        }
+        return RedeliveringSubscriptions.super.capability(type);
     }
 
     /**

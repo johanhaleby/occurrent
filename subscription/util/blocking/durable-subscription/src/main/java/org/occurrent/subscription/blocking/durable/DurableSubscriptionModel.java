@@ -156,7 +156,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * </ul>
  */
 @NullMarked
-public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions, CommitOrderedSubscriptions {
+public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions, CommitOrderedSubscriptions, RedeliveringSubscriptions {
 
     private static final Logger log = LoggerFactory.getLogger(DurableSubscriptionModel.class);
 
@@ -1116,13 +1116,24 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     /**
-     * Answers {@link RepositionableSubscriptions} only when the wrapped model has it, since
-     * {@link #resumeSubscription(String, StartAt)} resumes the subscription there. Answers every other capability as any
-     * model does.
+     * What the wrapped model answers, and {@code false} when it doesn't declare it. This model saves the checkpoint of
+     * an event only once the action has returned normally, and after an action that throws it saves no quiet position
+     * until a later event's checkpoint is saved. So the stored checkpoint doesn't move past an event whose action threw
+     * {@code AttemptNotMade}.
+     */
+    @Override
+    public boolean redeliversAnAttemptNotMade() {
+        return RedeliveringSubscriptions.findIn(subscriptionModel).map(RedeliveringSubscriptions::redeliversAnAttemptNotMade).orElse(false);
+    }
+
+    /**
+     * Answers {@link RepositionableSubscriptions} and {@link RedeliveringSubscriptions} only when the wrapped model has
+     * it, since {@link #resumeSubscription(String, StartAt)} resumes the subscription there, and an event is delivered
+     * again only when the wrapped model delivers it again. Answers every other capability as any model does.
      */
     @Override
     public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
-        if (type == RepositionableSubscriptions.class && !subscriptionModel.hasCapability(RepositionableSubscriptions.class)) {
+        if ((type == RepositionableSubscriptions.class || type == RedeliveringSubscriptions.class) && !subscriptionModel.hasCapability(type)) {
             return Optional.empty();
         }
         return CheckpointAwareSubscriptionModel.super.capability(type);
