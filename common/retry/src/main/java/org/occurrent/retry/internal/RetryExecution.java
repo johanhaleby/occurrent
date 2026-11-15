@@ -19,6 +19,7 @@ package org.occurrent.retry.internal;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.AfterRetryInfo.ResultOfRetryAttempt;
+import org.occurrent.retry.AttemptNotMade;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.MaxAttempts;
 import org.occurrent.retry.RetryInfo;
@@ -220,19 +221,6 @@ public class RetryExecution {
                 }
             }
         };
-    }
-
-    /**
-     * Thrown by the function given to {@code executeWithRetry} when it does not make the attempt it was called for,
-     * for example because the subscription it would deliver to has been closed. {@code executeWithRetry} rethrows it
-     * without another attempt, and without calling the retry predicate, the error mapper or the listeners of the
-     * {@link RetryStrategy}, since the attempt did not fail. When the skipped attempt is a retry, the before-retry
-     * listener has already been called, and no after-retry listener follows.
-     */
-    public static final class AttemptNotMade extends RuntimeException {
-        public AttemptNotMade(String message) {
-            super(message, null, false, false);
-        }
     }
 
     /**

@@ -30,7 +30,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.retry.internal.RetryExecution.AttemptNotMade;
+import org.occurrent.retry.AttemptNotMade;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;

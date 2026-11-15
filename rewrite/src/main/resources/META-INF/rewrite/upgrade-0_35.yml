@@ -23,4 +23,5 @@ description: >-
 recipeList:
   - org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35
   - org.occurrent.MigrateNativeMongoSubscriptionRecordPattern_0_35
+  - org.occurrent.MoveAttemptNotMade_0_35
   - org.occurrent.MoveSubscriptionAnnotationsToInternal_0_35
