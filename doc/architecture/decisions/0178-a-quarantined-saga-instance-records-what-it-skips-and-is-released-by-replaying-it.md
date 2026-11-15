@@ -73,9 +73,19 @@ Each recorded key is a record of its own in the state store, holding the saga id
 the key. A quarantine can record any number of inputs without growing the instance's document toward MongoDB's 16 MB
 limit, so there is no limit on how many it records.
 
+The methods that read and write the records are on an interface of their own, `SagaStateStoreSkippedInputs`, which a
+store implements next to `SagaStateStore`, the way it implements `SagaStateStoreQueries`. It has no state type
+parameter, since none of its methods reads the state, and none of them has a default. The in-memory store and
+`SpringMongoSagaStateStore` implement it. Point 7 says what the runner does with a store that doesn't.
+
 The write that quarantines an `ACTIVE` instance gives its failure record a new quarantine id and sets the skip counter
-to 0. The id names the whole quarantine until the instance is `ACTIVE` again, so a release that quarantines the instance
-again keeps the id, and keeps the counter for the records that stay. Records are stored under the saga id and the
+to 0. The saga reads the instance back after that write. When the quarantine id or the skip counter didn't persist, it
+writes the instance back as it was before the quarantine, logs an `ERROR` and fails the input instead of acknowledging
+it. A skip records nothing for an instance without them, so an instance left `QUARANTINED` would have the redelivery of
+that input and every later one acknowledged with nothing recorded and no `WARN`. Undone, it is quarantined again on the
+next failure of the input, so every delivery fails the same way until the store persists both. The id names the whole
+quarantine until the instance is `ACTIVE` again, so a release that quarantines the instance again keeps the id, and
+keeps the counter for the records that stay. Records are stored under the saga id and the
 quarantine id, and a release reads only those under the current id. A record left over from an earlier quarantine of the
 same instance is never replayed.
 
@@ -104,8 +114,7 @@ starts, to make the input it starts from the first record it replays, in point 3
 it. When a delete fails between the two, what remains is records that no instance reads, never a quarantined instance
 without the records of what it skipped. When a replayed input completes the instance, release deletes every record of
 the instance, under every quarantine id, with `deleteSkippedInputs(sagaId)`, since a completed instance skips every
-input and none of them can be replayed. On a store that doesn't implement `deleteSkippedInputs`, release deletes only
-the record it applied. After a crash between the write that completes the instance and that delete, the records stay
+input and none of them can be replayed. After a crash between the write that completes the instance and that delete, the records stay
 until `SagaStateStore.delete(sagaId)`.
 
 ### 3. Release replays the input the instance stopped on, then the records
@@ -168,8 +177,8 @@ of the saga's subscription isn't one, since a quarantined instance skips every e
 
 Release also throws `IllegalStateException` for an instance whose state no longer decodes, and the message names the
 decoding failure. To go on, fix how the state decodes and release the instance again, or delete the instance. An
-instance whose state stops decoding while it is releasing stays releasing. On a store that answers the poller's query,
-each poll logs the failure at `WARN` and tries again, so the release goes on once the state decodes.
+instance whose state stops decoding while it is releasing stays releasing. Each poll logs the failure at `WARN` and
+tries again, so the release goes on once the state decodes.
 
 ### 5. Release runs on any node, and a crashed release is resumed
 
@@ -182,9 +191,8 @@ without applying it.
 When a recorded input fails again while releasing, the failure is recorded the way any failure is, and the instance
 stays releasing. The timer poller also asks for releasing instances on every poll and continues their replay. With a
 competing-consumer strategy only the node holding the saga's timer lease polls, which is the Spring Boot starter's
-setup, and without one every node does. `SagaStateStore` gains a query for them, a `default` method that throws
-`UnsupportedOperationException`, so a custom store keeps compiling. The poller logs that once at `WARN` and stops asking,
-and on such a store a failed or interrupted release goes on only when `release` is called again. The poller is what
+setup, and without one every node does. The query is `findReleasingSagaIds` on `SagaStateStoreSkippedInputs`, and the
+last paragraph of this point says how a poll pages through it. The poller is what
 retries the failed input until it succeeds or its budget runs out, and it also resumes a release that a crash
 interrupted.
 
@@ -276,6 +284,10 @@ the defaults or was configured explicitly. The message names `SagaRunner.eventSt
 `SagaRunnerConfig.disableQuarantine()` as the two ways out. A runner that quarantines without an `EventStoreQueries`
 can't release anything, so `SagaStateStore.delete(sagaId)` would be the only way out, which is the situation ADR 134
 turned quarantine off for.
+
+For the same reason `SagaRunner.run` throws an `IllegalStateException` when quarantine is on and the saga's state store
+doesn't implement `SagaStateStoreSkippedInputs`. The message names the interface and `disableQuarantine()`. Such a
+store would quarantine an instance and skip its inputs without recording any of them.
 
 That is a startup failure for a `SagaRunner` built in plain Java without an `EventStoreQueries` that runs on the
 defaults, from `SagaRunnerConfig.defaults()` or from the `run` overloads that take no config, which pass
@@ -388,7 +400,7 @@ The upgrade guide has the procedure for operators, in
 - A quarantined instance keeps a record of every input it skips, with no limit. The records take space in the store
   until a release replays them, a replayed input completes the instance, or the 0.35.0 store deletes the instance.
   Records left under an earlier quarantine id, see points 2 and 3, stay until the instance is deleted, or until a
-  replayed input completes it on a store that implements `deleteSkippedInputs`, see point 2. A 0.34.0 `delete` after a
+  replayed input completes it, see point 2. A 0.34.0 `delete` after a
   downgrade removes none of them.
 - An instance whose K or recorded input refers to an event that was deleted from the store stays quarantined until the
   event is restored or the instance is deleted.
@@ -410,10 +422,10 @@ The upgrade guide has the procedure for operators, in
   `occurrent.saga.quarantine-enabled=false` as the ways to turn quarantine off.
 - `SagaFailure` gains two components, so a record pattern over it stops compiling. `SagaEnvelope` changes in 0.35.0
   already, and gains one more component.
-- A custom `SagaStateStore` has to persist the new fields, keep the records, implement `deleteSkippedInput`,
-  `deleteSkippedInputByKey` and `deleteSkippedInputs`, delete the records in `delete(sagaId)`, and implement the query
-  for releasing instances.
-  A release reads the instance back after setting `releasedAt` and throws
+- A custom `SagaStateStore` with quarantine on has to implement `SagaStateStoreSkippedInputs`, persist the new fields
+  and delete the records in `delete(sagaId)`, or turn quarantine off. Without the interface the runner refuses to
+  start, see point 7. On a store that loses the quarantine id or the skip counter, every delivery of the input that
+  would quarantine an instance fails and the instance stays out of quarantine, see point 2. A release reads the instance back after setting `releasedAt` and throws
   when `releasedAt`, the quarantine id or the skip counter didn't persist, rather than replaying into an instance that
   would forget it is releasing.
 
@@ -428,6 +440,10 @@ The upgrade guide has the procedure for operators, in
 - **A second, temporary subscription per release**, starting at K's position and feeding only the instance. The
   competing-consumer model would give it its own lease, but deciding when the instance may go `ACTIVE` and the temporary
   subscription may stop is the same handover problem between two subscriptions.
+- **The record methods as `default` methods on `SagaStateStore` that throw `UnsupportedOperationException`**, so a
+  custom store keeps compiling. Such a store quarantines an instance and skips its inputs without recording any of
+  them, so the instance can't be released, and the saga could only warn about it once it happened. A store of its own
+  without the interface is refused at startup instead, before anything is quarantined.
 - **Keep the records in a list on the instance's document.** The list grows the document toward MongoDB's 16 MB limit,
   so it needs a limit, and an instance that skips more inputs than the limit can't be released.
 - **Log an input whose event is missing and drop its record.** That loses the input. A wrong `EventStoreQueries`, one
