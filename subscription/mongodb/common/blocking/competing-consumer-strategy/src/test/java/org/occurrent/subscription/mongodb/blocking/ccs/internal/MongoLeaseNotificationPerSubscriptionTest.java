@@ -178,11 +178,12 @@ class MongoLeaseNotificationPerSubscriptionTest {
         try {
             assertThat(node.registerCompetingConsumer(locks, A, NODE)).isTrue();
             listener.blockOn("prohibited " + A);
+            OptionalLong lost = node.fencingToken(A);
 
             takeOverLease(rival, A);
             assertThat(listener.busy.await(10, TimeUnit.SECONDS)).as("the listener is busy with the loss of " + A).isTrue();
             rival.unregisterCompetingConsumer(locks, A, RIVAL);
-            assertThat(eventually(() -> node.hasLock(A, NODE))).as("the node won " + A + " back while the loss waited").isTrue();
+            assertThat(eventually(() -> node.fencingToken(A).isPresent() && !node.fencingToken(A).equals(lost))).as("the node won " + A + " back under a new token while the loss waited").isTrue();
             listener.unblock.countDown();
 
             listener.awaitCalls(2);

@@ -262,8 +262,11 @@ jobs:
           # The blocking subscription utilities are listed one by one, because the competing consumer among them is slow
           # enough to need the shard of its own below. The bare `subscription/util/blocking` prefix would pull it back
           # in here.
-          - { name: subscription-util-blocking,  paths: "subscription/util/blocking/durable-subscription subscription/util/blocking/stream-catchup-subscription subscription/util/blocking/catchup-subscription subscription/synchronous/blocking subscription/push/blocking" }
-          - { name: competing-consumer-blocking, paths: "subscription/util/blocking/competing-consumer-subscription" }
+          - { name: subscription-util-blocking,  paths: "subscription/util/blocking/stream-catchup-subscription subscription/util/blocking/catchup-subscription subscription/synchronous/blocking subscription/push/blocking" }
+          # `subscription/util/blocking/durable-subscription` runs next to the competing consumer. In the shard above it
+          # took about 2 minutes, the shard took 19m47s and 19m54s on main, and once the catch-up module gained its
+          # lifecycle tests both jobs were cancelled at the 20 minute shard timeout.
+          - { name: competing-consumer-blocking, paths: "subscription/util/blocking/competing-consumer-subscription subscription/util/blocking/durable-subscription" }
           # The reactor subscription utilities take about 970 seconds of test time, so about 1010 seconds per job. Next to
           # the other subscription modules they took up to 1134 seconds of test time and one job was cancelled at the
           # 20 minute shard timeout, so they have a shard of their own.

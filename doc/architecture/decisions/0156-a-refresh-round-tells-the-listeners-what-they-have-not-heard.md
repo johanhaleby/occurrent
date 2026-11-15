@@ -9,6 +9,10 @@ Accepted. Fixes [#1349](https://github.com/johanhaleby/occurrent/issues/1349). A
 [ADR 140](0140-a-refresh-round-tells-its-listeners-on-a-thread-of-its-own.md). Applies to both MongoDB lease
 strategies, which share `MongoLeaseCompetingConsumerStrategySupport`.
 
+Amended by [ADR 161](0161-a-held-event-is-withdrawn-instead-of-delivered-without-the-lease.md). `hasLock` answers no
+while the listeners are owed a prohibition, also for a lease the node holds again, and that no isn't counted as a lapse.
+So `lapses` below goes up when `hasLock` answers no for an acquired status only when no prohibition is owed.
+
 ## Context
 
 Under ADR 113 the locked step that changes a consumer's lease status also works out which callback that change owes,

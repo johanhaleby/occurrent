@@ -424,6 +424,10 @@ class StreamCatchupResumeStoresARestartablePositionTest {
         public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             heldPaused.add(refusal);
         }
+
+        @Override
+        public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+        }
     }
 
     private static NameDefined nameDefined(LocalDateTime time, String name) {

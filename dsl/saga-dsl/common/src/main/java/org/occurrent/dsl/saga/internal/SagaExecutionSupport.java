@@ -776,12 +776,12 @@ public final class SagaExecutionSupport {
     }
 
     // Only the input the record names clears it. Letting any successful input clear it lets a saga that re-arms a timer
-    // more often than the budget reset the clock forever, so an event that never succeeds never reaches the budget and
-    // keeps blocking every other instance. A timer has no redelivery key, so it never matches.
+    // more often than the budget reset the clock forever, so an event that never succeeds never reaches the budget, and
+    // nothing bounds how long it keeps failing. A timer has no redelivery key, so it never matches.
     // An exception message is application data and has no length the saga controls. A message big enough to push the
     // instance over MongoDB's document limit would fail the failure write on every retry, so the instance would never
-    // quarantine and would keep blocking the subscription, which is the outcome this whole design removes. The log
-    // still gets the whole throwable.
+    // quarantine and nothing would bound how long its event keeps failing, which is the outcome this whole design
+    // removes. The log still gets the whole throwable.
     static final int MAX_FAILURE_MESSAGE_LENGTH = 1000;
 
     private static @Nullable String shortened(@Nullable String failureMessage) {

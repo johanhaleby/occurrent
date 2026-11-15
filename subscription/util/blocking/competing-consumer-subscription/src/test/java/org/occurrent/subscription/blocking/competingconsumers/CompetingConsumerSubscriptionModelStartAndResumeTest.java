@@ -800,9 +800,12 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
             await().atMost(5, SECONDS).untilAsserted(() -> assertThat(held).as("events of x held").hasSize(2));
             assertThat(stopReturnedBeforeTheWaitRanOut).as("the action for e1 saw stop() return before its 5 second wait ran out").isTrue();
             assertThat(deliveredToX).as("events delivered to x").containsExactly("e1");
-            assertThat(warnings).as("warnings").singleElement().asString()
-                    .contains("Call start() on the CompetingConsumerSubscriptionModel, not on the subscription model it wraps")
-                    .contains("subscriptionId=x");
+            assertThat(warnings).as("warnings that the model was never started")
+                    .filteredOn(warning -> warning.contains("Call start() on the CompetingConsumerSubscriptionModel, not on the subscription model it wraps"))
+                    .singleElement().asString().contains("subscriptionId=x");
+            assertThat(warnings).as("the other warnings, for e1 let through by a model that doesn't redeliver")
+                    .filteredOn(warning -> !warning.contains("Call start() on the CompetingConsumerSubscriptionModel"))
+                    .singleElement().asString().contains("doesn't declare RedeliveringSubscriptions");
         } finally {
             detach(appender);
             overInMemory.shutdown();

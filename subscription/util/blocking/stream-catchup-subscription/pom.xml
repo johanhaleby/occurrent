@@ -32,6 +32,12 @@
             <artifactId>occurrent-subscription-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- A replay whose action threw AttemptNotMade runs again -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-retry</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-core</artifactId>
