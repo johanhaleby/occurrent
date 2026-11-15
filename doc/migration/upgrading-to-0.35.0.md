@@ -630,8 +630,10 @@ saga's subscription, as [Rolling upgrades from 0.34.0 and rolling back to it](#r
 A blank `occurrent.saga.quarantine-after` kept quarantine off in 0.34.0, and it now means the default of 5 minutes.
 To keep quarantine off, set `occurrent.saga.quarantine-enabled=false`.
 
-Quarantine still applies only on a subscription model that retains every event it delivers. On any other,
-`SagaRunner` turns it off and logs a `WARN`, as in 0.34.0.
+Quarantine still applies only on a subscription model that retains every event it delivers. On any other, and on a
+push feed, `SagaRunner` turns it off and logs a `WARN` each time the saga starts. Quarantine is now on by default, so a
+default configuration logs that `WARN` too, where 0.34.0 logged it only when you turned quarantine on.
+`SagaRunnerConfig.disableQuarantine()` or `occurrent.saga.quarantine-enabled=false` silences it.
 
 On a model that retains every event, `SagaRunner.run` throws an `IllegalStateException` when quarantine is on and the
 runner has no `EventStoreQueries`, since `release` reads the skipped inputs back with it. That holds whether quarantine

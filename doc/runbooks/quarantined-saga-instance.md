@@ -475,7 +475,9 @@ back with it. Pass the event store with `SagaRunner.eventStoreQueries(..)`, or c
 `SagaRunnerConfig.disableQuarantine()`. On the annotation path, no `EventStoreQueries` bean, or several with none of
 them `@Primary`, fails at startup the same way, so define the event store as a bean, mark one `@Primary`, or set
 `occurrent.saga.quarantine-enabled=false`. On a
-model that doesn't retain every event, `SagaRunner` turns quarantine off and logs a `WARN`, as in 0.34.0.
+model that doesn't retain every event, or on a push feed, `SagaRunner` turns quarantine off and logs a `WARN` each time
+the saga starts, with the default configuration too. `SagaRunnerConfig.disableQuarantine()` or
+`occurrent.saga.quarantine-enabled=false` silences it.
 
 Lower it when you would rather find out sooner and are willing to quarantine an instance whose downstream service was
 only briefly unavailable. Raise it when your dispatcher talks to something that is routinely down for longer than five
