@@ -1780,6 +1780,116 @@ class SagaReleaseTest {
     }
 
     @Nested
+    class WhenAStreamEventArrivesFurtherBehindThanTheReorderWindow {
+
+        private ListAppender<ILoggingEvent> appender;
+        private Logger executionLog;
+        private @Nullable Level originalLevel;
+
+        @BeforeEach
+        void startCapturing() {
+            execution = execution(CONFIG.withReorderWindow(1));
+            appender = new ListAppender<>();
+            appender.start();
+            executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            originalLevel = executionLog.getLevel();
+            executionLog.setLevel(Level.WARN);
+        }
+
+        @AfterEach
+        void stopCapturing() {
+            executionLog.setLevel(originalLevel);
+            executionLog.detachAppender(appender);
+            appender.stop();
+        }
+
+        // The stream holds placed, late, "b", "c" and the poison event. The instance applies placed, "b" and "c", so it
+        // remembers version 4 of the type and "late" is two behind it, further than a window of 1.
+        private CloudEvent quarantinedWithAnEventBehindTheWindow() {
+            CloudEvent placed = placed();
+            CloudEvent late = added("late");
+            CloudEvent b = added("b");
+            CloudEvent c = added("c");
+            failing.add("poison");
+            CloudEvent poison = added("poison");
+            deliver(placed);
+            deliver(b);
+            deliver(c);
+            quarantineOn(poison);
+            return late;
+        }
+
+        private List<String> behindTheWindowWarnings() {
+            return appender.list.stream()
+                    .filter(e -> e.getLevel() == Level.WARN)
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .filter(m -> m.contains("further behind than the instance remembers"))
+                    .toList();
+        }
+
+        @Test
+        void a_quarantined_instance_with_a_quarantine_id_warns_once_and_records_no_skipped_input_for_it() {
+            CloudEvent late = quarantinedWithAnEventBehindTheWindow();
+            List<String> recordedBefore = recordedKeys();
+            SagaEnvelope<Order> before = instance();
+
+            deliver(late);
+            deliver(late);
+
+            List<String> warnings = behindTheWindowWarnings();
+            assertAll(
+                    () -> assertThat(before.quarantineId()).isNotNull(),
+                    () -> assertThat(warnings).hasSize(1),
+                    () -> assertThat(warnings.getFirst()).contains("Saga 'o1' skipped version 2 of stream 'o1'"),
+                    () -> assertThat(recordedKeys()).isEqualTo(recordedBefore),
+                    () -> assertThat(instance()).isEqualTo(before)
+            );
+        }
+
+        @Test
+        void the_same_holds_while_the_state_of_the_instance_no_longer_decodes() {
+            CloudEvent late = quarantinedWithAnEventBehindTheWindow();
+            List<String> recordedBefore = recordedKeys();
+            SagaEnvelope<Order> before = instance();
+            store.refusesToDecode = true;
+
+            Throwable thrown = catchThrowable(() -> {
+                deliver(late);
+                deliver(late);
+            });
+
+            store.refusesToDecode = false;
+            List<String> warnings = behindTheWindowWarnings();
+            assertAll(
+                    () -> assertThat(thrown).isNull(),
+                    () -> assertThat(warnings).hasSize(1),
+                    () -> assertThat(warnings.getFirst()).contains("Saga 'o1' skipped version 2 of stream 'o1'"),
+                    () -> assertThat(recordedKeys()).isEqualTo(recordedBefore),
+                    () -> assertThat(instance()).isEqualTo(before)
+            );
+        }
+
+        @Test
+        void an_instance_quarantined_by_034_with_no_quarantine_id_does_not_warn() {
+            CloudEvent late = quarantinedWithAnEventBehindTheWindow();
+            SagaEnvelope<Order> quarantined = instance();
+            SagaFailure failure034 = new SagaFailure(quarantined.failure().input(), 1L, start, IllegalStateException.class.getName(), "boom");
+            SagaEnvelope<Order> by034 = new SagaEnvelope<>(ORDER, quarantined.state(), SagaStatus.QUARANTINED, quarantined.version() + 1, List.of(),
+                    quarantined.streamWatermarks(), null, start, start, null, null, true, failure034, quarantined.streamMarks(), null);
+            store.delegate.compareAndSave(ORDER, by034, quarantined.version());
+
+            deliver(late);
+
+            assertAll(
+                    () -> assertThat(instance().quarantineId()).isNull(),
+                    () -> assertThat(behindTheWindowWarnings()).isEmpty(),
+                    () -> assertThat(instance()).isEqualTo(by034)
+            );
+        }
+    }
+
+    @Nested
     class ThroughTheSagaSubscription {
 
         private final InMemorySubscriptionModel subscriptionModel = new InMemorySubscriptionModel();

@@ -1102,7 +1102,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             SkippedInput toRecord = SagaExecutionSupport.skipToRecord(current, meta, config.reorderWindow());
-            if (toRecord == null || recordedSkip(current, toRecord)) {
+            if (toRecord == null) {
+                warnIfBehindTheReorderWindow(sagaId, current, meta);
+                return true;
+            }
+            if (recordedSkip(current, toRecord)) {
                 return true;
             }
             SagaEnvelope<S> reread = stateStore.findWithoutState(sagaId).orElse(null);
@@ -1144,9 +1148,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     // A skipped stream event further behind than the reorder window cannot be told from a redelivery, and a late arrival
-    // is the case where skipping it loses the event, so it is said once per stream rather than skipped silently.
+    // is the case where skipping it loses the event, so it is said once per stream rather than skipped silently. A
+    // quarantined instance records every other input it skips, so the skip it leaves unrecorded is said too. One
+    // quarantined without a quarantine id records nothing and skips every input, so being behind is not why it skipped.
     private void warnIfBehindTheReorderWindow(String sagaId, @Nullable SagaEnvelope<S> current, EventMeta meta) {
-        if (current == null || current.isCompleted() || current.isQuarantined()
+        if (current == null || current.isCompleted() || (current.isQuarantined() && current.quarantineId() == null)
             || SagaExecutionSupport.classify(current, meta, config.reorderWindow()) != SagaExecutionSupport.Delivery.BEHIND_WINDOW) {
             return;
         }

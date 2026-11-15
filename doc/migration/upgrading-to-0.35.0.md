@@ -919,15 +919,19 @@ subscription goes live. To downgrade without that stall, do steps 1 to 4 on 0.35
 1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or
    `occurrent.saga.quarantine-enabled=false`, and have that running on every node before step 2. A node that still has
    quarantine on can quarantine another instance after you have listed them.
-2. Find the quarantined instances with `findByStatus(QUARANTINED, ..)` and call `release` on each whose failure
-   record has a quarantine id.
+2. List the quarantined instances and call `release` on each whose failure record has a quarantine id. On MongoDB,
+   `db.getCollection("saga-order-fulfilment").find({ status: "QUARANTINED_RECORDING" }, { _id: 1 })`, with your saga's
+   collection, lists exactly those, and its cursor reaches every one. On another store,
+   `findByStatus(QUARANTINED, ..)` lists them all only when its `limit` is above the number of quarantined instances,
+   since the limit is a bound and the query has no cursor.
 3. Delete with `SagaStateStore.delete(sagaId)` each one whose release returns `QUARANTINED_AGAIN`,
    `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
    longer decodes or an event store read that failed, and release the instance again, or delete it.
-5. Stop every 0.35.0 node, and set every `ACTIVE_MARKED` instance back to `ACTIVE` with the `updateMany` in
+5. Repeat steps 2 to 4 until step 2 lists no instance with a quarantine id. Then stop every 0.35.0 node, and set every
+   `ACTIVE_MARKED` instance back to `ACTIVE` with the `updateMany` in
    [the stored saga state for late versions](#stored-saga-state-1). A released instance is one of them. That section
-   says what 0.34.0 then loses.
+   lists the instances that lose a version first, and says what 0.34.0 then loses.
 6. Start the 0.34.0 nodes.
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already

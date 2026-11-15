@@ -244,9 +244,10 @@ public final class SagaRunner<E, C> {
      * their own once it returns {@code true}, so nothing has to be restarted.
      * <p>
      * The same gate holds back the poller's continuation of a release that failed on an input or was interrupted,
-     * since continuing it applies the skipped inputs and dispatches the commands their reactions return. The first
-     * poll after it returns {@code true} goes on with the release. {@link SagaSubscription#release(String)} doesn't
-     * wait for it.
+     * only because the poller is what continues it, and the first poll after it returns {@code true} goes on with the
+     * release. The gate exists for timers, which fire on the clock and can decide against state the subscription
+     * hasn't caught up to. A release applies only inputs the subscription has delivered and the instance recorded, in
+     * order, so {@link SagaSubscription#release(String)} doesn't wait for it.
      */
     public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
                                                              SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher,
