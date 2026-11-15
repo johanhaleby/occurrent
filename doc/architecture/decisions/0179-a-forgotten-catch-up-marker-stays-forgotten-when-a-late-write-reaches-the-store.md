@@ -155,6 +155,8 @@ A failover on Redis can still lose any acknowledged checkpoint write, a forget i
 brings its marker back, and the next catch-up for the id skips the replay that forget asked for. A master that a
 failover has replaced can also keep answering for a moment, and a read there misses a forget made on the new master, as
 a read in 0.34.0 does. The token only keeps a late write from bringing a marker back after a forget that Redis kept.
+[#1541](https://github.com/johanhaleby/occurrent/issues/1541) tracks documenting the lost writes for every Redis
+checkpoint save and delete, in the documentation and the `SpringRedisCheckpointStorage` javadoc.
 
 In a mixed cluster:
 
