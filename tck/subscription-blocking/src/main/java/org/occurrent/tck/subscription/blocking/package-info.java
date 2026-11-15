@@ -45,6 +45,9 @@
  *   <tr><td>{@link org.occurrent.tck.subscription.blocking.CheckpointStorageConformance}</td>
  *       <td>{@link org.occurrent.tck.subscription.blocking.CheckpointStorageFixture}</td>
  *       <td>you have a {@code CheckpointStorage}</td></tr>
+ *   <tr><td>{@link org.occurrent.tck.subscription.blocking.CatchupMarkerStorageConformance}</td>
+ *       <td>{@link org.occurrent.tck.subscription.blocking.CatchupMarkerStorageFixture}</td>
+ *       <td>you have a {@code CatchupMarkerStorage}</td></tr>
  *   <tr><td>{@link org.occurrent.tck.subscription.blocking.CompetingConsumerStrategyConformance}</td>
  *       <td>{@link org.occurrent.tck.subscription.blocking.CompetingConsumerStrategyFixture}</td>
  *       <td>you have a {@code CompetingConsumerStrategy}</td></tr>

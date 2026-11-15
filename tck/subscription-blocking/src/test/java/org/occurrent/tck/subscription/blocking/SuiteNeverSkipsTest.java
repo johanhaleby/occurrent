@@ -74,6 +74,16 @@ class SuiteNeverSkipsTest {
     }
 
     @Test
+    void the_catch_up_marker_suite_fails_every_test_against_a_storage_that_honours_nothing() {
+        assertEveryTestFails(HonoursNothingCatchupMarkerStorageConformance.class, "a storage that honours nothing");
+    }
+
+    @Test
+    void the_catch_up_marker_suite_passes_every_test_against_a_storage_that_honours_everything() {
+        assertEveryTestPasses(HonoursEverythingCatchupMarkerStorageConformance.class, "catch-up marker storage");
+    }
+
+    @Test
     void fails_every_test_and_skips_none_of_them_against_a_subscription_model_that_honours_nothing() {
         assertEveryTestFails(HonoursNothingSubscriptionModelConformance.class, "a model that honours nothing");
     }
@@ -171,7 +181,8 @@ class SuiteNeverSkipsTest {
     void names_nothing_that_could_skip_a_test_in_any_suite_it_compiles() {
         assertThat(SkipMechanismScan.classesScannedAlongside(SubscriptionModelConformance.class))
                 .describedAs("the scan must reach the suites, or a clean verdict means only that it looked nowhere")
-                .contains(CheckpointStorageConformance.class.getName(), SubscriptionModelConformance.class.getName(),
+                .contains(CheckpointStorageConformance.class.getName(), CatchupMarkerStorageConformance.class.getName(),
+                        SubscriptionModelConformance.class.getName(),
                         IntrospectableSubscriptionsConformance.class.getName(),
                         CheckpointAwareSubscriptionModelConformance.class.getName(),
                         CompetingConsumerStrategyConformance.class.getName(),
@@ -286,6 +297,23 @@ class SuiteNeverSkipsTest {
                     return true;
                 }
             };
+        }
+    }
+
+    static class HonoursNothingCatchupMarkerStorageConformance extends CatchupMarkerStorageConformance {
+
+        @Override
+        protected CatchupMarkerStorageFixture createFixture() {
+            return () -> NoopCatchupMarkerStorage.INSTANCE;
+        }
+    }
+
+    static class HonoursEverythingCatchupMarkerStorageConformance extends CatchupMarkerStorageConformance {
+
+        @Override
+        protected CatchupMarkerStorageFixture createFixture() {
+            WorkingCatchupMarkerStorage storage = new WorkingCatchupMarkerStorage();
+            return () -> storage;
         }
     }
 
