@@ -137,7 +137,13 @@ fence, so a 0.34.0 node reading its own late write behaves as it does today.
 
 Plain `read`, `exists`, `save` and `delete` keep their meaning and never touch the record.
 
-On a sharded checkpoint collection the record's `_id` is an embedded document. MONGO_SHARDING_RESULT
+On a sharded checkpoint collection the record's `_id` is an embedded document. MongoDB accepts an `_id` of any type
+other than an array, a regular expression or undefined, and a hashed index hashes an embedded document as one value.
+On MongoDB 4.4.5 a two-shard cluster sharded on `{_id: "hashed"}` and one sharded on `{_id: 1}` both took the record
+next to a plain document with the same id. Inserts, finds by exact `_id`, the conditional upsert and deletes by `_id`
+all worked, and mongos sent each find by exact `_id` to one shard. The downgrade cleanup below filters on
+`_id.catchupMarker`, which mongos cannot route by shard key, so it runs on every shard. The same check has not run
+on MongoDB 8.0.
 
 ### What a catch-up does with it
 
