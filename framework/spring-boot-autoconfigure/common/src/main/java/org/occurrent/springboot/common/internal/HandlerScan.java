@@ -36,6 +36,7 @@ import org.springframework.asm.SpringAsmInfo;
 import org.springframework.beans.factory.config.BeanDefinitionHolder;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.support.RootBeanDefinition;
+import org.springframework.beans.factory.support.ScopeNotActiveException;
 import org.springframework.core.BridgeMethodResolver;
 import org.springframework.core.MethodIntrospector;
 import org.springframework.core.ResolvableType;
@@ -65,6 +66,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -925,8 +927,9 @@ public final class HandlerScan {
 
     /**
      * Answers whether {@code beanName} names the proxy of a scoped bean, a definition that decorates its target's
-     * definition under {@link ScopedProxyUtils#getTargetBeanName}. Both annotation post-processors skip such a name,
-     * so a scoped bean's handlers register once, under its target's name. Internal to the Spring Boot starters.
+     * definition under {@link ScopedProxyUtils#getTargetBeanName}. Both annotation post-processors register a scoped
+     * bean's handlers under this name, and each delivery reaches the instance the scope holds at that moment, through
+     * the proxy when its class has the handler. Internal to the Spring Boot starters.
      *
      * @param beanFactory the bean factory that defines {@code beanName}
      * @param beanName    the bean name the scan is about to read
@@ -939,6 +942,92 @@ public final class HandlerScan {
         String targetBeanName = ScopedProxyUtils.getTargetBeanName(beanName);
         BeanDefinitionHolder decorated = beanFactory.getMergedBeanDefinition(beanName) instanceof RootBeanDefinition root ? root.getDecoratedDefinition() : null;
         return decorated != null && decorated.getBeanName().equals(targetBeanName) && beanFactory.containsBeanDefinition(targetBeanName);
+    }
+
+    /**
+     * Answers whether {@code beanName} names the target of a scoped bean, the {@code scopedTarget.} definition a
+     * scoped proxy decorates. Both annotation post-processors skip such a name, since the scoped bean's handlers
+     * register under its proxy's name. A bean that is only named {@code scopedTarget.} plus another bean's name, with
+     * no scoped proxy decorating it, is not a target. Internal to the Spring Boot starters.
+     *
+     * @param beanFactory the bean factory that defines {@code beanName}
+     * @param beanName    the bean name the scan is about to read
+     * @return {@code true} when a scoped proxy that {@link #isScopedProxy} recognizes decorates {@code beanName}
+     */
+    public static boolean isScopedTarget(ConfigurableListableBeanFactory beanFactory, String beanName) {
+        return ScopedProxyUtils.isScopedTarget(beanName) && isScopedProxy(beanFactory, ScopedProxyUtils.getOriginalBeanName(beanName));
+    }
+
+    /**
+     * Answers whether a scoped proxy of class {@code proxyType} can run {@code method}, a handler the scan read from
+     * its target's class. A CGLIB proxy subclasses the type the {@code @Bean} method or the bean class declares, so it
+     * runs a method declared on that type or above it. A JDK proxy runs a method one of its interfaces declares. Both
+     * annotation post-processors invoke a handler the proxy can't run on the scope's target instead. An unknown proxy
+     * class answers {@code true}, so the handler goes through the proxy and registration checks it there. Internal to
+     * the Spring Boot starters.
+     *
+     * @param proxyType the scoped proxy's class, or {@code null} when the container can't tell it
+     * @param method    the handler method the scan read from the target's class
+     * @return {@code true} when invoking {@code method} through the proxy runs it
+     */
+    public static boolean scopedProxyRuns(@Nullable Class<?> proxyType, Method method) {
+        if (proxyType == null || method.getDeclaringClass().isAssignableFrom(proxyType)) {
+            return true;
+        }
+        if (!java.lang.reflect.Proxy.isProxyClass(proxyType)) {
+            return false;
+        }
+        try {
+            AopUtils.selectInvocableMethod(method, proxyType);
+            return true;
+        } catch (IllegalStateException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Refuses a scoped target built after startup whose class declares Occurrent handlers when its scope is
+     * {@code request} or {@code session}. A subscription delivers on its own thread, where no request or session is
+     * bound, so every delivery to such a bean would throw. The startup scan refuses the same bean when the target's
+     * class shows a handler at startup, and this refuses it when only building the target shows one, as for a
+     * {@code @Bean} method declared to return an unannotated interface. The bean's creation then fails, in the request
+     * that first builds it. Other scopes aren't refused here. Internal to the Spring Boot starters.
+     *
+     * @param beanFactory the bean factory that defines {@code targetName}
+     * @param beanName    the name of the scoped proxy
+     * @param targetName  the name of its target, {@link ScopedProxyUtils#getTargetBeanName} of {@code beanName}
+     * @throws IllegalStateException when the target's scope is {@code request} or {@code session}
+     */
+    public static void refuseRequestOrSessionScopedTarget(ConfigurableListableBeanFactory beanFactory, String beanName, String targetName) {
+        String scope = beanFactory.getMergedBeanDefinition(targetName).getScope();
+        if ("request".equals(scope) || "session".equals(scope)) {
+            throw new IllegalStateException(("Bean '%s' has a scoped proxy, and its scoped target '%s' was built after startup with a class that declares Occurrent handlers, but the target's scope is '%s'. "
+                    + "A handler can't run in a bean whose scope is active only during a request or a session, so move it to a bean whose scope is active at startup.").formatted(beanName, targetName, scope));
+        }
+    }
+
+    /**
+     * Resolves the target of the scoped bean whose proxy is {@code beanName}, which the scan reads the bean's handlers
+     * and descriptors from. At startup {@code beanResolver} asks the container, so the target is the instance its scope
+     * holds now. For a target built after startup it answers with that instance. A scope that isn't active at startup,
+     * such as request or session scope, fails the scan with an exception that names the bean, instead of Spring's own,
+     * which advises adding the scoped proxy the bean already has. Internal to the Spring Boot starters.
+     *
+     * @param beanResolver resolves a bean by name, the container at startup and the instance in hand for a target
+     *                     built after startup
+     * @param beanName     the name of the scoped proxy
+     * @param targetName   the name of its target, {@link ScopedProxyUtils#getTargetBeanName} of {@code beanName}
+     * @return the target the scan reads the handlers and descriptors from
+     * @throws IllegalStateException when the target's scope isn't active, with Spring's exception as its cause
+     */
+    public static Object scopedTargetToRegister(Function<String, Object> beanResolver, String beanName, String targetName) {
+        try {
+            return beanResolver.apply(targetName);
+        } catch (ScopeNotActiveException e) {
+            throw new IllegalStateException(("Bean '%s' has a scoped proxy, and the scan asks for its scoped target '%s' at startup to read its Occurrent handlers, but the target's scope isn't active then. "
+                    + "The scan asks when the target's class shows an Occurrent annotation or can't be predicted. "
+                    + "A handler can't run in a bean whose scope is active only during a request or a session, so move it to a bean whose scope is active at startup.").formatted(beanName, targetName), e);
+        }
     }
 
     private static IllegalStateException annotationFromAMethodNotOverridden(Method method, Method declaration, MergedAnnotation<? extends Annotation> annotation) {

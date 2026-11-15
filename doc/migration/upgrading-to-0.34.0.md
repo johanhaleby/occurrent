@@ -756,7 +756,7 @@ What the failing event holds up in the meantime is decided by whatever feeds the
 0.34.0 adds quarantine, and it is off by default, so a saga you upgrade keeps the 0.33.0 behaviour until you turn it
 on. Nothing in 0.34.0 brings a quarantined instance back, and `SagaStateStore.delete(sagaId)` is the only way out of
 quarantine. That deletes the instance's state. Turn quarantine on when abandoning one instance is better for you than
-having its failing event hold up the subscription. Five minutes is a reasonable budget.
+having its failing event keep failing with nothing bounding it. Five minutes is a reasonable budget.
 
 ```java
 SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5));
@@ -809,7 +809,7 @@ once you have decided not to recover it. [The quarantined saga runbook](../runbo
 the whole sequence, including the log lines that announce a quarantine and what deleting an instance costs against a
 redelivery.
 
-Two of the conditions on `SagaStatus.QUARANTINED` need explaining before you rely on quarantine.
+Three of the conditions on `SagaStatus.QUARANTINED` need explaining before you rely on quarantine.
 
 **Quarantine is available only where the subscription model can say that acknowledging the failing event is not what would destroy the last copy of it,**
 which it declares by implementing `HistoryRetainingSubscriptions`. `NativeMongoSubscriptionModel` and
@@ -818,7 +818,8 @@ which it declares by implementing `HistoryRetainingSubscriptions`. `NativeMongoS
 declares nothing itself is answered by the model it wraps. On a model that declares nothing at all, a bare
 `PushSubscriptionModel` being the one you are most likely to meet, the runner switches a budget you set off at startup
 and logs why, so the saga keeps the 0.33.0 behaviour of never quarantining. That model hands the acknowledge-or-redeliver
-decision to the listener that called `accept`. What the failing event holds up is that listener's call as well.
+decision to the listener that called `accept`, and the javadoc on `SagaStatus.QUARANTINED` says what the failing event
+holds up on such a model.
 
 A model that cannot promise to hold everything gets no quarantine either, even where it can answer for the event an
 instance actually stopped on. `CatchupThenPushSubscriptionModel` is that case, since it replays an event store and
@@ -831,6 +832,12 @@ whatever fed it, and on a push feed behind a broker source that is what stages t
 The one copy this saga could ever be given would be gone at the moment of quarantine. Between an instance left active
 and an event this saga would be acknowledging away, this refuses the acknowledgement and leaves what happens to the
 event to whatever fed it.
+
+**A model that declares it holds everything is still asked about the one event.** Before it quarantines an instance,
+the runner asks the subscription model whether it still holds the event the instance stopped on. A no, or a check that
+throws, keeps the instance `ACTIVE` past its budget and logs a `WARN`, so a saga on a model that qualifies can still
+go unquarantined for one event. [The quarantined saga runbook](../runbooks/quarantined-saga-instance.md#how-you-find-out)
+describes that `WARN`.
 
 **An event with no redelivery key is not quarantined either.** The failure record identifies the failing event by its
 stream id with its stream version, or by its global position when it has no stream metadata. An event with neither

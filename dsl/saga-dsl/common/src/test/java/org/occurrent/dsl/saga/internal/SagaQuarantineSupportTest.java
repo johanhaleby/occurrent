@@ -173,7 +173,7 @@ class SagaQuarantineSupportTest {
         void shortens_a_failure_message_long_enough_to_threaten_the_document_limit() {
             // The message is application data with no length the saga controls. One big enough to push the instance
             // past MongoDB's document limit would fail this write on every retry, so the instance would never
-            // quarantine and would keep blocking the subscription.
+            // quarantine and the event would keep failing with nothing bounding it.
             String huge = "x".repeat(50_000);
 
             FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
@@ -304,7 +304,8 @@ class SagaQuarantineSupportTest {
         void two_inputs_failing_in_turn_still_reach_the_budget() {
             // Events at positions 7 and 8 both fail on this instance and arrive 7, 8, 7, 8, which a push feed with
             // concurrency or a re-offered batch produces. Each delivery used to write the current time into the record as
-            // its firstFailedAt, so the elapsed time never passed the budget and the instance kept blocking the others.
+            // its firstFailedAt, so the elapsed time never passed the budget and the events kept failing with nothing
+            // bounding them.
             Instant startedFailing = NOW;
             SagaEnvelope<OrderState> instance = active(3, Map.of("o1", 6L), 6L);
             List<Long> alternating = List.of(7L, 8L, 7L, 8L);
@@ -340,7 +341,7 @@ class SagaQuarantineSupportTest {
             // An event store built with withoutStreamPosition(), and an upgrade that leaves stream position disabled on
             // an existing collection, both feed a saga events like this. Requiring a position here made quarantine
             // inert for them: every retry returned without recording anything, so the budget never elapsed and the
-            // instance went on blocking every other one.
+            // event went on failing with nothing bounding it.
             FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
                     saga(), "o1", active(3, Map.of("o1", 6L), null), streamOnly(7), new IllegalStateException("boom"), NOW, BUDGET);
 
@@ -811,7 +812,7 @@ class SagaQuarantineSupportTest {
         @Test
         void still_reaches_the_budget_after_a_timer_fired_so_a_recurring_timer_cannot_hide_a_poison_event() {
             // The whole point of #818. A saga that re-arms a timer more often than the budget used to reset the clock on
-            // every tick, so the event never quarantined and every other instance stayed blocked behind it.
+            // every tick, so the event never reached the budget and kept failing.
             SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(5))));
 
             SagaEnvelope<OrderState> afterTimer = SagaExecutionSupport.process(

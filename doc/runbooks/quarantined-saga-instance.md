@@ -255,6 +255,17 @@ that event has been failing since then.
 
 ### 5. [you] Delete the instance, once you have decided not to recover it
 
+Read `SagaStateStore.delete`'s own javadoc before you run either of the two deletes below. Deleting an instance
+discards its redelivery watermarks along with its status, so if the event source can still redeliver an event this
+instance already consumed, a delete that races that redelivery lets the event recreate the instance and run the
+process a second time. A subscription replay, a reset checkpoint, and a redelivery after a crash are all ways that
+happens.
+
+So delete an instance only once its source can no longer redeliver any of its events. Leaving it in `QUARANTINED`
+until then is safe, because the runner skips every event addressed to it. It is not free, though. Every later event addressed to that instance is still delivered and still reads the
+instance from the state store before the runner skips it, so a correlation id that keeps receiving events keeps
+paying a lookup for each one.
+
 `SagaStateStore.delete(sagaId)` is the call, and whether you have anything to call it on depends on how the store was
 wired.
 
@@ -277,17 +288,7 @@ That removes the same document, since the instance is one document keyed by its 
 bookkeeping the Java call also does, which is dropping the saga id from the store's in-memory latch for the
 retained-event warning a flow saga gets when it crosses the size threshold. The consequence is that if this saga id
 comes back and crosses that threshold again, the warning stays suppressed until the entry is evicted or the
-application restarts. Everything below applies to both routes.
-
-Read `SagaStateStore.delete`'s own javadoc before you run either. Deleting an instance discards its redelivery
-watermarks along with its status, so if the event source can still redeliver an event this instance already consumed,
-a delete that races that redelivery lets the event recreate the instance and run the process a second time. A
-subscription replay, a reset checkpoint, and a redelivery after a crash are all ways that happens.
-
-So delete an instance only once its source can no longer redeliver any of its events. Leaving it in `QUARANTINED`
-until then is safe, because the runner skips every event addressed to it. It is not free, though. Every later event addressed to that instance is still delivered and still reads the
-instance from the state store before the runner skips it, so a correlation id that keeps receiving events keeps
-paying a lookup for each one.
+application restarts.
 
 The business process the instance was running is a separate question, and Occurrent has no answer for it. An order
 half way through fulfilment when its instance stopped is still half way through it after you delete the row. Finish or

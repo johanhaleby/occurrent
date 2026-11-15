@@ -276,7 +276,7 @@ class InheritedHandlerRegistrationTest {
     }
 
     @Test
-    void a_scoped_proxy_of_interfaces_registers_its_handler_once_under_the_target_and_runs_the_beans_body() {
+    void a_scoped_proxy_of_interfaces_registers_its_handler_once_under_the_proxy_and_runs_the_beans_body() {
         runner.withUserConfiguration(ScopedInterfacesConfiguration.class).run(context -> {
             assertThat(context).hasNotFailed();
             Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
@@ -288,7 +288,7 @@ class InheritedHandlerRegistrationTest {
     }
 
     @Test
-    void a_scoped_proxy_of_the_target_class_registers_its_handler_once_under_the_target_and_runs_the_beans_body() {
+    void a_scoped_proxy_of_the_target_class_registers_its_handler_once_under_the_proxy_and_runs_the_beans_body() {
         runner.withUserConfiguration(ScopedTargetClassConfiguration.class).run(context -> {
             assertThat(context).hasNotFailed();
             Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
@@ -899,6 +899,8 @@ class InheritedHandlerRegistrationTest {
     }
 
     interface ScopedMarker {
+        @Subscription(id = "scoped-interfaces-handler")
+        void on(TestEvent event);
     }
 
     record ScopedMarkerConsumer(ScopedMarker marker) {
@@ -911,7 +913,7 @@ class InheritedHandlerRegistrationTest {
             this.invocations = invocations;
         }
 
-        @Subscription(id = "scoped-interfaces-handler")
+        @Override
         public void on(TestEvent event) {
             invocations.bodies().add("scoped-interfaces-body");
         }

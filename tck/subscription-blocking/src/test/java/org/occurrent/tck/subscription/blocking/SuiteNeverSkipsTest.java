@@ -114,6 +114,12 @@ class SuiteNeverSkipsTest {
     }
 
     @Test
+    void the_competing_consumer_suite_passes_every_test_against_a_strategy_that_tells_its_listeners_on_another_thread() {
+        assertEveryTestPasses(HonoursEverythingAndTellsListenersOnAnotherThreadConformance.class,
+                "competing consumer strategy that tells its listeners on another thread");
+    }
+
+    @Test
     void the_in_process_suite_fails_every_test_against_a_model_that_delivers_asynchronously() {
         // The one case where "honours nothing" is the wrong shape. This suite's whole subject is that delivery already
         // happened when publishing returned, so the model that must fail it is a working asynchronous one rather than a
@@ -402,6 +408,38 @@ class SuiteNeverSkipsTest {
                  * Two orders of magnitude above this strategy's own round, since the bound is only paid in full by a
                  * failure and a tight one would make the anti-skip run itself the flaky thing.
                  */
+                @Override
+                public Duration timeToConverge() {
+                    return Duration.ofSeconds(5);
+                }
+
+                @Override
+                public void close() {
+                    strategy.shutdown();
+                }
+            };
+        }
+    }
+
+    static class HonoursEverythingAndTellsListenersOnAnotherThreadConformance extends CompetingConsumerStrategyConformance {
+
+        @Override
+        protected CompetingConsumerStrategyFixture createFixture() {
+            return new CompetingConsumerStrategyFixture() {
+
+                private final WorkingCompetingConsumerStrategy.Storage storage = new WorkingCompetingConsumerStrategy.Storage();
+                private final CompetingConsumerStrategy strategy = new WorkingCompetingConsumerStrategy(storage, true);
+
+                @Override
+                public CompetingConsumerStrategy competingConsumerStrategy() {
+                    return strategy;
+                }
+
+                @Override
+                public CompetingConsumerStrategy newCompetingConsumerStrategy() {
+                    return new WorkingCompetingConsumerStrategy(storage, true);
+                }
+
                 @Override
                 public Duration timeToConverge() {
                     return Duration.ofSeconds(5);
