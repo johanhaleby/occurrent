@@ -188,6 +188,13 @@ and on such a store a failed or interrupted release goes on only when `release` 
 retries the failed input until it succeeds or its budget runs out, and it also resumes a release that a crash
 interrupted.
 
+The poller polls only while the `timersEnabled` that `SagaRunner.run` takes returns `true`, so that gate holds back the
+continuation of a release as well as the saga's timers. Continuing a release applies the recorded inputs and dispatches
+the commands their reactions return. On a subscription model that reports whether it runs, the Spring Boot starter
+keeps the gate closed while the saga's subscription isn't running, and on one that also reports a replay, while it is
+still catching up. That is when a saga must not dispatch commands. The first poll after the gate opens
+goes on with the release. A call to `release` doesn't wait for the gate.
+
 One poll replays at most `timerBatchLimit` records, 100 by default. Each instance the poll lists gets a share of
 `max(1, timerBatchLimit / instances listed)` records, so an instance with many records doesn't hold back the others.
 The poll lists at most `timerBatchLimit` releasing instances, so the shares add up to at most `timerBatchLimit`. The
