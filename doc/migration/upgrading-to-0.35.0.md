@@ -39,7 +39,7 @@ other sections compile fine and behave differently, so read them first.
   **Breaks the build** if you inject the `occurrentComposedDefaultStartPosition` bean, name the type, or call or
   override `occurrentCompetingDurableSubscriptionModel(..)`.
 - [`SubscriptionAnnotations` moves to an internal package](#subscriptionannotations-moves-to-an-internal-package).
-  **Breaks the build** if you import it, and `UpgradeToOccurrent_0_35` rewrites the imports.
+  **Breaks the build** if you refer to it, and `UpgradeToOccurrent_0_35` rewrites the references.
 
 ### Sagas
 
@@ -197,9 +197,9 @@ other sections compile fine and behave differently, so read them first.
   handler declared with a type variable gets only the type the bean's class gives it, which can narrow a handler that
   ran in 0.34.0, one of the bridge kind or one on a JDK proxy that can't be unwrapped. Compiles unchanged.
 - [`SubscriptionAnnotations` moves to an internal package](#subscriptionannotations-moves-to-an-internal-package).
-  It moves to `org.occurrent.springboot.common.internal`, and `UpgradeToOccurrent_0_35` rewrites the imports. Code
+  It moves to `org.occurrent.springboot.common.internal`, and `UpgradeToOccurrent_0_35` rewrites the references. Code
   that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly sees the changes the
-  starters make to find inherited handlers. **Breaks the build** if you import it.
+  starters make to find inherited handlers. **Breaks the build** if you refer to it.
 
 ### Brokers
 
@@ -2526,8 +2526,8 @@ says whether an inherited handler was meant to run. See
 
 Both Spring Boot starters read a bean's handlers through `SubscriptionAnnotations`, in the module they share. It moves
 from `org.occurrent.springboot.common` to `org.occurrent.springboot.common.internal`. That package isn't part of the
-public API, so the class can change in any release. Three of its methods also change so that the starters find inherited handlers,
-see [A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered).
+public API, so the class can change in any release. Three of its methods also change so that the starters find
+inherited handlers, see [A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered).
 
 ### Who is affected
 
