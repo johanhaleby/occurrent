@@ -51,6 +51,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
@@ -1810,6 +1811,33 @@ class SagaReleaseTest {
             assertThatThrownBy(() -> subscription.release("unknown"))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("SagaRunner.eventStoreQueries(..)");
+        }
+
+        @Test
+        void the_timer_poller_holds_back_the_release_while_timers_are_disabled_and_finishes_it_once_they_are_enabled() {
+            quarantinedOnPoisonWithTwoStreamKeyedSkipped();
+            failing.clear();
+            failing.add("a");
+            assertThat(execution.release(ORDER)).isEqualTo(ReleaseResult.STILL_RELEASING);
+            failing.clear();
+            AtomicBoolean timersEnabled = new AtomicBoolean(false);
+            SagaRunner<OrderEvent, OrderCommand> runner = SagaRunner.<OrderEvent, OrderCommand>agnostic(subscriptionModel, converter).eventStoreQueries(queries);
+            SagaSubscription subscription = runner.run("orders", saga(), store, dispatched::add, null,
+                    CONFIG.withTimerPollInterval(Duration.ofMillis(20)), timersEnabled::get);
+            subscriptions.add(subscription);
+
+            // Many poll intervals elapse with the gate closed, and none of them may continue the release
+            org.awaitility.Awaitility.await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertAll(
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(packed()).extracting(Pack::item).containsExactly("poison")
+            ));
+
+            timersEnabled.set(true);
+
+            org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertAll(
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(packed()).extracting(Pack::item).containsExactly("poison", "a", "b")
+            ));
         }
     }
 

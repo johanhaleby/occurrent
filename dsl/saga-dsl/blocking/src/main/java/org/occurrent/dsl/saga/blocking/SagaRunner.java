@@ -242,6 +242,11 @@ public final class SagaRunner<E, C> {
      * Runs {@code saga}, firing its timers only while {@code timersEnabled} says to, on top of any competing-consumer
      * lease. Use it to keep a saga from issuing commands before the application is ready for it. Timers start firing on
      * their own once it returns {@code true}, so nothing has to be restarted.
+     * <p>
+     * The same gate holds back the poller's continuation of a release that failed on an input or was interrupted,
+     * since continuing it applies the skipped inputs and dispatches the commands their reactions return. The first
+     * poll after it returns {@code true} goes on with the release. {@link SagaSubscription#release(String)} doesn't
+     * wait for it.
      */
     public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
                                                              SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher,
@@ -258,7 +263,8 @@ public final class SagaRunner<E, C> {
      * <p>
      * Gate {@code timersEnabled} on the same readiness when you do. Without waiting, this returns while the replay is
      * still folding, so an unguarded poller can fire a timer for an instance whose later events have not been applied
-     * yet, and every lost compare-and-swap re-dispatches that reaction's whole command list.
+     * yet, and every lost compare-and-swap re-dispatches that reaction's whole command list. The gate holds back the
+     * poller's continuation of a release too, as the overload without {@code waitUntilStarted} describes.
      */
     public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
                                                              SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher,

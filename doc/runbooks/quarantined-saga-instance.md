@@ -314,6 +314,13 @@ on with each instance that is releasing, which with a competing-consumer strateg
 the saga's timer lease, and without one on every node. The poller also goes on with a release that a crash or a
 restart interrupted. You can call `release` again too, and it goes on where the release stands.
 
+The poller polls only while the saga's `timersEnabled` returns `true`, so a release that is under way waits with the
+timers while that gate is closed. Going on with a release dispatches commands. On a subscription model that reports
+whether it runs, the Spring Boot starter keeps the gate closed while the saga's subscription isn't running, which with
+`occurrent.subscription.mode=manual` lasts until the application resumes the subscription. On a model that also
+reports a replay, the gate stays closed while the subscription is still catching up. The first poll after the gate
+opens goes on with the release. A `release` call doesn't wait for the gate.
+
 One poll replays at most `timerBatchLimit` records, 100 by default, shared evenly among the releasing instances it
 lists, at least one each, and the next poll goes on where the last one stopped. A `release` call has no such bound and
 replays on the calling thread until it returns one of the results above.
