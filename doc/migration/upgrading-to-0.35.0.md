@@ -889,8 +889,8 @@ also has to restart before its subscription goes live. To downgrade without that
 2. List the quarantined instances and call `release` on each whose failure record has a quarantine id. On MongoDB,
    `db.getCollection("saga-order-fulfilment").find({ status: "QUARANTINED_RECORDING" }, { _id: 1 })`, with your saga's
    collection, lists exactly those, and its cursor reaches every one. On another store,
-   `findByStatus(QUARANTINED, ..)` lists them all only when its `limit` is above the number of quarantined instances,
-   since the limit is a bound and the query has no cursor.
+   `findByStatus(QUARANTINED, ..)` returns at most `limit` instances and has no cursor, so you know a call listed them
+   all only when it returns fewer than its `limit`. Raise the limit until it does.
 3. Delete with `SagaStateStore.delete(sagaId)` each one whose release returns `QUARANTINED_AGAIN`,
    `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
