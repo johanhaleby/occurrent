@@ -15,7 +15,7 @@ registrars that build them, and every `CheckpointStorage` that Occurrent ships.
 
 A catch-up marker records that a catch-up has replayed the whole history for a subscription id, so the next catch-up
 for that id skips the replay. The push models and the projection feeds keep it in the `CheckpointStorage` they are
-given, under the subscription id, and follow the order from ADR 177: read the marker at step 1 and write it at step 4.
+given, under the subscription id. ADR 177 puts the marker read at step 1 of a catch-up and the marker write at step 4.
 
 Some paths delete the marker so that whatever runs next for the id replays the history again:
 
@@ -142,7 +142,7 @@ other than an array, a regular expression or undefined, and a hashed index hashe
 On MongoDB 4.4.5 a two-shard cluster sharded on `{_id: "hashed"}` and one sharded on `{_id: 1}` both took the record
 next to a plain document with the same id. Inserts, finds by exact `_id`, the conditional upsert and deletes by `_id`
 all worked, and mongos sent each find by exact `_id` to one shard. The downgrade cleanup below filters on
-`_id.catchupMarker`, which mongos cannot route by shard key, so it runs on every shard. The same check has not run
+`_id.catchupMarker`, a part of the shard key on a collection sharded on `_id`, so mongos can send it to every shard. The same check has not run
 on MongoDB 8.0.
 
 ### What a catch-up does with it
@@ -154,21 +154,21 @@ on MongoDB 8.0.
 3. A `false` means the marker was forgotten or the lease moved on since step 1. The attempt writes no marker and
    records no failure, so the next catch-up for the id replays the history. The live delivery the attempt has already
    started goes on as it would after a written marker.
-4. Every path that deletes a marker calls `forgetCatchupMarker` instead of `delete`: `ReactiveHandover`'s
-   `forgetCaughtUp()` on both reactor sources, both push models' `cancelSubscription(id)`, and any later feed reset or
-   unregister ([#1291](https://github.com/johanhaleby/occurrent/issues/1291),
-   [#1032](https://github.com/johanhaleby/occurrent/issues/1032)).
+4. Every path that deletes a marker calls `forgetCatchupMarker` instead of `delete`: the `forgetCaughtUp()`
+   of the reactor push model and of the reactor `CatchupProjectionFeed`, both push models' `cancelSubscription(id)`,
+   and a later feed reset such as the one [#1291](https://github.com/johanhaleby/occurrent/issues/1291) asks for.
 
 The reactor push model's `markersNotYetDeleted` and the second delete it triggers at step 1 are removed. The tombstone
 is stored, so a restart no longer loses the record that a marker was forgotten.
 
 Point 3 does not end the attempt the way a stop does. On the blocking push model a stopped catch-up relaunches its
-replay at once while the model runs, and otherwise waits for `start(true)` and drops live events until then (ADR 85).
-After a refused marker write the first replays the whole history for nothing, and under a lease that moved on every
-relaunch is refused again. Under the second the subscription delivers nothing until someone calls `start(true)`.
-Point 3 relies on ADR 177's order, where the marker is written after the drain on both engines. `ReactiveHandover`
-writes it before the drain today ([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 31), so the reactor
-callers change only after that move.
+replay at once when the latest `start(..)` asked to resume subscriptions, and otherwise waits for
+`resumeSubscription(id)` or `start(true)` and drops live events until then (ADR 85). After a refused marker write the
+first replays the whole history for nothing, and under a lease that moved on every relaunch is refused again. Under
+the second the subscription delivers nothing until someone resumes it.
+Point 3 relies on ADR 177's order, where the marker is written after the drain on both engines. ADR 177 records
+`ReactiveHandover` as writing it before the drain ([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item
+31), so the reactor callers change only after that write has moved.
 
 Point 3 also changes a released behaviour. In 0.34.0 a blocking push model whose marker write is refused because the lease
 moved on throws `CheckpointWriteConditionNotFulfilledException` out of `markCaughtUp()`. `BlockingHandover` records
