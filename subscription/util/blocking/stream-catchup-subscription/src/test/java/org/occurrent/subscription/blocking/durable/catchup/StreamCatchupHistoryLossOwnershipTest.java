@@ -1320,6 +1320,10 @@ class StreamCatchupHistoryLossOwnershipTest {
                     told.set(true);
                 }
             }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+            }
         });
         DomainEvent later = nameDefined(LocalDateTime.now(), "later");
 
@@ -1738,6 +1742,10 @@ class StreamCatchupHistoryLossOwnershipTest {
         @Override
         public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             heldPaused.add(refusal);
+        }
+
+        @Override
+        public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
         }
     }
 

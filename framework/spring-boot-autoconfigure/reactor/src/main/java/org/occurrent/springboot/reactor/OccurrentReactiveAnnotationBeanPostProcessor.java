@@ -28,6 +28,7 @@ import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.api.reactor.Subscribable;
+import org.springframework.aop.scope.ScopedProxyUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.FactoryBean;
@@ -45,6 +46,7 @@ import org.springframework.util.ClassUtils;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -210,14 +212,42 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // sees the flag set. Registering it twice is not possible, since both check the same RegisteredHandlers.
         if (startupScanComplete && beanFactory.containsBeanDefinition(beanName)) {
             boolean singleton = beanFactory.isSingleton(beanName);
-            // The class of the instance this callback received, never a second lookup by name. Two threads
-            // building the same prototype share the recorded entry, so a lookup here can answer with the other
-            // one's class and this bean would be scanned for methods its own class does not declare.
-            ScanType userClass = new ScanType(userClassOf(bean), true);
-            scan(new String[]{beanName}, name -> userClass, name -> bean,
-                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved, false, false);
+            scanBuiltAfterStartup(beanFactory, beanName, bean, singleton, false, false);
         }
         return bean;
+    }
+
+    // Scans one bean the container built after the startup scan, or while it ran on another thread. The class is the
+    // instance's own, never a second lookup by name. Two threads building the same prototype share the recorded
+    // entry, so a lookup can answer with the other one's class and this bean would be scanned for methods its own
+    // class does not declare.
+    //
+    // A scoped target is scanned under its proxy's name, the name the startup scan registers its handlers under and
+    // every delivery goes through. The startup scan passes over a target whose predicted class shows no annotation,
+    // such as one a @Bean method declares as an interface, and building it is what shows its class, so it registers
+    // here. The scan reads the target in hand rather than asking its scope, which for a prototype would build another
+    // target and run this callback again. Its subscriptions never block for a replay, since a replay through the
+    // proxy asks the scope for the target this callback is still building.
+    //
+    // A request or session scope is refused here, since no subscription thread has a request or a session bound. A
+    // proxy built while this thread still builds its target is left to the target's own callback, which asks for the
+    // proxy to register on. Scanning the proxy would ask for that target again and throw
+    // BeanCurrentlyInCreationException.
+    private void scanBuiltAfterStartup(ConfigurableListableBeanFactory beanFactory, String beanName, Object bean, boolean singleton, boolean mayBlock, boolean mayBlockForReplay) {
+        if (HandlerScan.isScopedProxy(beanFactory, beanName) && beanFactory.isCurrentlyInCreation(ScopedProxyUtils.getTargetBeanName(beanName))) {
+            return;
+        }
+        ScanType userClass = new ScanType(userClassOf(bean), true);
+        Function<String, ScanType> typeResolver = name -> name.equals(beanName) ? userClass : resolveScanType(name);
+        Function<String, Object> beanResolver = name -> name.equals(beanName) ? bean : applicationContext.getBean(name);
+        boolean scopedTarget = HandlerScan.isScopedTarget(beanFactory, beanName);
+        String scanName = scopedTarget ? ScopedProxyUtils.getOriginalBeanName(beanName) : beanName;
+        if (scopedTarget && declaresAnyOccurrentAnnotation(userClass.type(), applicationContext.getBeanNamesForType(Subscribable.class).length > 0)) {
+            HandlerScan.refuseRequestOrSessionScopedTarget(beanFactory, scanName, beanName);
+        }
+        scan(new String[]{scanName}, typeResolver, beanResolver,
+                (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved,
+                mayBlock, mayBlockForReplay && !scopedTarget);
     }
 
     private static Class<?> userClassOf(Object bean) {
@@ -271,6 +301,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // thread creating it, which may be waiting for the lock this holds, so nothing here resolves anything. Both
     // sides can reach the same bean, and the RegisteredHandlers they both check admit only the first.
     //
+    // A scoped proxy is the exception, since the scan asks its scope for the target. That waits at most for a thread
+    // creating the target to finish. The only lock of this post-processor the startup thread holds here is
+    // registrationLock, which nothing but afterSingletonsInstantiated takes, so the creating thread never waits for
+    // the startup thread.
+    //
     // This runs on the startup thread inside afterSingletonsInstantiated, so a bean whose creating thread has
     // finished with it registers under the startup policy and keeps the WAIT_UNTIL_STARTED guarantee it would have
     // had a moment earlier. A bean still in creation does not, because a blocking replay delivers while this call
@@ -287,14 +322,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 continue;
             }
             boolean singleton = beanFactory.isSingleton(beanName);
-            ScanType userClass = new ScanType(userClassOf(bean), true);
             // One condition answers both, so a blocking replay cannot deliver anywhere the supplier would not have
-            // sent it. Asked once here for the whole registration, and again per delivery below, since creation
-            // finishing between the two only turns a replay this declined to block for into deliveries that do
-            // resolve the published bean.
-            scan(new String[]{beanName}, name -> userClass, name -> bean,
-                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved,
-                    true, publishedBeanIsResolvable(beanFactory, beanName, singleton));
+            // sent it. Asked once here for the whole registration, and again per delivery, since creation finishing
+            // between the two only turns a replay this declined to block for into deliveries that do resolve the
+            // published bean.
+            scanBuiltAfterStartup(beanFactory, beanName, bean, singleton, true, publishedBeanIsResolvable(beanFactory, beanName, singleton));
         }
     }
 
@@ -331,17 +363,48 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // Beans whose class is only predicted and whose prediction shows an annotation. Built at the end of this
         // pass so the next one can read their real class.
         Set<String> beansToBuild = new LinkedHashSet<>();
+        // The instance each scoped proxy's scope held when this pass read it, which is what a descriptor factory runs on
+        Map<String, Object> scopedTargets = new HashMap<>();
+        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         for (String beanName : beanNames) {
             // A scoped proxy and its target are two definitions of one bean, so its handlers register once, under the
-            // target's name
-            if (HandlerScan.isScopedProxy(((ConfigurableApplicationContext) applicationContext).getBeanFactory(), beanName)) {
+            // proxy's name, and every delivery reaches the instance the scope holds then
+            if (HandlerScan.isScopedTarget(beanFactory, beanName)) {
                 continue;
             }
             ScanType scanType;
-            try {
-                scanType = typeResolver.apply(beanName);
-            } catch (RuntimeException e) {
-                continue;
+            if (HandlerScan.isScopedProxy(beanFactory, beanName)) {
+                // The target's class is read the way any other bean's is, from a built instance's recording first and
+                // the prediction second, and the target is asked for only when that class shows an annotation, so a
+                // scoped bean without handlers is never asked for at startup. A class that can't be predicted is no
+                // answer, so the target is asked for then too, and its handlers register or startup fails instead of
+                // the bean being passed over without a trace
+                String targetName = ScopedProxyUtils.getTargetBeanName(beanName);
+                ScanType targetType;
+                try {
+                    targetType = typeResolver.apply(targetName);
+                } catch (RuntimeException e) {
+                    targetType = null;
+                }
+                if (targetType != null && !declaresAnyOccurrentAnnotation(targetType.type(), subscribableExists)) {
+                    continue;
+                }
+                // Asked again, a scope that hands out a new target per request, such as prototype, would build one
+                // more target per pass and per late callback for handlers that are already registered
+                if (targetType != null && targetType.concrete() && registersNothingNew(beanName, targetType.type(), subscribableExists)) {
+                    continue;
+                }
+                // The class comes from the target, since a proxy of ScopedProxyMode.INTERFACES has only the
+                // interfaces' methods
+                Object scopedTarget = HandlerScan.scopedTargetToRegister(beanResolver, beanName, targetName);
+                scopedTargets.put(beanName, scopedTarget);
+                scanType = new ScanType(userClassOf(scopedTarget), true);
+            } else {
+                try {
+                    scanType = typeResolver.apply(beanName);
+                } catch (RuntimeException e) {
+                    continue;
+                }
             }
             if (scanType == null) {
                 continue;
@@ -392,19 +455,32 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // a handler that never registered, which is the loss this whole class exists to close.
         for (Map.Entry<String, List<HandlerMethod>> staged : subscriptionMethods.entrySet()) {
             String beanName = staged.getKey();
+            List<HandlerMethod> handlers = staged.getValue();
+            // A handler the scoped proxy's class doesn't have, one declared only below the @Bean method's declared type
+            // or only on the class behind a JDK proxy, runs on the scope's target, asked for by name on every delivery.
+            // That is the instance the proxy would reach, without the interceptors on the proxy itself. The proxy's
+            // class is read from its factory, so a scan whose handlers all run on the target never asks for the proxy bean.
+            if (scopedTargets.containsKey(beanName)) {
+                String targetName = ScopedProxyUtils.getTargetBeanName(beanName);
+                Class<?> proxyType = beanFactory.getType(beanName);
+                List<HandlerMethod> onTarget = handlers.stream().filter(handler -> !HandlerScan.scopedProxyRuns(proxyType, handler.method())).toList();
+                if (!onTarget.isEmpty()) {
+                    registerSubscriptions(beanName, scopedTargets.get(beanName), onTarget, () -> applicationContext.getBean(targetName), mayBlock, mayBlockForReplay);
+                    handlers = handlers.stream().filter(handler -> !onTarget.contains(handler)).toList();
+                }
+                if (handlers.isEmpty()) {
+                    continue;
+                }
+            }
             Object bean = beanResolver.apply(beanName);
-            // The methods the loop above read, never a fresh scan of the resolved instance. A non-singleton bean
-            // is a new instance here, and a factory free to return a different implementation would otherwise have
-            // this register a method whose id went through no duplicate check and no refusal.
-            subscriptionRegistrar.registerSubscriptions(bean, staged.getValue(), handlerTargets.apply(beanName, bean), mayBlockForReplay,
-                    release -> subscribeCall(mayBlock, release),
-                    handler -> registeredHandlers.markRegistered(beanName, handler),
-                    this::claimSubscriptionId,
-                    handler -> registeredHandlers.forgetRegistered(beanName, handler),
-                    registeredIds::remove);
+            registerSubscriptions(beanName, bean, handlers, handlerTargets.apply(beanName, bean), mayBlock, mayBlockForReplay);
         }
         // No early return here. The build step at the end of this method is what lets the loop above finish, so a
         // pass that skips registering must still reach it.
+        //
+        // A descriptor is read once, so a scoped bean's factory runs on the instance its scope held when this pass read
+        // it, and invokeDescriptorFactory checks that instance's class, never a call through the scoped proxy
+        Function<String, Object> descriptorSources = name -> scopedTargets.containsKey(name) ? scopedTargets.get(name) : beanResolver.apply(name);
         for (Object[] pm : projectionMethods) {
             String beanName = (String) pm[0];
             HandlerMethod handler = (HandlerMethod) pm[1];
@@ -413,7 +489,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (registeredHandlers.markRegistered(beanName, handler)) {
                 registerDescriptor(beanName, handler, projection.id(),
                         "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(projection.id(), method.getDeclaringClass().getName(), method.getName()),
-                        release -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply(beanName), method, projection, mayBlock,
+                        release -> projectionRegistrar.processProjectionAnnotation(descriptorSources.apply(beanName), method, projection, mayBlock,
                                 subscribeCall(mayBlock, release)));
             }
         }
@@ -427,7 +503,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (registeredHandlers.markRegistered(beanName, handler)) {
                 registerDescriptor(beanName, handler, snapshot.id(),
                         "Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(snapshot.id(), method.getDeclaringClass().getName(), method.getName()),
-                        release -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply(beanName), method, snapshot, mayBlock,
+                        release -> snapshotRegistrar.processSnapshotAnnotation(descriptorSources.apply(beanName), method, snapshot, mayBlock,
                                 subscribeCall(mayBlock, release)));
             }
         }
@@ -436,6 +512,29 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             beanResolver.apply(beanName);
         }
         return registeredAnything;
+    }
+
+    // Registers the methods the scan read, never a fresh scan of the instance passed in. A non-singleton bean is a new
+    // instance here, and a factory free to return a different implementation would otherwise have this register a
+    // method whose id went through no duplicate check and no refusal
+    private void registerSubscriptions(String beanName, Object bean, List<HandlerMethod> handlers, Supplier<Object> handlerTarget, boolean mayBlock, boolean mayBlockForReplay) {
+        subscriptionRegistrar.registerSubscriptions(bean, handlers, handlerTarget, mayBlockForReplay,
+                release -> subscribeCall(mayBlock, release),
+                handler -> registeredHandlers.markRegistered(beanName, handler),
+                this::claimSubscriptionId,
+                handler -> registeredHandlers.forgetRegistered(beanName, handler),
+                registeredIds::remove);
+    }
+
+    // Whether every handler type declares that this pass could register is already registered under beanName, so
+    // scanning it again would register nothing
+    private boolean registersNothingNew(String beanName, Class<?> type, boolean subscribableExists) {
+        for (Method method : HandlerScan.handlerMethods(type, subscribableExists ? HANDLER_ANNOTATIONS : SUBSCRIPTION_ANNOTATIONS)) {
+            if (!registeredHandlers.isRegistered(beanName, new HandlerMethod(method, type))) {
+                return false;
+            }
+        }
+        return true;
     }
 
 

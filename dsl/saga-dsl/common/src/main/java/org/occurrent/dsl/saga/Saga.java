@@ -211,8 +211,9 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * Both things {@link #narrowingFilter()} asks of you apply here too, and two more come with them.
      * <p>
      * Every CloudEvent this admits is converted to a domain event before the saga sees it, so keep it inside what the
-     * converter can turn into an {@code E}. One it cannot fails that delivery rather than being ignored, and a
-     * subscription that keeps redelivering a failing event holds up everything queued behind it.
+     * converter can turn into an {@code E}. One it cannot fails that delivery rather than being ignored. What a
+     * delivery that keeps failing holds up depends on whatever feeds the subscription, as
+     * {@link SagaStatus#QUARANTINED} describes.
      * <p>
      * A converted event the saga has no handler for costs the two builders differently. A saga from {@link Builder}
      * leaves its state untouched. A flow saga appends every correlated event it receives to the instance's retained

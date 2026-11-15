@@ -253,6 +253,34 @@ class CompetingConsumerLosesNoHeldEventTest {
         assertThat(warnings).filteredOn(warning -> warning.getFormattedMessage().contains("whether this node holds the lease")).as("[lease warnings for e2, let through on the look hasLock threw for]").isEmpty();
     }
 
+    // e2 and then e3 wait for the lease while it closes without anyone being told, and each is let through as the lease
+    // moves to another node and this model pauses s1
+    @Test
+    void warns_once_when_a_model_that_does_not_redeliver_lets_an_event_through() throws Exception {
+        modelLog.setLevel(Level.DEBUG);
+        InMemorySubscriptionModel inMemory = new InMemorySubscriptionModel(RetryStrategy.none());
+        model = new CompetingConsumerSubscriptionModel(inMemory, strategy);
+        subscribeAndBlockInE1(inMemory);
+
+        strategy.fenced = true;
+        releaseE1.countDown();
+        assertThat(strategy.askedWithoutTheLease.await(5, SECONDS)).as("e2 waits for the lease").isTrue();
+        strategy.transfer("s1", "node", "other-node");
+        await().atMost(EVENTUALLY).until(() -> received.contains("e2"));
+        strategy.fenced = false;
+        strategy.transfer("s1", "other-node", "node");
+        await().atMost(EVENTUALLY).until(() -> inMemory.isRunning("s1"));
+        strategy.fenced = true;
+        inMemory.accept(List.of(event("e3")));
+        await().atMost(EVENTUALLY).until(() -> debugsSaying("Holding an event until this node may deliver it") == 2);
+        strategy.transfer("s1", "node", "other-node");
+
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(received).as("[events s1 received, e2 and e3 let through without the lease]").containsExactly("e1", "e2", "e3"));
+        assertThat(warnings()).as("[warnings for the two events let through without the lease]").singleElement()
+                .extracting(ILoggingEvent::getFormattedMessage).asString()
+                .contains("Delivering an event without the lease", InMemorySubscriptionModel.class.getName() + " doesn't declare RedeliveringSubscriptions", "Logged once per CompetingConsumerSubscriptionModel", "subscriberId=node", "subscriptionId=s1");
+    }
+
     // shutdown() begins while hasLock is asked for e2, and that hasLock throws. shutdown() lets e2 through once the wait
     // after the look ends, which it does only after the wrapped model has shut down. The wrapped model here returns from
     // its own shutdown() once that look has failed, without waiting for the thread that delivers e2.
@@ -485,6 +513,12 @@ class CompetingConsumerLosesNoHeldEventTest {
     private List<ILoggingEvent> warnings() {
         synchronized (logged) {
             return new ArrayList<>(logged.list).stream().filter(e -> e.getLevel() == Level.WARN).toList();
+        }
+    }
+
+    private long debugsSaying(String text) {
+        synchronized (logged) {
+            return new ArrayList<>(logged.list).stream().filter(e -> e.getLevel() == Level.DEBUG && e.getFormattedMessage().contains(text)).count();
         }
     }
 

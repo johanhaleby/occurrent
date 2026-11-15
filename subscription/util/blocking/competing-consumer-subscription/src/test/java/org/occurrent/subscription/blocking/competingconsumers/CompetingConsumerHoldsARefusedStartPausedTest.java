@@ -34,6 +34,7 @@ import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
@@ -553,6 +554,91 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
     }
 
     @Test
+    void holds_a_running_consumer_paused_and_gives_up_the_lease_with_a_warning_when_the_wrapped_model_tells_that_it_holds_the_subscription_paused_for_want_of_a_position() {
+        // Given a consumer that runs and holds the lease
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+        assertThat(model.isRunning(ID)).as("running before the report").isTrue();
+        assertThat(strategy.holders).as("holding the lease before the report").containsExactly(ID);
+        int callsBefore = wrapped.calls.get();
+
+        // When the wrapped model holds it paused because it got no position to open at the present
+        reporting.holdsPausedWithoutAPositionAndTells(ID, noPosition());
+
+        // Then
+        assertHeldPaused();
+        assertThat(warningsLogged()).as("warnings logged").singleElement().asString().contains("got no position to start it from");
+        assertThat(errorsLogged()).as("errors logged").isEmpty();
+        grantTheLease();
+        model.onConsumeProhibited(ID, NODE);
+        await().during(NO_FURTHER_CALLS_FOR).atMost(NO_FURTHER_CALLS_FOR.plusSeconds(5)).untilAsserted(() ->
+                assertThat(wrapped.calls.get()).as("calls into the wrapped model after the report").isEqualTo(callsBefore));
+    }
+
+    @Test
+    void holds_a_consumer_the_system_paused_paused_by_the_user_and_gives_up_the_lease_when_the_wrapped_model_tells_that_it_holds_the_subscription_paused_for_want_of_a_position() {
+        // Given a consumer that lost the lease and was paused by this node
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+        strategy.holders.remove(ID);
+        model.onConsumeProhibited(ID, NODE);
+        assertThat(wrapped.isPaused(ID)).as("paused in the wrapped model by the lease loss").isTrue();
+        assertThat(strategy.registrations).as("registered with the strategy before the report").containsExactly(ID);
+
+        // When the wrapped model holds it paused because it got no position to open at the present
+        reporting.holdsPausedWithoutAPositionAndTells(ID, noPosition());
+
+        // Then
+        assertHeldPaused();
+        assertThat(warningsLogged()).as("warnings logged").singleElement().asString().contains("got no position to start it from");
+    }
+
+    @Test
+    void holds_a_running_consumer_paused_and_gives_up_the_lease_when_a_report_for_want_of_a_position_waits_for_a_call_that_holds_the_lock() {
+        // Given a consumer that runs and holds the lease, and a call of its own that holds the subscription's lock
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+        CountDownLatch callHoldsTheLock = new CountDownLatch(1);
+        CountDownLatch letTheCallReturn = new CountDownLatch(1);
+        reporting.afterTheNextAnswerToIsRunning.set(() -> {
+            callHoldsTheLock.countDown();
+            awaitLatch(letTheCallReturn);
+        });
+        AtomicReference<@Nullable Throwable> callThrew = new AtomicReference<>();
+        Thread call = new Thread(() -> callThrew.set(catchThrowable(() -> model.resumeSubscription(ID))), "call-holding-the-lock");
+        call.start();
+        awaitLatch(callHoldsTheLock);
+
+        // When the wrapped model holds the subscription paused and tells, so the report waits for the lock
+        reporting.holdsPausedWithoutAPositionAndTells(ID, noPosition());
+        letTheCallReturn.countDown();
+
+        // Then the consumer is held paused and has given up the lease
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(this::assertHeldPaused);
+        joinTheCall(call);
+        assertThat(callThrew.get()).as("thrown by the call").isInstanceOf(SubscriptionAlreadyRunningException.class);
+        assertThat(warningsLogged()).as("warnings logged").singleElement().asString().contains("got no position to start it from");
+    }
+
+    @Test
+    void leaves_a_running_consumer_running_with_its_lease_when_the_wrapped_model_tells_for_want_of_a_position_of_a_hold_it_no_longer_has() {
+        // Given a consumer that runs and holds the lease
+        ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
+        strategy.grantOnRegister = true;
+        subscribe(false);
+
+        // When the wrapped model tells of a hold it no longer holds the subscription paused for
+        reporting.tellsOnly(ID, noPosition());
+
+        // Then
+        assertStillRunningWithItsLease();
+        await().during(NO_FURTHER_CALLS_FOR).atMost(NO_FURTHER_CALLS_FOR.plusSeconds(5)).untilAsserted(this::assertStillRunningWithItsLease);
+    }
+
+    @Test
     void holds_a_running_consumer_paused_and_gives_up_the_lease_when_the_wrapped_model_fails_the_first_question_whether_it_holds_the_subscription_paused() {
         // Given a consumer that runs and holds the lease, over a wrapped model that fails the first such question
         ReportingWrappedModel reporting = useAModelOverAWrappedModelThatReportsHeldPaused();
@@ -741,6 +827,10 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         assertThat(wrapped.calls.get()).as("calls into the wrapped model after the report").isEqualTo(callsBefore);
     }
 
+    private static UnsupportedStartAtException noPosition() {
+        return new UnsupportedStartAtException(StartAt.now(), "MongoDB gave no position");
+    }
+
     private static void joinTheCall(Thread call) {
         try {
             call.join(Duration.ofSeconds(10));
@@ -799,6 +889,16 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
     private @Nullable Throwable grantTheLease() {
         strategy.holders.add(ID);
         return catchThrowable(() -> model.onConsumeGranted(ID, NODE));
+    }
+
+    private void assertStillRunningWithItsLease() {
+        assertAll(
+                () -> assertThat(model.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(model.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(strategy.registrations).as("registered with the strategy").containsExactly(ID),
+                () -> assertThat(strategy.holders).as("holding the lease").containsExactly(ID),
+                () -> assertThat(warningsLogged()).as("warnings logged").isEmpty()
+        );
     }
 
     private void assertHeldPaused() {
@@ -1007,6 +1107,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
     private static final class ReportingWrappedModel extends WrappedModel implements StartRefusalReportingSubscriptions {
         private final List<StartRefusalListener> listeners = new CopyOnWriteArrayList<>();
         private final Map<String, CatchupCannotResumeException> heldFor = new ConcurrentHashMap<>();
+        private final Map<String, UnsupportedStartAtException> heldWithoutAPositionFor = new ConcurrentHashMap<>();
         private final AtomicReference<@Nullable Runnable> afterTheNextAnswerToIsRunning = new AtomicReference<>();
         private final AtomicInteger heldPausedQueriesToFail = new AtomicInteger();
         private final AtomicBoolean answersHeldPausedForEveryReport = new AtomicBoolean();
@@ -1032,6 +1133,21 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
 
         void tellsOnly(String subscriptionId, CatchupCannotResumeException refusal) {
             listeners.forEach(listener -> listener.handleHeldPaused(subscriptionId, refusal));
+        }
+
+        void holdsPausedWithoutAPositionAndTells(String subscriptionId, UnsupportedStartAtException refusal) {
+            holdPaused(subscriptionId);
+            heldWithoutAPositionFor.put(subscriptionId, refusal);
+            tellsOnly(subscriptionId, refusal);
+        }
+
+        void tellsOnly(String subscriptionId, UnsupportedStartAtException refusal) {
+            listeners.forEach(listener -> listener.handleHeldPaused(subscriptionId, refusal));
+        }
+
+        @Override
+        public boolean isHeldPausedFor(String subscriptionId, UnsupportedStartAtException refusal) {
+            return heldWithoutAPositionFor.get(subscriptionId) == refusal;
         }
 
         @Override
@@ -1063,6 +1179,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             heldFor.remove(subscriptionId);
+            heldWithoutAPositionFor.remove(subscriptionId);
             Subscription made = super.subscribe(subscriptionId, filter, startAt, action);
             tellsInsideTheNextSubscribe();
             return made;
@@ -1071,6 +1188,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         @Override
         public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             heldFor.remove(subscriptionId);
+            heldWithoutAPositionFor.remove(subscriptionId);
             Subscription made = super.subscribePaused(subscriptionId, filter, startAt, action);
             tellsInsideTheNextSubscribe();
             return made;
@@ -1082,12 +1200,14 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
                 return new WrappedSubscription(subscriptionId);
             }
             heldFor.remove(subscriptionId);
+            heldWithoutAPositionFor.remove(subscriptionId);
             return super.resumeSubscription(subscriptionId);
         }
 
         @Override
         public void cancelSubscription(String subscriptionId) {
             heldFor.remove(subscriptionId);
+            heldWithoutAPositionFor.remove(subscriptionId);
             super.cancelSubscription(subscriptionId);
         }
 
@@ -1095,6 +1215,7 @@ class CompetingConsumerHoldsARefusedStartPausedTest {
         public void start(boolean resumeSubscriptionsAutomatically) {
             if (resumeSubscriptionsAutomatically) {
                 heldFor.clear();
+                heldWithoutAPositionFor.clear();
             }
             super.start(resumeSubscriptionsAutomatically);
         }
