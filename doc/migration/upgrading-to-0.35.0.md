@@ -154,6 +154,9 @@ other sections compile fine and behave differently, so read them first.
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
   handler of a synchronous subscription that fails now makes `execute` throw, where a retry could run the command again.
+- [A forgotten catch-up marker stays forgotten](#a-forgotten-catch-up-marker-stays-forgotten). The blocking
+  checkpoint storages keep a generation per subscription id next to the checkpoints. On MongoDB a forget waits for a
+  majority, and on Redis the marker calls refuse ids under `occurrent:catchup-marker:`. Compiles unchanged.
 
 ### Spring Boot starter
 
@@ -1662,6 +1665,87 @@ cancel the subscription on every instance and subscribe it again from the beginn
 
 A DCB catch-up and the reactor catch-ups replay only by position, and throw the same exception when you start them from
 a time replay's checkpoint in the new form.
+
+## A forgotten catch-up marker stays forgotten
+
+The blocking checkpoint storages implement `CatchupMarkerStorage`. They are `InMemoryCheckpointStorage`,
+`NativeMongoCheckpointStorage`, `SpringMongoCheckpointStorage` and `SpringRedisCheckpointStorage`.
+
+Each subscription id gets a generation that changes when `forgetCatchupMarker(id)` runs, and a marker is saved with
+the generation its catch-up read. `readCatchupMarker(id)` reports the marker only while that generation is the current
+one.
+
+A save that reaches the store after a forget, for example one the client gave up on after a timeout while the
+database still ran it, then writes a marker that reads as absent. The next catch-up replays the history.
+[ADR 179](../architecture/decisions/0179-a-forgotten-catch-up-marker-stays-forgotten-when-a-late-write-reaches-the-store.md)
+has the design.
+
+### What changes in the store
+
+| Store | Where the generation is kept | What a forget writes |
+| --- | --- | --- |
+| MongoDB | A document in the checkpoint collection with the `_id` `{catchupMarker: "<subscription id>"}` | Raises the generation by one, then deletes the checkpoint |
+| Redis | A hash under `occurrent:catchup-marker:` | Replaces the generation with a random number and deletes the checkpoint, in one script |
+| In memory | A map in the storage | Raises the generation by one and deletes the checkpoint |
+
+Plain `read(id)` and `exists(id)` still find a marker saved with a generation that a forget replaced. Only
+`readCatchupMarker(id)` compares the generations.
+
+### Who is affected
+
+- You run MongoDB as a replica set or a sharded cluster. Both writes of a forget wait for `w: "majority"`, whatever
+  write concern your collection or `MongoOperations` has. `readCatchupMarker(id)` reads the generation with
+  `LINEARIZABLE` read concern, which a majority has to confirm. When no majority answers within 10 seconds, the
+  attempt fails, and the storage's `RetryStrategy` decides whether to try again. A standalone server refuses
+  `LINEARIZABLE`, and the storage then reads with `MAJORITY`.
+- You clean up the checkpoint collection or the Redis key space with a job of your own. Leave the generation documents
+  and hashes in place. Removing one puts the generation of that subscription id back at 0, and a marker saved before
+  an earlier forget can then read as present again.
+- You use `SpringRedisCheckpointStorage` with a subscription id that starts with `occurrent:catchup-marker:`. The
+  marker calls refuse it with an `IllegalArgumentException`. In Cluster-safe mode they also refuse the ids that a
+  conditional `save` refuses, such as `""` and `"{}orders"`.
+- You wrote a `CheckpointStorage` of your own that keeps catch-up markers. Read the next section.
+
+### A storage of your own
+
+Implement the three methods of `CatchupMarkerStorage`:
+
+```java
+CatchupMarker readCatchupMarker(String subscriptionId);
+boolean saveCatchupMarker(String subscriptionId, Checkpoint marker, long generation, CheckpointWriteCondition condition);
+void forgetCatchupMarker(String subscriptionId);
+```
+
+- `readCatchupMarker` returns the marker and the generation as the store held them at one instant. The marker is
+  absent unless it was saved with the current generation. An id that was never forgotten has generation 0.
+- `saveCatchupMarker` stores `generation` with the marker in the same write. It returns `false` only when `condition`
+  refuses the save, and a store failure throws.
+- `forgetCatchupMarker` changes the generation and deletes the checkpoint at the id. Never give an id a generation it
+  had before, or a marker saved under that generation reads as present again.
+
+`CatchupMarkerStorageConformance` in `occurrent-tck-subscription-blocking` checks this contract. Use it in a test of
+your storage the way you use `CheckpointStorageConformance`.
+
+### Rolling upgrades and rolling back
+
+A rolling upgrade needs no migration, and the generation check covers every forget a 0.35.0 node makes. A forget or a
+read on a 0.34.0 node behaves as in 0.34.0 until every node runs 0.35.0:
+
+- A 0.34.0 forget doesn't change the generation. A late write after it brings the marker back, as in 0.34.0, and the
+  marker stays present after the upgrade until a 0.35.0 node forgets the id.
+- A 0.34.0 node's late write after a 0.35.0 forget still brings the marker back for the 0.34.0 nodes.
+- A forget on a 0.35.0 node deletes the checkpoint only after a majority has its generation raise. Until then the
+  0.34.0 nodes keep reading the marker. The default `RetryStrategy` of the MongoDB storages keeps trying, and when a
+  `RetryStrategy` of yours gives up, the forget throws without deleting.
+
+No mixed order makes a node read a marker as present where an all-0.34.0 deployment reads it as absent. A 0.35.0 node
+saves and deletes the checkpoint under the same conditions as 0.34.0, and on read it only adds the generation check,
+which can turn present into absent and never the other way.
+
+To roll back to 0.34.0, leave the generation documents and hashes in place. 0.34.0 doesn't read them, and it reads
+every stored marker as present, also one whose generation a forget replaced. That is the exposure 0.34.0 has to any
+late write. Removing them puts each generation back at 0, and after the next upgrade a marker saved before an earlier
+forget can read as present again.
 
 ## A replayed event holds the checkpoint to resume from
 
