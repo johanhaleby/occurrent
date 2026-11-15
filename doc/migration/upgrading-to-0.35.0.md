@@ -886,18 +886,19 @@ also has to restart before its subscription goes live. To downgrade without that
 1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or
    `occurrent.saga.quarantine-enabled=false`, and have that running on every node before step 2. A node that still has
    quarantine on can quarantine another instance after you have listed them.
-2. Find the quarantined instances with `findByStatus(QUARANTINED, ..)` and call `release` on each whose failure
-   record has a quarantine id.
+2. List the quarantined instances and call `release` on each whose failure record has a quarantine id. On MongoDB,
+   `db.getCollection("saga-order-fulfilment").find({ status: "QUARANTINED_RECORDING" }, { _id: 1 })`, with your saga's
+   collection, lists exactly those, and its cursor reaches every one. On another store,
+   `findByStatus(QUARANTINED, ..)` lists them all only when its `limit` is above the number of quarantined instances,
+   since the limit is a bound and the query has no cursor.
 3. Delete with `SagaStateStore.delete(sagaId)` each one whose release returns `QUARANTINED_AGAIN`,
    `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
    longer decodes or an event store read that failed, and release the instance again, or delete it.
-5. Downgrade.
+5. Repeat steps 2 to 4 until step 2 lists no instance with a quarantine id. Then downgrade.
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already
 released.
-
-<!-- Q2: downgrade rewrite result pending -->
 
 ## A saga timer that keeps failing waits behind the timers already due
 

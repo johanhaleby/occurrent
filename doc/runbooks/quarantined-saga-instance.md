@@ -315,7 +315,9 @@ the saga's timer lease, and without one on every node. The poller also goes on w
 restart interrupted. You can call `release` again too, and it goes on where the release stands.
 
 The poller polls only while the saga's `timersEnabled` returns `true`, so a release that is under way waits with the
-timers while that gate is closed. Going on with a release dispatches commands. On a subscription model that reports
+timers while that gate is closed, only because the poller is what goes on with it. The gate exists for timers, which
+fire on the clock and can decide against state the subscription hasn't caught up to. A release applies only inputs the
+subscription has delivered and the instance recorded, in order. On a subscription model that reports
 whether it runs, the Spring Boot starter keeps the gate closed while the saga's subscription isn't running, which with
 `occurrent.subscription.mode=manual` lasts until the application resumes the subscription. On a model that also
 reports a replay, the gate stays closed while the subscription is still catching up. The first poll after the gate
@@ -526,19 +528,20 @@ so the stall lasts until the instance is deleted. To downgrade without that stal
 1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or
    `occurrent.saga.quarantine-enabled=false`, and have that running on every node before step 2. A node that still has
    quarantine on can quarantine another instance after you have listed them.
-2. Find the quarantined instances with `findByStatus(QUARANTINED, ..)` and call `release` on each whose failure
-   record has a quarantine id.
+2. List the quarantined instances and call `release` on each whose failure record has a quarantine id. On MongoDB,
+   `db.getCollection("saga-order-fulfilment").find({ status: "QUARANTINED_RECORDING" }, { _id: 1 })`, with your saga's
+   collection, lists exactly those, and its cursor reaches every one. On another store,
+   `findByStatus(QUARANTINED, ..)` lists them all only when its `limit` is above the number of quarantined instances,
+   since the limit is a bound and the query has no cursor.
 3. Delete with `SagaStateStore.delete(sagaId)` each one whose release returns `QUARANTINED_AGAIN`,
    `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
    longer decodes or an event store read that failed, and release the instance again, or delete it.
-5. Downgrade.
+5. Repeat steps 2 to 4 until step 2 lists no instance with a quarantine id. Then downgrade.
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already
 released. The
 [0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#rolling-upgrades-from-0340-and-rolling-back-to-it) also
 covers a rolling upgrade from 0.34.0.
-
-<!-- Q2: downgrade rewrite result pending -->
 
 Deleting an instance is not reversible from inside Occurrent. Take a backup of the collection first if you want one.
