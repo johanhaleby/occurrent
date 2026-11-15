@@ -92,6 +92,10 @@ public class SpringMongoSubscriptionModelConfig {
      * {@code true}, an error in the log names the subscription, and {@code resumeSubscription(id)} reads the change
      * stream again. A subscription that starts at the present is refused and removed when that read gives no position,
      * and waiting for it to start throws an {@code UnsupportedStartAtException}.
+     * <p>
+     * While it is off, waiting for a subscription whose change stream history is lost as it opens, or with its first
+     * reply through a mongos, throws an {@code UnsupportedStartAtException} with MongoDB's error as its cause, and the
+     * subscription is removed.
      *
      * @param restartSubscriptionsOnChangeStreamHistoryLost Whether or not to automatically restart a subscription, whose change stream history is lost.
      * @return A new instance of {@code SpringSubscriptionModelConfig}

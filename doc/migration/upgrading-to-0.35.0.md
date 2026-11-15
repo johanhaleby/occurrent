@@ -136,6 +136,10 @@ other sections compile fine and behave differently, so read them first.
   On a server that sends no operation time, a `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel`
   subscription at the present reads the change stream once to record its position, and `waitUntilStarted(..)` and
   `start(true)` throw `UnsupportedStartAtException` when that read gives none. Compiles unchanged.
+- [A MongoDB subscription whose history is lost is refused when restarts are off](#a-mongodb-subscription-whose-history-is-lost-is-refused-when-restarts-are-off).
+  With `restartSubscriptionsOnChangeStreamHistoryLost` off, `waitUntilStarted(..)` and `start(true)` throw
+  `UnsupportedStartAtException` for a `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` subscription
+  whose change stream history is gone, where 0.34.0 waited forever. Compiles unchanged.
 - [A blocking catch-up resume at a dynamic start uses the catch-up's answer](#a-blocking-catch-up-resume-at-a-dynamic-start-uses-the-catch-ups-answer).
   The live model resumes at the start a `StartAt.dynamic(..)` function answered the catch-up, where 0.34.0 let the live
   model ask the function for itself. Compiles unchanged.
@@ -2815,6 +2819,48 @@ the exception can stop the application from starting, with no call of your own i
 `startupMode = BACKGROUND` on the annotation to start the subscription in the background instead, or pass
 `waitUntilStarted = false` to the Kotlin DSL's `subscribe(..)`. The refusal is then logged as an error and the
 subscription is removed.
+
+## A MongoDB subscription whose history is lost is refused when restarts are off
+
+`NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel` don't restart a subscription whose change stream
+history is lost while `restartSubscriptionsOnChangeStreamHistoryLost` is off, which is the default. That hasn't
+changed. What changes is what a caller waiting for the subscription to start sees:
+
+* When MongoDB reports the loss as the change stream opens, or through a mongos with the change stream's first
+  reply, `waitUntilStarted()` and `start(true)` throw an
+  `UnsupportedStartAtException`, and so does `waitUntilStarted(..)` with a timeout, which answered `false` in 0.34.0.
+  `startAt()` on the exception is the checkpoint whose history is gone, or the subscription's start position when
+  there is no checkpoint to name. Its cause is MongoDB's error, code 286 (`ChangeStreamHistoryLost`), and its message
+  names the fixes below.
+* Through a mongos, a subscription that starts at a stored position counts as started only once that first reply
+  came. On a quiet collection a wait can then take up to the `maxAwaitTime` configured, or the server's default when
+  none is. A start at the present, and any start on a replica set, count as started as the change stream opens.
+* The listeners added through `StartRefusalReportingSubscriptions` are told through `handleStartRefusal(..)`. A
+  `CompetingConsumerSubscriptionModel` forgets the subscription on that node, as it does for any refused start.
+* The id is free, so `subscribe(..)` with it works again.
+* A loss on a later read, after the handle answered that the subscription started, tells the listeners and frees the
+  id the same way. The handle keeps its answer.
+
+In 0.34.0 the model removed the subscription and released no waiter, so a `waitUntilStarted()` with no timeout never
+returned.
+
+### Who is affected
+
+Code that waits for one of these subscriptions to start with restarts after a loss of history off. The blocking Spring
+Boot starter waits for a subscription at `NOW` or `DEFAULT` to start by default, so an application whose stored
+checkpoint for one is older than the oplog's history can fail to start with the `UnsupportedStartAtException`. Set
+`startupMode = BACKGROUND` on the annotation, or pass `waitUntilStarted = false` to the Kotlin DSL's `subscribe(..)`,
+to start it in the background.
+
+### What to do
+
+Pick one, as the exception's message says:
+
+* Subscribe through a catch-up subscription, which replays from the event store and then goes live.
+* Remove the subscription's checkpoint from the durable storage, so it starts again from the position it is
+  subscribed at.
+* Turn `restartSubscriptionsOnChangeStreamHistoryLost` on, which restarts the subscription at the present and skips
+  what was written in between.
 
 ## A blocking catch-up resume at a dynamic start uses the catch-up's answer
 

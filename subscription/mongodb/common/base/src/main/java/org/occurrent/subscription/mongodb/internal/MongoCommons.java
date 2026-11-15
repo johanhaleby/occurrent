@@ -224,9 +224,13 @@ public class MongoCommons {
      * because the oplog no longer reaches back to it.
      */
     public static boolean isChangeStreamHistoryLost(Throwable throwable) {
+        return hasCommandErrorCode(throwable, CHANGE_STREAM_HISTORY_LOST_ERROR_CODE);
+    }
+
+    private static boolean hasCommandErrorCode(Throwable throwable, int errorCode) {
         // Spring translates the driver's exception into one of its own and keeps the driver's as the cause
         for (Throwable cause = throwable; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
-            if (cause instanceof MongoCommandException mongoCommandException && mongoCommandException.getErrorCode() == CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
+            if (cause instanceof MongoCommandException mongoCommandException && mongoCommandException.getErrorCode() == errorCode) {
                 return true;
             }
         }
@@ -686,6 +690,26 @@ public class MongoCommons {
     public static final Document LEGACY_SERVER_CLOCK_COMMAND = new Document("isMaster", 1);
 
     public static final int COMMAND_NOT_FOUND_ERROR_CODE = 59;
+
+    /**
+     * Whether {@code runCommand} reaches MongoDB through a mongos, from the answer to {@link #SERVER_CLOCK_COMMAND}, or to
+     * {@link #LEGACY_SERVER_CLOCK_COMMAND} on a server that doesn't know it. A mongos answers {@code msg} isdbgrid, also
+     * through a load balancer. Every other failure reaches the caller.
+     *
+     * @param runCommand Runs a command against the database of the event collection
+     */
+    public static boolean isMongos(Function<Document, Document> runCommand) {
+        Document answer;
+        try {
+            answer = runCommand.apply(SERVER_CLOCK_COMMAND);
+        } catch (RuntimeException e) {
+            if (!hasCommandErrorCode(e, COMMAND_NOT_FOUND_ERROR_CODE)) {
+                throw e;
+            }
+            answer = runCommand.apply(LEGACY_SERVER_CLOCK_COMMAND);
+        }
+        return answer != null && "isdbgrid".equals(answer.get("msg"));
+    }
 
     /**
      * The earliest operation time in the second the server's wall clock showed {@code elapsedNanos} before

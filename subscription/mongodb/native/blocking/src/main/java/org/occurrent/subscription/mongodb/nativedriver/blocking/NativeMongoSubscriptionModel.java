@@ -449,8 +449,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * returns has started. Pausing, cancelling and listing subscriptions keep working while it waits.
      * <p>
      * The wait for a subscription ends early when it's paused or cancelled, when the model shuts down, or when its
-     * change stream won't open at all, because its {@code RetryStrategy} gave up or its change stream history was lost
-     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off. Until one of those happens, a returned
+     * change stream won't open at all because its {@code RetryStrategy} gave up. Until one of those happens, a returned
      * {@code Subscription} that never answers that it has started keeps this method waiting. A subscription whose change
      * stream history was lost as it opened, and which then waits for an action call made before it was paused, counts as
      * started, so this method returns also when that action call is the one that called it. A subscription that isn't
@@ -458,8 +457,13 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * isn't waited for. A subscription that an override already resumed or cancelled while resuming an earlier one is
      * left out.
      * <p>
-     * A wait throws for a start position the model refuses, and for a subscription at the present when MongoDB gives
-     * neither an operation time nor a change stream position. When a resume or a wait throws, every other subscription
+     * A wait throws for a start position the model refuses, for a subscription at the present when MongoDB gives
+     * neither an operation time nor a change stream position, and for a subscription whose change stream history was
+     * lost as it opened, or with its first reply through a mongos, while
+     * {@code restartSubscriptionsOnChangeStreamHistoryLost} is off. Through a mongos, a subscription that starts at a
+     * stored position counts as started once its change stream's first reply came, so the wait can take up to
+     * {@code maxAwaitTime} longer, or the server's default wait when none is configured. When a resume or a wait
+     * throws, every other subscription
      * is still resumed and waited for, and then this method throws the first exception with the others added as
      * suppressed.
      * <p>

@@ -55,6 +55,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
+import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -85,6 +86,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -318,6 +320,13 @@ public class SpringMongoSubscriptionModelTest {
             public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
             }
         };
+    }
+
+    // What a handle of a subscription whose history was lost throws, a copy of the refusal the model made with the MongoDB error beneath it
+    private static void assertRefusedBecauseTheHistoryWasLost(Throwable thrown, String subscriptionId) {
+        assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .hasMessageStartingWith("There was not enough oplog to resume subscription \"" + subscriptionId + "\"")
+                .rootCause().isInstanceOfSatisfying(MongoCommandException.class, e -> assertThat(e.getErrorCode()).isEqualTo(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE));
     }
 
     @Nested
@@ -2697,9 +2706,89 @@ public class SpringMongoSubscriptionModelTest {
             CompletableFuture<Void> start = CompletableFuture.runAsync(() -> subscriptionModel.start(true));
 
             // Then
-            assertThat(start).succeedsWithin(Duration.ofSeconds(10));
+            assertThat(start).failsWithin(Duration.ofSeconds(10)).withThrowableOfType(ExecutionException.class)
+                    .satisfies(thrown -> assertRefusedBecauseTheHistoryWasLost(thrown.getCause(), subscriptionId));
             await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse());
             assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse();
+        }
+
+        @SuppressWarnings("unchecked")
+        @Timeout(value = 20, unit = SECONDS)
+        @Test
+        void a_subscription_whose_history_is_lost_when_not_configured_to_restart_throws_the_refusal_from_every_wait_and_its_id_is_freed() {
+            // Given
+            MongoTemplate mongoTemplateSpy = spy(mongoTemplate);
+            MongoDatabase mongoDatabase = mock(MongoDatabase.class);
+            MongoCollection<Document> mongoCollection = (MongoCollection<Document>) mock(MongoCollection.class);
+
+            List<BsonElement> elements = new ArrayList<>();
+            elements.add(new BsonElement("code", new BsonInt32(286)));
+            elements.add(new BsonElement("codeName", new BsonString("ChangeStreamHistoryLost")));
+
+            // Called in org.springframework.data.mongodb.core.messaging.ChangeStreamTask#initCursor, for the first change stream only
+            when(mongoTemplateSpy.getDb()).thenReturn(mongoDatabase).thenCallRealMethod();
+            when(mongoDatabase.getCollection("events")).thenReturn(mongoCollection);
+            when(mongoCollection.watch(any(Class.class))).thenThrow(new UncategorizedMongoDbException("expected", new MongoCommandException(new BsonDocument(elements), new ServerAddress())));
+
+            subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(false));
+            String subscriptionId = UUID.randomUUID().toString();
+            Subscription subscription = subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
+
+            // When
+            Throwable timedWait = catchThrowable(() -> subscription.waitUntilStarted(Duration.ofSeconds(5)));
+            Throwable untimedWait = catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+                subscription.waitUntilStarted();
+            }));
+
+            // Then
+            assertRefusedBecauseTheHistoryWasLost(timedWait, subscriptionId);
+            assertRefusedBecauseTheHistoryWasLost(untimedWait, subscriptionId);
+            assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId);
+            assertThat(subscriptionModel.subscribe(subscriptionId, __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10))).as("the id is free to subscribe with again").isTrue();
+        }
+
+        @Timeout(value = 20, unit = SECONDS)
+        @Test
+        void a_history_loss_after_the_subscription_started_keeps_the_handle_started_frees_the_id_and_tells_the_start_refusal_listeners() {
+            // Given a subscription whose change stream opens, and then loses its history when it is read
+            AtomicBoolean losing = new AtomicBoolean(true);
+            MongoCommandException historyLost = new MongoCommandException(new BsonDocument("ok", new BsonInt32(0)).append("code", new BsonInt32(286))
+                    .append("codeName", new BsonString("ChangeStreamHistoryLost")), new ServerAddress());
+            MongoTemplate template = new MongoTemplate(mongoTemplate.getMongoDatabaseFactory()) {
+                @Override
+                public MongoDatabase getDb() {
+                    return historyLostWhenRead(super.getDb(), losing, historyLost);
+                }
+            };
+            subscriptionModel = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING)
+                    .restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            CopyOnWriteArrayList<UnsupportedStartAtException> refusals = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<String> refusedIds = new CopyOnWriteArrayList<>();
+            subscriptionModel.addStartRefusalListener(onStartRefusal((refusedId, refusal) -> {
+                // What the listener is told is what the subscription is made again with, so a loss that kept coming would
+                // refuse the second subscription too
+                losing.set(false);
+                refusedIds.add(refusedId);
+                refusals.add(refusal);
+            }));
+            String subscriptionId = UUID.randomUUID().toString();
+
+            // When
+            Subscription subscription = subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
+            boolean started = subscription.waitUntilStarted(Duration.ofSeconds(10));
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(refusals).hasSize(1));
+
+            // Then
+            assertThat(started).as("answer while the change stream was open").isTrue();
+            assertThat(subscription.waitUntilStarted(Duration.ofSeconds(1))).as("answer after the history was lost").isTrue();
+            assertThat(refusedIds).containsExactly(subscriptionId);
+            assertThat(refusals.getFirst()).hasMessageStartingWith("There was not enough oplog to resume subscription \"" + subscriptionId + "\"").rootCause().isSameAs(historyLost);
+            assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId);
+            assertThat(subscriptionModel.subscribe(subscriptionId, __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10))).as("the id is free to subscribe with again").isTrue();
         }
     }
 
@@ -3125,6 +3214,27 @@ public class SpringMongoSubscriptionModelTest {
         return proxy(MongoDatabase.class, database, (method, args, result) -> method.getName().equals("getCollection")
                 ? proxy(MongoCollection.class, result, (m, a, r) -> m.getName().equals("watch") ? changeStreamLostAt(lostAt, r, false) : r)
                 : result);
+    }
+
+    // A change stream that opens, and whose cursor fails with history lost when it is read, while losing is set
+    private static MongoDatabase historyLostWhenRead(MongoDatabase database, AtomicBoolean losing, MongoCommandException historyLost) {
+        return proxy(MongoDatabase.class, database, (method, args, result) -> method.getName().equals("getCollection")
+                ? proxy(MongoCollection.class, result, (m, a, r) -> m.getName().equals("watch") ? changeStreamLostWhenRead(r, losing, historyLost) : r)
+                : result);
+    }
+
+    private static Object changeStreamLostWhenRead(Object changeStream, AtomicBoolean losing, MongoCommandException historyLost) {
+        return proxy(ChangeStreamIterable.class, changeStream, (method, args, result) -> {
+            if (method.getName().equals("cursor")) {
+                return proxy(MongoChangeStreamCursor.class, result, (m, a, r) -> {
+                    if (losing.get() && (m.getName().equals("tryNext") || m.getName().equals("next") || m.getName().equals("hasNext"))) {
+                        throw historyLost;
+                    }
+                    return r;
+                });
+            }
+            return result instanceof ChangeStreamIterable ? changeStreamLostWhenRead(result, losing, historyLost) : result;
+        });
     }
 
     private static Object changeStreamLostAt(BsonTimestamp lostAt, Object changeStream, boolean opensAtLostAt) {
