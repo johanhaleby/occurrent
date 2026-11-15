@@ -47,6 +47,7 @@ class UpgradeToOccurrent_0_35Test implements RewriteTest {
 
     private static final String DCB_MARKER_VERSIONS_RECORD_PATTERN = "org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35";
     private static final String NATIVE_MONGO_SUBSCRIPTION_RECORD_PATTERN = "org.occurrent.MigrateNativeMongoSubscriptionRecordPattern_0_35";
+    private static final String SUBSCRIPTION_ANNOTATIONS_TO_INTERNAL = "org.occurrent.MoveSubscriptionAnnotationsToInternal_0_35";
 
     @Override
     public void defaults(RecipeSpec spec) {
@@ -164,6 +165,121 @@ class UpgradeToOccurrent_0_35Test implements RewriteTest {
                                     case NativeMongoSubscription(var subscriptionId, var latch, var startFailure) -> subscriptionId + ":" + latch.getCount();
                                     default -> "unknown";
                                 };
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void theRecipeListsTheSubscriptionAnnotationsToInternalSubRecipe() {
+        Recipe recipe = activate("org.occurrent.UpgradeToOccurrent_0_35");
+
+        assertThat(recipe.getRecipeList()).extracting(Recipe::getName).contains(SUBSCRIPTION_ANNOTATIONS_TO_INTERNAL);
+    }
+
+    @Test
+    void theSubscriptionAnnotationsToInternalSubRecipeLoadsAndValidates() {
+        Recipe recipe = activate(SUBSCRIPTION_ANNOTATIONS_TO_INTERNAL);
+
+        assertThat(recipe.validate().isValid()).isTrue();
+        assertThat(recipe.getName()).isEqualTo(SUBSCRIPTION_ANNOTATIONS_TO_INTERNAL);
+        assertThat(recipe.getRecipeList()).extracting(Recipe::getName)
+                .containsExactly("org.openrewrite.java.ChangeType");
+    }
+
+    @Test
+    void movesTheSubscriptionAnnotationsImportsToTheInternalPackage() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class SubscriptionAnnotations {
+                            public record HandlerParameter(String name) {
+                            }
+
+                            public static boolean shouldWaitUntilStarted(boolean replaysHistory) {
+                                return !replaysHistory;
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.SubscriptionAnnotations;
+                        import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
+
+                        class Foo {
+                            HandlerParameter parameter = new HandlerParameter("event");
+
+                            boolean wait(boolean replaysHistory) {
+                                return SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory);
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
+                        import org.occurrent.springboot.common.internal.SubscriptionAnnotations.HandlerParameter;
+
+                        class Foo {
+                            HandlerParameter parameter = new HandlerParameter("event");
+
+                            boolean wait(boolean replaysHistory) {
+                                return SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory);
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    /**
+     * A caller who skipped 0.31.0 runs the 0.31 and 0.35 umbrellas in one invocation. The class sat in
+     * {@code org.occurrent.springboot.mongo.common} before 0.31.0 and in {@code org.occurrent.springboot.common}
+     * until 0.35.0, so the two moves have to chain.
+     */
+    @Test
+    void aPre031SubscriptionAnnotationsImportEndsInTheInternalPackageWhenBothUmbrellasRunInOneInvocation() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_31", "org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.mongo.common;
+
+                        public class SubscriptionAnnotations {
+                            public static boolean shouldWaitUntilStarted(boolean replaysHistory) {
+                                return !replaysHistory;
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
+
+                        class Foo {
+                            boolean wait(boolean replaysHistory) {
+                                return SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory);
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
+
+                        class Foo {
+                            boolean wait(boolean replaysHistory) {
+                                return SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory);
                             }
                         }
                         """
