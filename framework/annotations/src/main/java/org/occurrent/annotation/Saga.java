@@ -51,9 +51,10 @@ import java.lang.annotation.*;
  * What a failing event holds up is decided by whatever feeds the subscription, and the javadoc on
  * {@code SagaStatus.QUARANTINED} says what that can be.
  * <p>
- * An instance that keeps failing can be quarantined instead once {@code occurrent.saga.quarantine-after} is set to a
- * positive duration. Quarantine is off by default, because 0.34.0 has no operation that brings a quarantined instance
- * back. Whether a failing event is considered for quarantine and
+ * An instance that keeps failing can be quarantined instead, after {@code occurrent.saga.quarantine-after}, five
+ * minutes by default. Set {@code occurrent.saga.quarantine-enabled=false} to turn quarantine off. A quarantined
+ * instance records the inputs it skips, and {@code SagaSubscription.release(sagaId)} brings it back by replaying them.
+ * Whether a failing event is considered for quarantine and
  * whether a considered one is actually quarantined are separate conditions, and the javadoc on
  * {@code SagaStatus.QUARANTINED} lists both. An instance can be past its budget and still {@code ACTIVE}, so read its
  * status rather than inferring it from the budget. What failed and where decide nothing once the saga has worked out

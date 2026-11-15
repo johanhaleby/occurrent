@@ -25,6 +25,7 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaFilters;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
@@ -37,6 +38,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -86,9 +88,8 @@ import static java.util.Objects.requireNonNull;
  *       What a failing event holds up is decided by whatever feeds the subscription rather than by the runner, and
  *       {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what that can be.
  *       <p>
- *       An instance that keeps failing can be quarantined instead once you turn quarantine on with
- *       {@link SagaRunnerConfig#withQuarantineAfter(java.time.Duration)}. It is off by default, because 0.34.0 has no
- *       operation that brings a quarantined instance back. Whether a failing event is considered
+ *       An instance that keeps failing is quarantined instead, after five minutes by default, and
+ *       {@link SagaRunnerConfig#withQuarantineAfter(java.time.Duration)} sets another budget. Whether a failing event is considered
  *       for quarantine and whether a considered one is actually quarantined are separate conditions, and
  *       {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists both. An instance can be past its budget and
  *       still {@code ACTIVE}, so read the instance's status rather than inferring it from the budget.
@@ -103,7 +104,10 @@ import static java.util.Objects.requireNonNull;
  *       An event the saga correlated is charged to that instance, and a quarantine records whichever event the
  *       instance is failing on then. Each failing event keeps its own clock, so an instance where two events fail in
  *       turn measures each from its own first failure, and the record names whichever event it stopped on.
- *       The quarantined instance stops there, and 0.34.0 has no operation that brings it back, so {@code SagaStateStore.delete(sagaId)} is how you abandon it.
+ *       The quarantined instance stops there and records the key of every input it skips.
+ *       {@link SagaSubscription#release(String)} brings it back by replaying the event it stopped on and then those
+ *       inputs, read back from the {@link org.occurrent.eventstore.api.blocking.EventStoreQueries} the runner was given,
+ *       and {@code SagaStateStore.delete(sagaId)} is how you abandon it.
  *       <p>
  *       An event the saga could <em>not</em> correlate, because the converter or the id extractor threw, is never let
  *       past, whatever the budget. Not being able to say which instance it belongs to does not mean it belongs to none,
@@ -121,7 +125,7 @@ import static java.util.Objects.requireNonNull;
  *       it hasn't been offered for that long, and one that does not offer a refused delivery again gets only the first
  *       WARN.
  *       <p>
- *       Without quarantine, which is the default and what {@link SagaRunnerConfig#disableQuarantine()} gives, the
+ *       Without quarantine, which is what {@link SagaRunnerConfig#disableQuarantine()} gives, the
  *       saga keeps the pre-0.34.0 behaviour and keeps refusing the event for as long as the model offers it again.
  *       That is also what a subscription
  *       model that does not guarantee it holds every event it delivers gets, since
@@ -162,34 +166,48 @@ public final class SagaRunner<E, C> {
     private final CloudEventConverter<E> cloudEventConverter;
     private final Function<Filter, SubscriptionFilter> toSubscriptionFilter;
     private final @Nullable CompetingConsumerStrategy competingConsumerStrategy;
+    private final @Nullable EventStoreQueries eventStoreQueries;
 
     private SagaRunner(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter, Function<Filter, SubscriptionFilter> toSubscriptionFilter,
-                       @Nullable CompetingConsumerStrategy competingConsumerStrategy) {
+                       @Nullable CompetingConsumerStrategy competingConsumerStrategy, @Nullable EventStoreQueries eventStoreQueries) {
         this.subscriptionModel = requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.cloudEventConverter = requireNonNull(cloudEventConverter, "cloudEventConverter cannot be null");
         this.toSubscriptionFilter = requireNonNull(toSubscriptionFilter, "toSubscriptionFilter cannot be null");
         this.competingConsumerStrategy = competingConsumerStrategy;
+        this.eventStoreQueries = eventStoreQueries;
     }
 
     /** A runner whose subscription is capability-agnostic: it delivers both stream-written and DCB-appended events. */
     public static <E, C> SagaRunner<E, C> agnostic(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
-        return new SagaRunner<>(subscriptionModel, cloudEventConverter, AgnosticSubscriptionFilter::filter, null);
+        return new SagaRunner<>(subscriptionModel, cloudEventConverter, AgnosticSubscriptionFilter::filter, null, null);
     }
 
     /** A runner whose subscription is scoped to the {@code STREAM} capability, excluding DCB-appended events. */
     public static <E, C> SagaRunner<E, C> stream(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
-        return new SagaRunner<>(subscriptionModel, cloudEventConverter, StreamSubscriptionFilter::filter, null);
+        return new SagaRunner<>(subscriptionModel, cloudEventConverter, StreamSubscriptionFilter::filter, null, null);
+    }
+
+    /**
+     * Returns a copy of this runner that reads from {@code eventStoreQueries} the inputs a quarantined instance skipped,
+     * which is what {@link SagaSubscription#release(String)} replays. Give it the event store the saga's subscription
+     * reads from. A runner without one refuses to start a saga that quarantines on a subscription model holding every
+     * event it delivers, and names this method and {@link SagaRunnerConfig#disableQuarantine()} as the two ways out.
+     */
+    public SagaRunner<E, C> eventStoreQueries(EventStoreQueries eventStoreQueries) {
+        return new SagaRunner<>(subscriptionModel, cloudEventConverter, toSubscriptionFilter, competingConsumerStrategy,
+                requireNonNull(eventStoreQueries, "eventStoreQueries cannot be null"));
     }
 
     /**
      * Returns a copy of this runner whose saga timer poller is coordinated by {@code strategy}. Only the instance that
      * currently holds the saga's timer lease polls the store for due timers, the others wake on their interval and do
      * nothing without querying it. Without a strategy (the default) every instance polls. The lease is released on
-     * {@link SagaSubscription#close()}.
+     * {@link SagaSubscription#close()}. The poller also goes on with the release of every instance that is releasing,
+     * so with a strategy only the lease holder does that too.
      */
     public SagaRunner<E, C> competingConsumerStrategy(CompetingConsumerStrategy strategy) {
         return new SagaRunner<>(subscriptionModel, cloudEventConverter, toSubscriptionFilter,
-                requireNonNull(strategy, "competingConsumerStrategy cannot be null"));
+                requireNonNull(strategy, "competingConsumerStrategy cannot be null"), eventStoreQueries);
     }
 
     /** Runs {@code saga} with the default configuration, starting at the subscription model's default position. */
@@ -254,7 +272,8 @@ public final class SagaRunner<E, C> {
         requireNonNull(timersEnabled, "timersEnabled cannot be null");
 
         SagaRunnerConfig effectiveConfig = quarantineOnlyIfTheEventCanBeAskedForAgain(subscriptionId, config);
-        SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, effectiveConfig, retentionCheckFor(subscriptionId, effectiveConfig));
+        SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, effectiveConfig,
+                retentionCheckFor(subscriptionId, effectiveConfig), Instant::now, eventStoreQueries);
         SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));
         Consumer<CloudEvent> action = execution::onCloudEvent;
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
@@ -297,13 +316,12 @@ public final class SagaRunner<E, C> {
         ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(daemonThreadFactory("occurrent-saga-timer-" + subscriptionId));
         long intervalMillis = config.timerPollInterval().toMillis();
         poller.scheduleWithFixedDelay(pollTask, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
-        return new SagaSubscription(subscription, poller, SagaInstances.of(stateStore), strategy, leaseKey, holderId);
+        return new SagaSubscription(subscription, poller, SagaInstances.of(stateStore), strategy, leaseKey, holderId, execution::release);
     }
 
     /**
      * Quarantine is available only on a subscription model that can say whether it still holds the failing event,
-     * meaning a {@link HistoryRetainingSubscriptions}, so that a future release could hand that event back. 0.34.0
-     * does not. On any other
+     * meaning a {@link HistoryRetainingSubscriptions}, since quarantining acknowledges the event. On any other
      * model this returns a configuration with the budget switched off, and the saga keeps the behaviour it had before
      * 0.34.0.
      * <p>
@@ -335,6 +353,11 @@ public final class SagaRunner<E, C> {
             log.warn("Saga subscription '{}' runs on a subscription model that cannot guarantee it holds every event it delivers ({}), so quarantine is switched off for this saga, and an instance that keeps failing is never quarantined, which is the behaviour before 0.34.0. What its failing event holds up is decided by whatever feeds this subscription. Quarantining the event an instance stopped on would be safe whenever this model still holds that one, but a quarantined instance skips everything addressed to it afterwards, and skipping acknowledges. On a model that holds only some of what it delivers, one of those later events may be a copy nothing else has. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                     subscriptionId, subscriptionModel.getClass().getName());
             return config.disableQuarantine();
+        }
+        if (eventStoreQueries == null) {
+            throw new IllegalStateException("Saga subscription '" + subscriptionId + "' quarantines an instance that keeps failing, and its SagaRunner has no EventStoreQueries to release a quarantined instance from. "
+                                            + "Give the runner the event store with SagaRunner.eventStoreQueries(..), since every blocking event store Occurrent ships implements EventStoreQueries, "
+                                            + "or turn quarantine off with SagaRunnerConfig.disableQuarantine().");
         }
         return config;
     }

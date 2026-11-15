@@ -34,6 +34,10 @@ import static java.util.Objects.requireNonNull;
 public final class InMemorySagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S> {
 
     private final ConcurrentMap<String, SagaEnvelope<S>> store = new ConcurrentHashMap<>();
+    private final ConcurrentMap<SkippedInputId, SkippedInput> skippedInputs = new ConcurrentHashMap<>();
+
+    private record SkippedInputId(String sagaId, String quarantineId, String key) {
+    }
 
     @Override
     public Optional<SagaEnvelope<S>> find(String sagaId) {
@@ -78,6 +82,63 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     }
 
     @Override
+    public List<String> findReleasingSagaIds(@Nullable String after, int limit) {
+        if (limit < 1) {
+            throw new IllegalArgumentException("limit must be positive, was " + limit);
+        }
+        return store.values().stream()
+                .filter(SagaEnvelope::isReleasing)
+                .map(SagaEnvelope::sagaId)
+                .filter(id -> after == null || id.compareTo(after) > 0)
+                .sorted()
+                .limit(limit)
+                .toList();
+    }
+
+    @Override
+    public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
+        requireNonNull(input, "input cannot be null");
+        skippedInputs.putIfAbsent(skippedInputId(sagaId, quarantineId, input.key()), input);
+    }
+
+    @Override
+    public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
+        requireNonNull(sagaId, "sagaId cannot be null");
+        requireNonNull(quarantineId, "quarantineId cannot be null");
+        if (limit < 1) {
+            throw new IllegalArgumentException("limit must be positive, was " + limit);
+        }
+        return skippedInputs.entrySet().stream()
+                .filter(entry -> entry.getKey().sagaId().equals(sagaId) && entry.getKey().quarantineId().equals(quarantineId))
+                .map(Map.Entry::getValue)
+                .sorted(SkippedInput.ORDER)
+                .limit(limit)
+                .toList();
+    }
+
+    @Override
+    public void deleteSkippedInputByKey(String sagaId, String quarantineId, String key) {
+        skippedInputs.remove(skippedInputId(sagaId, quarantineId, key));
+    }
+
+    @Override
+    public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
+        requireNonNull(input, "input cannot be null");
+        skippedInputs.remove(skippedInputId(sagaId, quarantineId, input.key()), input);
+    }
+
+    @Override
+    public void deleteSkippedInputs(String sagaId) {
+        requireNonNull(sagaId, "sagaId cannot be null");
+        skippedInputs.keySet().removeIf(id -> id.sagaId().equals(sagaId));
+    }
+
+    private static SkippedInputId skippedInputId(String sagaId, String quarantineId, String key) {
+        return new SkippedInputId(requireNonNull(sagaId, "sagaId cannot be null"), requireNonNull(quarantineId, "quarantineId cannot be null"),
+                requireNonNull(key, "key cannot be null"));
+    }
+
+    @Override
     public List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
         requireNonNull(status, "status cannot be null");
         requireNonNull(updatedBefore, "updatedBefore cannot be null");
@@ -100,5 +161,6 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     public void delete(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
         store.remove(sagaId);
+        deleteSkippedInputs(sagaId);
     }
 }

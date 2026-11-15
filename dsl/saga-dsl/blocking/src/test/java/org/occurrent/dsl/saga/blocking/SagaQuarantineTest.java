@@ -207,6 +207,7 @@ class SagaQuarantineTest {
 
     private SagaSubscription run(Subscribable model, SagaRunnerConfig config) {
         SagaSubscription subscription = SagaRunner.<OrderEvent, OrderCommand>agnostic(model, converter)
+                .eventStoreQueries(eventStore)
                 .run("orders", orderFulfillment(), stateStore, dispatched::add, null, config);
         subscriptionsToClose.add(subscription);
         return subscription;
@@ -1230,9 +1231,33 @@ class SagaQuarantineTest {
         private final Instant start = Instant.parse("2026-01-01T00:00:00Z");
         private final AtomicReference<Instant> now = new AtomicReference<>(start);
 
+        @Test
+        void keeps_rethrowing_for_five_minutes_and_quarantines_the_instance_once_they_are_up() {
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>("orders", orderFulfillment(), stateStore,
+                    dispatched::add, converter, SagaRunnerConfig.defaults(), event -> true, now::get);
+            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
+            assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+            now.set(start.plus(Duration.ofMinutes(5)).minusMillis(1));
+            assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+            assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE);
+
+            now.set(start.plus(Duration.ofMinutes(5)));
+            catchThrowable(() -> execution.onCloudEvent(poisonEvent));
+
+            assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED);
+        }
+    }
+
+    @Nested
+    class WithQuarantineDisabled {
+
+        private final Instant start = Instant.parse("2026-01-01T00:00:00Z");
+        private final AtomicReference<Instant> now = new AtomicReference<>(start);
+
         private SagaExecution<OrderEvent, OrderState, OrderCommand> execution() {
             return new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                    SagaRunnerConfig.defaults(), event -> true, now::get);
+                    SagaRunnerConfig.defaults().disableQuarantine(), event -> true, now::get);
         }
 
         @Test

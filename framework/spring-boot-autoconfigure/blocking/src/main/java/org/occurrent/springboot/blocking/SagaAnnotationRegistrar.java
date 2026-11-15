@@ -29,6 +29,7 @@ import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.OccurrentProperties;
@@ -39,6 +40,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CancellableSubscriptions;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
@@ -146,14 +148,16 @@ class SagaAnnotationRegistrar {
         // A push model ignores StartAt, and a replay in front of it always starts at the beginning, so there is no
         // start position to compute. rejectStartPositionAttributes has already refused the four that would imply one.
         StartAt startAt = push ? null : startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
-        SagaRunnerConfig config = withQuarantineBudget(SagaRunnerConfig.defaults(), occurrentProperties().getSaga().getQuarantineAfter())
+        SagaRunnerConfig config = withQuarantine(SagaRunnerConfig.defaults(), occurrentProperties().getSaga())
                 .withTimerPollInterval(sagaTimerPollInterval())
                 .withRedeliveryDetection(redeliveryDetectionOf(annotation));
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         SagaRunner<E, C> configured = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
         CompetingConsumerStrategy competingConsumerStrategy = resolveSagaCompetingConsumerStrategy();
+        SagaRunner<E, C> withStrategy = competingConsumerStrategy == null ? configured : configured.competingConsumerStrategy(competingConsumerStrategy);
+        EventStoreQueries eventStoreQueries = resolveEventStoreQueries(id, config, subscribable);
         // Effectively final, so a withheld push saga can close over it and run the same registration later.
-        final SagaRunner<E, C> runner = competingConsumerStrategy == null ? configured : configured.competingConsumerStrategy(competingConsumerStrategy);
+        final SagaRunner<E, C> runner = eventStoreQueries == null ? withStrategy : withStrategy.eventStoreQueries(eventStoreQueries);
 
         // A saga replaying its history from the beginning defaults to starting in the background, exactly as
         // @Subscription and @Projection do. startupMode was accepted and ignored here until now, so a saga always
@@ -635,17 +639,42 @@ class SagaAnnotationRegistrar {
         return (CommandDispatcher<C>) dispatcherBean;
     }
 
+    // getIfUnique gives null both for no bean and for several without a primary one. Either fails here only for a saga
+    // whose SagaRunner refuses to start without an EventStoreQueries, so the message is the starter's and not the runner's
+    private @Nullable EventStoreQueries resolveEventStoreQueries(String id, SagaRunnerConfig config, Subscribable subscribable) {
+        EventStoreQueries unique = applicationContext.getBeanProvider(EventStoreQueries.class).getIfUnique();
+        if (unique != null || config.quarantineAfter().isEmpty()) {
+            return unique;
+        }
+        String[] names = applicationContext.getBeanNamesForType(EventStoreQueries.class);
+        boolean retainsEveryEvent = HistoryRetainingSubscriptions.findIn(subscribable).map(HistoryRetainingSubscriptions::retainsEveryEvent).orElse(false);
+        if (names.length > 1 && retainsEveryEvent) {
+            throw new IllegalStateException("@Saga '%s' quarantines an instance that keeps failing and needs an EventStoreQueries to release a quarantined instance from, but found %d EventStoreQueries beans (%s) and none of them is @Primary. Mark the one the saga reads from @Primary, or turn quarantine off with occurrent.saga.quarantine-enabled=false.".formatted(id, names.length, String.join(", ", names)));
+        }
+        if (names.length == 0 && retainsEveryEvent) {
+            throw new IllegalStateException("@Saga '%s' quarantines an instance that keeps failing and needs an EventStoreQueries to release a quarantined instance from, but no EventStoreQueries bean exists. Define the event store as a bean, or turn quarantine off with occurrent.saga.quarantine-enabled=false.".formatted(id));
+        }
+        return null;
+    }
+
     private Duration sagaTimerPollInterval() {
         return occurrentProperties().getSaga().getTimerPollInterval();
+    }
+
+    static SagaRunnerConfig withQuarantine(SagaRunnerConfig config, OccurrentProperties.SagaProperties properties) {
+        if (!properties.isQuarantineEnabled()) {
+            return config.disableQuarantine();
+        }
+        return withQuarantineBudget(config, properties.getQuarantineAfter());
     }
 
     // Zero is refused because a reader can take it to mean "never" or "immediately"
     static SagaRunnerConfig withQuarantineBudget(SagaRunnerConfig config, @Nullable Duration configured) {
         if (configured == null) {
-            return config.disableQuarantine();
+            return config.withQuarantineAfter(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER);
         }
         if (configured.isZero() || configured.isNegative()) {
-            throw new IllegalArgumentException("occurrent.saga.quarantine-after must be a positive duration, such as 5m, but was " + configured + ". Leave the property out to keep quarantine off.");
+            throw new IllegalArgumentException("occurrent.saga.quarantine-after must be a positive duration, such as 5m, but was " + configured + ". Leave the property out for the default of 5m, or set occurrent.saga.quarantine-enabled=false to turn quarantine off.");
         }
         return config.withQuarantineAfter(configured);
     }

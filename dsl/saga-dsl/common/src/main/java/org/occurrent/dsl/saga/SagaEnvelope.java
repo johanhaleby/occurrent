@@ -66,6 +66,10 @@ import static java.util.Objects.requireNonNull;
  *                          of the same type, which a feed that reorders can deliver, be told from a redelivery. Empty
  *                          for an instance stored before 0.35.0, which reads as every type of a stream being applied up to
  *                          that stream's watermark
+ * @param quarantineSkipCount the {@link SkippedInput#seq()} the next input this quarantined instance skips is recorded
+ *                          under, raised by one in the write that follows each record. Written as 0 by the write that
+ *                          quarantines the instance, and {@code null} once it is active again, and on an instance
+ *                          quarantined by 0.34.0
  * @param <S>               the user state type
  */
 public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
@@ -81,7 +85,8 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        @Nullable String currentStep,
                                                        boolean started,
                                                        @Nullable SagaFailure failure,
-                                                       Map<String, StreamMarks> streamMarks) implements SagaInstance {
+                                                       Map<String, StreamMarks> streamMarks,
+                                                       @Nullable Long quarantineSkipCount) implements SagaInstance {
 
     public SagaEnvelope {
         requireNonNull(sagaId, "sagaId cannot be null");
@@ -95,6 +100,17 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
             // state to derive from, which is exactly the projected-read case a store needs it for.
             currentStep = state instanceof FlowState<?> flowState ? flowState.currentStep() : null;
         }
+    }
+
+    /**
+     * An envelope with no skip count, which is an instance that is not quarantined and one quarantined before 0.35.0.
+     */
+    public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
+                        Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
+                        @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep,
+                        boolean started, @Nullable SagaFailure failure, Map<String, StreamMarks> streamMarks) {
+        this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
+                completedAt, currentStep, started, failure, streamMarks, null);
     }
 
     /**
@@ -231,6 +247,23 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     /** Whether the instance is quarantined on an input it could not handle. */
     public boolean isQuarantined() {
         return status == SagaStatus.QUARANTINED;
+    }
+
+    /**
+     * Whether the instance is quarantined and a release of it is running, which is when its failure record has
+     * {@link SagaFailure#releasedAt()} set. The status stays {@link SagaStatus#QUARANTINED} until the release has
+     * applied every input it skipped.
+     */
+    public boolean isReleasing() {
+        return isQuarantined() && failure != null && failure.isReleasing();
+    }
+
+    /**
+     * The id of the quarantine this instance is in, see {@link SagaFailure#quarantineId()}, or {@code null} when it
+     * is not quarantined or was quarantined by 0.34.0.
+     */
+    public @Nullable String quarantineId() {
+        return isQuarantined() && failure != null ? failure.quarantineId() : null;
     }
 
     /**

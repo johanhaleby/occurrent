@@ -29,10 +29,21 @@ import java.util.Optional;
  * store is also queried for instances with a due timer, since timers live in the envelope rather than an external
  * scheduler.
  * <p>
- * This is the minimal contract the executor needs. Two of its six methods are {@code default}, and both are about
- * reading and writing an instance without its application state, which is how the executor quarantines an instance
- * whose state no longer decodes. A store inherits them and works, and only a store that overrides them lets such an
- * instance be considered for quarantine at all.
+ * This is the minimal contract the executor needs. Most of its methods are {@code default}. Two are about reading and
+ * writing an instance without its application state, which is how the executor quarantines an instance whose state no
+ * longer decodes. A store inherits them and works, and only a store that overrides them lets such an instance be
+ * considered for quarantine at all.
+ * <p>
+ * The others are about releasing a quarantined instance, and their defaults throw {@link UnsupportedOperationException},
+ * so a store written before 0.35.0 keeps compiling. Such a store still quarantines an instance, and the instance still
+ * skips its inputs, but it records none of them and cannot be released. A store that supports release implements
+ * {@link #recordSkippedInput}, {@link #findSkippedInputs}, {@link #deleteSkippedInput} and {@link #deleteSkippedInputs},
+ * removes an instance's records in {@link #delete(String)}, and persists every member of {@link SagaEnvelope} and
+ * {@link SagaFailure}, {@link SagaFailure#releasedAt()}, {@link SagaFailure#quarantineId()} and
+ * {@link SagaEnvelope#quarantineSkipCount()} included. A release reads
+ * the instance back after it starts and throws when one of those did not persist. {@link #findReleasingSagaIds(String, int)}
+ * is what lets the timer poller go on with a release that failed on an input or was interrupted. Without it a release
+ * goes on only when it is asked for again.
  * <p>
  * Observing instances is an optional capability layered on top. A store that also implements
  * {@link SagaStateStoreQueries} can be enumerated, which is what a progress view or a stuck-instance sweep needs. A
@@ -128,6 +139,86 @@ public interface SagaStateStore<S extends @Nullable Object> {
     List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit);
 
     /**
+     * The ids of instances that are releasing, in ascending id order, strictly after {@code after} and at most
+     * {@code limit} of them. A releasing instance is {@link SagaStatus#QUARANTINED} and its failure record has
+     * {@link SagaFailure#releasedAt()} set. The timer poller asks for them on every poll and goes on with their
+     * release, which is what retries an input that failed during a release and what resumes a release a crash
+     * interrupted.
+     * <p>
+     * The poller passes the last id of the previous page as {@code after}, and {@code null} to start over. That is
+     * what gives every releasing instance a turn however many sit at the front. A store that ignores {@code after}
+     * can return the same first ids on every poll, and the instances behind them never get continued.
+     * <p>
+     * The default throws {@link UnsupportedOperationException}, so a store written before 0.35.0 keeps compiling. The
+     * poller then logs once at {@code WARN} and stops asking, and a release on that store goes on only when
+     * {@code SagaSubscription.release(sagaId)} is called again.
+     *
+     * @param after only ids greater than {@code after} are returned, or all of them when {@code null}
+     * @param limit how many ids to return at most, at least 1
+     */
+    default List<String> findReleasingSagaIds(@Nullable String after, int limit) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not implement findReleasingSagaIds");
+    }
+
+    /**
+     * Record that the quarantined instance {@code sagaId} skipped {@code input}, under the quarantine
+     * {@code quarantineId}. A record of the same key under the same quarantine that is there already is kept as it is,
+     * with its {@code seq}. Atomic per key, so two callers recording one key store one record.
+     * <p>
+     * The default throws {@link UnsupportedOperationException}. The executor then skips the input without recording it.
+     */
+    default void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not implement recordSkippedInput");
+    }
+
+    /**
+     * The first {@code limit} records under the quarantine {@code quarantineId} of {@code sagaId}, in
+     * {@link SkippedInput#ORDER}, by {@code seq}. Records under any other quarantine id are left out.
+     * <p>
+     * No two records of one quarantine share a {@code seq}. A skip raises the instance's
+     * {@link SagaEnvelope#quarantineSkipCount()} before it writes the record, with the count it read as the record's
+     * {@code seq}, so a crash between the two leaves a gap in the numbers and never a second record with the same one.
+     * <p>
+     * The default throws {@link UnsupportedOperationException}.
+     *
+     * @param limit how many records to return at most, at least 1
+     */
+    default List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not implement findSkippedInputs");
+    }
+
+    /**
+     * Delete the record of {@code key} under the quarantine {@code quarantineId} of {@code sagaId}, whatever its
+     * {@code seq}. Nothing happens when there is none. Release uses it only to move the record of the input it starts
+     * from to the head, and deletes every other record with {@link #deleteSkippedInput(String, String, SkippedInput)}.
+     * <p>
+     * The default throws {@link UnsupportedOperationException}.
+     */
+    default void deleteSkippedInputByKey(String sagaId, String quarantineId, String key) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not implement deleteSkippedInputByKey");
+    }
+
+    /**
+     * Delete the record of {@code input}'s key under the quarantine {@code quarantineId} of {@code sagaId}, only when its
+     * {@code seq} is {@code input}'s too. Nothing happens when there is none, or when the record of that key has another
+     * {@code seq}, which is what a release that recorded the key again in between left there.
+     * <p>
+     * The default throws {@link UnsupportedOperationException}.
+     */
+    default void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not implement deleteSkippedInput");
+    }
+
+    /**
+     * Delete every record of {@code sagaId}, under every quarantine id. {@link #delete(String)} does this too.
+     * <p>
+     * The default throws {@link UnsupportedOperationException}.
+     */
+    default void deleteSkippedInputs(String sagaId) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not implement deleteSkippedInputs");
+    }
+
+    /**
      * Remove the instance, for retention tooling. Most deployments keep completed instances (with a TTL) instead, and that
      * is the recommended default for a reason: deleting an instance discards the dedup watermarks and the completed status
      * that make the instance absorbing. If the event source can still redeliver an event this instance already consumed (a
@@ -135,6 +226,9 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * event recreate the instance from its start event and run the process a second time. Delete an instance only once its
      * source can no longer redeliver any of its events, until then let a TTL expire it, so a late redelivery still finds
      * the terminal instance and is skipped rather than resurrecting it.
+     * <p>
+     * A store that records skipped inputs deletes the instance's records too, under every quarantine id, so a later
+     * instance with the same id inherits none of them.
      */
     void delete(String sagaId);
 

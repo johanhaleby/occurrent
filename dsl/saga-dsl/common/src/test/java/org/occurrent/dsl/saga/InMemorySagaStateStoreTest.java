@@ -52,6 +52,11 @@ class InMemorySagaStateStoreTest {
         return new SagaEnvelope<>(sagaId, state, SagaStatus.QUARANTINED, version, timers, Map.of(), null, NOW, NOW, null, null, true, failure);
     }
 
+    private static SagaEnvelope<String> releasingEnvelope(String sagaId) {
+        SagaFailure failure = new SagaFailure("s@7", 7L, NOW, IllegalStateException.class.getName(), "boom", NOW.plusSeconds(1), "q1");
+        return new SagaEnvelope<>(sagaId, "a", SagaStatus.QUARANTINED, 1, List.of(), Map.of(), null, NOW, NOW, null, null, true, failure, Map.of(), 0L);
+    }
+
     private static SagaEnvelope<String> activeEnvelopeUpdatedAt(String sagaId, Instant updatedAt) {
         return new SagaEnvelope<>(sagaId, "a", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null, null);
     }
@@ -389,6 +394,173 @@ class InMemorySagaStateStoreTest {
             store.delete("unknown");
 
             assertThat(store.find("unknown")).isEmpty();
+        }
+    }
+
+    @Nested
+    class FindReleasingSagaIds {
+
+        @Test
+        void lists_the_releasing_instances_in_ascending_id_order_up_to_the_limit() {
+            store.compareAndSave("c", releasingEnvelope("c"), 0);
+            store.compareAndSave("a", releasingEnvelope("a"), 0);
+            store.compareAndSave("d", releasingEnvelope("d"), 0);
+            store.compareAndSave("b", releasingEnvelope("b"), 0);
+            store.compareAndSave("0", envelope("0", "x", 1, List.of()), 0);
+            store.compareAndSave("1", quarantinedEnvelope("1", "x", 1, List.of()), 0);
+
+            assertAll(
+                    () -> assertThat(store.findReleasingSagaIds(null, 10)).containsExactly("a", "b", "c", "d"),
+                    () -> assertThat(store.findReleasingSagaIds(null, 3)).containsExactly("a", "b", "c")
+            );
+        }
+
+        @Test
+        void lists_only_the_ids_strictly_after_the_given_one_in_ascending_order_up_to_the_limit() {
+            for (String id : List.of("c", "a", "d", "b")) {
+                store.compareAndSave(id, releasingEnvelope(id), 0);
+            }
+
+            assertAll(
+                    () -> assertThat(store.findReleasingSagaIds("a", 10)).containsExactly("b", "c", "d"),
+                    () -> assertThat(store.findReleasingSagaIds("a", 2)).containsExactly("b", "c"),
+                    () -> assertThat(store.findReleasingSagaIds("b", 1)).containsExactly("c"),
+                    () -> assertThat(store.findReleasingSagaIds("d", 10)).isEmpty()
+            );
+        }
+
+        @Test
+        void lists_the_ids_after_one_that_is_not_there_and_is_not_releasing() {
+            store.compareAndSave("a", releasingEnvelope("a"), 0);
+            store.compareAndSave("c", releasingEnvelope("c"), 0);
+            store.compareAndSave("b", envelope("b", "x", 1, List.of()), 0);
+
+            assertAll(
+                    () -> assertThat(store.findReleasingSagaIds("b", 10)).containsExactly("c"),
+                    () -> assertThat(store.findReleasingSagaIds("bb", 10)).containsExactly("c")
+            );
+        }
+
+        @Test
+        void cannot_be_read_with_a_limit_below_1() {
+            assertThatThrownBy(() -> store.findReleasingSagaIds(null, 0)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class SkippedInputRecords {
+
+        @Test
+        void are_read_in_seq_order_whatever_order_they_were_written_in() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(7, "b@2"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(-1, "a@1"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "c@3"));
+
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(3, "c@3"), new SkippedInput(7, "b@2"));
+        }
+
+        @Test
+        void keep_the_first_record_of_a_key_and_its_seq() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(2, "a@1"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(5, "a@1"));
+
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(2, "a@1"));
+        }
+
+        @Test
+        void are_read_for_one_saga_and_quarantine_id_only() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+            store.recordSkippedInput("s1", "q2", new SkippedInput(0, "b@1"));
+            store.recordSkippedInput("s2", "q1", new SkippedInput(0, "c@1"));
+
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(0, "a@1"));
+        }
+
+        @Test
+        void are_read_up_to_the_limit_from_the_lowest_seq() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(2, "c@3"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(1, "b@2"));
+
+            assertThat(store.findSkippedInputs("s1", "q1", 2)).containsExactly(new SkippedInput(0, "a@1"), new SkippedInput(1, "b@2"));
+        }
+
+        @Test
+        void cannot_be_read_with_a_limit_below_1() {
+            assertThatThrownBy(() -> store.findSkippedInputs("s1", "q1", 0)).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void are_deleted_one_key_at_a_time() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(1, "b@2"));
+
+            store.deleteSkippedInputByKey("s1", "q1", "a@1");
+
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(1, "b@2"));
+        }
+
+        @Test
+        void are_deleted_exactly_when_the_key_and_the_seq_both_match() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(1, "b@2"));
+
+            store.deleteSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(1, "b@2"));
+        }
+
+        @Test
+        void keep_a_record_of_the_same_key_with_another_seq_when_deleted_exactly() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(-1, "a@1"));
+
+            store.deleteSkippedInput("s1", "q1", new SkippedInput(3, "a@1"));
+
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"));
+        }
+
+        @Test
+        void keep_a_record_of_the_same_key_and_seq_under_another_quarantine_id_or_instance_when_deleted_exactly() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+            store.recordSkippedInput("s1", "q2", new SkippedInput(0, "a@1"));
+            store.recordSkippedInput("s2", "q1", new SkippedInput(0, "a@1"));
+
+            store.deleteSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+
+            assertAll(
+                    () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
+                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "a@1")),
+                    () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "a@1"))
+            );
+        }
+
+        @Test
+        void are_deleted_with_the_instance_under_every_quarantine_id_and_only_for_that_instance() {
+            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+            store.recordSkippedInput("s1", "q2", new SkippedInput(0, "b@1"));
+            store.recordSkippedInput("s2", "q1", new SkippedInput(0, "c@1"));
+
+            store.delete("s1");
+
+            assertAll(
+                    () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
+                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).isEmpty(),
+                    () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "c@1"))
+            );
+        }
+
+        @Test
+        void are_deleted_for_every_quarantine_id_by_the_bulk_delete() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+            store.recordSkippedInput("s1", "q2", new SkippedInput(0, "b@1"));
+
+            store.deleteSkippedInputs("s1");
+
+            assertAll(
+                    () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
+                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).isEmpty()
+            );
         }
     }
 }

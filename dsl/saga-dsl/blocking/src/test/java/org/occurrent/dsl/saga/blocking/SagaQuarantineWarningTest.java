@@ -35,6 +35,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
@@ -50,6 +51,7 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -163,27 +165,95 @@ class SagaQuarantineWarningTest {
     }
 
     /**
-     * Quarantine is off unless asked for, so a saga on the default configuration has given nothing up and there is
-     * nothing to warn about. Without this the message would fire for every saga on a feed that cannot retain events.
+     * The default configuration quarantines after five minutes, so a saga on it gives quarantine up on such a model and
+     * is told why, the same as a saga that asked for a budget.
      */
     @ParameterizedTest
     @MethodSource("modelsThatCannotSupportQuarantine")
-    @DisplayName("says nothing under the default configuration")
-    void says_nothing_under_the_default_configuration(Subscribable model) {
+    @DisplayName("says that quarantine is switched off under the default configuration too")
+    void says_that_quarantine_is_switched_off_under_the_default_configuration_too(Subscribable model) {
         SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
                 .run("orders", saga(), SagaStateStore.inMemory(), c -> {
                 }, null, SagaRunnerConfig.defaults())
                 .close();
 
-        assertThat(warnings()).isEmpty();
+        assertAll(
+                () -> assertThat(warnings()).hasSize(1),
+                () -> assertThat(warning()).contains("quarantine is switched off")
+        );
     }
 
     private static Stream<Subscribable> modelsThatCannotSupportQuarantine() {
         return Stream.of(new RetainsNothing(), new RetainsSomeEvents());
     }
 
+    /**
+     * A model that holds every event it delivers lets a quarantined saga skip them, and the release then asks the event
+     * store for what it skipped. A runner with nothing to ask would quarantine and never be able to release, so it
+     * refuses to start and names both ways out.
+     */
+    @Test
+    void refuses_to_start_when_quarantine_is_on_the_model_holds_every_event_and_there_is_no_event_store_queries() {
+        Retains model = new Retains();
+
+        Throwable thrown = catchThrowable(() -> SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .run("orders", saga(), SagaStateStore.inMemory(), c -> {
+                }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5))));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class),
+                () -> assertThat(thrown).hasMessageContaining("SagaRunner.eventStoreQueries(..)"),
+                () -> assertThat(thrown).hasMessageContaining("SagaRunnerConfig.disableQuarantine()"),
+                () -> assertThat(model.subscribed).isZero()
+        );
+    }
+
+    @Test
+    void starts_without_event_store_queries_when_quarantine_is_off_on_a_model_that_holds_every_event() {
+        Retains model = new Retains();
+
+        SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .run("orders", saga(), SagaStateStore.inMemory(), c -> {
+                }, null, SagaRunnerConfig.defaults().disableQuarantine())
+                .close();
+
+        assertAll(
+                () -> assertThat(model.subscribed).isEqualTo(1),
+                () -> assertThat(warnings()).isEmpty()
+        );
+    }
+
+    @Test
+    void starts_without_event_store_queries_on_a_model_that_cannot_hold_every_event_with_quarantine_switched_off() {
+        RetainsSomeEvents model = new RetainsSomeEvents();
+
+        SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .run("orders", saga(), SagaStateStore.inMemory(), c -> {
+                }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)))
+                .close();
+
+        assertAll(
+                () -> assertThat(model.subscribed).isEqualTo(1),
+                () -> assertThat(warnings()).hasSize(1),
+                () -> assertThat(warning()).contains("quarantine is switched off")
+        );
+    }
+
+    @Test
+    void starts_on_a_model_that_holds_every_event_when_there_are_event_store_queries() {
+        Retains model = new Retains();
+
+        run(model);
+
+        assertAll(
+                () -> assertThat(model.subscribed).isEqualTo(1),
+                () -> assertThat(warnings()).isEmpty()
+        );
+    }
+
     private void run(Subscribable model) {
         SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .eventStoreQueries(new InMemoryEventStore())
                 .run("orders", saga(), SagaStateStore.inMemory(), c -> {
                 }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)))
                 .close();
@@ -206,8 +276,11 @@ class SagaQuarantineWarningTest {
     }
 
     private static class RetainsNothing implements Subscribable {
+        int subscribed;
+
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            subscribed++;
             return new NoopSubscription(subscriptionId);
         }
     }

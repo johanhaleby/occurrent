@@ -27,6 +27,7 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.springboot.common.SubscriptionResumePoints;
@@ -109,6 +110,11 @@ class SagaAnnotationRegistrarTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<SubscriptionResumePoints> resumePointsProvider = mock(ObjectProvider.class);
         when(applicationContext.getBeanProvider(SubscriptionResumePoints.class)).thenReturn(resumePointsProvider);
+        // Empty, since this saga has no event store to release a quarantined instance from
+        @SuppressWarnings("unchecked")
+        ObjectProvider<EventStoreQueries> eventStoreQueriesProvider = mock(ObjectProvider.class);
+        when(applicationContext.getBeanProvider(EventStoreQueries.class)).thenReturn(eventStoreQueriesProvider);
+        when(applicationContext.getBeanNamesForType(EventStoreQueries.class)).thenReturn(new String[0]);
 
         StartPositionSupport startPositionSupport = new StartPositionSupport(applicationContext);
         SagaAnnotationRegistrar registrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport);

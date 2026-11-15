@@ -53,8 +53,8 @@ import static java.util.Objects.requireNonNull;
  *                             indistinguishable from a redelivery and is lost. Each instance remembers up to this many
  *                             applied versions per stream and event type, so the state it stores grows with the number
  * @param quarantineAfter      how long one event has to keep failing before its instance can be quarantined on it,
- *                             or empty to never quarantine. Empty is the default, and
- *                             {@link #withQuarantineAfter(Duration)} turns quarantine on. Reaching the budget is not
+ *                             or empty to never quarantine. {@link #defaults()} quarantines after five minutes, and
+ *                             {@link #disableQuarantine()} turns quarantine off. Reaching the budget is not
  *                             enough on its own, and {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists what
  *                             else has to hold. When it is empty the saga keeps rethrowing for as long as the subscription model offers the event
  *                             again, which is what every version up to 0.33.0 did.
@@ -79,6 +79,9 @@ import static java.util.Objects.requireNonNull;
 public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts,
                                RedeliveryDetection redeliveryDetection, Optional<Duration> quarantineAfter,
                                int reorderWindow) {
+
+    /** How long one event keeps failing before {@link #defaults()} quarantines its instance. */
+    public static final Duration DEFAULT_QUARANTINE_AFTER = Duration.ofMinutes(5);
 
     public SagaRunnerConfig {
         requireNonNull(timerPollInterval, "timerPollInterval cannot be null");
@@ -126,12 +129,14 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
 
     /**
      * The default configuration: poll every 15 seconds, fire up to 100 due instances per poll, retry a lost save up to 50
-     * times, require redelivery detection, and never quarantine. The poll interval only bounds how late a due timer fires, and saga
+     * times, require redelivery detection, and quarantine an instance whose event has kept failing for five minutes,
+     * recording every input it skips meanwhile. The poll interval only bounds how late a due timer fires, and saga
      * timeouts run at a minutes-to-days timescale, so 15 seconds (the same default as JobRunr) keeps the store query
      * load low while firing well within tolerance. Lower it only when you rely on short timeouts firing promptly.
      */
     public static SagaRunnerConfig defaults() {
-        return new SagaRunnerConfig(Duration.ofSeconds(15), 100, 50, RedeliveryDetection.REQUIRED, Optional.empty(), SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
+        return new SagaRunnerConfig(Duration.ofSeconds(15), 100, 50, RedeliveryDetection.REQUIRED, Optional.of(DEFAULT_QUARANTINE_AFTER),
+                SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
     }
 
     /** A copy of this configuration with a different poll interval. */
@@ -146,15 +151,20 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
 
     /**
      * A copy of this configuration that quarantines an instance once it has kept failing for {@code quarantineAfter}.
-     * Quarantine is off by default because 0.34.0 has no operation that brings a quarantined instance back, so
-     * {@code SagaStateStore.delete(sagaId)} is the only way out of it, and that abandons the instance.
+     * {@link #defaults()} quarantines after five minutes. It applies only on a subscription model that holds every
+     * event it delivers, and {@link SagaRunner} turns it off on any other. On such a model, a runner with quarantine on
+     * and no {@link SagaRunner#eventStoreQueries(org.occurrent.eventstore.api.blocking.EventStoreQueries)} refuses to
+     * start, since it could not release a quarantined instance.
      * <p>
      * Five minutes is a reasonable budget. Once a MongoDB subscription model's backoff saturates it retries every two
      * seconds, so five minutes is about a hundred and fifty attempts. A replica-set election takes seconds and a
-     * rolling restart a minute or two, so both finish well inside it without quarantining anything. The budget is also
-     * the earliest a failing instance can be quarantined.
+     * rolling restart a minute or two, so both finish well inside it without quarantining anything.
      * <p>
-     * Use {@link #disableQuarantine()} to turn quarantine off again.
+     * A quarantined instance skips every input addressed to it and records the key of each.
+     * {@link SagaSubscription#release(String)} brings it back by replaying the input it
+     * stopped on and then the inputs it recorded, in order, so its state ends up as if it had never stopped.
+     * <p>
+     * Use {@link #disableQuarantine()} to turn quarantine off.
      *
      * @throws NullPointerException     if {@code quarantineAfter} is {@code null}
      * @throws IllegalArgumentException if {@code quarantineAfter} is zero or negative
@@ -165,7 +175,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
     }
 
     /**
-     * A copy of this configuration that never quarantines, which is also what {@link #defaults()} gives. A faulty
+     * A copy of this configuration that never quarantines. A faulty
      * instance then keeps failing for as long as the subscription model offers the failed event again, which is the
      * behaviour every version up to 0.33.0 had.
      * <p>
