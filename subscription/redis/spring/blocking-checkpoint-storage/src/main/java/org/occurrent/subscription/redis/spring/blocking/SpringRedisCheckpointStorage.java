@@ -20,10 +20,12 @@ import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.CatchupMarker;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.CatchupMarkerStorage;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -32,6 +34,7 @@ import org.springframework.data.redis.serializer.RedisSerializer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.HexFormat;
 import java.util.List;
@@ -122,11 +125,22 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * This also assumes the {@link RedisOperations} passed in serializes a key to its own literal bytes, the same
  * assumption the checkpoint's plain {@code GET} already makes. A key serializer that reshapes the string changes
  * what Cluster actually hashes, and nothing in this class can see that reshaping to compensate for it.
+ * <p>
+ * <strong>Catch-up markers.</strong> As a {@link CatchupMarkerStorage} this stores a marker at the checkpoint key and
+ * the version key like any other checkpoint, and keeps the generation of the subscription id, and the generation the
+ * marker was saved with, in a hash under {@code occurrent:catchup-marker:}, built and slot-aligned the same way as the
+ * version key. Each marker call is one Lua script over those keys. {@link #forgetCatchupMarker(String)} sets the
+ * generation to a random number other than {@code 0}, so a later forget doesn't repeat a generation that a failover
+ * lost. Don't delete these hashes. Deleting one puts the generation of that id back at {@code 0}, and a marker
+ * saved earlier can then read as present again. The marker calls throw {@link IllegalArgumentException} for every
+ * subscription id a conditional {@link #save(String, Checkpoint, CheckpointWriteCondition) save} refuses in the same
+ * mode, and for ids that start with {@code occurrent:catchup-marker:}.
  */
 @NullMarked
-public class SpringRedisCheckpointStorage implements CheckpointStorage {
+public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
 
     private static final String VERSION_KEY_PREFIX = "occurrent:checkpoint-version:";
+    private static final String GENERATION_KEY_PREFIX = "occurrent:catchup-marker:";
 
     /**
      * Returned by the write scripts below when the write went through.
@@ -182,7 +196,59 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
             return -2
             """, Long.class);
 
-    // The three scripts above only ever return a Long, and this is never asked to deserialize one, since a Long
+    // KEYS[1] = checkpoint key, KEYS[2] = version key, KEYS[3] = generation hash. ARGV[1] = marker value, ARGV[2] =
+    // generation, ARGV[3] = 'any', 'notOlderThan' or 'ifAbsent', ARGV[4] = write version for notOlderThan. Writes the
+    // two keys the way NOT_OLDER_THAN_SCRIPT, IF_ABSENT_SCRIPT and a plain SET do, and stores the generation as the
+    // marker's stamp only when the write happens. Returns 1 when it wrote and 0 when the condition refused.
+    private static final RedisScript<Long> SAVE_CATCHUP_MARKER_SCRIPT = RedisScript.of("""
+            if ARGV[3] == 'notOlderThan' then
+                local storedVersionRaw = redis.call('GET', KEYS[2])
+                if storedVersionRaw and tonumber(storedVersionRaw) > tonumber(ARGV[4]) then
+                    return 0
+                end
+                redis.call('SET', KEYS[1], ARGV[1])
+                redis.call('SET', KEYS[2], ARGV[4])
+            elseif ARGV[3] == 'ifAbsent' then
+                if redis.call('EXISTS', KEYS[1]) == 1 then
+                    return 0
+                end
+                redis.call('SET', KEYS[1], ARGV[1])
+            else
+                redis.call('SET', KEYS[1], ARGV[1])
+            end
+            redis.call('HSET', KEYS[3], 'stamp', ARGV[2])
+            return 1
+            """, Long.class);
+
+    // KEYS[1] = checkpoint key, KEYS[2] = generation hash. No ARGV. Returns the generation, followed by the marker
+    // value only when the marker's stamp equals the generation. A missing generation or stamp counts as 0. Both are
+    // compared and returned as strings, since Lua numbers can't hold every 64-bit generation exactly.
+    @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> READ_CATCHUP_MARKER_SCRIPT = RedisScript.of("""
+            local marker = redis.call('GET', KEYS[1])
+            local generation = redis.call('HGET', KEYS[2], 'generation') or '0'
+            local stamp = redis.call('HGET', KEYS[2], 'stamp') or '0'
+            if marker and stamp == generation then
+                return {generation, marker}
+            end
+            return {generation}
+            """, List.class);
+
+    // KEYS[1] = checkpoint key, KEYS[2] = version key, KEYS[3] = generation hash. ARGV[1] = new generation. Replaces
+    // the generation, removes the stamp, and deletes the two keys the way delete does. The hash itself stays.
+    private static final RedisScript<Long> FORGET_CATCHUP_MARKER_SCRIPT = RedisScript.of("""
+            redis.call('HSET', KEYS[3], 'generation', ARGV[1])
+            redis.call('HDEL', KEYS[3], 'stamp')
+            redis.call('DEL', KEYS[1], KEYS[2])
+            return 1
+            """, Long.class);
+
+    // Hands READ_CATCHUP_MARKER_SCRIPT's reply back as raw bytes, so the marker value can go through the
+    // RedisOperations' own value serializer and the generation can be parsed as plain digits
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static final RedisSerializer<List> RAW_REPLY_SERIALIZER = (RedisSerializer) RedisSerializer.byteArray();
+
+    // The scripts above other than READ_CATCHUP_MARKER_SCRIPT only ever return a Long, and this is never asked to deserialize one, since a Long
     // reply comes back from the driver as a Long already. It exists because the execute overload that takes
     // explicit serializers demands one of the right type.
     private static final RedisSerializer<Long> RESULT_SERIALIZER = new RedisSerializer<Long>() {
@@ -211,6 +277,8 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     // had. true only for an instance forStandalone builds, where that restriction is lifted since a standalone or
     // replicated server has no slot to protect it from.
     private final boolean standalone;
+
+    private final SecureRandom generations = new SecureRandom();
 
     private volatile boolean shutdown;
 
@@ -517,6 +585,102 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
             return result != null && result;
         };
         return Boolean.TRUE.equals(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalArgumentException for the subscription ids the class javadoc says the catch-up marker calls
+     *                                  refuse
+     */
+    @Override
+    public CatchupMarker readCatchupMarker(String subscriptionId) {
+        requireUsableForCatchupMarker(subscriptionId);
+        Supplier<CatchupMarker> read = () -> {
+            @SuppressWarnings("unchecked")
+            List<byte[]> reply = requireNonNull(redis.execute(READ_CATCHUP_MARKER_SCRIPT, RedisSerializer.string(), RAW_REPLY_SERIALIZER,
+                    List.of(subscriptionId, generationKey(subscriptionId))));
+            long generation = Long.parseLong(new String(reply.get(0), StandardCharsets.UTF_8));
+            if (reply.size() < 2) {
+                return new CatchupMarker(null, generation);
+            }
+            String marker = (String) requireNonNull(redis.getValueSerializer().deserialize(reply.get(1)));
+            return new CatchupMarker(new StringBasedCheckpoint(marker), generation);
+        };
+        return requireNonNull(executeWithRetry(read, retryUnlessShutdownOrCrossSlot(), retryStrategy).get());
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalArgumentException for the subscription ids the class javadoc says the catch-up marker calls
+     *                                  refuse
+     */
+    @Override
+    public boolean saveCatchupMarker(String subscriptionId, Checkpoint marker, long generation, CheckpointWriteCondition condition) {
+        requireNonNull(marker, Checkpoint.class.getSimpleName() + " cannot be null");
+        requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
+        requireUsableForCatchupMarker(subscriptionId);
+        String conditionName = switch (condition) {
+            case CheckpointWriteCondition.Any ignored -> "any";
+            case CheckpointWriteCondition.NotOlderThan ignored -> "notOlderThan";
+            case CheckpointWriteCondition.IfAbsent ignored -> "ifAbsent";
+        };
+        long writeVersion = condition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan ? notOlderThan.writeVersion() : 0;
+        Supplier<Long> save = () -> redis.execute(SAVE_CATCHUP_MARKER_SCRIPT, conditionArgsSerializer, RESULT_SERIALIZER,
+                List.of(subscriptionId, versionKey(subscriptionId), generationKey(subscriptionId)),
+                marker.asString(), digits(generation), conditionName.getBytes(StandardCharsets.UTF_8), digits(writeVersion));
+        Long outcome = executeWithRetry(save, retryUnlessShutdownOrCrossSlot(), retryStrategy).get();
+        return outcome != null && outcome == 1L;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalArgumentException for the subscription ids the class javadoc says the catch-up marker calls
+     *                                  refuse
+     */
+    @Override
+    public void forgetCatchupMarker(String subscriptionId) {
+        requireUsableForCatchupMarker(subscriptionId);
+        // A new generation for each attempt, so a retry never puts back a generation that a forget in between replaced
+        Supplier<@Nullable Long> forget = () -> redis.execute(FORGET_CATCHUP_MARKER_SCRIPT, conditionArgsSerializer, RESULT_SERIALIZER,
+                List.of(subscriptionId, versionKey(subscriptionId), generationKey(subscriptionId)), digits(newGeneration()));
+        executeWithRetry(forget, retryUnlessShutdownOrCrossSlot(), retryStrategy).get();
+    }
+
+    private long newGeneration() {
+        long generation;
+        do {
+            generation = generations.nextLong();
+        } while (generation == 0);
+        return generation;
+    }
+
+    private static byte[] digits(long value) {
+        return Long.toString(value).getBytes(StandardCharsets.UTF_8);
+    }
+
+    private Predicate<Throwable> retryUnlessShutdownOrCrossSlot() {
+        return e -> !shutdown && !isClusterSlotMismatch(e);
+    }
+
+    // The checks a conditional save makes, plus the generation hash's own prefix, since a checkpoint key with that
+    // text would be some other subscription id's generation hash
+    private void requireUsableForCatchupMarker(String subscriptionId) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
+        requireOutsideVersionKeyNamespace(subscriptionId);
+        if (subscriptionId.startsWith(GENERATION_KEY_PREFIX)) {
+            throw new IllegalArgumentException("Subscription id \"" + subscriptionId + "\" cannot be used for a catch-up marker, since it starts with \"" + GENERATION_KEY_PREFIX + "\", the prefix this storage reserves for its own generation keys.");
+        }
+        if (!standalone && !isClusterSlotAlignable(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription id \"" + subscriptionId + "\" cannot be used for a catch-up marker, since Redis Cluster would hash the checkpoint key and this storage's generation key for it to different slots and refuse the marker calls for crossing slots.");
+        }
+    }
+
+    // Built like versionKey, so it shares a Cluster slot with the checkpoint key and the version key
+    static String generationKey(String subscriptionId) {
+        return GENERATION_KEY_PREFIX + "{" + clusterHashTag(subscriptionId) + "}" + sha256Hex(subscriptionId);
     }
 
     // The hash tag wraps the same substring Redis Cluster's own slot algorithm would pick out of the checkpoint key

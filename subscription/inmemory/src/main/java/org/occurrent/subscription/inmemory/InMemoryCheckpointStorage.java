@@ -18,9 +18,11 @@ package org.occurrent.subscription.inmemory;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.CatchupMarker;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
+import org.occurrent.subscription.api.blocking.CatchupMarkerStorage;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 
 import java.util.Map;
@@ -37,12 +39,18 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * {@link CheckpointWriteCondition} is evaluated for real, not refused. The checkpoint and its version are two
  * separate maps, since {@link CheckpointWriteCondition#any()} writes the former and leaves the latter untouched.
+ * <p>
+ * As a {@link CatchupMarkerStorage} it keeps the generation a marker was saved with next to the checkpoint, and the
+ * generation of each subscription id in a map of its own. The generation is a counter that each forget raises by one.
  */
 @NullMarked
-public class InMemoryCheckpointStorage implements CheckpointStorage {
+public class InMemoryCheckpointStorage implements CatchupMarkerStorage {
 
     private final Map<String, Checkpoint> checkpoints = new ConcurrentHashMap<>();
     private final Map<String, Long> versions = new ConcurrentHashMap<>();
+    // The generation each marker was saved with. A checkpoint without one counts as saved with generation 0
+    private final Map<String, Long> stamps = new ConcurrentHashMap<>();
+    private final Map<String, Long> generations = new ConcurrentHashMap<>();
     private final ReentrantLock lock = new ReentrantLock();
 
     @Override
@@ -59,25 +67,76 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
         requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
         lock.lock();
         try {
-            if (condition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan) {
-                Long stored = versions.get(subscriptionId);
-                if (stored != null && stored > notOlderThan.writeVersion()) {
-                    throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(stored), condition);
-                }
-                checkpoints.put(subscriptionId, checkpoint);
-                versions.put(subscriptionId, notOlderThan.writeVersion());
-            } else if (condition instanceof CheckpointWriteCondition.IfAbsent) {
-                if (checkpoints.containsKey(subscriptionId)) {
-                    Long stored = versions.get(subscriptionId);
-                    OptionalLong storedVersion = stored == null ? OptionalLong.empty() : OptionalLong.of(stored);
-                    throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, condition);
-                }
-                checkpoints.put(subscriptionId, checkpoint);
-            } else {
-                // CheckpointWriteCondition.Any: the stored version, if any, is carried forward untouched.
-                checkpoints.put(subscriptionId, checkpoint);
-            }
+            saveUnderLock(subscriptionId, checkpoint, condition);
+            stamps.remove(subscriptionId);
             return checkpoint;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Throws CheckpointWriteConditionNotFulfilledException when condition refuses the write, and writes nothing then
+    private void saveUnderLock(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+        if (condition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan) {
+            Long stored = versions.get(subscriptionId);
+            if (stored != null && stored > notOlderThan.writeVersion()) {
+                throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(stored), condition);
+            }
+            checkpoints.put(subscriptionId, checkpoint);
+            versions.put(subscriptionId, notOlderThan.writeVersion());
+        } else if (condition instanceof CheckpointWriteCondition.IfAbsent) {
+            if (checkpoints.containsKey(subscriptionId)) {
+                Long stored = versions.get(subscriptionId);
+                OptionalLong storedVersion = stored == null ? OptionalLong.empty() : OptionalLong.of(stored);
+                throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, condition);
+            }
+            checkpoints.put(subscriptionId, checkpoint);
+        } else {
+            // CheckpointWriteCondition.Any: the stored version, if any, is carried forward untouched.
+            checkpoints.put(subscriptionId, checkpoint);
+        }
+    }
+
+    @Override
+    public CatchupMarker readCatchupMarker(String subscriptionId) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        lock.lock();
+        try {
+            long generation = generations.getOrDefault(subscriptionId, 0L);
+            Checkpoint marker = checkpoints.get(subscriptionId);
+            boolean present = marker != null && stamps.getOrDefault(subscriptionId, 0L) == generation;
+            return new CatchupMarker(present ? marker : null, generation);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public boolean saveCatchupMarker(String subscriptionId, Checkpoint marker, long generation, CheckpointWriteCondition condition) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(marker, Checkpoint.class.getSimpleName() + " cannot be null");
+        requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
+        lock.lock();
+        try {
+            saveUnderLock(subscriptionId, marker, condition);
+            stamps.put(subscriptionId, generation);
+            return true;
+        } catch (CheckpointWriteConditionNotFulfilledException e) {
+            return false;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public void forgetCatchupMarker(String subscriptionId) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        lock.lock();
+        try {
+            generations.merge(subscriptionId, 1L, Long::sum);
+            checkpoints.remove(subscriptionId);
+            versions.remove(subscriptionId);
+            stamps.remove(subscriptionId);
         } finally {
             lock.unlock();
         }
@@ -102,6 +161,7 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
         try {
             checkpoints.remove(subscriptionId);
             versions.remove(subscriptionId);
+            stamps.remove(subscriptionId);
         } finally {
             lock.unlock();
         }

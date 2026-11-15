@@ -16,16 +16,20 @@
 
 package org.occurrent.subscription.mongodb.spring.blocking;
 
+import com.mongodb.ReadConcern;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.ReturnDocument;
+import com.mongodb.client.model.UpdateOptions;
 import jakarta.annotation.PreDestroy;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.CatchupMarker;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.api.blocking.CatchupMarkerStorage;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
@@ -34,8 +38,10 @@ import org.springframework.data.mongodb.core.MongoOperations;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+import static com.mongodb.ReadPreference.primary;
 import static com.mongodb.client.model.Filters.eq;
 import static java.util.Collections.singletonList;
 import static java.util.Objects.requireNonNull;
@@ -46,15 +52,28 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
  * A Spring implementation of {@link CheckpointStorage} that stores {@link Checkpoint} in MongoDB.
+ * <p>
+ * As a {@link CatchupMarkerStorage} it keeps the generation of a subscription id in a second document in the same
+ * collection, with the {@code _id} {@code {catchupMarker: "<subscription id>"}}. Don't delete these documents. Deleting
+ * one puts the generation of that id back at {@code 0}, and a marker saved earlier can then read as present again.
+ * <p>
+ * {@link #forgetCatchupMarker(String)} waits for a majority of the replica set to acknowledge each of its two writes,
+ * whatever write concern the {@link MongoOperations} or the database has. {@link #readCatchupMarker(String)} reads the
+ * generation with {@link ReadConcern#LINEARIZABLE}, which a majority has to confirm. An attempt that gets no
+ * acknowledgement or confirmation within 10 seconds fails, and the {@link RetryStrategy} decides whether to try again.
+ * A server that isn't a replica set member refuses {@link ReadConcern#LINEARIZABLE}, and this storage then reads the
+ * generation with {@link ReadConcern#MAJORITY} for the rest of its life.
  */
 @NullMarked
-public class SpringMongoCheckpointStorage implements CheckpointStorage {
+public class SpringMongoCheckpointStorage implements CatchupMarkerStorage {
 
     private final MongoOperations mongoOperations;
     private final String checkpointCollection;
     private final RetryStrategy retryStrategy;
 
     private volatile boolean shutdown = false;
+    // Set once the server refuses a LINEARIZABLE read, never cleared
+    private volatile boolean linearizableReadNotSupported = false;
 
     /**
      * Create a {@link CheckpointStorage} that uses the Spring's {@link MongoOperations} to persist checkpoints in MongoDB.
@@ -133,6 +152,63 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
     public boolean exists(String subscriptionId) {
         Supplier<Boolean> exists = () -> mongoOperations.exists(query(where(ID).is(subscriptionId)), checkpointCollection);
         return Boolean.TRUE.equals(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
+    }
+
+    // Forgetting a marker sets a write concern per operation, which MongoOperations has no method for. Reading one
+    // runs on the driver collection too, with the same filter the save uses. execute(..) still translates exceptions
+    @Override
+    public CatchupMarker readCatchupMarker(String subscriptionId) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
+        Supplier<CatchupMarker> read = () -> mongoOperations.execute(checkpointCollection, collection -> {
+            // The checkpoint document first and the generation second, so the answer held at one instant
+            MongoCollection<Document> majorityReads = collection.withReadPreference(primary()).withReadConcern(ReadConcern.MAJORITY);
+            Document markerDocument = majorityReads.find(eq(ID, subscriptionId)).first();
+            long generation = readCatchupMarkerGeneration(collection, subscriptionId);
+            return MongoCommons.catchupMarkerOf(markerDocument, generation);
+        });
+        return requireNonNull(executeWithRetry(read, __ -> !shutdown, retryStrategy).get());
+    }
+
+    private long readCatchupMarkerGeneration(MongoCollection<Document> collection, String subscriptionId) {
+        if (!linearizableReadNotSupported) {
+            try {
+                MongoCollection<Document> linearizableReads = collection.withReadPreference(primary()).withReadConcern(ReadConcern.LINEARIZABLE);
+                return MongoCommons.extractCatchupMarkerGeneration(linearizableReads.find(MongoCommons.catchupMarkerGenerationFilter(subscriptionId))
+                        .maxTime(MongoCommons.CATCHUP_MARKER_GENERATION_READ_MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
+                        .first());
+            } catch (RuntimeException e) {
+                if (!MongoCommons.isLinearizableReadNotSupported(e)) {
+                    throw e;
+                }
+                linearizableReadNotSupported = true;
+            }
+        }
+        MongoCollection<Document> majorityReads = collection.withReadPreference(primary()).withReadConcern(ReadConcern.MAJORITY);
+        return MongoCommons.extractCatchupMarkerGeneration(majorityReads.find(MongoCommons.catchupMarkerGenerationFilter(subscriptionId)).first());
+    }
+
+    @Override
+    public boolean saveCatchupMarker(String subscriptionId, Checkpoint marker, long generation, CheckpointWriteCondition condition) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
+        requireNonNull(marker, Checkpoint.class.getSimpleName() + " cannot be null");
+        requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
+        Document markerDocument = MongoCommons.generateCatchupMarkerDocument(subscriptionId, marker, generation);
+        Supplier<Document> save = () -> persistConditionalCheckpointDocument(subscriptionId, markerDocument, condition);
+        Document afterDocument = requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
+        return MongoCommons.checkpointWriteSucceeded(marker, condition, afterDocument);
+    }
+
+    @Override
+    public void forgetCatchupMarker(String subscriptionId) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
+        // Retried apart, so a failed delete never raises the generation again, and a failed raise never sends the delete
+        Runnable raiseGeneration = () -> mongoOperations.execute(checkpointCollection, collection ->
+                collection.withWriteConcern(MongoCommons.CATCHUP_MARKER_FORGET_WRITE_CONCERN)
+                        .updateOne(MongoCommons.catchupMarkerGenerationFilter(subscriptionId), MongoCommons.raiseCatchupMarkerGeneration(), new UpdateOptions().upsert(true)));
+        executeWithRetry(raiseGeneration, __ -> !shutdown, retryStrategy).run();
+        Runnable delete = () -> mongoOperations.execute(checkpointCollection, collection ->
+                collection.withWriteConcern(MongoCommons.CATCHUP_MARKER_FORGET_WRITE_CONCERN).deleteOne(eq(ID, subscriptionId)));
+        executeWithRetry(delete, __ -> !shutdown, retryStrategy).run();
     }
 
     /**

@@ -23,9 +23,12 @@ import com.mongodb.MongoNotPrimaryException;
 import com.mongodb.MongoServerException;
 import com.mongodb.MongoSocketException;
 import com.mongodb.MongoTimeoutException;
+import com.mongodb.WriteConcern;
 import org.bson.*;
+import org.bson.conversions.Bson;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.mongodb.internal.OperationTimeLiveStart;
+import org.occurrent.subscription.CatchupMarker;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
@@ -55,6 +58,8 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Updates.inc;
 import static java.util.Arrays.asList;
 import static java.util.Objects.requireNonNull;
 
@@ -457,7 +462,17 @@ public class MongoCommons {
      * @param afterDocument  The document {@code findOneAndUpdate} returned
      */
     public static void assertCheckpointWriteSucceeded(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition, Document afterDocument) {
-        boolean succeeded = switch (condition) {
+        if (!checkpointWriteSucceeded(checkpoint, condition, afterDocument)) {
+            throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, extractWriteVersion(afterDocument), condition);
+        }
+    }
+
+    /**
+     * Whether {@code afterDocument} shows that {@code condition} allowed the write, told apart the way
+     * {@link #assertCheckpointWriteSucceeded(String, Checkpoint, CheckpointWriteCondition, Document)} describes.
+     */
+    public static boolean checkpointWriteSucceeded(Checkpoint checkpoint, CheckpointWriteCondition condition, Document afterDocument) {
+        return switch (condition) {
             case CheckpointWriteCondition.Any any -> true;
             case CheckpointWriteCondition.NotOlderThan notOlderThan -> {
                 OptionalLong storedVersion = extractWriteVersion(afterDocument);
@@ -468,9 +483,99 @@ public class MongoCommons {
                 yield storedCheckpointValue.equals(checkpoint.asString());
             }
         };
-        if (!succeeded) {
-            throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, extractWriteVersion(afterDocument), condition);
+    }
+
+    /**
+     * The field that holds the generation in a generation document, and in a catch-up marker's checkpoint document
+     * the generation the marker was saved with, its stamp. See ADR 179.
+     */
+    public static final String CATCHUP_MARKER_GENERATION = "generation";
+
+    /**
+     * The field inside the {@code _id} of a generation document that holds the subscription id. An embedded
+     * {@code _id} can never equal the plain string {@code _id} of a checkpoint document.
+     */
+    public static final String CATCHUP_MARKER_GENERATION_ID = "catchupMarker";
+
+    /**
+     * How long a forget waits for a majority to acknowledge each of its two writes before it throws.
+     */
+    public static final Duration CATCHUP_MARKER_FORGET_WRITE_TIMEOUT = Duration.ofSeconds(10);
+
+    /**
+     * How long the linearizable read of a generation may run on the server before it throws.
+     */
+    public static final Duration CATCHUP_MARKER_GENERATION_READ_MAX_TIME = Duration.ofSeconds(10);
+
+    /**
+     * The write concern of both writes of a forget, whatever write concern the application set on its collection.
+     */
+    public static final WriteConcern CATCHUP_MARKER_FORGET_WRITE_CONCERN = WriteConcern.MAJORITY.withWTimeout(CATCHUP_MARKER_FORGET_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+    /**
+     * The error code a server that is not a replica set member refuses a {@code LINEARIZABLE} read with
+     * ({@code NotAReplicaSet}).
+     */
+    public static final int LINEARIZABLE_READ_NOT_SUPPORTED_ERROR_CODE = 123;
+
+    /**
+     * Builds the document a catch-up marker is stored as, the checkpoint document of
+     * {@link #generateCheckpointDocument(String, Checkpoint)} with {@code generation} as its stamp.
+     */
+    public static Document generateCatchupMarkerDocument(String subscriptionId, Checkpoint marker, long generation) {
+        Document document = generateCheckpointDocument(subscriptionId, marker);
+        document.put(CATCHUP_MARKER_GENERATION, generation);
+        return document;
+    }
+
+    /**
+     * Finds the generation document of {@code subscriptionId} by its exact {@code _id}.
+     */
+    public static Bson catchupMarkerGenerationFilter(String subscriptionId) {
+        return eq(MongoCloudEventsToJsonDeserializer.ID, new Document(CATCHUP_MARKER_GENERATION_ID, subscriptionId));
+    }
+
+    /**
+     * Raises the generation by one, for an upserting update of the generation document.
+     */
+    public static Bson raiseCatchupMarkerGeneration() {
+        return inc(CATCHUP_MARKER_GENERATION, 1L);
+    }
+
+    /**
+     * The generation a generation document holds, or the stamp a checkpoint document holds. {@code 0} when the
+     * document or its field is missing.
+     */
+    public static long extractCatchupMarkerGeneration(@Nullable Document document) {
+        if (document == null) {
+            return 0;
         }
+        Number generation = document.get(CATCHUP_MARKER_GENERATION, Number.class);
+        return generation == null ? 0 : generation.longValue();
+    }
+
+    /**
+     * The marker of the checkpoint document read first and the generation read second, present only when the
+     * document exists and its stamp equals {@code generation}.
+     */
+    public static CatchupMarker catchupMarkerOf(@Nullable Document checkpointDocument, long generation) {
+        if (checkpointDocument == null || extractCatchupMarkerGeneration(checkpointDocument) != generation) {
+            return new CatchupMarker(null, generation);
+        }
+        return new CatchupMarker(calculateCheckpointFromMongoStreamPositionDocument(checkpointDocument), generation);
+    }
+
+    /**
+     * Whether {@code throwable} is a server that is not a replica set member refusing a {@code LINEARIZABLE} read.
+     */
+    public static boolean isLinearizableReadNotSupported(Throwable throwable) {
+        // Spring translates the driver's exception into one of its own and keeps the driver's as the cause
+        for (Throwable cause = throwable; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof MongoServerException serverException && serverException.getCode() == LINEARIZABLE_READ_NOT_SUPPORTED_ERROR_CODE) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static BsonTimestamp getServerOperationTime(Document hostInfoDocument) {
