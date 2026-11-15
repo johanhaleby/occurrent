@@ -1,0 +1,28 @@
+#
+# Copyright 2026 Johan Haleby
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MoveSubscriptionAnnotationsToInternal_0_35
+displayName: Move SubscriptionAnnotations to org.occurrent.springboot.common.internal
+description: >-
+  SubscriptionAnnotations moves from org.occurrent.springboot.common to org.occurrent.springboot.common.internal,
+  since it is code the two Spring Boot starters share and not part of the public API. Rewrites every import and
+  fully qualified reference to it, its nested types included. See doc/migration/upgrading-to-0.35.0.md.
+recipeList:
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations
+      ignoreDefinition: true

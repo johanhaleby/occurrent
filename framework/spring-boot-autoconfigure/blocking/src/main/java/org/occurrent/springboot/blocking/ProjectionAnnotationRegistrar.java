@@ -46,7 +46,7 @@ import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.common.OccurrentProperties;
-import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.CatchupThenLiveOptions;

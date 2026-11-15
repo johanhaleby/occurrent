@@ -38,6 +38,8 @@ other sections compile fine and behave differently, so read them first.
 - [`ComposedDefaultStartPosition` and its bean are removed](#composeddefaultstartposition-and-its-bean-are-removed).
   **Breaks the build** if you inject the `occurrentComposedDefaultStartPosition` bean, name the type, or call or
   override `occurrentCompetingDurableSubscriptionModel(..)`.
+- [`SubscriptionAnnotations` moves to an internal package](#subscriptionannotations-moves-to-an-internal-package).
+  **Breaks the build** if you import it, and `UpgradeToOccurrent_0_35` rewrites the imports.
 
 ### Sagas
 
@@ -194,9 +196,10 @@ other sections compile fine and behave differently, so read them first.
   static method that hides an annotated static factory method of a superclass fails at startup the same way. A
   handler declared with a type variable gets only the type the bean's class gives it, which can narrow a handler that
   ran in 0.34.0, one of the bridge kind or one on a JDK proxy that can't be unwrapped. Compiles unchanged.
-- [`SubscriptionAnnotations` reads handlers as the bean's class sees them](#subscriptionannotations-reads-handlers-as-the-beans-class-sees-them).
-  Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly sees the changes
-  the starters make to find inherited handlers. Compiles unchanged.
+- [`SubscriptionAnnotations` moves to an internal package](#subscriptionannotations-moves-to-an-internal-package).
+  It moves to `org.occurrent.springboot.common.internal`, and `UpgradeToOccurrent_0_35` rewrites the imports. Code
+  that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly sees the changes the
+  starters make to find inherited handlers. **Breaks the build** if you import it.
 
 ### Brokers
 
@@ -2519,15 +2522,17 @@ checkpoint and, for a `@Projection`, `@Snapshot` or `@Saga`, its state. There is
 says whether an inherited handler was meant to run. See
 [ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md).
 
-## `SubscriptionAnnotations` reads handlers as the bean's class sees them
+## `SubscriptionAnnotations` moves to an internal package
 
-Both Spring Boot starters read a bean's handlers through `SubscriptionAnnotations`, in the module they share. Three of
-its public methods change so that the starters find inherited handlers, see
-[A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered).
+Both Spring Boot starters read a bean's handlers through `SubscriptionAnnotations`, in the module they share. It moves
+from `org.occurrent.springboot.common` to `org.occurrent.springboot.common.internal`. That package isn't part of the
+public API, so the class can change in any release. Three of its methods also change so that the starters find inherited handlers,
+see [A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered).
 
 ### Who is affected
 
-Code outside the starters that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter`.
+Code outside the starters that refers to `SubscriptionAnnotations` or one of its nested types stops compiling. Code that
+calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` also gets the changes below.
 
 ### What changes
 
@@ -2547,9 +2552,11 @@ Code outside the starters that calls `invokeDescriptorFactory`, `runsImplementat
 
 ### What to do
 
-The code compiles unchanged. Where you call one of the three methods, check what your code does with the new answer
-for an inherited factory method, a package-private method declared again in another package, or a handler declared
-with a type variable.
+`UpgradeToOccurrent_0_35` rewrites the imports and fully qualified names to the new package. A later release can change
+the class with no recipe and no section in an upgrade guide, so code that keeps calling it can stop compiling or
+behave differently on any upgrade. Where you call one of the three methods, check what your code does with the new
+answer for an inherited factory method, a package-private method declared again in another package, or a handler
+declared with a type variable.
 
 ## `ComposedDefaultStartPosition` and its bean are removed
 

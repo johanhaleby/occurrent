@@ -33,7 +33,7 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.PushCatchupStatusImpl;
-import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CancellableSubscriptions;
