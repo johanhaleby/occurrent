@@ -55,15 +55,17 @@ document as a marker and skip a replay.
 
 ### A generation per subscription id
 
-Every subscription id has a generation, a counter that starts at 0 and that only a forget raises.
+Every subscription id has a generation, a number that starts at 0 and that only a forget changes.
 
-* Forgetting a marker raises the generation by one in one atomic write. The generation never goes down.
+* Forgetting a marker changes the generation in one atomic write. On MongoDB and in memory the generation is a
+  counter that the forget raises by one, and it never goes down. On Redis the forget sets a fresh random token, for the
+  reason under "Where the marker is stored".
 * A marker write stores the generation its attempt read at step 1 with the marker. That number is the marker's
   stamp.
 * A marker counts as present only while its stamp equals the current generation. A missing stamp or a missing
   generation counts as 0.
 
-A late write from an attempt that started before a forget writes a stamp the forget has already passed, so its
+A late write from an attempt that started before a forget writes a stamp the forget has already replaced, so its
 marker reads absent even when the store applies it after the forget. That holds with or without a lease, and whichever
 node issued the write.
 
@@ -85,12 +87,13 @@ public record CatchupMarker(@Nullable Checkpoint checkpoint, long generation) { 
 ```
 
 The reactor interface mirrors it with `Mono<CatchupMarker>`, `Mono<Boolean>` and `Mono<Void>`. `readCatchupMarker`
-returns the marker and the current generation as the store held them at one instant during the call, so the attempt
-never pairs a marker with a generation from a different moment. On MongoDB that holds only with two reads in a fixed
-order and the conditions under "The ordered reads on MongoDB". The names are provisional until the interfaces are built.
+returns the marker and the generation as the store held them at one instant, so the attempt never pairs a marker with a
+generation from a different moment. On MongoDB and in memory it also sees every forget acknowledged before the call
+started. On MongoDB that holds only with two reads in a fixed order and the conditions under "The ordered reads on
+MongoDB". The names are provisional until the interfaces are built.
 
 `saveCatchupMarker` returns `false` only when the lease condition refuses the write. A save whose stamp a forget has
-passed returns `true`, and the marker it wrote reads absent. A store failure throws. The caller
+replaced returns `true`, and the marker it wrote reads absent. A store failure throws. The caller
 passes the generation `readCatchupMarker` returned, and the javadoc says so. The MongoDB stores cannot check it, since
 their save never reads the generation document.
 
@@ -111,18 +114,47 @@ The marker stays where 0.34.0 keeps it, and the generation is stored beside it:
 On MongoDB:
 
 * `readCatchupMarker` reads the plain document first and the generation document second, two finds by exact `_id`,
-  both with `withReadPreference(primary())`. The marker is present only when the plain document exists and its
+  both with `withReadPreference(primary())`. The plain read uses `ReadConcern.MAJORITY`. The generation read uses
+  `ReadConcern.LINEARIZABLE` with a `maxTimeMS`. The marker is present only when the plain document exists and its
   `generation` equals the generation document's.
 * `saveCatchupMarker` is one `findOneAndUpdate` on the plain document, the conditional `$replaceWith` a checkpoint save
-  already is, with `generation` added to the new document. It never reads the generation document.
-* `forgetCatchupMarker` raises the generation with an upserting `$inc`, then deletes the plain document. The delete
-  is there for 0.34.0 nodes. When it fails after the `$inc`, a 0.35.0 node still reads the marker as absent. When the
-  `$inc` fails, nothing has changed and the forget throws to its caller, as `delete` does today.
+  already is, with `generation` added to the new document. It never reads the generation document, and it uses the
+  write concern of the collection the application gave the store.
+* `forgetCatchupMarker` raises the generation with an upserting `$inc`, then deletes the plain document. Both writes
+  use `WriteConcern.MAJORITY` with a `wtimeout`, whatever write concern the application set on its collection. Without
+  the `wtimeout`, a forget would wait forever while no majority is reachable. The delete is there for 0.34.0 nodes.
+  When it fails after the `$inc`, a 0.35.0 node still reads the marker as absent. When the `$inc` fails, or its
+  `wtimeout` passes, the forget throws to its caller, as `delete` does today. A forget that throws after a `wtimeout`
+  may still have raised the generation, and a retry raises it once more.
+* On a standalone server, MongoDB refuses `LINEARIZABLE` with error code 123 (checked on 4.4.5). The store then reads
+  the generation with `MAJORITY` and keeps doing so for its lifetime, without trying `LINEARIZABLE` again. A standalone
+  server has no failover and no rollback, so the two read concerns return the same generation there. The store learns
+  the topology from that first refusal, because a store built from a `MongoCollection` has no client to ask.
 
 On Redis each call is one Lua script over the plain key, its version key and the generation hash, which share one
 Cluster slot. The save writes the plain key and its version key the way a conditional save does today, and sets the
-stamp only when that write happens. The forget raises the generation, removes the stamp, and deletes the plain key and
-its version key, as `delete` does. In memory each call is one step under the lock.
+stamp only when that write happens. The forget sets the generation to a token, removes the stamp, and deletes the plain
+key and its version key, as `delete` does. The store draws the token in Java with `SecureRandom`, as a `long` other
+than 0, and passes it to the script. In memory each call is one step under the lock.
+
+A counter does not work on Redis. Redis replicates to its replicas asynchronously, so a failover can lose an increment
+the old master acknowledged, and the counter then repeats a value:
+
+1. A forget raises the generation from 4 to 5 on the master, and an attempt reads 5.
+2. The master fails before the replica has the forget, and the replica becomes master with the generation at 4.
+3. A second forget raises the generation from 4 to 5 again.
+4. The attempt's late save is applied with stamp 5, and the marker reads present although the second forget came after
+   the attempt started.
+
+A random token is not repeated by a lost write, so the late save's stamp differs from the token the second forget set,
+and the marker reads absent. The read is one script, so it needs no order between two reads. The
+generation hash is never removed, since a removed hash puts the generation back at 0 and a late save from an attempt
+that read 0 would read present.
+
+A failover on Redis can still lose any acknowledged checkpoint write, a forget included, as in 0.34.0. A lost forget
+brings its marker back, and the next catch-up for the id skips the replay that forget asked for. A master that a
+failover has replaced can also keep answering for a moment, and a read there misses a forget made on the new master, as
+a read in 0.34.0 does. The token only keeps a late write from bringing a marker back after a forget that Redis kept.
 
 In a mixed cluster:
 
@@ -143,8 +175,9 @@ On a sharded checkpoint collection the generation document's `_id` is an embedde
 any type other than an array, a regular expression or undefined, and a hashed index hashes an embedded document as one
 value. On MongoDB 4.4.5 a two-shard cluster sharded on `{_id: "hashed"}` and one sharded on `{_id: 1}` both took such a
 document next to a plain document with the same id. Inserts, finds by exact `_id`, a pipeline upsert, a `$set` upsert
-and deletes by `_id` all worked, and mongos sent each find by exact `_id` to one shard. The forget's `$inc` upsert was
-not part of that check, and the check has not run on MongoDB 8.0.
+and deletes by `_id` all worked, and mongos sent each find by exact `_id` to one shard. On the hashed cluster the
+forget's `$inc` upsert and the delete with `w: "majority"`, and finds by exact `_id` with `MAJORITY` and with
+`LINEARIZABLE`, worked too. The check has not run on MongoDB 8.0.
 
 ### The ordered reads on MongoDB
 
@@ -153,37 +186,56 @@ different shards. Such a query can return the generation from before a forget's 
 the store applied after it. The marker then reads present although it was never present at any one instant, and the
 next catch-up skips the replay the forget asked for.
 
-Reading the plain document first and the generation document second gives an answer that held at one instant, under
-two conditions:
+Reading the plain document first and the generation document second gives an answer that held at one instant no
+later than the second read, under two conditions:
 
 1. A stamp is never above the current generation.
-2. The generation the second read sees is never lower than the generation at the time of the first read.
+2. The generation the second read sees is never lower than the generation at the instant the first read reflects.
 
 Say the first read sees stamp `s` and the second sees generation `g`. When `s` equals `g`, condition 1 puts the
-generation at the first read at `s` or above, and condition 2 puts it at `g` or below. It was `s`, so the marker was
-present at the first read. When they differ, either the generation was already above `s` at the first read, or a
-forget raised it between the reads. Right after that forget's `$inc`, every stored stamp is at most the old
-generation, so the marker was absent at that instant. Either way the answer held at one instant between the two reads.
+generation at the instant of the first read at `s` or above, and condition 2 puts it at `g` or below. It was `s`, so
+the marker was present then. When they differ, either the generation was already above `s` at that instant, or a
+forget raised it before the second read. Right after that forget's `$inc`, every stored stamp is at most the old
+generation, so the marker was absent at that instant. Either way the answer held at one instant.
 
-Three rules keep the conditions:
+Here "the generation" means the value a majority of the replica set has committed. Five rules keep the conditions,
+across a failover too:
 
 * Every save stores, as its stamp, the generation its caller read from `readCatchupMarker`, which the
-  `saveCatchupMarker` javadoc requires. A 0.34.0 save and a plain `save` write no stamp, which counts as 0. This keeps
-  condition 1.
-* Generation documents and generation hashes are never removed, and the generation only grows through `$inc`. A removed
-  generation document puts the generation back at 0, and a late 0.35.0 save applied after that leaves a stamp above
+  `saveCatchupMarker` javadoc requires. A 0.34.0 save and a plain `save` write no stamp, which counts as 0.
+* The generation read is `LINEARIZABLE`. It returns only what a majority has committed, so a stamp never comes from an
+  `$inc` that a failover later rolls back. It also reflects every write a majority committed before the read started.
+  A node that has lost an election and does not know it yet cannot get a majority to confirm the read, so it fails the
+  read instead of answering from old data. `MAJORITY` alone does not give the second guarantee. A primary that a newer
+  election has replaced can keep serving majority reads from its last commit point until it steps down.
+* The forget is written with `WriteConcern.MAJORITY`. A forget the store acknowledged is committed and never rolls
+  back.
+* Generation documents are never removed, and the generation only grows through `$inc`. A removed
+  generation document puts the generation back at 0, and a late 0.35.0 save applied after that writes a stamp above
   it. A later forget can then raise the generation to that stamp, and the forgotten marker reads present until the
-  forget's delete runs. This keeps both conditions.
-* Both reads go to the primary. A secondary can lag and return an older generation at the second read, which breaks
-  condition 2.
+  forget's delete runs.
+* The plain read is `MAJORITY`, so it never sees a stamp from a save that a failover later rolls back. It may come
+  from a primary that an election has replaced and reflect an earlier instant. The proof above allows that, since
+  the second read is the one that has to be current.
 
-The fence assumes that a forget, once acknowledged, is never rolled back, which means the application writes to the
-checkpoint collection with majority write concern. The marker delete in 0.34.0 rests on the same assumption. Under
-`w: 1` a failover can roll back an acknowledged `$inc`, which breaks condition 2. On a sharded collection the plain
-document and the generation document can sit on different shards, so a save whose stamp is the rolled-back generation
-can survive on one shard while the `$inc` is rolled back on the other, which breaks condition 1 too.
+The first, second and fourth rules keep condition 1. The second and fourth keep condition 2. The fifth makes the first
+read reflect a committed instant, which the proof needs. The third makes an acknowledged forget a committed one, so the
+generation read of a `readCatchupMarker` that starts after it sees it, and the marker reads absent.
 
-Redis and in-memory need none of this, since a read there is one script or one step under the lock.
+Without these concerns the fence would break on a failover. With MongoDB's default `local` read concern a primary can
+return an `$inc` that is not committed yet. The attempt reads generation 1 from it, the primary loses an election and
+the `$inc` rolls back to 0, and the attempt's save is applied on the new primary with stamp 1. A later forget raises the
+generation to 1 and the forgotten marker reads present.
+
+0.34.0 has the same gap without a late write. Its `exists` reads the plain document at the default `local` read
+concern, so a primary that an election has replaced can still return the document a forget on the new primary
+deleted. The concerns close that gap for `readCatchupMarker`, and plain `exists` keeps it.
+
+The marker save keeps the collection's write concern, because a rolled-back save only loses the marker. The next
+catch-up for the id replays once, and no event is lost. Forcing `MAJORITY` on it would make every catch-up wait for a
+majority at its end and protect nothing the fence needs.
+
+In memory a read is one step under the lock, and on Redis it is one script, as the previous section says.
 
 ### What a catch-up does with it
 
@@ -229,12 +281,28 @@ in [#1258](https://github.com/johanhaleby/occurrent/issues/1258) is the second k
   delete of the plain copy failed, a late write whose record write passed and whose plain write the lease condition
   refused left a present record next to a stale plain copy, and the read answered present.
 * A causally consistent session with majority read and write concern around the two reads. It would keep the second read
-  from seeing an older generation than the first, but a forget acknowledged at `w: 1` could still be rolled back, so the
-  majority-write assumption would stay. On top of that `NativeMongoCheckpointStorage` takes a `MongoDatabase` or a
+  from seeing an older generation than the first. `NativeMongoCheckpointStorage` takes a `MongoDatabase` or a
   `MongoCollection`, and neither can start a session, so every MongoDB store would need a new constructor contract.
+* A write acknowledged by a majority in place of the `LINEARIZABLE` read, such as a no-op update of the generation
+  document before reading it with `MAJORITY`. Every catch-up start would then write. An acknowledged write proves a
+  majority took it, but a `MAJORITY` read after it can still go to a primary that an election has replaced, so the
+  write alone does not make the read current.
+* The marker and the generation in one document. One read would see both at one instant, but it still has to be a
+  current read for the same reason, and a 0.34.0 save replaces the whole plain document, so during a rolling upgrade a
+  0.34.0 node would reset the generation.
 * A read that raises the generation with `$max` above any stamp it finds. It sees a stamp only while that stamp is
   above the generation, not once a later forget has raised the generation to the same number, and it turns every read
   into a possible write.
+* On Redis, `WAIT` after the forget script, to hold the forget until replicas have it. The Redis documentation calls
+  `WAIT` best effort. A failover can still promote a replica that lacks the forget. It would narrow the loss without
+  closing it, and every forget would wait for replicas.
+* On Redis, a counter combined with the master's replication id, which changes on a failover. The script would have to
+  read the replication id on every forget, and a random token is unique without it.
+* On Redis, a token based on the time. Two forgets in the same clock tick, or on a master whose clock is behind the old
+  master's, can produce the same token.
+* On Redis, a save that checks its stamp against the generation when it writes, and refuses a stale one. With a
+  counter it accepts the late save in the example above, since the stamp equals the repeated value. With a token the
+  read already reports such a marker as absent.
 
 ### Required where markers are written
 
@@ -272,17 +340,22 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   `readCatchupMarker` applies the fence.
 * A marker save is one write. A forget is two writes on MongoDB and one script on Redis. A read is two finds on MongoDB
   and one script on Redis.
-* A late save whose stamp is older than the current generation can replace a marker written under the current one, when
+* On a replica set or a sharded cluster, a forget waits until a majority has its two writes, and a `readCatchupMarker`
+  waits for the round trip a `LINEARIZABLE` read makes to a majority. A standalone server answers as before. When no
+  majority is reachable, a forget throws after its `wtimeout` and a read throws after its `maxTimeMS`. The changelog
+  says the forget ignores a weaker write concern on the application's collection.
+* A late save whose stamp is not the current generation can replace a marker written under the current one, when
   its lease condition lets it. The id then reads absent and the next catch-up replays once.
-* A retried forget whose first attempt was applied raises the generation twice. Every attempt that read the
+* A retried forget whose first attempt was applied changes the generation twice. Every attempt that read the
   generation in between has its marker fenced, and each of them costs one more replay.
 * A rolling upgrade needs no migration. A 0.34.0 node ignores the generation, and a 0.35.0 node reads the markers a
   0.34.0 node writes and deletes, with the exceptions listed under "Where the marker is stored".
 * A downgrade keeps every marker where 0.34.0 reads it. A marker the generation fenced stays too, and a 0.34.0 node
   reads it as present, the exposure 0.34.0 has to any late write. The generation documents and hashes stay behind
-  unread, and the migration guide says to leave them in place. Removing one puts that id's generation back at 0, and a
-  late 0.35.0 save applied afterwards leaves a stamp above it, which breaks condition 1 under "The ordered reads on
-  MongoDB". On Redis the generation hashes are the keys under `occurrent:catchup-marker:`.
+  unread, and the migration guide says to leave them in place. Removing one puts that id's generation back at 0. On
+  MongoDB a late 0.35.0 save applied afterwards writes a stamp above it, which breaks condition 1 under "The ordered
+  reads on MongoDB", and on Redis a late save from an attempt that read 0 reads present. On Redis the generation hashes
+  are the keys under `occurrent:catchup-marker:`.
 * The checkpoint collection, or the Redis key space, gains one generation document or hash for every subscription id
   that was ever forgotten, and a cancel does not remove it.
 * The fence is only as strong as the oldest node writing the id. A 0.34.0 node's late write still brings the marker
