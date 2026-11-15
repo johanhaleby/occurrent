@@ -314,22 +314,22 @@ does. A replay that a resume started runs again from its last stored checkpoint 
 The 0.34.0 node keeps the saga's competing-consumer lease while it retries, because the lease is refreshed on a
 schedule of its own whatever the subscription is doing, so the saga's subscription stalls. The node gives the lease up
 when it is stopped for its upgrade, but the next node to take it may still run 0.34.0 and stall on the same event, so
-the stall ends once a 0.35.0 node holds the lease. It also ends when a 0.35.0 node releases the instance or deletes it,
-because the 0.34.0 node reads the instance again on every retry. A released instance is `ACTIVE` and is stored with
-that plain status, which 0.34.0 decodes, and a deleted one is not there to decode. A catch-up replay that a subscribe
+the stall ends once a 0.35.0 node holds the lease. It also ends when a 0.35.0 node deletes the instance, because the
+0.34.0 node reads the instance again on every retry and a deleted one is not there to decode. A release doesn't end it,
+because a released instance keeps the stream marks of the events it has handled, so it is stored as `ACTIVE_MARKED`
+(ADR 154), which 0.34.0 can't decode either. A catch-up replay that a subscribe
 started is not retried, so a node whose replay failed doesn't go live until it restarts, whatever happens to the
 instance.
 
 Without a competing-consumer strategy every node runs the saga's subscription. The 0.35.0 nodes handle the event, and
-only the 0.34.0 node's own subscription stalls, until the node is upgraded or the instance is released or deleted.
+only the 0.34.0 node's own subscription stalls, until the node is upgraded or the instance is deleted.
 
 The subscription delivers one event at a time, so the stall holds up every later event of that saga subscription, for
 every instance of the saga, not only the events of the quarantined instance.
 
-After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease or to release the instance, so the stall
-lasts until the instance is deleted, with competing consumers or without. A node whose catch-up stopped on the event
-also has to restart before its subscription goes live. A downgrade that doesn't stall anything goes like this, on
-0.35.0:
+After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease, so the stall lasts until the instance is
+deleted, with competing consumers or without. A node whose catch-up stopped on the event also has to restart before its
+subscription goes live. A downgrade that doesn't stall anything goes like this, with steps 1 to 4 on 0.35.0:
 
 1. Turn quarantine off on every node, and have that running on every node before step 2. A node that still has
    quarantine on can quarantine another instance after the instances are listed.
@@ -339,13 +339,14 @@ also has to restart before its subscription goes live. A downgrade that doesn't 
    `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
    longer decodes or an event store read that failed, and release the instance again, or delete it.
-5. Downgrade.
+5. Stop every 0.35.0 node, and set every `ACTIVE_MARKED` instance back to `ACTIVE`, released ones included, with the
+   update ADR 154 describes.
+6. Start the 0.34.0 nodes.
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already
 released. Of what this record adds, only the `QUARANTINED_RECORDING` status is something 0.34.0 can't decode, and no
-instance has it after these steps.
-
-<!-- Q2: downgrade sentence pending ruling -->
+instance has it after these steps. ADR 154 stores an instance with stream marks as `ACTIVE_MARKED` for the same reason
+this record stores `QUARANTINED_RECORDING`, and says what step 5 loses.
 
 The upgrade guide has the procedure for operators, in
 [Rolling upgrades from 0.34.0 and rolling back to it](../../migration/upgrading-to-0.35.0.md#rolling-upgrades-from-0340-and-rolling-back-to-it).
@@ -379,11 +380,11 @@ The upgrade guide has the procedure for operators, in
   event is restored or the instance is deleted.
 - A 0.34.0 node, in a mixed cluster or after a downgrade, stalls the subscription of a saga with an instance that
   0.35.0 quarantined, for every later event of that subscription. It loses no input. In a mixed cluster the stall ends
-  once a 0.35.0 node holds the saga's competing-consumer lease, or once a 0.35.0 node releases or deletes the
-  instance. Without competing consumers it ends when the 0.34.0 node is upgraded. After a downgrade only a delete ends
-  it.
-  A downgrade that first turns quarantine off on every node, and then releases those instances and deletes the ones
-  that stay quarantined, stalls nothing.
+  once a 0.35.0 node holds the saga's competing-consumer lease, or once a 0.35.0 node deletes the instance. A release
+  doesn't end it, since a released instance is stored as `ACTIVE_MARKED` (ADR 154). Without competing consumers it
+  ends when the 0.34.0 node is upgraded. After a downgrade only a delete ends it.
+  A downgrade that first turns quarantine off on every node, then releases those instances and deletes the ones that
+  stay quarantined, and sets `ACTIVE_MARKED` back to `ACTIVE` once every 0.35.0 node has stopped, stalls nothing.
 - An application that never configured quarantine starts quarantining on upgrade, and so does one that set
   `occurrent.saga.quarantine-after` blank to keep it off. A blank value meant quarantine off in 0.34.0 and means the
   5-minute default in 0.35.0.
