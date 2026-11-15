@@ -201,8 +201,8 @@ other sections compile fine and behave differently, so read them first.
   the starters make to find inherited handlers. Compiles unchanged.
 - [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
   `occurrent.saga.quarantine-after` defaults to 5 minutes, also when it is blank, so a `@Saga` quarantines unless you
-  set `occurrent.saga.quarantine-enabled=false`. With quarantine on, several `EventStoreQueries` beans and none of
-  them `@Primary` fail at startup. The `sagaSubscription-<id>` bean releases an instance. Compiles unchanged.
+  set `occurrent.saga.quarantine-enabled=false`. With quarantine on, no `EventStoreQueries` bean, or several and none
+  of them `@Primary`, fails at startup. The `sagaSubscription-<id>` bean releases an instance. Compiles unchanged.
 
 ### Brokers
 
@@ -611,8 +611,8 @@ and the issue is [#1259](https://github.com/johanhaleby/occurrent/issues/1259).
 - A saga that never configured quarantine, built from `SagaRunnerConfig.defaults()` or a `@Saga` with
   `occurrent.saga.quarantine-after` left out or blank. It now quarantines an instance whose event keeps failing.
 - A `SagaRunner` you build yourself without an `EventStoreQueries`, when quarantine is on. It fails at startup.
-- A Spring Boot application with several `EventStoreQueries` beans and none of them `@Primary`, when quarantine is on.
-  It fails at startup.
+- A Spring Boot application with no `EventStoreQueries` bean, or several and none of them `@Primary`, when quarantine
+  is on. It fails at startup.
 - A `SagaStateStore` of your own.
 - An instance that 0.34.0 quarantined.
 - A record pattern over `SagaFailure` or `SagaEnvelope`.
@@ -643,9 +643,10 @@ comes from `SagaRunnerConfig.defaults()` or you set it yourself. Two kinds of ap
 The message says to pass the event store with `SagaRunner.eventStoreQueries(..)`, since every blocking event store
 Occurrent ships implements `EventStoreQueries`, or to turn quarantine off with `SagaRunnerConfig.disableQuarantine()`.
 
-In Spring Boot, a `@Saga` with quarantine on fails at startup when the context has several `EventStoreQueries` beans
-and none of them is `@Primary`. The message names the saga id and the beans, and says to mark the one the saga reads
-from `@Primary` or to set `occurrent.saga.quarantine-enabled=false`. With quarantine off, or on a subscription model
+In Spring Boot, a `@Saga` with quarantine on fails at startup when the context has no `EventStoreQueries` bean, or
+several and none of them is `@Primary`. With none, the message names the saga id and says to define the event store as
+a bean. With several, it names the saga id and the beans, and says to mark the one the saga reads from `@Primary`. Both
+say to set `occurrent.saga.quarantine-enabled=false` to turn quarantine off. With quarantine off, or on a subscription model
 that doesn't retain every event, the application starts.
 
 While it is quarantined, an instance records the key of every input it skips, in the order they arrive. A skip used to
@@ -696,13 +697,15 @@ A `SagaStateStore` of your own has to save `SagaFailure.releasedAt()`, `SagaFail
 `SagaEnvelope.quarantineSkipCount()`, and read them back. A release reads the instance back after it sets
 `releasedAt`, and throws an `IllegalStateException` when one of the three didn't persist.
 
-It also has to keep the skipped inputs, with `recordSkippedInput`, `findSkippedInputs`, `deleteSkippedInput` and
-`deleteSkippedInputs`, and delete them in `delete(sagaId)`. Their defaults throw `UnsupportedOperationException`. On a
+It also has to keep the skipped inputs, with `recordSkippedInput`, `findSkippedInputs`, `deleteSkippedInput`,
+`deleteSkippedInputByKey` and `deleteSkippedInputs`, and delete them in `delete(sagaId)`. Their defaults throw `UnsupportedOperationException`. On a
 store without `recordSkippedInput`, a quarantined instance skips its inputs without recording them, the runner logs a
 `WARN` once, and `release` throws for such an instance.
 
-The store also needs `findReleasingSagaIds(int)`, which returns the ids of the instances that are `QUARANTINED` with
-`releasedAt` set. The timer poller asks for them on every poll and goes on with their release. The default throws
+The store also needs `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are
+`QUARANTINED` with `releasedAt` set, in ascending order, after the id `after` (all of them when it is `null`), and at
+most `limit` of them. The timer poller asks for them on every poll and goes on with their release, starting each poll
+after the last id the previous one listed and from the first id again once a poll lists fewer than `limit`. The default throws
 `UnsupportedOperationException`, so your store compiles without it. The poller then logs a `WARN` once and stops
 asking, and a release that failed on an input or was interrupted goes on only when you call `release` again.
 
@@ -714,11 +717,11 @@ If you don't want quarantine, turn it off with `SagaRunnerConfig.defaults().disa
 When you build a `SagaRunner` yourself with quarantine on, call `eventStoreQueries(..)` with the event store the saga's
 subscription reads from, or the runner refuses to start.
 
-When your Spring Boot context has several `EventStoreQueries` beans, mark the one the saga reads from `@Primary`, or
-the application fails at startup while quarantine is on.
+When your Spring Boot context has no `EventStoreQueries` bean, define the event store as one. When it has several,
+mark the one the saga reads from `@Primary`. Otherwise the application fails at startup while quarantine is on.
 
 When you have a `SagaStateStore` of your own, persist the three fields, keep the skipped inputs and implement
-`findReleasingSagaIds(int)`, as [Stored saga state for a release](#stored-saga-state-for-a-release) describes.
+`findReleasingSagaIds(after, limit)`, as [Stored saga state for a release](#stored-saga-state-for-a-release) describes.
 
 An instance that 0.34.0 quarantined can't be released. Delete it as
 [the quarantined saga runbook](../runbooks/quarantined-saga-instance.md#6-you-delete-the-instance-once-you-have-decided-not-to-recover-it)

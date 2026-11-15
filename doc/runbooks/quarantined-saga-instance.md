@@ -472,8 +472,9 @@ blank.
 With quarantine on, from the defaults or set yourself, a `SagaRunner` on a subscription model that retains every
 event it delivers refuses to start without an `EventStoreQueries`, since `release` in step 5 reads the skipped inputs
 back with it. Pass the event store with `SagaRunner.eventStoreQueries(..)`, or call
-`SagaRunnerConfig.disableQuarantine()`. On the annotation path, several `EventStoreQueries` beans with none of them
-`@Primary` fail at startup the same way, so mark one `@Primary` or set `occurrent.saga.quarantine-enabled=false`. On a
+`SagaRunnerConfig.disableQuarantine()`. On the annotation path, no `EventStoreQueries` bean, or several with none of
+them `@Primary`, fails at startup the same way, so define the event store as a bean, mark one `@Primary`, or set
+`occurrent.saga.quarantine-enabled=false`. On a
 model that doesn't retain every event, `SagaRunner` turns quarantine off and logs a `WARN`, as in 0.34.0.
 
 Lower it when you would rather find out sooner and are willing to quarantine an instance whose downstream service was
