@@ -47,25 +47,25 @@ attempts' writes or refuse both. Adding the delete count to the lease version fa
 deletes inside one lease the stored version passes the next lease holder's token, and the old holder's late write is
 accepted, which is what ADR 116 exists to refuse.
 
-A marker left behind at the subscription id itself does not work on MongoDB during a rolling upgrade.
+A tombstone left at the subscription id itself does not work on MongoDB during a rolling upgrade.
 `NativeMongoCheckpointStorage.exists(id)` in 0.34.0 matches on `_id` alone, so a 0.34.0 node would read such a
 document as a marker and skip a replay.
 
 ## Decision
 
-### A generation per marker
+### A generation per subscription id
 
-Every marker has a generation, a counter that starts at 0 when nothing has been stored for the id.
+Every subscription id has a generation, a counter that starts at 0 and that only a forget raises.
 
-* Forgetting a marker turns its record into a tombstone and raises its generation by one, in one atomic write to
-  that record. The tombstone holds only the generation.
-* A generation never goes down. Nothing but a forget changes it.
-* A marker write names the generation its attempt read at step 1, and the store writes it only while the stored
-  generation still equals that number. A lease condition, where the attempt has one, applies too.
-* A write refused by either check stores nothing and returns `false`. A store failure still throws.
+* Forgetting a marker raises the generation by one in one atomic write. The generation never goes down.
+* A marker write stores the generation its attempt read at step 1 with the marker. That number is the marker's
+  stamp.
+* A marker counts as present only while its stamp equals the current generation. A missing stamp or a missing
+  generation counts as 0.
 
-A late write from an attempt that started before a forget names a generation the forget has already raised, so the
-store refuses it. That holds with or without a lease, and whichever node issued the write.
+A late write from an attempt that started before a forget writes a stamp the forget has already passed, so its
+marker reads absent even when the store applies it after the forget. That holds with or without a lease, and whichever
+node issued the write.
 
 ### `CatchupMarkerStorage`
 
@@ -74,7 +74,7 @@ A new interface on each stack holds the marker operations. `CheckpointStorage` i
 ```java
 public interface CatchupMarkerStorage extends CheckpointStorage {
     CatchupMarker readCatchupMarker(String subscriptionId);
-    boolean saveCatchupMarker(String subscriptionId, Checkpoint marker, long expectedGeneration, CheckpointWriteCondition condition);
+    boolean saveCatchupMarker(String subscriptionId, Checkpoint marker, long generation, CheckpointWriteCondition condition);
     void forgetCatchupMarker(String subscriptionId);
 }
 
@@ -85,8 +85,11 @@ public record CatchupMarker(@Nullable Checkpoint checkpoint, long generation) { 
 ```
 
 The reactor interface mirrors it with `Mono<CatchupMarker>`, `Mono<Boolean>` and `Mono<Void>`. `readCatchupMarker`
-returns the marker and its generation from one read, so the attempt never pairs a marker with a generation from a
-different moment. The names are provisional until the interfaces are built.
+returns the marker and the current generation from one read, so the attempt never pairs a marker with a generation
+from a different moment. The names are provisional until the interfaces are built.
+
+`saveCatchupMarker` returns `false` only when the lease condition refuses the write. A save whose stamp a forget has
+passed returns `true`, and the marker it wrote reads absent. A store failure throws.
 
 Every `CheckpointStorage` that Occurrent ships implements it: `NativeMongoCheckpointStorage`,
 `SpringMongoCheckpointStorage`, `ReactorCheckpointStorage`, `SpringRedisCheckpointStorage` and both
@@ -94,56 +97,54 @@ Every `CheckpointStorage` that Occurrent ships implements it: `NativeMongoCheckp
 
 ### Where the marker is stored
 
-The marker's state (present or forgotten), its generation and its lease version are stored in a record of their own,
-apart from the plain checkpoint at the subscription id. The marker's position stays in that plain checkpoint, as in
-0.34.0:
+The marker stays where 0.34.0 keeps it, and the generation is stored beside it:
 
-| Store | Record | Same atomic unit as the plain checkpoint |
+| Store | Marker and its stamp | Generation |
 | --- | --- | --- |
-| MongoDB (Native, Spring, Reactor) | a document with `_id: {catchupMarker: "<id>"}` in the same checkpoint collection | no, two documents |
-| Redis | a key `occurrent:catchup-marker:{<hash tag>}<sha256 of id>`, built the way the version key is | yes, same Cluster slot, one Lua script |
-| In-memory | a second map under the store's existing lock | yes |
+| MongoDB (Native, Spring, Reactor) | the plain checkpoint document at the subscription id, with a new `generation` field | a document `{_id: {catchupMarker: "<id>"}, generation: <n>}` in the same checkpoint collection |
+| Redis | the plain checkpoint key and its version key, with the stamp in the generation hash | a hash at `occurrent:catchup-marker:{<hash tag>}<sha256 of id>`, built the way the version key is, holding the generation and the stamp |
+| In-memory | the plain checkpoint, with the stamp beside it | a second map under the store's existing lock |
 
-A 0.34.0 node never reads the record. Its reads and deletes match the plain id exactly, and no shipped 0.34.0
-checkpoint storage scans the collection or the key space.
+On MongoDB:
 
-A marker write writes the record and then the plain checkpoint at the subscription id, the way 0.34.0 writes the
-marker. That plain copy is the marker a 0.34.0 node reads and deletes during a rolling upgrade. The record decides
-first:
+* `readCatchupMarker` is one query, with `_id` in the plain id and the generation document's id.
+* `saveCatchupMarker` is one `findOneAndUpdate` on the plain document, the conditional `$replaceWith` a checkpoint save
+  already is, with `generation` added to the new document. It never reads the generation document.
+* `forgetCatchupMarker` raises the generation with an upserting `$inc`, then deletes the plain document. The delete
+  is there for 0.34.0 nodes. When it fails after the `$inc`, a 0.35.0 node still reads the marker as absent. When the
+  `$inc` fails, nothing has changed and the forget throws to its caller, as `delete` does today.
 
-| Record | Plain copy at the id | `readCatchupMarker` answers |
-| --- | --- | --- |
-| tombstone | any | absent, with the tombstone's generation |
-| present | present | present |
-| present | absent | absent. A 0.34.0 node forgot it, or the plain write failed |
-| none | present | present, generation 0. Written by 0.34.0 |
-| none | absent | absent, generation 0 |
+On Redis each call is one Lua script over the plain key, its version key and the generation hash, which share one
+Cluster slot. The save writes the plain key and its version key the way a conditional save does today, and sets the
+stamp only when that write happens. The forget raises the generation, removes the stamp, and deletes the plain key and
+its version key, as `delete` does. In memory each call is one step under the lock.
 
-`readCatchupMarker` fetches both with one query on MongoDB (`_id` in the record's id and the plain id) and one script
-on Redis.
+Presence is decided by one stored marker compared with one counter. A record holding the marker's state apart from a
+copy at the plain id was rejected, because the two can disagree. After a forget whose delete of the plain copy failed,
+a late write whose record write passed and whose plain write the lease condition refused left a present record next
+to a stale plain copy, and the read answered present.
 
-`saveCatchupMarker` writes the record first, and the plain copy only when the record was written. When the lease
-condition refuses the plain write, the call returns `false`, and when the plain write fails, it throws. Either way the
-marker reads absent, and the next catch-up replays. `forgetCatchupMarker` writes the
-tombstone first, then deletes the plain copy. On Redis and in memory both steps of either call are one atomic
-operation. On MongoDB they are two, and that order keeps every interleaving on the side of an extra replay. A read
-between the two steps of a forget sees the tombstone, and a read between the two steps of a save sees a record
-without its plain copy.
+In a mixed cluster:
 
-Reading the plain copy is what keeps a mixed cluster safe in both directions. A 0.34.0 node that forgets a marker
-deletes the plain copy, and a 0.35.0 node then reads the marker as absent and replays. A late 0.34.0 write after a
-0.35.0 forget is stored in the plain copy, and the tombstone keeps it from counting on a 0.35.0 node. A 0.34.0 node has no
-fence, so a 0.34.0 node reading its own late write behaves as it does today.
+* A 0.34.0 node reads and deletes the plain checkpoint as before. On MongoDB it reads a checkpoint by its position
+  fields and ignores `generation`, and it never reads the generation document or hash.
+* A 0.34.0 save on MongoDB replaces the whole document, and the only field it can keep from the old one is `version`, so
+  a marker it writes has no stamp and counts as generation 0. Once a 0.35.0 node has forgotten the id, the generation is
+  at least 1, and a late 0.34.0 write reads absent on 0.35.0 nodes.
+* A 0.34.0 forget deletes the plain checkpoint, and 0.35.0 nodes then read the marker as absent. It does not raise the
+  generation, so a late write after a 0.34.0 forget is not fenced, as in 0.34.0.
+* On Redis a 0.34.0 save does not touch the hash, so the stamp stays. After a 0.34.0 delete and a 0.34.0 write, a
+  0.35.0 node reads that marker as present when the stamp from the last 0.35.0 save equals the current generation. That
+  is the unfenced 0.34.0 forget from the previous point.
 
-Plain `read`, `exists`, `save` and `delete` keep their meaning and never touch the record.
+Plain `read`, `exists`, `save` and `delete` keep their meaning and never touch the generation.
 
-On a sharded checkpoint collection the record's `_id` is an embedded document. MongoDB accepts an `_id` of any type
-other than an array, a regular expression or undefined, and a hashed index hashes an embedded document as one value.
-On MongoDB 4.4.5 a two-shard cluster sharded on `{_id: "hashed"}` and one sharded on `{_id: 1}` both took the record
-next to a plain document with the same id. Inserts, finds by exact `_id`, the conditional upsert and deletes by `_id`
-all worked, and mongos sent each find by exact `_id` to one shard. The downgrade cleanup below filters on
-`_id.catchupMarker`, a part of the shard key on a collection sharded on `_id`, so mongos can send it to every shard. The same check has not run
-on MongoDB 8.0.
+On a sharded checkpoint collection the generation document's `_id` is an embedded document. MongoDB accepts an `_id` of
+any type other than an array, a regular expression or undefined, and a hashed index hashes an embedded document as one
+value. On MongoDB 4.4.5 a two-shard cluster sharded on `{_id: "hashed"}` and one sharded on `{_id: 1}` both took such a
+document next to a plain document with the same id. Inserts, finds by exact `_id`, a pipeline upsert, a `$set` upsert
+and deletes by `_id` all worked, and mongos sent each find by exact `_id` to one shard. The forget's `$inc` upsert was
+not part of that check, and the check has not run on MongoDB 8.0.
 
 ### What a catch-up does with it
 
@@ -151,29 +152,32 @@ on MongoDB 8.0.
    attempt keeps the generation it read.
 2. At step 4 it calls `saveCatchupMarker` with that generation, plus `notOlderThan(leaseToken)` where a
    `CheckpointWriteVersionSource` gives a version and `any()` otherwise.
-3. A `false` means the marker was forgotten or the lease moved on since step 1. The attempt writes no marker and
-   records no failure, so the next catch-up for the id replays the history. The live delivery the attempt has already
-   started goes on as it would after a written marker.
-4. Every path that deletes a marker calls `forgetCatchupMarker` instead of `delete`: the `forgetCaughtUp()`
+3. A `false` means a node with a newer lease has written a marker at the id. The attempt writes no marker, records no
+   failure, and keeps delivering live events. The next catch-up for the id reads the other node's marker. Under
+   competing consumers `CompetingConsumerSubscriptionModel` pauses the node that lost the lease through
+   `pauseSubscription(id)`, and a pause asked for during the replay is applied when the catch-up completes. Until the
+   pause is applied, both nodes can deliver the same events, which at-least-once delivery allows.
+4. A store failure from `saveCatchupMarker` is handled like a `false`. The attempt logs it with the subscription id,
+   writes no marker, records no failure, and keeps delivering live events. An interrupt flag on the thread is kept.
+5. Every path that deletes a marker calls `forgetCatchupMarker` instead of `delete`: the `forgetCaughtUp()`
    of the reactor push model and of the reactor `CatchupProjectionFeed`, both push models' `cancelSubscription(id)`,
    and a later feed reset such as the one [#1291](https://github.com/johanhaleby/occurrent/issues/1291) asks for.
 
-The reactor push model's `markersNotYetDeleted` and the second delete it triggers at step 1 are removed. The tombstone
-is stored, so a restart no longer loses the record that a marker was forgotten.
+The reactor push model's `markersNotYetDeleted` and the second delete it triggers at step 1 are removed. The
+generation is stored, so a restart no longer loses the record that a marker was forgotten.
 
-Point 3 does not end the attempt the way a stop does. On the blocking push model a stopped catch-up relaunches its
-replay at once when the latest `start(..)` asked to resume subscriptions, and otherwise waits for
-`resumeSubscription(id)` or `start(true)` and drops live events until then (ADR 85). After a refused marker write the
-first replays the whole history for nothing, and under a lease that moved on every relaunch is refused again. Under
-the second the subscription delivers nothing until someone resumes it.
-Point 3 relies on ADR 177's order, where the marker is written after the drain on both engines. ADR 177 records
+Points 3 and 4 rely on ADR 177's order, where the marker is written after the replay and the drain on both engines. A
+marker that is not written then costs the next catch-up one replay and loses no event. ADR 177 records
 `ReactiveHandover` as writing it before the drain ([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item
 31), so the reactor callers change only after that write has moved.
 
-Point 3 also changes a released behaviour. In 0.34.0 a blocking push model whose marker write is refused because the lease
-moved on throws `CheckpointWriteConditionNotFulfilledException` out of `markCaughtUp()`. `BlockingHandover` records
-it as a failed catch-up, and the registration then refuses every live event until the subscription is cancelled.
-Under this ADR the subscription keeps delivering after the same refusal, and no marker is written.
+Points 3 and 4 change a released behaviour. In 0.34.0 a blocking push model whose marker write is refused because the
+lease moved on throws `CheckpointWriteConditionNotFulfilledException` out of `markCaughtUp()`, and a store failure
+there throws too. `BlockingHandover` records either as a failed catch-up, and the registration then refuses every
+live event until the subscription is cancelled. The shipped blocking stores retry a failed save without limit under
+their default `RetryStrategy`, so a store failure reaches that state only under a bounded one, while
+`ReactorCheckpointStorage` gives up after five attempts by default. Under this ADR the subscription keeps delivering
+after either, and no marker is written. The changelog lists this under Changes.
 
 Other deletes follow one rule. A delete that has to refuse a write that is already on its way to the store uses a
 generation. A delete that only races other calls in the same process can use a lock. The catch-up progress checkpoint
@@ -199,9 +203,9 @@ Marker-writing code takes a `CatchupMarkerStorage` and has no unfenced fallback.
   exception names the bean's class.
 * A `CatchupMarkerStorage` evaluates write conditions, and the registrars ask `evaluatesWriteConditionsFor(id)` for
   each catch-up subscription id at startup. On Redis in Cluster-safe mode that answers `false` for the ids whose
-  record cannot share a slot with the plain checkpoint (`""`, `"{}orders"`, `"a}b{c"`), and the marker calls refuse
-  those ids with an `IllegalArgumentException`, as a conditional `save` already does. Such an id keeps a working
-  marker today, because a marker write with `any()` is a plain `SET`, so this is listed as breaking too.
+  generation hash cannot share a slot with the plain checkpoint (`""`, `"{}orders"`, `"a}b{c"`), and the marker calls
+  refuse those ids with an `IllegalArgumentException`, as a conditional `save` already does. Such an id keeps a
+  working marker today, because a marker write with `any()` is a plain `SET`, so this is listed as breaking too.
 
 A `null` marker storage keeps its meaning, and every catch-up replays the history.
 
@@ -212,16 +216,22 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   stack, `CatchupMarkerStorageConformance`, checks the contract. The changelog lists this as breaking, and the
   0.35.0 migration guide shows what to implement. A variable typed `CheckpointStorage` that holds a shipped store
   needs its type changed, nothing else.
-* Code that reads a marker through plain `read(id)` keeps seeing the plain copy, which 0.35.0 still writes. Only the
-  fence lives in the record.
-* A marker save is two writes and a forget is two writes. Both are lifecycle calls, made once per catch-up or cancel.
+* Plain `read(id)` still returns the marker's position, including a marker the generation has fenced. Only
+  `readCatchupMarker` applies the fence.
+* A marker save is one write. A forget is two writes on MongoDB and one script on Redis. A read is one query or one
+  script.
+* A late save whose stamp is older than the current generation can replace a marker written under the current one, when
+  its lease condition lets it. The id then reads absent and the next catch-up replays once.
 * A retried forget whose first attempt was applied raises the generation twice. Every attempt that read the
-  generation in between is refused, and each of them costs one more replay.
-* A rolling upgrade on MongoDB or Redis is safe in both directions. A 0.34.0 node ignores the record. A 0.35.0 node
-  reads every marker a 0.34.0 node wrote or deleted, except a 0.34.0 write after a 0.35.0 forget, which it ignores.
-* A downgrade keeps every marker that was present, since the plain copy is still there. The records stay behind
-  unread. `db.<checkpointCollection>.deleteMany({"_id.catchupMarker": {$exists: true}})` removes them on MongoDB, and
-  on Redis they are the keys under `occurrent:catchup-marker:`.
+  generation in between has its marker fenced, and each of them costs one more replay.
+* A rolling upgrade needs no migration. A 0.34.0 node ignores the generation, and a 0.35.0 node reads the markers a
+  0.34.0 node writes and deletes, with the exceptions listed under "Where the marker is stored".
+* A downgrade keeps every marker where 0.34.0 reads it. A marker the generation fenced stays too, and a 0.34.0 node
+  reads it as present, the exposure 0.34.0 has to any late write. The generation documents and hashes stay behind
+  unread. Leave them in place. Deleting one while its plain checkpoint remains resets the id's generation to 0, so a
+  fenced marker whose stamp is 0 reads present again after the next upgrade. To remove the generation for an id, delete
+  the plain checkpoint at the subscription id first and the generation after, which costs that id one replay. On Redis
+  the generation hashes are the keys under `occurrent:catchup-marker:`.
 * The fence is only as strong as the oldest node writing the id. A 0.34.0 node's late write still brings the marker
   back for the 0.34.0 nodes, as it does today.
 * The ADR 177 order is unchanged. Step 1 now reads the generation with the marker, and step 4 can be refused.
