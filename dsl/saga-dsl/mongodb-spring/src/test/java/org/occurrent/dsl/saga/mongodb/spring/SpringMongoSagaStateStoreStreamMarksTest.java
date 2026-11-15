@@ -36,6 +36,7 @@ import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.BasicQuery;
 import org.springframework.data.mongodb.core.query.Query;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -1060,6 +1061,51 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
             // Then
             assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(4L, since));
+        }
+    }
+
+    @Nested
+    @DisplayName("when the instances that lose a version on a downgrade are listed")
+    class WhenTheInstancesThatLoseAVersionOnADowngradeAreListed {
+
+        // The filter of the "Stored saga state" section in doc/migration/upgrading-to-0.35.0.md, field for field.
+        private static final String GUIDE_FILTER = """
+                { status: "ACTIVE_MARKED", $or: [
+                    { "streamMarks.pending.versions.0": { $exists: true } },
+                    { "streamMarks.legacyFailed.0": { $exists: true } } ] }""";
+        private static final Map<String, StreamMarks> LEGACY_FAILED_ONLY_MARKS = Map.of(
+                STREAM_ID, new StreamMarks(3, Map.of(PLACED_TYPE, new TypeMark(12, List.of(9L, 10L, 11L), 8)), Map.of(), List.of(5L, 7L)),
+                "other", new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(), List.of()));
+
+        private void saveWithId(String id, Map<String, StreamMarks> marks) {
+            SagaEnvelope<String> envelope = new SagaEnvelope<>(id, "awaiting-payment", SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM_ID, 12L, "other", 1L), null,
+                    NOW, NOW, null, null, true, null, marks);
+            assertThat(stateStore.compareAndSave(id, envelope, 0)).isTrue();
+        }
+
+        private Document rawDocument(String id) {
+            return requireNonNull(mongoOperations.findOne(Query.query(where("_id").is(id)), Document.class, COLLECTION));
+        }
+
+        @Test
+        void the_guide_filter_lists_exactly_the_marked_instances_with_a_pending_or_legacy_failed_version() {
+            // Given
+            saveWithId("1", PENDING_MARKS);
+            saveWithId("2", LEGACY_FAILED_ONLY_MARKS);
+            saveWithId("3", MARKS);
+            saveWithId("4", Map.of());
+
+            // When
+            List<Document> listed = mongoOperations.find(new BasicQuery(GUIDE_FILTER, "{ state: 0 }"), Document.class, COLLECTION);
+
+            // Then
+            assertAll(
+                    () -> assertThat(rawDocument("1").getString("status")).isEqualTo("ACTIVE_MARKED"),
+                    () -> assertThat(rawDocument("2").getString("status")).isEqualTo("ACTIVE_MARKED"),
+                    () -> assertThat(rawDocument("3").getString("status")).isEqualTo("ACTIVE_MARKED"),
+                    () -> assertThat(rawDocument("4").getString("status")).isEqualTo("ACTIVE"),
+                    () -> assertThat(listed).extracting(d -> d.getString("_id")).containsExactlyInAnyOrder("1", "2")
+            );
         }
     }
 }
