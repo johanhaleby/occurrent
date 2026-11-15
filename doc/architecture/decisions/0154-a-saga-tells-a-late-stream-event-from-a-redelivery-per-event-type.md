@@ -151,7 +151,7 @@ applied an event with a stream version to, and the timers of such an instance wa
 without a long canary. A query written by hand for `status: "ACTIVE"` misses the instances stored as `ACTIVE_MARKED`.
 
 Going back to 0.34.0 is an explicit step. Once every 0.35.0 node has stopped, a query lists the `ACTIVE_MARKED`
-instances whose marks hold a version in `pending` or `legacyFailed`, which are the instances that lose a version. Then
+instances whose marks hold a version in `pending` or `legacyFailed`, a version 0.34.0 never applies. Then
 an `updateMany` sets `ACTIVE_MARKED` back to `ACTIVE`, and the 0.34.0 nodes start after it. 0.34.0 ignores the marks
 and drops them on its first save of each instance. A pending version is then never applied, and a late version below
 the watermark is skipped, as before this decision. The next 0.35.0 node reads such an instance as a pre-0.35.0 one, so

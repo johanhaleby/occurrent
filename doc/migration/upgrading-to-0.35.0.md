@@ -665,8 +665,8 @@ db.getCollection("saga-order-fulfilment")
 ```
 
 To go back to 0.34.0, stop every 0.35.0 node. Then list the `ACTIVE_MARKED` instances that hold a version that failed
-and waits to be applied again, in `pending` or `legacyFailed`. These are the instances that lose a version, as the
-paragraph after the update says:
+and waits to be applied again, in `pending` or `legacyFailed`. 0.34.0 never applies such a version, as the paragraph
+after the update says:
 
 ```javascript
 db.getCollection("saga-order-fulfilment")
@@ -941,7 +941,7 @@ subscription goes live. To downgrade without that stall, do steps 1 to 4 on 0.35
 5. Repeat steps 2 to 4 until step 2 lists no instance with a quarantine id. Then stop every 0.35.0 node, and set every
    `ACTIVE_MARKED` instance back to `ACTIVE` with the `updateMany` in
    [the stored saga state for late versions](#stored-saga-state-1). A released instance is one of them. That section
-   lists the instances that lose a version first, and says what 0.34.0 then loses.
+   first lists the instances that hold a version 0.34.0 never applies, and says what else 0.34.0 loses.
 6. Start the 0.34.0 nodes.
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already
