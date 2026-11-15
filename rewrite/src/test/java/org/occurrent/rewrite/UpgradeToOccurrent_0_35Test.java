@@ -394,6 +394,41 @@ class UpgradeToOccurrent_0_35Test implements RewriteTest {
     }
 
     @Test
+    void movesAFullyQualifiedReferenceToANestedSubscriptionAnnotationsTypeToTheInternalPackage() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class SubscriptionAnnotations {
+                            public record HandlerParameter(String name) {
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        class Foo {
+                            org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter parameter;
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
+
+                        class Foo {
+                            SubscriptionAnnotations.HandlerParameter parameter;
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void movesTheAsynchronousSubscribablesImportToTheInternalPackage() {
         rewriteRun(
                 spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
