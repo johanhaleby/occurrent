@@ -1855,9 +1855,9 @@ class SagaQuarantineTest {
      * are the two things {@link org.occurrent.dsl.saga.SagaStateStore} asks a store to override together, and the
      * MongoDB store does them with a projection and a {@code findAndModify}.
      */
-    private static final class RefusesToDecodeOneInstance implements SagaStateStore<OrderState>, SagaStateStoreQueries<OrderState> {
+    private static final class RefusesToDecodeOneInstance implements SagaStateStore<OrderState>, SagaStateStoreQueries<OrderState>, SagaStateStoreSkippedInputs {
 
-        private final SagaStateStore<OrderState> delegate = SagaStateStore.inMemory();
+        private final InMemorySagaStateStore<OrderState> delegate = new InMemorySagaStateStore<>();
         private final Set<String> undecodable = ConcurrentHashMap.newKeySet();
 
         private volatile Supplier<? extends Throwable> loadFailure = () -> new IllegalStateException("the state can no longer be decoded");
@@ -1913,10 +1913,41 @@ class SagaQuarantineTest {
             delegate.delete(sagaId);
         }
 
+        @Override
+        public List<String> findReleasingSagaIds(@Nullable String after, int limit) {
+            return delegate.findReleasingSagaIds(after, limit);
+        }
+
+        @Override
+        public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
+            delegate.recordSkippedInput(sagaId, quarantineId, input);
+        }
+
+        @Override
+        public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
+            return delegate.findSkippedInputs(sagaId, quarantineId, limit);
+        }
+
+        @Override
+        public void deleteSkippedInputByKey(String sagaId, String quarantineId, String key) {
+            delegate.deleteSkippedInputByKey(sagaId, quarantineId, key);
+        }
+
+        @Override
+        public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
+            delegate.deleteSkippedInput(sagaId, quarantineId, input);
+        }
+
+        @Override
+        public void deleteSkippedInputs(String sagaId) {
+            delegate.deleteSkippedInputs(sagaId);
+        }
+
         private static SagaEnvelope<OrderState> withState(SagaEnvelope<OrderState> envelope, @Nullable OrderState state) {
             return new SagaEnvelope<>(envelope.sagaId(), state, envelope.status(), envelope.version(), envelope.timers(),
                     envelope.streamWatermarks(), envelope.positionWatermark(), envelope.createdAt(), envelope.updatedAt(),
-                    envelope.completedAt(), envelope.currentStep(), envelope.started(), envelope.failure());
+                    envelope.completedAt(), envelope.currentStep(), envelope.started(), envelope.failure(),
+                    envelope.streamMarks(), envelope.quarantineSkipCount());
         }
     }
 

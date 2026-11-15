@@ -153,8 +153,9 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * A copy of this configuration that quarantines an instance once it has kept failing for {@code quarantineAfter}.
      * {@link #defaults()} quarantines after five minutes. It applies only on a subscription model that holds every
      * event it delivers, and {@link SagaRunner} turns it off on any other. On such a model, a runner with quarantine on
-     * and no {@link SagaRunner#eventStoreQueries(org.occurrent.eventstore.api.blocking.EventStoreQueries)} refuses to
-     * start, since it could not release a quarantined instance.
+     * and no {@link SagaRunner#eventStoreQueries(org.occurrent.eventstore.api.blocking.EventStoreQueries)}, or a state
+     * store that does not implement {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs}, refuses to start, since
+     * it could not release a quarantined instance.
      * <p>
      * Five minutes is a reasonable budget. Once a MongoDB subscription model's backoff saturates it retries every two
      * seconds, so five minutes is about a hundred and fifty attempts. A replica-set election takes seconds and a

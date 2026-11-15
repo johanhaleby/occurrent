@@ -34,6 +34,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.saga.Saga;
+import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.StartAt;
@@ -45,8 +46,10 @@ import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -208,6 +211,44 @@ class SagaQuarantineWarningTest {
         );
     }
 
+    /**
+     * Quarantine records what the instance skips and a release reads it back, both through the optional
+     * SagaStateStoreSkippedInputs capability. A store without it would quarantine and then have nowhere to put the
+     * skipped inputs, so the runner refuses to start instead of finding out on the first quarantine.
+     */
+    @Test
+    void refuses_to_start_when_quarantine_is_on_the_model_holds_every_event_and_the_store_cannot_record_skipped_inputs() {
+        Retains model = new Retains();
+
+        Throwable thrown = catchThrowable(() -> SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .eventStoreQueries(new InMemoryEventStore())
+                .run("orders", saga(), new StoreWithoutSkippedInputs<>(), c -> {
+                }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5))));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class),
+                () -> assertThat(thrown).hasMessageContaining("SagaStateStoreSkippedInputs"),
+                () -> assertThat(thrown).hasMessageContaining("SagaRunnerConfig.disableQuarantine()"),
+                () -> assertThat(model.subscribed).isZero()
+        );
+    }
+
+    @Test
+    void starts_with_a_store_that_cannot_record_skipped_inputs_when_quarantine_is_switched_off() {
+        Retains model = new Retains();
+
+        SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .eventStoreQueries(new InMemoryEventStore())
+                .run("orders", saga(), new StoreWithoutSkippedInputs<>(), c -> {
+                }, null, SagaRunnerConfig.defaults().disableQuarantine())
+                .close();
+
+        assertAll(
+                () -> assertThat(model.subscribed).isEqualTo(1),
+                () -> assertThat(warnings()).isEmpty()
+        );
+    }
+
     @Test
     void starts_without_event_store_queries_when_quarantine_is_off_on_a_model_that_holds_every_event() {
         Retains model = new Retains();
@@ -273,6 +314,31 @@ class SagaQuarantineWarningTest {
 
     private String warning() {
         return warnings().getFirst();
+    }
+
+    // Delegates to the in-memory store and, unlike it, does not implement SagaStateStoreSkippedInputs
+    private static final class StoreWithoutSkippedInputs<S> implements SagaStateStore<S> {
+        private final SagaStateStore<S> delegate = SagaStateStore.inMemory();
+
+        @Override
+        public Optional<SagaEnvelope<S>> find(String sagaId) {
+            return delegate.find(sagaId);
+        }
+
+        @Override
+        public boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
+            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        }
+
+        @Override
+        public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
+            return delegate.findWithDueTimers(now, limit);
+        }
+
+        @Override
+        public void delete(String sagaId) {
+            delegate.delete(sagaId);
+        }
     }
 
     private static class RetainsNothing implements Subscribable {

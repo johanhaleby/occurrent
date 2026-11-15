@@ -144,7 +144,8 @@ public final class SagaSubscription implements AutoCloseable {
      *                               skipped. The message names the way out, {@code SagaStateStore.delete(sagaId)}. Also
      *                               thrown when the runner was built without an
      *                               {@link org.occurrent.eventstore.api.blocking.EventStoreQueries}, when the state store
-     *                               does not record skipped inputs, and when it does not persist what a release writes
+     *                               does not implement {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs}, and
+     *                               when it does not persist what a release writes
      */
     public ReleaseResult release(String sagaId) {
         return release.apply(requireNonNull(sagaId, "sagaId cannot be null"));

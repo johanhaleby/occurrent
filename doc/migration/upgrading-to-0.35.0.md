@@ -812,21 +812,25 @@ db.getCollection("saga-order-fulfilment")
   .find({ status: { $in: ["QUARANTINED", "QUARANTINED_RECORDING"] } }, { state: 0 })
 ```
 
-A `SagaStateStore` of your own has to save `SagaFailure.releasedAt()`, `SagaFailure.quarantineId()` and
-`SagaEnvelope.quarantineSkipCount()`, and read them back. A release reads the instance back after it sets
-`releasedAt`, and throws an `IllegalStateException` when one of the three didn't persist.
+Quarantine needs a store that implements the new interface `SagaStateStoreSkippedInputs` next to `SagaStateStore`.
+The in-memory store and `SpringMongoSagaStateStore` implement it. On a subscription model that retains every event,
+`SagaRunner.run` throws an `IllegalStateException` when quarantine is on and the saga's store doesn't implement it.
+The message names the interface and `SagaRunnerConfig.disableQuarantine()`.
 
-It also has to keep the skipped inputs, with `recordSkippedInput`, `findSkippedInputs`, `deleteSkippedInput`,
-`deleteSkippedInputByKey` and `deleteSkippedInputs`, and delete them in `delete(sagaId)`. Their defaults throw `UnsupportedOperationException`. On a
-store without `recordSkippedInput`, a quarantined instance skips its inputs without recording them, the runner logs a
-`WARN` once, and `release` throws for such an instance.
+A store that implements it has to save `SagaFailure.releasedAt()`, `SagaFailure.quarantineId()` and
+`SagaEnvelope.quarantineSkipCount()`, and read them back. The saga reads the instance back after the write that
+quarantines it. When the quarantine id or the skip count didn't persist, it writes the instance back as it was before
+the quarantine, logs an `ERROR` and fails the event instead of acknowledging it, since an instance without them skips
+every later input without recording it. Every delivery of the event fails the same way until the store persists both. A release
+reads the instance back after it sets `releasedAt`, and throws an `IllegalStateException` when one of the three didn't
+persist.
 
-The store also needs `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are
-`QUARANTINED` with `releasedAt` set, in ascending order, after the id `after` (all of them when it is `null`), and at
-most `limit` of them. The timer poller asks for them on every poll and goes on with their release, starting each poll
-after the last id the previous one listed and from the first id again once a poll lists fewer than `limit`. The default throws
-`UnsupportedOperationException`, so your store compiles without it. The poller then logs a `WARN` once and stops
-asking, and a release that failed on an input or was interrupted goes on only when you call `release` again.
+The store also keeps the skipped inputs, with `recordSkippedInput`, `findSkippedInputs`, `deleteSkippedInput`,
+`deleteSkippedInputByKey` and `deleteSkippedInputs`, and deletes them in `delete(sagaId)`. It implements
+`findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`
+set, in ascending order, after the id `after` (all of them when it is `null`), and at most `limit` of them. The timer
+poller asks for them on every poll and goes on with their release, starting each poll after the last id the previous
+one listed and from the first id again once a poll lists fewer than `limit`. None of the six methods has a default.
 
 ### What to do
 
@@ -839,8 +843,9 @@ subscription reads from, or the runner refuses to start.
 When your Spring Boot context has no `EventStoreQueries` bean, define the event store as one. When it has several,
 mark the one the saga reads from `@Primary`. Otherwise the application fails at startup while quarantine is on.
 
-When you have a `SagaStateStore` of your own, persist the three fields, keep the skipped inputs and implement
-`findReleasingSagaIds(after, limit)`, as [Stored saga state for a release](#stored-saga-state-for-a-release) describes.
+When you have a `SagaStateStore` of your own and quarantine on, implement `SagaStateStoreSkippedInputs` on it, as
+[Stored saga state for a release](#stored-saga-state-for-a-release) describes, or turn quarantine off with
+`SagaRunnerConfig.disableQuarantine()`. Otherwise the runner refuses to start.
 
 An instance that 0.34.0 quarantined can't be released. Delete it as
 [the quarantined saga runbook](../runbooks/quarantined-saga-instance.md#6-you-delete-the-instance-once-you-have-decided-not-to-recover-it)
