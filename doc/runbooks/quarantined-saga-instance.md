@@ -508,9 +508,10 @@ A 0.34.0 node throws on every event addressed to an instance that 0.35.0 stored 
 `findByStatus(QUARANTINED, ..)` on 0.34.0 doesn't find such an instance. The node stores no position past that event,
 so no input is lost. On a live subscription it retries the event in place and keeps the saga's competing-consumer
 lease while it does, so the saga's subscription stalls. The stall holds up every later event of that saga
-subscription, not only the events of the quarantined instance, and after a downgrade no 0.35.0 node is left to take
-the lease. To downgrade without that stall,
-do this on 0.35.0:
+subscription, not only the events of the quarantined instance. It ends when a 0.35.0 node takes the lease, or when a
+0.35.0 node releases or deletes the instance. A node whose catch-up replay failed on the event also has to restart
+before its subscription goes live. After a downgrade no 0.35.0 node is left to take the lease or release the instance,
+so the stall lasts until the instance is deleted. To downgrade without that stall, do this on 0.35.0:
 
 1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or
    `occurrent.saga.quarantine-enabled=false`, and have that running on every node before step 2. A node that still has
@@ -519,7 +520,9 @@ do this on 0.35.0:
    record has a quarantine id.
 3. Delete with `SagaStateStore.delete(sagaId)` each one whose release returns `QUARANTINED_AGAIN`,
    `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
-4. Downgrade.
+4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
+   longer decodes or an event store read that failed, and release the instance again, or delete it.
+5. Downgrade.
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already
 released. The

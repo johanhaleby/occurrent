@@ -742,19 +742,27 @@ again. No input is lost.
 
 On a live MongoDB subscription the 0.34.0 node retries the event in place with the subscription model's retry
 strategy, which by default backs off from 100 ms to 2 s and never gives up. In a catch-up replay that a subscribe
-started, the replay fails and the subscription doesn't go live on that node. A replay that a resume started runs
-again from its last stored checkpoint with the same backoff.
+started, the replay fails and the subscription doesn't go live on that node until the node restarts, which its
+upgrade does. A replay that a resume started runs again from its last stored checkpoint with the same backoff.
 
 The 0.34.0 node keeps the saga's competing-consumer lease while it retries, because the lease is refreshed on a
 schedule of its own whatever the subscription is doing, so the saga's subscription stalls. The node gives the lease up
 when it is stopped for its upgrade, but the next node to take it may still run 0.34.0 and stall on the same event, so
-the stall ends once a 0.35.0 node holds the lease.
+the stall ends once a 0.35.0 node holds the lease. It also ends when a 0.35.0 node releases the instance or deletes it,
+because the 0.34.0 node reads the instance again on every retry. A released instance is `ACTIVE` and is stored with
+that plain status, which 0.34.0 decodes, and a deleted one is not there to decode. A catch-up replay that a subscribe
+started is not retried, so a node whose replay failed doesn't go live until it restarts, whatever happens to the
+instance.
+
+Without a competing-consumer strategy every node runs the saga's subscription. The 0.35.0 nodes handle the event, and
+only the 0.34.0 node's own subscription stalls, until the node is upgraded or the instance is released or deleted.
 
 The subscription delivers one event at a time, so the stall holds up every later event of that saga subscription, for
 every instance of the saga, not only the events of the quarantined instance.
 
-After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease, so with competing consumers the stall
-lasts until something changes the instance. To downgrade without that stall, do this on 0.35.0:
+After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease or to release the instance, so the stall
+lasts until the instance is deleted, with competing consumers or without. A node whose catch-up stopped on the event
+also has to restart before its subscription goes live. To downgrade without that stall, do this on 0.35.0:
 
 1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or
    `occurrent.saga.quarantine-enabled=false`, and have that running on every node before step 2. A node that still has
@@ -763,7 +771,9 @@ lasts until something changes the instance. To downgrade without that stall, do 
    record has a quarantine id.
 3. Delete with `SagaStateStore.delete(sagaId)` each one whose release returns `QUARANTINED_AGAIN`,
    `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
-4. Downgrade.
+4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
+   longer decodes or an event store read that failed, and release the instance again, or delete it.
+5. Downgrade.
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already
 released.
