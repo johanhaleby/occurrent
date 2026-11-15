@@ -84,9 +84,11 @@ reads the records in order of sequence number, which is the order the inputs wer
 A crash or a lost race between those writes can skip a number, but never gives two records the same one. When the first
 write succeeds and the record isn't written, the input was never acknowledged, so it is offered again and takes a new
 number. When the record is written and the second write isn't, the input is offered again, finds its key recorded, and
-makes only the second write. When two skips of one key race and both take a number, the record of the first stays, the
-other's number goes unused, and the other still makes the second write. A release that finds a record whose skip never
-finished replays an input the instance never applied.
+makes only the second write. When two skips of one key race and both take a number, the record written first stays and
+the other's number goes unused, and the other still makes the second write. The record that stays can hold the higher of
+the two numbers, so the input is replayed after an input of another stream that took a number between them. Both orders
+are ones live delivery offered, since the input arrived before that other input and again after it. A release that
+finds a record whose skip never finished replays an input the instance never applied.
 
 `SagaStateStore.delete(sagaId)` also deletes the instance's records.
 
