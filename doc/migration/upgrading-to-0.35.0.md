@@ -235,6 +235,10 @@ other sections compile fine and behave differently, so read them first.
 
 ### The rewrite recipe
 
+Run `UpgradeToOccurrent_0_35` while the project still depends on 0.34.0, and then move the dependency to 0.35.0.
+`MoveAttemptNotMade_0_35` and `MoveSubscriptionAnnotationsToInternal_0_35` look for the type at its old name, and once
+the dependency is 0.35.0 no type has that name, so they change nothing.
+
 - `org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35` adds the new bindings to a record pattern over
   `DcbAppendResult`, `DcbEventStream`, `DcbReadOptions` or `Snapshot`. See
   [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions) and
@@ -245,6 +249,9 @@ other sections compile fine and behave differently, so read them first.
 - `org.occurrent.MoveAttemptNotMade_0_35` changes each reference to `RetryExecution.AttemptNotMade` to
   `org.occurrent.retry.AttemptNotMade`. See
   [A held event is withdrawn instead of delivered without the lease](#a-held-event-is-withdrawn-instead-of-delivered-without-the-lease).
+- `org.occurrent.MoveSubscriptionAnnotationsToInternal_0_35` changes each reference to `SubscriptionAnnotations` and
+  its nested types to the package `org.occurrent.springboot.common.internal`. See
+  [`SubscriptionAnnotations` moves to an internal package](#subscriptionannotations-moves-to-an-internal-package).
 - No recipe rewrites a `DcbConsistencyToken` or the streams that create one. See
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
 
