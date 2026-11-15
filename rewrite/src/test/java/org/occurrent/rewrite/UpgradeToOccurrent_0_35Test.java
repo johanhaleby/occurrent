@@ -47,7 +47,7 @@ class UpgradeToOccurrent_0_35Test implements RewriteTest {
 
     private static final String DCB_MARKER_VERSIONS_RECORD_PATTERN = "org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35";
     private static final String NATIVE_MONGO_SUBSCRIPTION_RECORD_PATTERN = "org.occurrent.MigrateNativeMongoSubscriptionRecordPattern_0_35";
-    private static final String SUBSCRIPTION_ANNOTATIONS_TO_INTERNAL = "org.occurrent.MoveSubscriptionAnnotationsToInternal_0_35";
+    private static final String SPRING_BOOT_COMMON_TO_INTERNAL = "org.occurrent.MoveSpringBootCommonTypesToInternal_0_35";
 
     @Override
     public void defaults(RecipeSpec spec) {
@@ -173,21 +173,22 @@ class UpgradeToOccurrent_0_35Test implements RewriteTest {
     }
 
     @Test
-    void theRecipeListsTheSubscriptionAnnotationsToInternalSubRecipe() {
+    void theRecipeListsTheSpringBootCommonTypesToInternalSubRecipe() {
         Recipe recipe = activate("org.occurrent.UpgradeToOccurrent_0_35");
 
-        assertThat(recipe.getRecipeList()).extracting(Recipe::getName).contains(SUBSCRIPTION_ANNOTATIONS_TO_INTERNAL);
+        assertThat(recipe.getRecipeList()).extracting(Recipe::getName).contains(SPRING_BOOT_COMMON_TO_INTERNAL);
     }
 
     @Test
-    void theSubscriptionAnnotationsToInternalSubRecipeLoadsAndValidates() {
-        Recipe recipe = activate(SUBSCRIPTION_ANNOTATIONS_TO_INTERNAL);
+    void theSpringBootCommonTypesToInternalSubRecipeLoadsAndValidates() {
+        Recipe recipe = activate(SPRING_BOOT_COMMON_TO_INTERNAL);
 
         assertThat(recipe.validate().isValid()).isTrue();
-        assertThat(recipe.getName()).isEqualTo(SUBSCRIPTION_ANNOTATIONS_TO_INTERNAL);
+        assertThat(recipe.getName()).isEqualTo(SPRING_BOOT_COMMON_TO_INTERNAL);
         assertThat(recipe.getRecipeList()).extracting(Recipe::getName)
                 .containsExactly("org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType",
-                        "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType");
+                        "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType",
+                        "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType");
     }
 
     @Test
@@ -272,6 +273,232 @@ class UpgradeToOccurrent_0_35Test implements RewriteTest {
                             boolean wait(boolean replaysHistory) {
                                 return SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory);
                             }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void movesThePushCatchupStatusImplImportToTheInternalPackage() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class PushCatchupStatusImpl {
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.PushCatchupStatusImpl;
+
+                        class Foo {
+                            PushCatchupStatusImpl status = new PushCatchupStatusImpl();
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
+
+                        class Foo {
+                            PushCatchupStatusImpl status = new PushCatchupStatusImpl();
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void expandsAWildcardImportOfTheOldPackageWhenOneOfItsTypesMoves() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class AsynchronousSubscribables {
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class OccurrentProperties {
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.*;
+
+                        class Foo {
+                            AsynchronousSubscribables subscribables = new AsynchronousSubscribables();
+                            OccurrentProperties properties = new OccurrentProperties();
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.OccurrentProperties;
+                        import org.occurrent.springboot.common.internal.AsynchronousSubscribables;
+
+                        class Foo {
+                            AsynchronousSubscribables subscribables = new AsynchronousSubscribables();
+                            OccurrentProperties properties = new OccurrentProperties();
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void movesAFullyQualifiedReferenceToThePushCatchupStatusImplToTheInternalPackage() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class PushCatchupStatusImpl {
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        class Foo {
+                            org.occurrent.springboot.common.PushCatchupStatusImpl status = new org.occurrent.springboot.common.PushCatchupStatusImpl();
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
+
+                        class Foo {
+                            PushCatchupStatusImpl status = new PushCatchupStatusImpl();
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void movesTheAsynchronousSubscribablesImportToTheInternalPackage() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class AsynchronousSubscribables {
+                            public static String resolve() {
+                                return "subscribable";
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.AsynchronousSubscribables;
+
+                        class Foo {
+                            String resolve() {
+                                return AsynchronousSubscribables.resolve();
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.AsynchronousSubscribables;
+
+                        class Foo {
+                            String resolve() {
+                                return AsynchronousSubscribables.resolve();
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void movesTheAppliedAppendRecordingRegistryImportToTheInternalPackage() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class AppliedAppendRecordingRegistry {
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.AppliedAppendRecordingRegistry;
+
+                        class Foo {
+                            AppliedAppendRecordingRegistry registry = new AppliedAppendRecordingRegistry();
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.AppliedAppendRecordingRegistry;
+
+                        class Foo {
+                            AppliedAppendRecordingRegistry registry = new AppliedAppendRecordingRegistry();
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void movesThePolledCatchupSignalsImportToTheInternalPackage() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class PolledCatchupSignals {
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.PolledCatchupSignals;
+
+                        class Foo {
+                            PolledCatchupSignals signals = new PolledCatchupSignals();
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.PolledCatchupSignals;
+
+                        class Foo {
+                            PolledCatchupSignals signals = new PolledCatchupSignals();
                         }
                         """
                 )

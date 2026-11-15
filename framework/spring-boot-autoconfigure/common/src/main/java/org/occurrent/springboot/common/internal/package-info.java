@@ -15,8 +15,8 @@
  */
 
 /**
- * Code the blocking and reactor Spring Boot starters share to find and register annotated handlers. These types are
- * {@code public} only because the two starters are separate modules. They are not part of the public API and can change
+ * Code the Spring Boot starters share to register annotated handlers and run their subscriptions. These types are
+ * {@code public} only because the starters are separate modules. They are not part of the public API and can change
  * or be removed in any release, so application code shouldn't use them.
  */
 @NullMarked

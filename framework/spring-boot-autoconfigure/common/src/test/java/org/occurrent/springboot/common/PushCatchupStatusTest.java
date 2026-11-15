@@ -25,6 +25,7 @@ import org.occurrent.springboot.common.PushCatchupStatus.Failed;
 import org.occurrent.springboot.common.PushCatchupStatus.Live;
 import org.occurrent.springboot.common.PushCatchupStatus.NotStarted;
 import org.occurrent.springboot.common.PushCatchupStatus.Unknown;
+import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 

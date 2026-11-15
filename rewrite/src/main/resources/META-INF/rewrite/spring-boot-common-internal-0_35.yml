@@ -15,12 +15,14 @@
 #
 ---
 type: specs.openrewrite.org/v1beta/recipe
-name: org.occurrent.MoveSubscriptionAnnotationsToInternal_0_35
-displayName: Move SubscriptionAnnotations to org.occurrent.springboot.common.internal
+name: org.occurrent.MoveSpringBootCommonTypesToInternal_0_35
+displayName: Move the types the Spring Boot starters share to org.occurrent.springboot.common.internal
 description: >-
-  SubscriptionAnnotations moves from org.occurrent.springboot.common to org.occurrent.springboot.common.internal,
-  since it is code the two Spring Boot starters share and not part of the public API. Rewrites every import and
-  fully qualified reference to it, its nested types included. See doc/migration/upgrading-to-0.35.0.md.
+  SubscriptionAnnotations, PushCatchupStatusImpl, AsynchronousSubscribables, AppliedAppendRecordingRegistry and
+  PolledCatchupSignals move from org.occurrent.springboot.common to org.occurrent.springboot.common.internal, since
+  they are code the Spring Boot starters share and not part of the public API. Rewrites every import and fully
+  qualified reference to them, the nested types of SubscriptionAnnotations included. See
+  doc/migration/upgrading-to-0.35.0.md.
 recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations
@@ -41,4 +43,20 @@ recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations$ResolvedTypeFilter
       newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations$ResolvedTypeFilter
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.PushCatchupStatusImpl
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.PushCatchupStatusImpl
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.AsynchronousSubscribables
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.AsynchronousSubscribables
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.AppliedAppendRecordingRegistry
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.AppliedAppendRecordingRegistry
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.PolledCatchupSignals
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.PolledCatchupSignals
       ignoreDefinition: true

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.common;
+package org.occurrent.springboot.common.internal;
 
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
@@ -34,10 +34,10 @@ import java.util.List;
  * the starter's own (now absent) bean was ever marked {@code @Primary}.
  * <p>
  * Narrowing to non-register-only candidates first, the same way the annotation registrars narrow a push feed bean in
- * {@link org.occurrent.springboot.common.internal.SubscriptionAnnotations#resolveFeedBean}, resolves this with no configuration from the application: a
+ * {@link SubscriptionAnnotations#resolveFeedBean}, resolves this with no configuration from the application: a
  * user-declared asynchronous model is picked up automatically, without needing {@code @Primary} itself.
  *
- * @see org.occurrent.springboot.common.internal.SubscriptionAnnotations#resolveFeedBean
+ * @see SubscriptionAnnotations#resolveFeedBean
  */
 public final class AsynchronousSubscribables {
 
