@@ -33,6 +33,7 @@ import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
 import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStateStoreQueries;
+import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.flow.FlowState;
@@ -96,7 +97,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * @param <S> the user state type
  */
 @NullMarked
-public final class SpringMongoSagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S> {
+public final class SpringMongoSagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S>, SagaStateStoreSkippedInputs {
 
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
 

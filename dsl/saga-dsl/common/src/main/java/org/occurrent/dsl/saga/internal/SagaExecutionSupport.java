@@ -360,6 +360,16 @@ public final class SagaExecutionSupport {
         return withBookkeeping(current, current.status(), current.updatedAt(), current.failure(), current.streamMarks(), current.quarantineSkipCount());
     }
 
+    /**
+     * The instance {@code stored}, which a store kept quarantined without its {@link SagaFailure#quarantineId()} or its
+     * {@link SagaEnvelope#quarantineSkipCount()}, one version up with {@code status} and no skip count. Its failure
+     * record stays, so the input it failed on keeps the time it first failed and quarantines it again on its next
+     * failure.
+     */
+    public static <S extends @Nullable Object> SagaEnvelope<S> withQuarantineUndone(SagaEnvelope<S> stored, SagaStatus status) {
+        return withBookkeeping(stored, status, stored.updatedAt(), stored.failure(), stored.streamMarks(), null);
+    }
+
     /** The {@link SkippedInput#seq()} a release records the input the instance was quarantined on under, before every skip. */
     public static final long RELEASE_HEAD_SEQ = -1;
 

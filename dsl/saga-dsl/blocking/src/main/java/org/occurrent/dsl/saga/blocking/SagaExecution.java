@@ -157,11 +157,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // Where a release reads the inputs it replays from. Without it a quarantined instance still records what it skips,
     // and release throws.
     private final @Nullable EventStoreQueries eventStoreQueries;
-    // Set once the state store has said it cannot list releasing instances, so the poller asks once and warns once
-    private final AtomicBoolean releasingQueryUnsupported = new AtomicBoolean();
+    // The state store's skip records, or null when it does not implement SagaStateStoreSkippedInputs. The runner turns
+    // quarantine on only when it does, so with null the poller has nothing to continue and release refuses
+    private final @Nullable SagaStateStoreSkippedInputs skippedInputs;
     // The last id the previous release poll listed, null when that poll reached the end
     private final AtomicReference<@Nullable String> releasingCursor = new AtomicReference<>();
-    private final AtomicBoolean skipRecordingUnsupportedWarned = new AtomicBoolean();
 
     SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
                   CloudEventConverter<E> converter, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable) {
@@ -182,6 +182,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         this.subscriptionId = subscriptionId;
         this.saga = saga;
         this.stateStore = stateStore;
+        this.skippedInputs = stateStore instanceof SagaStateStoreSkippedInputs records ? records : null;
         this.dispatcher = dispatcher;
         this.converter = converter;
         this.config = config;
@@ -462,6 +463,23 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                             subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                     return false;
                 }
+                SagaEnvelope<S> withoutId = quarantinedWithoutId(sagaId, record.envelope());
+                if (withoutId != null) {
+                    // Undone, because left QUARANTINED without an id the instance would skip this event's redelivery and
+                    // every later input with nothing recorded
+                    SagaStatus before = current == null ? SagaStatus.ACTIVE : current.status();
+                    boolean undone = stateStore.compareAndSaveWithoutState(sagaId, SagaExecutionSupport.withQuarantineUndone(withoutId, before), withoutId.version());
+                    if (undone) {
+                        log.error("Saga '{}' instance '{}' was quarantined on the event '{}', but its state store {} did not persist SagaFailure.quarantineId or SagaEnvelope.quarantineSkipCount, so the quarantine was undone. "
+                                        + "The event goes back to whatever feeds this subscription instead of being acknowledged, and every delivery of it fails the same way until the store persists both.",
+                                subscriptionId, sagaId, meta.redeliveryKey(), stateStore.getClass().getName(), failure);
+                    } else {
+                        log.error("Saga '{}' instance '{}' was quarantined on the event '{}', but its state store {} did not persist SagaFailure.quarantineId or SagaEnvelope.quarantineSkipCount, and the quarantine could not be undone because the instance changed again. "
+                                        + "The event goes back to whatever feeds this subscription instead of being acknowledged. While the instance stays QUARANTINED without them, it skips every input without recording it.",
+                                subscriptionId, sagaId, meta.redeliveryKey(), stateStore.getClass().getName(), failure);
+                    }
+                    return false;
+                }
                 log.error("Saga '{}' instance '{}' is now QUARANTINED, stopped on the event '{}', which has been failing for {}, past its budget of {}. The time runs from when this event first failed, which can be before it was parked and offered again. It skips every further event and fires no timers. Find it with findByStatus(QUARANTINED, ..).",
                         subscriptionId, sagaId, meta.redeliveryKey(), failingFor(record, now), quarantineAfter, failure);
                 return true;
@@ -491,6 +509,22 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             return false;
         }
+    }
+
+    // The instance as stored after the write that quarantined it, when the store lost its quarantine id or skip count,
+    // and null when it kept both. skipToRecord records nothing for an instance without them, so a store that drops either
+    // would have every later skip acknowledged with nothing recorded. Only the version that write made can blame the
+    // store. A later version is another input or node that went on from it
+    private @Nullable SagaEnvelope<S> quarantinedWithoutId(String sagaId, SagaEnvelope<S> written) {
+        if (written.quarantineId() == null) {
+            return null;
+        }
+        SagaEnvelope<S> readBack = stateStore.findWithoutState(sagaId).orElse(null);
+        if (readBack == null || readBack.version() != written.version() || !readBack.isQuarantined()
+            || (readBack.quarantineId() != null && readBack.quarantineSkipCount() != null)) {
+            return null;
+        }
+        return readBack;
     }
 
     /**
@@ -578,9 +612,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     /**
      * Go on with the release of every instance that is releasing, which retries an input that failed during a release
      * until it succeeds or its budget runs out, and resumes a release a crash interrupted. Asked on every poll, so with
-     * a competing-consumer strategy only the node holding the saga's timer lease asks. A store that cannot list
-     * releasing instances is warned about once and not asked again, and a runner without an {@link EventStoreQueries}
-     * has nothing to replay from, so it does not ask either.
+     * a competing-consumer strategy only the node holding the saga's timer lease asks. A store that does not implement
+     * {@link SagaStateStoreSkippedInputs} has no releasing instances to list, and a runner without an
+     * {@link EventStoreQueries} has nothing to replay from, so neither asks.
      * <p>
      * One poll replays at most {@code timerBatchLimit} records, shared evenly among the instances it lists and at least
      * one each, and the next poll goes on where this poll stopped. It lists at most {@code timerBatchLimit} instances,
@@ -590,18 +624,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      */
     private void continueReleases() {
         EventStoreQueries queries = eventStoreQueries;
-        if (queries == null || releasingQueryUnsupported.get()) {
+        SagaStateStoreSkippedInputs records = skippedInputs;
+        if (queries == null || records == null) {
             return;
         }
         List<String> releasing;
         try {
-            releasing = stateStore.findReleasingSagaIds(releasingCursor.get(), config.timerBatchLimit());
-        } catch (UnsupportedOperationException unsupported) {
-            if (releasingQueryUnsupported.compareAndSet(false, true)) {
-                log.warn("Saga '{}' cannot go on with releases on its own, because its state store {} does not implement findReleasingSagaIds. A release that fails on an input or is interrupted goes on only when SagaSubscription.release(sagaId) is called again.",
-                        subscriptionId, stateStore.getClass().getName(), unsupported);
-            }
-            return;
+            releasing = records.findReleasingSagaIds(releasingCursor.get(), config.timerBatchLimit());
         } catch (Throwable t) {
             log.warn("Saga '{}' could not list the instances it is releasing", subscriptionId, t);
             return;
@@ -633,6 +662,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             throw new IllegalStateException("Saga '" + subscriptionId + "' cannot release instance '" + sagaId + "', because its SagaRunner was built without an EventStoreQueries to read the skipped inputs back from. "
                                             + "Give the runner one with SagaRunner.eventStoreQueries(..).");
         }
+        SagaStateStoreSkippedInputs records = skippedInputs(sagaId);
         // Read whole, so an instance whose state does not decode is refused here rather than marked releasing with
         // nothing able to apply to it
         for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
@@ -650,16 +680,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             String quarantineId = Objects.requireNonNull(current.quarantineId());
             SkippedInput head = SagaExecutionSupport.releaseHead(current);
-            try {
-                // Deleted and written again rather than kept, so the record an earlier release left when it was
-                // quarantined again on this input moves to the head, whatever its seq. Written before the release starts,
-                // so a release that has started always finds it
-                stateStore.deleteSkippedInputByKey(sagaId, quarantineId, head.key());
-                stateStore.recordSkippedInput(sagaId, quarantineId, head);
-            } catch (UnsupportedOperationException unsupported) {
-                throw new IllegalStateException("Saga '" + subscriptionId + "' cannot release instance '" + sagaId + "', because its state store "
-                                                + stateStore.getClass().getName() + " does not record the inputs a quarantined instance skips.", unsupported);
-            }
+            // Deleted and written again rather than kept, so the record an earlier release left when it was
+            // quarantined again on this input moves to the head, whatever its seq. Written before the release starts,
+            // so a release that has started always finds it
+            records.deleteSkippedInputByKey(sagaId, quarantineId, head.key());
+            records.recordSkippedInput(sagaId, quarantineId, head);
             if (!stateStore.compareAndSaveWithoutState(sagaId, releasing, current.version())) {
                 continue;
             }
@@ -746,7 +771,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 throw new IllegalStateException("Saga '" + subscriptionId + "' instance '" + sagaId + "' is releasing with no quarantine id, which only a state store that does not persist SagaFailure.quarantineId leaves.");
             }
             // Read after the instance, so the write that turns it active expects a version from before this read
-            List<SkippedInput> first = stateStore.findSkippedInputs(sagaId, quarantineId, 1);
+            List<SkippedInput> first = skippedInputs(sagaId).findSkippedInputs(sagaId, quarantineId, 1);
             Instant now = clock.get();
             if (first.isEmpty()) {
                 if (stateStore.compareAndSaveWithoutState(sagaId, SagaExecutionSupport.withReleased(current, now), current.version())) {
@@ -810,11 +835,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return recordReleaseFailure(sagaId, record, meta, failure, now);
             }
             if (saved && completed) {
-                deleteRecordsOfCompleted(sagaId, quarantineId, record);
+                deleteRecordsOfCompleted(sagaId);
                 lostInARow = 0;
                 replayed++;
             } else if (saved) {
-                stateStore.deleteSkippedInput(sagaId, quarantineId, record);
+                skippedInputs(sagaId).deleteSkippedInput(sagaId, quarantineId, record);
                 lostInARow = 0;
                 replayed++;
             } else {
@@ -861,7 +886,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             SagaEnvelope<S> after = stateStore.find(sagaId).orElse(null);
             if (after == null || !SagaExecutionSupport.differsOnlyByRecordedSkips(basis, after)
-                || !stateStore.findSkippedInputs(sagaId, quarantineId, 1).equals(List.of(record))) {
+                || !skippedInputs(sagaId).findSkippedInputs(sagaId, quarantineId, 1).equals(List.of(record))) {
                 return false;
             }
             envelope = SagaExecutionSupport.rebased(envelope, after);
@@ -872,14 +897,21 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     // A replay that completed the instance leaves records no release reads again, so all of them go. A crash before this
-    // leaves them until SagaStateStore.delete. A store without the bulk delete still deletes the record just applied,
-    // so the release ends as it would have without this
-    private void deleteRecordsOfCompleted(String sagaId, String quarantineId, SkippedInput record) {
-        try {
-            stateStore.deleteSkippedInputs(sagaId);
-        } catch (UnsupportedOperationException unsupported) {
-            stateStore.deleteSkippedInput(sagaId, quarantineId, record);
+    // leaves them until SagaStateStore.delete
+    private void deleteRecordsOfCompleted(String sagaId) {
+        skippedInputs(sagaId).deleteSkippedInputs(sagaId);
+    }
+
+    // The store's skip records. Release and the poller reach this only on a store that implements
+    // SagaStateStoreSkippedInputs, and so does a skip, because only quarantine gives an instance a quarantine id and
+    // the runner turns quarantine on only for such a store
+    private SagaStateStoreSkippedInputs skippedInputs(String sagaId) {
+        SagaStateStoreSkippedInputs records = skippedInputs;
+        if (records == null) {
+            throw new IllegalStateException("Saga '" + subscriptionId + "' cannot record or release the inputs instance '" + sagaId + "' skips, because its state store "
+                                            + stateStore.getClass().getName() + " does not implement SagaStateStoreSkippedInputs.");
         }
+        return records;
     }
 
     // The event a recorded key names, or null when the store no longer has it.
@@ -905,7 +937,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     return SagaSubscription.ReleaseResult.NOT_FOUND;
                 }
                 String quarantineId = current.quarantineId();
-                if (quarantineId == null || !stateStore.findSkippedInputs(sagaId, quarantineId, 1).equals(List.of(record))) {
+                if (quarantineId == null || !skippedInputs(sagaId).findSkippedInputs(sagaId, quarantineId, 1).equals(List.of(record))) {
                     SagaSubscription.ReleaseResult moved = resultUnlessReleasing(stateStore.findWithoutState(sagaId).orElse(null));
                     if (moved != null) {
                         logMovedOn(sagaId, record, moved, failure);
@@ -1122,28 +1154,16 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // raises the skip count, which takes toRecord's seq for it alone, the second records toRecord under the quarantine
     // id, and the third raises the version again. A key recorded already keeps its first record, so its new seq goes
     // unused. The third is what makes a release that read the records before this one lose its write that turns the
-    // instance active. False when the first or the third write lost, and the caller decides again on what it reads. A
-    // store that does not record skipped inputs is warned about once, and from then on the input is skipped unrecorded
-    // with no write, as before 0.35.0
+    // instance active. False when the first or the third write lost, and the caller decides again on what it reads
     private boolean recordedSkip(SagaEnvelope<S> current, SkippedInput toRecord) {
-        if (skipRecordingUnsupportedWarned.get()) {
-            return true;
-        }
         String sagaId = current.sagaId();
+        SagaStateStoreSkippedInputs records = skippedInputs(sagaId);
         String quarantineId = Objects.requireNonNull(current.quarantineId());
         SagaEnvelope<S> counted = SagaExecutionSupport.withSkipCounted(current);
         if (!stateStore.compareAndSaveWithoutState(sagaId, counted, current.version())) {
             return false;
         }
-        try {
-            stateStore.recordSkippedInput(sagaId, quarantineId, toRecord);
-        } catch (UnsupportedOperationException unsupported) {
-            if (skipRecordingUnsupportedWarned.compareAndSet(false, true)) {
-                log.warn("Saga '{}' skips the inputs of a quarantined instance without recording them, because its state store {} does not implement recordSkippedInput. Such an instance cannot be released.",
-                        subscriptionId, stateStore.getClass().getName(), unsupported);
-            }
-            return true;
-        }
+        records.recordSkippedInput(sagaId, quarantineId, toRecord);
         return stateStore.compareAndSaveWithoutState(sagaId, SagaExecutionSupport.withSkipFinished(counted), counted.version());
     }
 

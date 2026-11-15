@@ -24,6 +24,7 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.internal.SagaFilters;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
@@ -278,7 +279,7 @@ public final class SagaRunner<E, C> {
         requireNonNull(config, "config cannot be null");
         requireNonNull(timersEnabled, "timersEnabled cannot be null");
 
-        SagaRunnerConfig effectiveConfig = quarantineOnlyIfTheEventCanBeAskedForAgain(subscriptionId, config);
+        SagaRunnerConfig effectiveConfig = quarantineOnlyIfTheEventCanBeAskedForAgain(subscriptionId, stateStore, config);
         SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, effectiveConfig,
                 retentionCheckFor(subscriptionId, effectiveConfig), Instant::now, eventStoreQueries);
         SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));
@@ -345,8 +346,14 @@ public final class SagaRunner<E, C> {
      * ones behind it, and on a model holding only some of what it delivers one of those may be a copy nothing else
      * has. So quarantine needs a model that guarantees it holds everything, and one that cannot promise that keeps the
      * pre-0.34.0 behaviour of never quarantining, and is told why at startup.
+     * <p>
+     * On a model that holds everything, quarantine also needs a state store that implements
+     * {@link SagaStateStoreSkippedInputs} and a runner with an {@link EventStoreQueries}. The first records what a
+     * quarantined instance skips and the second is where a release reads it back from. Without either this throws and
+     * names {@link SagaRunnerConfig#disableQuarantine()}, because an instance quarantined without them skips its inputs
+     * for good.
      */
-    private SagaRunnerConfig quarantineOnlyIfTheEventCanBeAskedForAgain(String subscriptionId, SagaRunnerConfig config) {
+    private SagaRunnerConfig quarantineOnlyIfTheEventCanBeAskedForAgain(String subscriptionId, SagaStateStore<?> stateStore, SagaRunnerConfig config) {
         if (config.quarantineAfter().isEmpty()) {
             return config;
         }
@@ -360,6 +367,12 @@ public final class SagaRunner<E, C> {
             log.warn("Saga subscription '{}' runs on a subscription model that cannot guarantee it holds every event it delivers ({}), so quarantine is switched off for this saga, and an instance that keeps failing is never quarantined, which is the behaviour before 0.34.0. What its failing event holds up is decided by whatever feeds this subscription. Quarantining the event an instance stopped on would be safe whenever this model still holds that one, but a quarantined instance skips everything addressed to it afterwards, and skipping acknowledges. On a model that holds only some of what it delivers, one of those later events may be a copy nothing else has. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                     subscriptionId, subscriptionModel.getClass().getName());
             return config.disableQuarantine();
+        }
+        if (!(stateStore instanceof SagaStateStoreSkippedInputs)) {
+            throw new IllegalStateException("Saga subscription '" + subscriptionId + "' quarantines an instance that keeps failing, and its state store " + stateStore.getClass().getName()
+                                            + " does not implement SagaStateStoreSkippedInputs, so a quarantined instance could neither record the inputs it skips nor be released. "
+                                            + "Implement SagaStateStoreSkippedInputs on the store, as the in-memory and MongoDB stores do, "
+                                            + "or turn quarantine off with SagaRunnerConfig.disableQuarantine().");
         }
         if (eventStoreQueries == null) {
             throw new IllegalStateException("Saga subscription '" + subscriptionId + "' quarantines an instance that keeps failing, and its SagaRunner has no EventStoreQueries to release a quarantined instance from. "

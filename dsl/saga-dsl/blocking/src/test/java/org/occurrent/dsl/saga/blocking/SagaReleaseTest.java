@@ -647,25 +647,6 @@ class SagaReleaseTest {
         }
 
         @Test
-        void warns_once_and_stops_asking_a_store_that_cannot_list_releasing_instances() {
-            store.cannotListReleasing = true;
-
-            execution.pollTimers();
-            execution.pollTimers();
-            execution.pollTimers();
-
-            List<String> warnings = appender.list.stream()
-                    .filter(e -> e.getLevel() == Level.WARN)
-                    .map(ILoggingEvent::getFormattedMessage)
-                    .filter(m -> m.contains("does not implement findReleasingSagaIds"))
-                    .toList();
-            assertAll(
-                    () -> assertThat(store.releasingAsked).hasValue(1),
-                    () -> assertThat(warnings).hasSize(1)
-            );
-        }
-
-        @Test
         void logs_that_it_could_not_list_the_instances_when_the_listing_fails_and_not_that_it_could_not_go_on_with_one() {
             store.listFailure = new IllegalStateException("the store is down");
 
@@ -1689,20 +1670,6 @@ class SagaReleaseTest {
             );
         }
 
-        @Test
-        void a_store_that_cannot_delete_them_all_still_releases_and_deletes_the_record_it_applied() {
-            String quarantineId = quarantinedWithDoneAndLateSkipped();
-            store.cannotBulkDelete = true;
-
-            ReleaseResult result = execution.release(ORDER);
-
-            assertAll(
-                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
-                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.COMPLETED),
-                    () -> assertThat(store.delegate.findSkippedInputs(ORDER, quarantineId, 10)).extracting(SkippedInput::key)
-                            .containsExactly(streamKey(eventStore.read(ORDER).eventList().getLast()))
-            );
-        }
     }
 
     @Nested
@@ -1730,51 +1697,55 @@ class SagaReleaseTest {
     }
 
     @Nested
-    class WhenTheStoreCannotRecordSkippedInputs {
+    class WhenTheStoreDoesNotImplementTheSkippedInputsCapability {
 
-        private ListAppender<ILoggingEvent> appender;
-        private Logger executionLog;
-        private @Nullable Level originalLevel;
+        @Test
+        void a_release_is_refused_with_a_message_that_names_the_capability() {
+            SagaExecution<OrderEvent, Order, OrderCommand> withoutRecords = new SagaExecution<>("orders", saga(), new StoreWithoutSkippedInputs(),
+                    dispatched::add, converter, CONFIG, event -> true, now::get, queries);
 
-        @BeforeEach
-        void startCapturing() {
-            appender = new ListAppender<>();
-            appender.start();
-            executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
-            executionLog.addAppender(appender);
-            originalLevel = executionLog.getLevel();
-            executionLog.setLevel(Level.WARN);
+            assertThatThrownBy(() -> withoutRecords.release(ORDER))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("SagaStateStoreSkippedInputs");
         }
+    }
 
-        @AfterEach
-        void stopCapturing() {
-            executionLog.setLevel(originalLevel);
-            executionLog.detachAppender(appender);
-            appender.stop();
+    @Nested
+    class WhenTheStoreDoesNotPersistTheQuarantineId {
+
+        @Test
+        void the_delivery_that_quarantines_the_instance_is_not_acknowledged() {
+            deliver(placed());
+            failing.add("poison");
+            CloudEvent poison = added("poison");
+            assertThatThrownBy(() -> deliver(poison)).isInstanceOf(IllegalStateException.class);
+            store.dropsTheQuarantineId = true;
+            now.set(now.get().plus(BUDGET));
+
+            assertThatThrownBy(() -> deliver(poison))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("cannot pack poison");
         }
 
         @Test
-        void it_warns_once_and_makes_no_write_for_the_skips_after_the_warning() {
+        void every_redelivery_of_the_event_fails_and_the_instance_stays_out_of_quarantine() {
             deliver(placed());
             failing.add("poison");
-            quarantineOn(added("poison"));
-            store.cannotRecord = true;
+            CloudEvent poison = added("poison");
+            assertThatThrownBy(() -> deliver(poison)).isInstanceOf(IllegalStateException.class);
+            store.dropsTheQuarantineId = true;
+            now.set(now.get().plus(BUDGET));
+            assertThatThrownBy(() -> deliver(poison))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("cannot pack poison");
 
-            deliver(added("a"));
-            int writesAfterTheWarning = store.writesWithoutState.get();
-            SagaEnvelope<Order> afterTheWarning = instance();
-            deliver(added("b"));
-            deliver(added("c"));
+            Throwable redelivery = catchThrowable(() -> deliver(poison));
 
-            List<String> warnings = appender.list.stream()
-                    .filter(e -> e.getLevel() == Level.WARN)
-                    .map(ILoggingEvent::getFormattedMessage)
-                    .filter(m -> m.contains("does not implement recordSkippedInput"))
-                    .toList();
             assertAll(
-                    () -> assertThat(warnings).hasSize(1),
-                    () -> assertThat(store.writesWithoutState).hasValue(writesAfterTheWarning),
-                    () -> assertThat(instance()).isEqualTo(afterTheWarning)
+                    () -> assertThat(redelivery)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessage("cannot pack poison"),
+                    () -> assertThat(instance().status()).isNotEqualTo(SagaStatus.QUARANTINED)
             );
         }
     }
@@ -2005,14 +1976,38 @@ class SagaReleaseTest {
         }
     }
 
+    // The in-memory store without the optional SagaStateStoreSkippedInputs capability
+    private static final class StoreWithoutSkippedInputs implements SagaStateStore<Order> {
+        private final SagaStateStore<Order> delegate = SagaStateStore.inMemory();
+
+        @Override
+        public Optional<SagaEnvelope<Order>> find(String sagaId) {
+            return delegate.find(sagaId);
+        }
+
+        @Override
+        public boolean compareAndSave(String sagaId, SagaEnvelope<Order> envelope, long expectedVersion) {
+            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        }
+
+        @Override
+        public List<SagaEnvelope<Order>> findWithDueTimers(Instant now, int limit) {
+            return delegate.findWithDueTimers(now, limit);
+        }
+
+        @Override
+        public void delete(String sagaId) {
+            delegate.delete(sagaId);
+        }
+    }
+
     /**
      * An in-memory store that runs a hook just before its next write, which is how a test puts another write between
      * a read and the write that follows it, and records every write it accepts.
      */
-    private static final class InterceptingStore implements SagaStateStore<Order> {
-        final SagaStateStore<Order> delegate = SagaStateStore.inMemory();
+    private static final class InterceptingStore implements SagaStateStore<Order>, SagaStateStoreSkippedInputs {
+        final InMemorySagaStateStore<Order> delegate = new InMemorySagaStateStore<>();
         final List<SagaEnvelope<Order>> accepted = new CopyOnWriteArrayList<>();
-        final AtomicInteger releasingAsked = new AtomicInteger();
         private final AtomicReference<@Nullable Runnable> beforeNextStateWrite = new AtomicReference<>();
         private final AtomicReference<@Nullable Runnable> beforeNextWriteWithoutState = new AtomicReference<>();
         final AtomicInteger writesWithoutState = new AtomicInteger();
@@ -2026,14 +2021,12 @@ class SagaReleaseTest {
         volatile boolean refusesToDecode;
         volatile @Nullable RuntimeException findFailure;
         volatile @Nullable RuntimeException findWithoutStateFailure;
-        volatile boolean cannotListReleasing;
         volatile @Nullable RuntimeException listFailure;
         volatile @Nullable String findFailsFor;
         volatile boolean dropsTheReleaseTime;
+        volatile boolean dropsTheQuarantineId;
         private final AtomicReference<@Nullable Runnable> beforeNextFindWithoutState = new AtomicReference<>();
         volatile boolean listsEveryReleasingInstanceWhateverTheLimit;
-        volatile boolean cannotRecord;
-        volatile boolean cannotBulkDelete;
 
         void beforeNextRecord(Runnable hook) {
             beforeNextRecord.set(hook);
@@ -2120,6 +2113,9 @@ class SagaReleaseTest {
             }
             run(beforeNextWriteWithoutState);
             SagaEnvelope<Order> toSave = dropsTheReleaseTime && envelope.isReleasing() ? withoutTheReleaseTime(envelope) : envelope;
+            if (dropsTheQuarantineId && envelope.isQuarantined()) {
+                toSave = withoutTheQuarantineId(toSave);
+            }
             boolean saved = delegate.compareAndSaveWithoutState(sagaId, toSave, expectedVersion);
             if (saved) {
                 accepted.add(new SagaEnvelope<>(envelope.sagaId(), null, envelope.status(), envelope.version(), envelope.timers(),
@@ -2127,6 +2123,15 @@ class SagaReleaseTest {
                         envelope.currentStep(), envelope.started(), envelope.failure(), envelope.streamMarks(), envelope.quarantineSkipCount()));
             }
             return saved;
+        }
+
+        // What a store that forgets SagaFailure.quarantineId and SagaEnvelope.quarantineSkipCount persists
+        private static SagaEnvelope<Order> withoutTheQuarantineId(SagaEnvelope<Order> envelope) {
+            SagaFailure failure = envelope.failure();
+            SagaFailure forgotten = new SagaFailure(failure.input(), failure.position(), failure.firstFailedAt(), failure.failureType(), failure.failureMessage(), failure.releasedAt(), null);
+            return new SagaEnvelope<>(envelope.sagaId(), envelope.state(), envelope.status(), envelope.version(), envelope.timers(),
+                    envelope.streamWatermarks(), envelope.positionWatermark(), envelope.createdAt(), envelope.updatedAt(), envelope.completedAt(),
+                    envelope.currentStep(), envelope.started(), forgotten, envelope.streamMarks(), null);
         }
 
         // What a store that forgets SagaFailure.releasedAt persists
@@ -2145,10 +2150,6 @@ class SagaReleaseTest {
 
         @Override
         public List<String> findReleasingSagaIds(@Nullable String after, int limit) {
-            releasingAsked.incrementAndGet();
-            if (cannotListReleasing) {
-                throw new UnsupportedOperationException("findReleasingSagaIds");
-            }
             RuntimeException failure = listFailure;
             if (failure != null) {
                 throw failure;
@@ -2158,9 +2159,6 @@ class SagaReleaseTest {
 
         @Override
         public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-            if (cannotRecord) {
-                throw new UnsupportedOperationException("recordSkippedInput");
-            }
             run(beforeNextRecord);
             delegate.recordSkippedInput(sagaId, quarantineId, input);
             run(afterNextRecord);
@@ -2193,9 +2191,6 @@ class SagaReleaseTest {
 
         @Override
         public void deleteSkippedInputs(String sagaId) {
-            if (cannotBulkDelete) {
-                throw new UnsupportedOperationException("deleteSkippedInputs");
-            }
             delegate.deleteSkippedInputs(sagaId);
         }
 
