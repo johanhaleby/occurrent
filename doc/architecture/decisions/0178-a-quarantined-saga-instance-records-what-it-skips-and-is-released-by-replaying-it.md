@@ -58,8 +58,9 @@ a quarantined instance, and all three record it:
 
 A skip used to write nothing. It now makes the three writes point 2 describes, two compare-and-sets on the instance with
 the key's record between them, and each compare-and-set is retried on a lost write like any other save. The second one
-changes the instance's version after the record exists, which point 3 relies on. A skip whose key is recorded already
-makes only that second write. The watermarks still don't move, which is what ADR 134 Decision point 5 requires.
+changes the instance's version after the record exists, which point 3 relies on. A redelivered input whose key is
+recorded takes a number that goes unused, since its record write keeps the record already there. The watermarks still
+don't move, which is what ADR 134 Decision point 5 requires.
 
 Events from a DCB store are stored with a stream id and a stream version on MongoDB, so they are recorded by stream key
 like any other.
@@ -83,14 +84,16 @@ reads the records in order of sequence number, which is the order the inputs wer
 
 A crash or a lost race between those writes can skip a number, but never gives two records the same one. When the first
 write succeeds and the record isn't written, the input was never acknowledged, so it is offered again and takes a new
-number. When the record is written and the second write isn't, the input is offered again, finds its key recorded, and
-makes only the second write. When two skips of one key race and both take a number, the record written first stays and
-the other's number goes unused, and the other still makes the second write. The record that stays can hold the higher of
-the two numbers, so the input is replayed after an input of another stream that took a number between them. Both orders
+number. A redelivered input whose key is recorded takes a number that goes unused. Its record write keeps the record
+already there, and it still makes the second write, so when the record was written and the second write wasn't, the
+redelivery finishes the skip. When two skips of one key race, the record written first stays and the other's number goes
+unused in the same way. The record that stays can hold the higher of the two numbers, so the input is replayed after an
+input of another stream that took a number between them. Both orders
 are ones live delivery offered, since the input arrived before that other input and again after it. A release that
 finds a record whose skip never finished replays an input the instance never applied.
 
-`SagaStateStore.delete(sagaId)` also deletes the instance's records.
+`SagaStateStore.delete(sagaId)` also deletes the instance's records. When a replayed input completes the instance,
+release deletes the records still left, since a completed instance skips every input and none of them can be replayed.
 
 ### 3. Release replays the input the instance stopped on, then the records
 
@@ -125,7 +128,7 @@ A lost compare-and-set while releasing is either such a skip or another node's r
 follows the at-least-once dispatch contract of live inputs, so a reaction is dispatched once for each time its input is
 applied. When the instance read again holds the same state, the same first record and the same watermarks, only skips
 happened, and release writes the result it computed again without dispatching the reaction a second time. Anything else,
-it computes again.
+it computes again. The state is compared with `equals`, so for a state type without it release always computes again.
 
 An event that commits late below a position another read reached isn't a problem here. Nothing reads a range of
 positions. The late event is delivered live, is skipped, and is recorded like any other.
@@ -241,7 +244,9 @@ until the node runs 0.35.0 again, or until the instance is deleted and the node 
 
 A downgrade that doesn't stall anything goes in three steps, all on 0.35.0. Turn quarantine off, so that no instance is
 quarantined while the others are dealt with. Then release each instance that 0.35.0 quarantined until `release` returns
-`RELEASED`, or delete it with `SagaStateStore.delete(sagaId)`. Then downgrade. Of what this record adds, only the
+`RELEASED`, or delete it with `SagaStateStore.delete(sagaId)`. With quarantine off, a replayed input that keeps failing
+never quarantines the instance again, so when `release` doesn't return `RELEASED`, delete the instance. Then downgrade.
+Of what this record adds, only the
 `QUARANTINED_RECORDING` status is something 0.34.0 can't read, and no instance has it after these steps. A downgrade
 that skips these steps stalls or stops the saga's subscription as above, until the node runs 0.35.0 again.
 
@@ -263,7 +268,7 @@ that skips these steps stalls or stops the saga's subscription as above, until t
 - A skip by a quarantined instance is now three writes, two compare-and-sets on the instance and the record between
   them.
 - A quarantined instance keeps a record of every input it skips, with no limit. The records take space in the store
-  until a release replays them or the instance is deleted.
+  until a release replays them, a replayed input completes the instance, or the instance is deleted.
 - An instance whose K or recorded input refers to an event that was deleted from the store stays quarantined until the
   event is restored or the instance is deleted.
 - A rolling upgrade from 0.34.0 that follows the upgrade guide takes two deploys, one with quarantine off and one that
