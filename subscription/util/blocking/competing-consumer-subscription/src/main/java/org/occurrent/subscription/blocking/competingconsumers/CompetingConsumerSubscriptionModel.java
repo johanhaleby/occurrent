@@ -2773,7 +2773,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     private boolean isHeldPausedInTheWrappedModelFor(String subscriptionId, UnsupportedStartAtException refused) {
-        return inTheWrappedModelFor(subscriptionId, () -> StartRefusalReportingSubscriptions.findIn(delegate).map(model -> model.isHeldPausedFor(subscriptionId, refused)).orElse(false));
+        return inTheWrappedModelFor(subscriptionId, CallKind.ASKING_OR_STARTING, () -> StartRefusalReportingSubscriptions.findIn(delegate).map(model -> model.isHeldPausedFor(subscriptionId, refused)).orElse(false));
     }
 
     /**
