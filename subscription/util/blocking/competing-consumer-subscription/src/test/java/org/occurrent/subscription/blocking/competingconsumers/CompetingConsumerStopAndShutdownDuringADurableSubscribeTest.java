@@ -50,11 +50,11 @@ import java.util.function.Consumer;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
 
 /**
  * A durable model reads the stored position of a subscription to make it from its default start position and to
- * resume it, and it also reads it once before it starts one at a position of its own. A read takes as long as the
- * database cannot be reached. Neither stop() nor shutdown() waits for the
+ * resume it, which takes as long as the database cannot be reached. Neither stop() nor shutdown() waits for the
  * subscribe of one that does not compete while it reads. The wrapped model is not running as the model is built, so the
  * model is stopped and the subscription runs once start(..) is called.
  */
@@ -79,8 +79,8 @@ class CompetingConsumerStopAndShutdownDuringADurableSubscribeTest {
             if (durableModelStartsAt.equals("default")) {
                 assertThat(read.awaitEntered()).as("the durable model reads the stored position of nc to make it").isTrue();
             } else {
-                // The durable model reads the stored position of nc once before it starts it at now()
-                assertThat(read.awaitEntered()).as("the durable model reads the stored position of nc before it starts it at now()").isTrue();
+                // The durable model reads nothing to make it from now(), so the subscribe reads only to resume it
+                await().atMost(EVENTUALLY).until(() -> read.entered() || subscribing.isDone());
             }
 
             Runnable call = called.equals("stop()") ? fixture.model::stop : fixture.model::shutdown;
@@ -96,13 +96,13 @@ class CompetingConsumerStopAndShutdownDuringADurableSubscribeTest {
     }
 
     @Test
-    void a_subscription_that_does_not_compete_made_before_the_first_start_waits_for_it_without_resuming_it() {
+    void a_subscription_that_does_not_compete_made_before_the_first_start_waits_for_it_with_no_read_of_its_stored_position() {
         Fixture fixture = new Fixture();
         try {
             fixture.subscribeNc("now");
 
             assertThat(fixture.wrapped.log).as("[calls to the wrapped model, which was stopped before the model was built]").containsExactly("stop", "subscribe nc running=false");
-            assertThat(fixture.storage.reads).as("reads of the stored position of nc, which is the durable model's read of what is stored for nc before it starts it at a position of its own, and no resume read it").hasValue(1);
+            assertThat(fixture.storage.reads).as("reads of the stored position of nc").hasValue(0);
             assertThat(fixture.wrapped.runs("nc")).as("nc runs in the wrapped model before the first start").isFalse();
 
             fixture.model.start(false);

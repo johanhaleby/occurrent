@@ -379,7 +379,9 @@ Every other capability is found only on a model that implements it. That is `Rep
 * `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
   `ManualStartSubscriptionModel` answers empty. There is no way to resume a competing subscription at a position yet.
   Pause and resume it through the `CompetingConsumerSubscriptionModel`. Over a `DurableSubscriptionModel` the resume
-  starts from the stored checkpoint. [#1304](https://github.com/johanhaleby/occurrent/issues/1304) decides how a resume at
+  starts from the stored checkpoint. The exception is a subscription subscribed at a `StartAt.checkpoint(..)` of its own
+  that has stored no checkpoint yet, while the checkpoint and write version stored for the id are the ones read when it
+  was subscribed, or that read failed. Its resume goes on from the position the model it wraps has read to. [#1304](https://github.com/johanhaleby/occurrent/issues/1304) decides how a resume at
   a position through a competing consumer should work.
 * `capability(CheckpointAwareSubscriptionModel.class)`, or another model type, on a wrapper that doesn't implement it
   answers empty where it used to answer the model beneath. On the stack the Spring Boot starter builds, a

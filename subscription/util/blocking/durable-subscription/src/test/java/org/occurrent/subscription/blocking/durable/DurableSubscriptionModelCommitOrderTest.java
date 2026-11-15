@@ -38,15 +38,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * What {@link DurableSubscriptionModel} answers to {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()}.
- * It answers what the wrapped model answers, and {@code false} when the wrapped model doesn't implement the interface
- * or the model starts subscriptions it can't record a start position for.
+ * It answers {@code false} whatever the wrapped model answers, since a resume goes to the checkpoint stored for the id,
+ * and another process can store one there that lies after events this model never delivered.
  */
 @DisplayName("DurableSubscriptionModelCommitOrder")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelCommitOrderTest {
 
     @Test
-    void delivers_every_event_in_commit_order_when_the_wrapped_model_declares_that_it_does() {
+    void does_not_deliver_every_event_in_commit_order_even_when_the_wrapped_model_declares_that_it_does() {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(new DeclaringModel(true), new InMemoryCheckpointStorage());
 
@@ -54,7 +54,7 @@ class DurableSubscriptionModelCommitOrderTest {
         boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
 
         // Then
-        assertThat(deliversInCommitOrder).isTrue();
+        assertThat(deliversInCommitOrder).isFalse();
     }
 
     @Test
@@ -107,7 +107,7 @@ class DurableSubscriptionModelCommitOrderTest {
     }
 
     @Test
-    void a_manual_start_model_over_it_delivers_every_event_in_commit_order_when_the_wrapped_model_declares_that_it_does() {
+    void a_manual_start_model_over_it_does_not_deliver_every_event_in_commit_order_even_when_the_wrapped_model_declares_that_it_does() {
         // Given
         DurableSubscriptionModel durable = new DurableSubscriptionModel(new DeclaringModel(true), new InMemoryCheckpointStorage());
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(durable);
@@ -116,7 +116,7 @@ class DurableSubscriptionModelCommitOrderTest {
         boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
 
         // Then
-        assertThat(deliversInCommitOrder).isTrue();
+        assertThat(deliversInCommitOrder).isFalse();
     }
 
     private static class SilentModel implements CheckpointAwareSubscriptionModel {

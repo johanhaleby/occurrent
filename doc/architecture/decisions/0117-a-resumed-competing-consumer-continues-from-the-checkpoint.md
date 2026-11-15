@@ -30,6 +30,8 @@ Delivery stayed at-least-once either way, so nothing was lost, and the redeliver
 
 This amends what [ADR 94](0094-the-subscription-tck-declares-three-differences-and-waits-deterministically.md)'s pause section implied about a resumed subscription continuing from the position it had read. That is still what the wrapped Mongo model does on its own, but a `DurableSubscriptionModel` sitting above it now resumes from the stored checkpoint instead whenever one is available and the model underneath can be repositioned.
 
+One exception came with [#1490](https://github.com/johanhaleby/occurrent/issues/1490). A subscription subscribed at a `StartAt.checkpoint(..)` of its own that has stored no checkpoint yet goes on from the position the model underneath has read to, while the checkpoint and write version stored for the id are the ones read when it was subscribed, or that read failed. A checkpoint an earlier run stored can lie after its start, and resuming there would skip the events in between.
+
 The limit [ADR 116](0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md) named and filed separately, "a node that lost the lease and later takes it back resumes its own subscription from the position it had, not from the checkpoint the other node advanced", is what this ADR fixes. That sentence is no longer true of the current code, and this is the record of why.
 
 `CompetingConsumerSubscriptionModelFixture.deliversEventsPublishedWhilePaused()` still answers `true` for the same outcome as before, reopening from a position that covers the paused window, but the position it reopens from is now the checkpoint another node may have advanced, not always the position this node's own delegate last read.

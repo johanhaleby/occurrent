@@ -46,6 +46,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModelConfig;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
 import org.occurrent.subscription.blocking.durable.catchup.StartAtTime;
@@ -279,6 +280,38 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
         // Then A resumes from the checkpoint B stored, so it delivers e6 and neither e4 nor e5
         await("A delivers e6").atMost(5, SECONDS).until(() -> eventsA.stream().anyMatch(e -> e.getId().equals("e6")));
         assertThat(eventsA).extracting(CloudEvent::getId).containsExactly("e2", "e3", "e6");
+    }
+
+    @Test
+    void a_node_that_subscribed_at_now_and_gets_the_lease_resumes_from_the_holders_last_checkpoint_and_delivers_what_the_holder_handled_without_storing_a_checkpoint() {
+        // Given a holder A that stores a checkpoint only for e1, and handles e1, e2 and e3
+        String subscriptionId = UUID.randomUUID().toString();
+        SpringMongoCheckpointStorage checkpointStorage = new SpringMongoCheckpointStorage(mongoTemplate, checkpointCollection);
+        DurableSubscriptionModelConfig storeForE1Only = new DurableSubscriptionModelConfig(cloudEvent -> cloudEvent.getId().equals("e1")).neverSaveQuietPosition();
+        CopyOnWriteArrayList<CloudEvent> eventsA = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<CloudEvent> eventsB = new CopyOnWriteArrayList<>();
+        nodeA = new CompetingConsumerSubscriptionModel(new DurableSubscriptionModel(springModel(), checkpointStorage, storeForE1Only), strategy);
+        nodeB = new CompetingConsumerSubscriptionModel(new DurableSubscriptionModel(springModel(), checkpointStorage, storeForE1Only), strategy);
+        nodeA.subscribe("A", subscriptionId, null, StartAt.now(), eventsA::add).waitUntilStarted();
+        eventStore.write(streamId, serialize(new NameDefined("e1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "e1")));
+        eventStore.write(streamId, serialize(new NameWasChanged("e2", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "e2")));
+        eventStore.write(streamId, serialize(new NameWasChanged("e3", LocalDateTime.of(2026, 1, 1, 0, 0, 2), "name", "e3")));
+        await("A handles e1, e2 and e3").atMost(5, SECONDS).untilAsserted(() -> assertThat(eventsA).extracting(CloudEvent::getId).containsExactly("e1", "e2", "e3"));
+        String checkpointAfterE1 = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(eventsA.get(0)).asString();
+        await("the checkpoint after e1 is stored").atMost(5, SECONDS).until(() -> checkpointStorage.exists(subscriptionId) && checkpointStorage.read(subscriptionId).asString().equals(checkpointAfterE1));
+
+        // And node B, stopped, subscribes at now() after e3, which the wrapped model holds paused at that position, and is then started while A holds the lease
+        nodeB.stop();
+        nodeB.subscribe("B", subscriptionId, null, StartAt.now(), eventsB::add);
+        nodeB.start();
+
+        // When A loses the lease, B gets it and e4 is written
+        strategy.transferLease(subscriptionId, "A", "B");
+        eventStore.write(streamId, serialize(new NameWasChanged("e4", LocalDateTime.of(2026, 1, 1, 0, 0, 3), "name", "e4")));
+
+        // Then B resumes at the checkpoint after e1, so it delivers e2 and e3, which A handled without storing a checkpoint, before e4
+        await("B delivers e4").atMost(5, SECONDS).until(() -> eventsB.stream().anyMatch(e -> e.getId().equals("e4")));
+        assertThat(eventsB).extracting(CloudEvent::getId).containsExactly("e2", "e3", "e4");
     }
 
     @Test
