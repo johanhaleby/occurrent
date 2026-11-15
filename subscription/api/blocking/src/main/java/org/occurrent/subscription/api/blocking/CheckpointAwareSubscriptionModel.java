@@ -65,8 +65,9 @@ public interface CheckpointAwareSubscriptionModel extends SubscriptionModel, Glo
      * {@link #globalCheckpoint()} for a caller that may stop wanting the answer while it waits for it. A catch-up
      * subscription calls this on its replay thread, and {@code stillWanted} turns {@code false} once the subscription is
      * cancelled, the catch-up model is stopped or shut down, or another replay took the subscription over. A model that
-     * retries a failure should check {@code stillWanted} before each new attempt and, once it is {@code false}, throw
-     * the last failure instead of trying again.
+     * retries a failure should check {@code stillWanted} before each new attempt. Once it is {@code false}, the model
+     * must throw the last failure instead of trying again, and not answer {@code null}, which a catch-up reads as a
+     * model that has no global checkpoint.
      * <p>
      * The default calls {@link #globalCheckpoint()} and never reads {@code stillWanted}. A model that wraps another one
      * passes the call on to the model it wraps, with the same {@code stillWanted}.
@@ -82,8 +83,9 @@ public interface CheckpointAwareSubscriptionModel extends SubscriptionModel, Glo
      * {@link #canResumeFrom(Checkpoint)} for a caller that may stop wanting the answer while it waits for it. A catch-up
      * subscription calls this on its replay thread, and {@code stillWanted} turns {@code false} once the subscription is
      * cancelled, the catch-up model is stopped or shut down, or another replay took the subscription over. A model that
-     * retries a failure should check {@code stillWanted} before each new attempt and, once it is {@code false}, throw
-     * the last failure instead of trying again. The MongoDB subscription models do that.
+     * retries a failure should check {@code stillWanted} before each new attempt. Once it is {@code false}, the model
+     * must throw the last failure instead of trying again, and not answer {@code false}, which a catch-up reads as a
+     * feed that no longer has the history back to {@code checkpoint}. The MongoDB subscription models do that.
      * <p>
      * The default calls {@link #canResumeFrom(Checkpoint)} and never reads {@code stillWanted}. A model that wraps
      * another one passes the call on to the model it wraps, with the same {@code stillWanted}.

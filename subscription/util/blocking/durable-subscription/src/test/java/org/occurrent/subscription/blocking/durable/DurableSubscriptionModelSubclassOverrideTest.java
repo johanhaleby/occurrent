@@ -30,6 +30,7 @@ import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
@@ -171,6 +172,54 @@ class DurableSubscriptionModelSubclassOverrideTest {
 
         // Then
         assertThat(wrapped.calls).as("calls the wrapped model got").containsExactly(new Call("canResumeFrom(Checkpoint)", null), new Call("globalCheckpoint()", null));
+    }
+
+    @Test
+    void a_one_argument_canResumeFrom_inside_a_nested_two_argument_call_sees_the_stillWanted_of_the_outer_call_again() {
+        // Given an override that makes a nested two-argument call, with another stillWanted, before it calls super
+        BooleanSupplier outerStillWanted = () -> true;
+        BooleanSupplier innerStillWanted = () -> false;
+        AtomicBoolean nested = new AtomicBoolean();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage()) {
+            @Override
+            public boolean canResumeFrom(Checkpoint checkpoint) {
+                if (!nested.getAndSet(true)) {
+                    canResumeFrom(checkpoint, innerStillWanted);
+                }
+                return super.canResumeFrom(checkpoint);
+            }
+        };
+
+        // When
+        model.canResumeFrom(WRAPPED_ANSWER, outerStillWanted);
+
+        // Then the call to super after the nested call is the outer call's
+        assertThat(wrapped.calls).as("calls the wrapped model got")
+                .containsExactly(new Call("canResumeFrom(Checkpoint, BooleanSupplier)", innerStillWanted), new Call("canResumeFrom(Checkpoint, BooleanSupplier)", outerStillWanted));
+    }
+
+    @Test
+    void a_one_argument_globalCheckpoint_inside_a_nested_two_argument_call_sees_the_stillWanted_of_the_outer_call_again() {
+        // Given an override that makes a nested two-argument call, with another stillWanted, before it calls super
+        BooleanSupplier outerStillWanted = () -> true;
+        BooleanSupplier innerStillWanted = () -> false;
+        AtomicBoolean nested = new AtomicBoolean();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage()) {
+            @Override
+            public @Nullable Checkpoint globalCheckpoint() {
+                if (!nested.getAndSet(true)) {
+                    globalCheckpoint(innerStillWanted);
+                }
+                return super.globalCheckpoint();
+            }
+        };
+
+        // When
+        model.globalCheckpoint(outerStillWanted);
+
+        // Then the call to super after the nested call is the outer call's
+        assertThat(wrapped.calls).as("calls the wrapped model got")
+                .containsExactly(new Call("globalCheckpoint(BooleanSupplier)", innerStillWanted), new Call("globalCheckpoint(BooleanSupplier)", outerStillWanted));
     }
 
     private record Call(String method, @Nullable BooleanSupplier stillWanted) {
