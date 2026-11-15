@@ -314,12 +314,14 @@ does. A replay that a resume started runs again from its last stored checkpoint 
 The 0.34.0 node keeps the saga's competing-consumer lease while it retries, because the lease is refreshed on a
 schedule of its own whatever the subscription is doing, so the saga's subscription stalls. The node gives the lease up
 when it is stopped for its upgrade, but the next node to take it may still run 0.34.0 and stall on the same event, so
-the stall ends once a 0.35.0 node holds the lease. It also ends when a 0.35.0 node releases or deletes the instance, so it
-is no longer quarantined. A released instance is `ACTIVE` and is stored with that plain status, which 0.34.0
-decodes.
+the stall ends once a 0.35.0 node holds the lease. It also ends when a 0.35.0 node releases the instance or deletes it,
+because the 0.34.0 node reads the instance again on every retry. A released instance is `ACTIVE` and is stored with
+that plain status, which 0.34.0 decodes, and a deleted one is not there to decode. A catch-up replay that a subscribe
+started is not retried, so a node whose replay failed doesn't go live until it restarts, whatever happens to the
+instance.
 
 Without a competing-consumer strategy every node runs the saga's subscription. The 0.35.0 nodes handle the event, and
-only the 0.34.0 node's own subscription stalls, until the node is upgraded or the instance is no longer quarantined.
+only the 0.34.0 node's own subscription stalls, until the node is upgraded or the instance is released or deleted.
 
 The subscription delivers one event at a time, so the stall holds up every later event of that saga subscription, for
 every instance of the saga, not only the events of the quarantined instance.
