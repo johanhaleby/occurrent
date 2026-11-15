@@ -146,8 +146,8 @@ defect), a listener that delivers from several threads, a Kafka topic whose part
 produced, and a RabbitMQ `prefetchCount` or a number of concurrent publishers of one stream that is larger than the
 window.
 
-During a rolling upgrade a 0.34.0 node stalls on the first event for any instance a 0.35.0 node has handled, and the
-timers of such an instance wait while a 0.34.0 node holds the timer lease. Saga nodes have to be rolled in one rollout,
+During a rolling upgrade a 0.34.0 node stalls on the first event for an `ACTIVE` instance that a 0.35.0 node has
+applied an event with a stream version to, and the timers of such an instance wait while a 0.34.0 node holds the timer lease. Saga nodes have to be rolled in one rollout,
 without a long canary. A query written by hand for `status: "ACTIVE"` misses the instances stored as `ACTIVE_MARKED`.
 
 Going back to 0.34.0 is an explicit step. Once every 0.35.0 node has stopped, an `updateMany` sets `ACTIVE_MARKED` back
