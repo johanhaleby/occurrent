@@ -77,8 +77,10 @@ The try pauses the subscription in the wrapped model, which withdraws the event,
 **A blocking catch-up replay that a subscribe started runs again after a withdrawn event.** Only a replay that a resume
 started ran again, since the live model holds that subscription paused. A replay that a subscribe started ended with
 "the subscription did not go live" logged at ERROR, and the withdrawn event never came back on this node. Now that
-replay runs again from the last position it stored, once the subscription is resumed or `start(true)` is called, or
-after a backoff when nothing paused or stopped it. The withdrawal is logged at DEBUG.
+replay is held and runs again from the last position it stored, once the subscription is resumed or `start(true)` is
+called, also when nothing paused or stopped it. It doesn't run again by itself after a backoff, since a model that
+declares `RedeliveringSubscriptions` delivers a withdrawn event again only on a resume or a start. The withdrawal is
+logged at DEBUG.
 
 I rejected four other designs.
 

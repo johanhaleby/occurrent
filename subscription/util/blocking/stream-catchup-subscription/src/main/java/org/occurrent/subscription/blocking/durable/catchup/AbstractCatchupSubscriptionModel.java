@@ -1214,10 +1214,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * What the live delegate answers, and {@code false} when it doesn't declare it. A replay stores the position of an
-     * event only once the action has returned normally. A replay whose action threw {@code AttemptNotMade} runs again
-     * from the last position it stored, once the subscription is resumed or this model is started with
-     * {@code start(true)}, or after a backoff when nothing paused or stopped it. Once live, the live delegate delivers
-     * the event again.
+     * event only once the action has returned normally. A replay whose action threw {@code AttemptNotMade} is held, and
+     * runs again from the last position it stored once the subscription is resumed or this model is started with
+     * {@code start(true)}. Once live, the live delegate delivers the event again.
      */
     @Override
     public boolean redeliversAnAttemptNotMade() {
@@ -3749,13 +3748,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * now, or {@code null} when this attempt doesn't run it again. Taken under the handover lock, so every lifecycle
      * call for the id either comes before this decides or finds what it decided.
      * <p>
-     * Only a replay a resume started runs again, since the live delegate holds its subscription paused and nothing else
-     * would resume it, and a replay a subscribe started whose action threw {@link AttemptNotMade}, since the event it
-     * withdrew would otherwise never be delivered here. It runs again from the last position it stored, while it is still the current attempt, and nothing asked it to stop. A cancel, a
-     * resume at a given position or a shutdown ends it, which the caller asked for. A stop, a pause asked for during the
-     * replay or while it waits, or a {@link CatchupListener} that throws as the replay runs again, holds it until a
-     * resume or a start that resumes. So does a {@link CatchupCannotResumeException}, without a backoff, since the
-     * replay would fail the same way if it ran again now. A resume the live delegate refuses with
+     * Only a replay a resume started is kept to run again, since the live delegate holds its subscription paused and
+     * nothing else would resume it, and so is a replay a subscribe started whose action threw {@link AttemptNotMade},
+     * since the event it withdrew would otherwise never be delivered here. Such a replay runs again from the last
+     * position it stored, while it is still the current attempt and nothing asked it to stop. A cancel, a resume at a
+     * given position or a shutdown ends it, which the caller asked for. A stop, a pause asked for during the replay or
+     * while it waits, or a {@link CatchupListener} that throws as the replay runs again, holds it until a resume or a
+     * start that resumes. So does a {@link CatchupCannotResumeException}, since the replay would fail the same way if it
+     * ran again now, and an {@link AttemptNotMade}, since a model that declares {@code RedeliveringSubscriptions}
+     * delivers a withdrawn event again only when the subscription is resumed or started. Neither waits out a backoff.
+     * Any other failure runs it again after a backoff. A resume the live delegate refuses with
      * {@link SubscriptionAlreadyRunningException} ends it too, and the log says whether the live delegate runs the
      * subscription or holds it paused by then, and what resumes it.
      */
@@ -3787,8 +3789,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     logFailure(subscriptionId, failure, "it runs again once the subscription is resumed");
                     return null;
                 }
-                if (failure instanceof CatchupCannotResumeException) {
-                    // Held rather than run again now, since it would fail the same way
+                if (failure instanceof CatchupCannotResumeException || failure instanceof AttemptNotMade) {
+                    // Held rather than run again now. A CatchupCannotResumeException would fail the same way, and a
+                    // withdrawn event is delivered again only on a resume or a start, as RedeliveringSubscriptions says
                     attempt.backingOff = false;
                     hold(subscriptionId, attempt);
                     logFailure(subscriptionId, failure, "it was held, and runs again once the subscription is resumed or start(true) is called on this model");

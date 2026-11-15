@@ -24,8 +24,8 @@ package org.occurrent.retry;
  * when it withdraws an event it holds for the lease, and not for an event handler. A model throws it from the action
  * once it has paused, cancelled or stopped the subscription, or begun to shut down. Thrown from the action of a
  * subscription that is still open, it ends that subscription's run on the MongoDB change stream models, which deliver
- * nothing more for the subscription until it is paused and resumed. A catch-up replay runs again instead, after a
- * backoff or once the subscription is resumed.
+ * nothing more for the subscription until it is paused and resumed. A blocking catch-up replay is held instead,
+ * and runs again once the subscription is resumed or the model is started with {@code start(true)}.
  * <p>
  * A subscription model that declares {@code RedeliveringSubscriptions} and answers {@code true} treats it this way.
  * It doesn't move the subscription's position past the event, doesn't retry the event, and doesn't report it as a
