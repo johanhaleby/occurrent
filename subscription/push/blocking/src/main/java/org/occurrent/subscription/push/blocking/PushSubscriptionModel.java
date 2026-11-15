@@ -62,8 +62,9 @@ import java.util.function.Consumer;
  * <p>
  * <strong>One model feeds one subscription</strong>, and a second {@code subscribe} is refused. The acknowledgement is
  * what forces it: this model has exactly one per received event, so several handlers on it would share the decision to
- * acknowledge or redeliver, and a handler that keeps failing would hold up every handler behind it. Declare one model
- * per projection or saga, each fed by its own queue. See ADR 90.
+ * acknowledge or redeliver. A handler that keeps failing would then hold up every handler behind it when the listener
+ * redelivers, or lose the event for them when the listener acknowledges. Declare one model per projection or saga,
+ * each fed by its own queue. See ADR 90.
  * <p>
  * Occurrent stays transport-neutral: this model has no dependency on any broker. The pushed events must carry the
  * Occurrent cloud-event extensions the handlers rely on (at minimum {@code streamid} and {@code streamversion}, add

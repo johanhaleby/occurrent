@@ -69,10 +69,11 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * The behaviour <a href="https://github.com/johanhaleby/occurrent/issues/818">#818</a> asked for: one event a saga
- * cannot get through must not stop every other instance sharing the saga's single subscription. That covers an event
- * one instance cannot handle. An event the saga cannot even work out an instance for is the exception, and it keeps
- * the saga waiting rather than be lost, see <a href="https://github.com/johanhaleby/occurrent/issues/1042">#1042</a>.
+ * <a href="https://github.com/johanhaleby/occurrent/issues/818">#818</a> asked for the instance an event keeps failing
+ * on to be quarantined, so the subscription's checkpoint can move past it. One event a saga cannot get through must not
+ * keep failing with nothing bounding it. That covers an event one instance cannot handle. An event the saga cannot even
+ * work out an instance for is the exception, and it keeps the saga waiting rather than be lost, see
+ * <a href="https://github.com/johanhaleby/occurrent/issues/1042">#1042</a>.
  */
 @DisplayName("A saga delivery that keeps failing")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -1584,7 +1585,7 @@ class SagaQuarantineTest {
         @BeforeEach
         void loadTheStoreThatCannotDecode() {
             // The saga itself handles everything here. What fails is loading the instance, which is the one failure that
-            // used to leave no failure record behind, so the budget never ran out and the instance blocked forever.
+            // used to leave no failure record behind, so the budget never ran out and the event kept failing forever.
             reactionFails = false;
             stateStore = store;
         }
@@ -1702,7 +1703,8 @@ class SagaQuarantineTest {
         void a_redelivery_of_an_event_it_has_already_handled_does_not_block_the_channel_either() {
             // The instance is active and has not reached its budget, so neither the completed nor the quarantined answer
             // applies, and yet its watermarks already cover this event. Loading it is what failed, so without the
-            // watermark answer the skip that was always going to happen turns into a permanent block on a replay.
+            // watermark answer the skip that was always going to happen turns into a failure that never ends on a
+            // replay.
             ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
             SagaSubscription subscription = run(model, CONFIG);
             model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));

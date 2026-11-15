@@ -21,7 +21,7 @@ import java.util.Optional;
 /**
  * Marker supertype for every blocking subscription model capability. {@link Subscribable}, {@link CancellableSubscriptions},
  * {@link Pushable}, {@link RepositionableSubscriptions}, {@link ReplayAwareSubscriptions}, {@link IntrospectableSubscriptions},
- * {@link HistoryRetainingSubscriptions}, {@link HistoryLossReportingSubscriptions}, {@link StartRefusalReportingSubscriptions}, {@link CommitOrderedSubscriptions} and {@link SubscriptionModelWrapper} all extend it, so a whole {@link SubscriptionModel} is one transitively, without
+ * {@link HistoryRetainingSubscriptions}, {@link HistoryLossReportingSubscriptions}, {@link StartRefusalReportingSubscriptions}, {@link CommitOrderedSubscriptions}, {@link RedeliveringSubscriptions} and {@link SubscriptionModelWrapper} all extend it, so a whole {@link SubscriptionModel} is one transitively, without
  * declaring it directly.
  * <p>
  * It exists so a method that accepts "whatever partial or complete subscription model a caller happens to hold" has a
@@ -39,6 +39,7 @@ import java.util.Optional;
  * @see HistoryLossReportingSubscriptions#findIn(SubscriptionModelCapability)
  * @see StartRefusalReportingSubscriptions#findIn(SubscriptionModelCapability)
  * @see CommitOrderedSubscriptions#findIn(SubscriptionModelCapability)
+ * @see RedeliveringSubscriptions#findIn(SubscriptionModelCapability)
  */
 public interface SubscriptionModelCapability {
 
@@ -55,8 +56,8 @@ public interface SubscriptionModelCapability {
      * {@link CancellableSubscriptions} and {@link RepositionableSubscriptions}, and is answered only by a model that
      * implements it, since a wrapper that keeps state for a subscription would otherwise never hear about the action
      * taken on the model beneath it. A wrapper is found for such a capability by implementing it. The same holds for
-     * {@link CommitOrderedSubscriptions}, because commit order is a property of the whole delivery path and any wrapper
-     * can break it, so a wrapper declares it only by implementing it.
+     * {@link CommitOrderedSubscriptions} and {@link RedeliveringSubscriptions}, because each is a property of the whole
+     * delivery path and any wrapper can break it, so a wrapper declares it only by implementing it.
      *
      * @param type The capability to look for.
      * @param <T>  The capability type.

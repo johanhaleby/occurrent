@@ -199,7 +199,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         // letTheSubscriptionPast, rather than by where it was thrown or what type it was, bar the one exclusion those
         // conditions name. A saga whose id extractor
         // throws on one event is the case that wrote this. It used to escape a try that opened after it, so nothing was
-        // recorded, nothing was quarantined, and every other instance of the saga waited behind the redelivery forever.
+        // recorded, nothing was quarantined, and nothing bounded how long the event kept failing.
         EventMeta meta = EventMeta.NONE;
         String sagaId = null;
         try {
@@ -1236,7 +1236,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // Each extension is read on its own, because one that cannot be read must not take the others with it. An event
     // carrying a good streamid and streamversion beside a position that is not a number has a redelivery key, and
     // reading the three together threw before either of the first two reached the record, so the event looked like one
-    // carrying no key at all and blocked the channel with nothing able to budget it.
+    // with no key at all, which nothing can budget.
     // An unreadable stream key extension is handed back rather than read as absent, because an event with a bad
     // streamversion would otherwise be handled as one that carries no key.
     private ExtractedMeta extractMeta(CloudEvent cloudEvent) {

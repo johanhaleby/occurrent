@@ -191,7 +191,7 @@ Read `firstFailedAt()` as how long `failure.input()` has been failing. Each fail
 another event that failed on the same instance before it does not move it. A record written before 0.35.0 can hold an
 earlier instant, from when the instance started failing on some other event.
 
-It is a floor rather than an exact incident start. The value is when the failure was first recorded, and an earlier
+It is a ceiling rather than an exact incident start. The value is when the failure was first recorded, and an earlier
 failure of the same event that recorded nothing, one whose writes all lost their compare-and-set for instance, makes
 that later than when the event started failing. So the event may have been failing for longer than the difference
 between `firstFailedAt()` and now.
@@ -392,6 +392,18 @@ A key is `<streamId>@<streamVersion>` for an event from a stream.
 
 ### 6. [you] Delete the instance, once you have decided not to recover it
 
+Read `SagaStateStore.delete`'s own javadoc before you run either of the two deletes below. Deleting an instance
+discards its redelivery watermarks along with its status, so if the event source can still redeliver an event this
+instance already consumed, a delete that races that redelivery lets the event recreate the instance and run the
+process a second time. A subscription replay, a reset checkpoint, and a redelivery after a crash are all ways that
+happens.
+
+So delete an instance only once its source can no longer redeliver any of its events. Leaving it in `QUARANTINED`
+until then is safe, because the runner skips every event addressed to it. It is not free, though. Every later event
+addressed to that instance is still delivered and still reads the instance from the state store before the runner
+skips it. From 0.35.0 the skip also records the event's key, which takes two writes to the instance and one record
+between them, so a correlation id that keeps receiving events costs a read and three writes for each one.
+
 `SagaStateStore.delete(sagaId)` is the call, and whether you have anything to call it on depends on how the store was
 wired.
 
@@ -420,18 +432,7 @@ db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({ sagaId: "o
 The Java call also drops the saga id from the store's in-memory latch for the retained-event warning a flow saga gets
 when it crosses the size threshold, and nothing in MongoDB does that. The consequence is that if this saga id comes
 back and crosses that threshold again, the warning stays suppressed until the entry is evicted or the application
-restarts. Everything below applies to both routes.
-
-Read `SagaStateStore.delete`'s own javadoc before you run either. Deleting an instance discards its redelivery
-watermarks along with its status, so if the event source can still redeliver an event this instance already consumed,
-a delete that races that redelivery lets the event recreate the instance and run the process a second time. A
-subscription replay, a reset checkpoint, and a redelivery after a crash are all ways that happens.
-
-So delete an instance only once its source can no longer redeliver any of its events. Leaving it in `QUARANTINED`
-until then is safe, because the runner skips every event addressed to it. It is not free, though. Every later event
-addressed to that instance is still delivered and still reads the instance from the state store before the runner
-skips it. From 0.35.0 the skip also records the event's key, which takes two writes to the instance and one record
-between them, so a correlation id that keeps receiving events costs a read and three writes for each one.
+restarts.
 
 The business process the instance was running is a separate question, and Occurrent has no answer for it. An order
 half way through fulfilment when its instance stopped is still half way through it after you delete the row. Finish or

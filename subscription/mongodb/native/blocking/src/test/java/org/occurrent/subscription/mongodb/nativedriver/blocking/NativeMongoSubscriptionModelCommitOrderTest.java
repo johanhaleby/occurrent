@@ -36,8 +36,8 @@ import static org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMon
 
 /**
  * What {@link NativeMongoSubscriptionModel} answers to {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()}.
- * The answer is {@code false} whatever {@code restartSubscriptionsOnChangeStreamHistoryLost} is set to. With it on, a
- * restart after lost history skips events, and with it off, issue 1482 tracks two gaps that still break commit order.
+ * The answer is {@code true} while {@code restartSubscriptionsOnChangeStreamHistoryLost} is off. With it on, a restart
+ * after lost history opens at the present and skips events, so the answer is {@code false}.
  * Nothing here subscribes, so these tests need no MongoDB.
  */
 @DisplayName("NativeMongoSubscriptionModelCommitOrder")
@@ -52,7 +52,7 @@ class NativeMongoSubscriptionModelCommitOrderTest {
     }
 
     @Test
-    void does_not_deliver_every_event_in_commit_order_when_restarting_after_lost_history_is_turned_off() {
+    void delivers_every_event_in_commit_order_when_restarting_after_lost_history_is_turned_off() {
         // Given
         NativeMongoSubscriptionModel model = modelWith(withConfig().restartSubscriptionsOnChangeStreamHistoryLost(false));
 
@@ -60,7 +60,7 @@ class NativeMongoSubscriptionModelCommitOrderTest {
         boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
 
         // Then
-        assertThat(deliversInCommitOrder).isFalse();
+        assertThat(deliversInCommitOrder).isTrue();
     }
 
     @Test

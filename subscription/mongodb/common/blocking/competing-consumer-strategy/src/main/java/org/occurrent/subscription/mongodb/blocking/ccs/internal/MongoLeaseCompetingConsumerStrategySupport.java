@@ -409,6 +409,11 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * while MongoDB's clock gains less than a quarter of the lease time on this node's over one lease. After a failover
      * to a primary whose clock is further ahead than that, or a server clock set forward by more than that, this can
      * answer {@code true} after another node has taken the lease.
+     * <p>
+     * Answers {@code false} while the listeners are still owed a prohibition for a lease this node lost, also when it
+     * holds a newer lease by then, until each listener has returned from {@code onConsumeProhibited}. A listener that
+     * has not heard of the loss yet would otherwise go on delivering under the newer lease what the node that held the
+     * lease in between may already have delivered.
      */
     public boolean hasLock(String subscriptionId, String subscriberId) {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
@@ -416,9 +421,17 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
         ConsumerState c = competingConsumers.get(competingConsumer);
         Status status = c == null ? null : c.status;
-        boolean hasLock = status != null && status.isLockAcquired() && cannotHaveExpired(c, status);
+        boolean hasLock = status != null && status.isLockAcquired() && !owesAProhibition(c, status) && cannotHaveExpired(c, status);
         logDebug("hasLock={} (subscriberId={}, subscriptionId={})", hasLock, subscriberId, subscriptionId);
         return hasLock;
+    }
+
+    // Counts read after the status, as a tell reads them, so a lease lost before that status counts. No lapse is
+    // counted, since the prohibition is told anyway and the grant after it is told from NotGranted
+    private static boolean owesAProhibition(ConsumerState c, Status status) {
+        long lapses = c.lapses;
+        long losses = c.losses;
+        return whatToTell(c.told, status, lapses, losses, true) == Change.PROHIBIT;
     }
 
     // A listener may act on a no from here, such as pausing the subscription, so counting it as a lapse makes the

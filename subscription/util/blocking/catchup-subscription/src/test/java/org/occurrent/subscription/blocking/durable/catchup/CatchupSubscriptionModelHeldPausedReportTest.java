@@ -174,6 +174,10 @@ class CatchupSubscriptionModelHeldPausedReportTest {
         public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             heldPaused.add(refusal);
         }
+
+        @Override
+        public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+        }
     }
 
     // A live model that cannot resume from any live start the catch-up model hands it, as one whose history is gone, and
