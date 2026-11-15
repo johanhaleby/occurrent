@@ -186,7 +186,45 @@ class UpgradeToOccurrent_0_35Test implements RewriteTest {
         assertThat(recipe.validate().isValid()).isTrue();
         assertThat(recipe.getName()).isEqualTo(SUBSCRIPTION_ANNOTATIONS_TO_INTERNAL);
         assertThat(recipe.getRecipeList()).extracting(Recipe::getName)
-                .containsExactly("org.openrewrite.java.ChangeType");
+                .containsExactly("org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType",
+                        "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType");
+    }
+
+    @Test
+    void movesAnImportOfOnlyANestedSubscriptionAnnotationsTypeToTheInternalPackage() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class SubscriptionAnnotations {
+                            public record StreamSubscriptionDefinition(String name) {
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
+
+                        class Foo {
+                            StreamSubscriptionDefinition definition = new StreamSubscriptionDefinition("stream");
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
+
+                        class Foo {
+                            SubscriptionAnnotations.StreamSubscriptionDefinition definition = new SubscriptionAnnotations.StreamSubscriptionDefinition("stream");
+                        }
+                        """
+                )
+        );
     }
 
     @Test

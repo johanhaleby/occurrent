@@ -26,3 +26,19 @@ recipeList:
       oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations
       newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations
       ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations$HandlerParameterKind
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations$HandlerParameterKind
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations$HandlerParameter
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations$HandlerParameter
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations$StreamSubscriptionDefinition
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations$StreamSubscriptionDefinition
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations$ResolvedTypeFilter
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations$ResolvedTypeFilter
+      ignoreDefinition: true
