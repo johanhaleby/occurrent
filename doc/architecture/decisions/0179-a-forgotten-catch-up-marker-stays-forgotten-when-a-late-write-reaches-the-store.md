@@ -158,6 +158,13 @@ a read in 0.34.0 does. The token only keeps a late write from bringing a marker 
 [#1541](https://github.com/johanhaleby/occurrent/issues/1541) tracks documenting the lost writes for every Redis
 checkpoint save and delete, in the documentation and the `SpringRedisCheckpointStorage` javadoc.
 
+Occurrent accepts this loss on Redis. The Redis documentation for [`WAIT`](https://redis.io/docs/latest/commands/wait/)
+says it does not make Redis a strongly consistent store, and that a failover can still lose a write that several
+replicas received. The other Redis alternatives under "Alternatives not chosen", a counter with the replication id, a
+time-based token and a write-time check, only change how the generation is formed, so none of them brings a lost forget
+back. An application that cannot accept a lost forget keeps its catch-up markers in MongoDB, where the forget is written
+with `WriteConcern.MAJORITY`.
+
 In a mixed cluster:
 
 * A 0.34.0 node reads and deletes the plain checkpoint as before. On MongoDB it reads a checkpoint by its position
@@ -350,8 +357,15 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   its lease condition lets it. The id then reads absent and the next catch-up replays once.
 * A retried forget whose first attempt was applied changes the generation twice. Every attempt that read the
   generation in between has its marker fenced, and each of them costs one more replay.
-* A rolling upgrade needs no migration. A 0.34.0 node ignores the generation, and a 0.35.0 node reads the markers a
-  0.34.0 node writes and deletes, with the exceptions listed under "Where the marker is stored".
+* A rolling upgrade needs no migration, and the fence covers every forget a 0.35.0 node makes. A forget made on a
+  0.34.0 node, and a read on a 0.34.0 node, behave as in 0.34.0 until every node runs 0.35.0. A 0.34.0 forget does not
+  change the generation, so a late write after it brings the marker back as it does today, and that marker stays
+  present after the upgrade until a 0.35.0 node forgets the id. A 0.34.0 node's late write after a 0.35.0 forget
+  still brings the marker back for the 0.34.0 nodes. No mixed order makes a node read a marker as present where an
+  all-0.34.0 deployment would read it absent. A 0.35.0 node saves and deletes the plain checkpoint under the same
+  conditions as 0.34.0, and on read it only adds the stamp check, which can turn present into absent and never the other
+  way. The one difference is a forget whose `$inc` passes its `wtimeout`. It throws before its delete, so 0.34.0 nodes
+  keep reading the marker, and the caller gets the exception. The list under "In a mixed cluster" gives each case.
 * A downgrade keeps every marker where 0.34.0 reads it. A marker the generation fenced stays too, and a 0.34.0 node
   reads it as present, the exposure 0.34.0 has to any late write. The generation documents and hashes stay behind
   unread, and the migration guide says to leave them in place. Removing one puts that id's generation back at 0. On
@@ -360,8 +374,6 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   are the keys under `occurrent:catchup-marker:`.
 * The checkpoint collection, or the Redis key space, gains one generation document or hash for every subscription id
   that was ever forgotten, and a cancel does not remove it.
-* The fence is only as strong as the oldest node writing the id. A 0.34.0 node's late write still brings the marker
-  back for the 0.34.0 nodes, as it does today.
 * The ADR 177 order is unchanged. Step 1 now reads the generation with the marker, and step 4 can be refused.
 * The reactor push model still takes no `CheckpointWriteVersionSource`
   ([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 29), so its marker writes pass `any()` as the
