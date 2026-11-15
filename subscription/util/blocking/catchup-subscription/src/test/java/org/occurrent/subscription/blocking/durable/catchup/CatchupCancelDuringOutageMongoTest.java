@@ -40,6 +40,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -130,6 +131,15 @@ class CatchupCancelDuringOutageMongoTest {
 
     @Test
     void a_cancel_during_the_outage_ends_the_retry_of_canResumeFrom_and_the_warnings_stop() {
+        aCancelDuringTheOutageEndsTheRetryAndTheWarningsStop(false);
+    }
+
+    @Test
+    void a_cancel_during_the_outage_ends_the_retry_when_the_live_model_is_a_subclass_that_overrides_only_the_one_argument_canResumeFrom_and_calls_super() {
+        aCancelDuringTheOutageEndsTheRetryAndTheWarningsStop(true);
+    }
+
+    private void aCancelDuringTheOutageEndsTheRetryAndTheWarningsStop(boolean liveModelOverridesCanResumeFrom) {
         // Given a catch-up whose replay has delivered its history and now asks whether the live start still holds
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         client = MongoClients.create(connectionString);
@@ -144,8 +154,15 @@ class CatchupCancelDuringOutageMongoTest {
         eventStore.write(UUID.randomUUID().toString(), WriteCondition.anyStreamVersion(),
                 converter.toCloudEvents(List.of(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "event1"))));
         executor = Executors.newCachedThreadPool();
-        liveModel = new NativeMongoSubscriptionModel(subscriptionClient.getDatabase(database), "events", TimeRepresentation.RFC_3339_STRING, executor,
-                NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+        NativeMongoSubscriptionModelConfig config = NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)));
+        liveModel = liveModelOverridesCanResumeFrom
+                ? new NativeMongoSubscriptionModel(subscriptionClient.getDatabase(database), "events", TimeRepresentation.RFC_3339_STRING, executor, config) {
+                    @Override
+                    public boolean canResumeFrom(Checkpoint checkpoint) {
+                        return super.canResumeFrom(checkpoint);
+                    }
+                }
+                : new NativeMongoSubscriptionModel(subscriptionClient.getDatabase(database), "events", TimeRepresentation.RFC_3339_STRING, executor, config);
         durable = new DurableSubscriptionModel(liveModel, new InMemoryCheckpointStorage());
         catchup = new CatchupSubscriptionModel(durable, eventStore, new CatchupSubscriptionModelConfig(100));
         captureLogs();
