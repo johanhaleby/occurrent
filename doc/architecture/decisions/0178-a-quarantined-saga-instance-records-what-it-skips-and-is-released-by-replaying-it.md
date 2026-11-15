@@ -189,11 +189,15 @@ retries the failed input until it succeeds or its budget runs out, and it also r
 interrupted.
 
 The poller polls only while the `timersEnabled` that `SagaRunner.run` takes returns `true`, so that gate holds back the
-continuation of a release as well as the saga's timers. Continuing a release applies the recorded inputs and dispatches
-the commands their reactions return. On a subscription model that reports whether it runs, the Spring Boot starter
-keeps the gate closed while the saga's subscription isn't running, and on one that also reports a replay, while it is
-still catching up. That is when a saga must not dispatch commands. The first poll after the gate opens
-goes on with the release. A call to `release` doesn't wait for the gate.
+continuation of a release as well as the saga's timers. On a subscription model that reports whether it runs, the
+Spring Boot starter keeps the gate closed while the saga's subscription isn't running, and on one that also reports a
+replay, while it is still catching up. The gate exists for timers. A timer fires on the clock, so while the
+subscription isn't running or is still catching up, it can decide against state that lacks inputs the subscription
+hasn't delivered yet. A release applies only inputs the subscription has delivered and the instance recorded, each on
+the state the inputs before it produced. An input the subscription still holds back comes after all of them, where
+live delivery would also put it. So a call to `release` doesn't wait for the gate and dispatches on whichever node it's
+called on. Continuing a release waits for the gate only because the poller runs it, and the first poll after the gate
+opens goes on with it.
 
 One poll replays at most `timerBatchLimit` records, 100 by default. Each instance the poll lists gets a share of
 `max(1, timerBatchLimit / instances listed)` records, so an instance with many records doesn't hold back the others.
@@ -340,13 +344,16 @@ subscription goes live. A downgrade that doesn't stall anything goes like this, 
 
 1. Turn quarantine off on every node, and have that running on every node before step 2. A node that still has
    quarantine on can quarantine another instance after the instances are listed.
-2. Find the quarantined instances with `findByStatus(QUARANTINED, ..)` and call `release` on each whose failure record
-   has a quarantine id.
+2. List the quarantined instances and call `release` on each whose failure record has a quarantine id. On MongoDB,
+   `find({ status: "QUARANTINED_RECORDING" }, { _id: 1 })` on the saga's collection lists exactly those, and its cursor
+   reaches every one. On another store, `findByStatus(QUARANTINED, ..)` lists them all only when its `limit` is above
+   the number of quarantined instances, since the limit is a bound and the query has no cursor.
 3. Delete with `SagaStateStore.delete(sagaId)` each one whose release returns `QUARANTINED_AGAIN`,
    `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
    longer decodes or an event store read that failed, and release the instance again, or delete it.
-5. Stop every 0.35.0 node, and set every `ACTIVE_MARKED` instance back to `ACTIVE`, released ones included, with the
+5. Repeat steps 2 to 4 until step 2 lists no instance with a quarantine id. Then stop every 0.35.0 node, and set every
+   `ACTIVE_MARKED` instance back to `ACTIVE`, released ones included, with the
    update ADR 154 describes.
 6. Start the 0.34.0 nodes.
 
