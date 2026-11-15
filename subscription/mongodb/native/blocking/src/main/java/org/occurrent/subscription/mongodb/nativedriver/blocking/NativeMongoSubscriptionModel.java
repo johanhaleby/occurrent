@@ -452,7 +452,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
     /**
      * {@link #canResumeFrom(Checkpoint)}, except that a transient failure is also thrown, instead of retried, once
-     * {@code stillWanted} answers {@code false}.
+     * {@code stillWanted} answers {@code false}. A catch-up calls this overload from its replay thread, so a subclass that
+     * overrides {@link #canResumeFrom(Checkpoint)} overrides this overload as well.
      */
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint, BooleanSupplier stillWanted) {

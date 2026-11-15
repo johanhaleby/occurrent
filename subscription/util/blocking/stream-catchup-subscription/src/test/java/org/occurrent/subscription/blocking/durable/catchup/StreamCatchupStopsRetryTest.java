@@ -115,6 +115,7 @@ class StreamCatchupStopsRetryTest {
         catchupLog = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
         originalLevel = catchupLog.getLevel();
         catchupLog.setLevel(Level.DEBUG);
+        logged.list = new CopyOnWriteArrayList<>();
         logged.start();
         catchupLog.addAppender(logged);
     }
@@ -144,7 +145,7 @@ class StreamCatchupStopsRetryTest {
 
         // Then
         assertThat(live.retryEnded).as("the retry of the wrapped model ended once the subscription was cancelled").succeedsWithin(WAIT);
-        assertThat(startedAccordingTo(subscription)).as("the subscription started").isFalse();
+        assertThat(subscription.waitUntilStarted(WAIT)).as("the subscription started").isFalse();
         awaitTheLogLineForTheEndedRetry();
         assertAll(
                 () -> assertThat(catchup.isRunning(ID)).as("running").isFalse(),
@@ -199,20 +200,87 @@ class StreamCatchupStopsRetryTest {
         assertThatStartRunsTheParkedReplayAndTheSubscriptionGoesLive();
     }
 
-    // A handle of a replay that ended on the failure of the retry either answers false or throws that failure, and neither is a start
-    private boolean startedAccordingTo(Subscription subscription) {
-        try {
-            return subscription.waitUntilStarted(WAIT);
-        } catch (RuntimeException e) {
-            assertThat(e).as("thrown by the handle").isSameAs(live.retryEnded.getNow(null));
-            return false;
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Site.class)
+    void a_shutdown_during_the_retry_ends_it_and_the_replay_ends_as_cancelled_without_an_error_logged(Site site) {
+        // Given
+        Subscription subscription = subscribeWhileTheWrappedModelRetries(site);
+
+        // When
+        catchup.shutdown();
+
+        // Then
+        assertThat(live.retryEnded).as("the retry of the wrapped model ended once the model was shut down").succeedsWithin(WAIT);
+        assertThat(subscription.waitUntilStarted(WAIT)).as("the subscription started").isFalse();
+        awaitTheLogLineForTheEndedRetry();
+        assertAll(
+                () -> assertThat(catchup.isRunning(ID)).as("running").isFalse(),
+                () -> assertThat(catchup.hasParkedReplay(ID)).as("replay parked").isFalse(),
+                () -> assertThat(levelOfTheLogLineForTheEndedRetry()).as("level of the line logged for the ended retry").isEqualTo(Level.DEBUG),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Site.class)
+    void a_stop_that_the_replay_sees_before_a_start_returns_relaunches_the_replay_itself_when_the_start_found_nothing_parked(Site site) {
+        // Given a stop that marked the model stopped and is held at its claim, and the replay thread held before it takes the handover lock
+        subscribeWhileTheWrappedModelRetries(site);
+        CompletableFuture<Void> stopping;
+        try (AbstractCatchupSubscriptionModel.Claim ignored = catchup.claim(ID)) {
+            try (AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = catchup.lockHandover(ID)) {
+                stopping = CompletableFuture.runAsync(() -> catchup.stop());
+                assertThat(live.retryEnded).as("the retry of the wrapped model ended once the model was stopped").succeedsWithin(WAIT);
+
+                // When start(true) returns, having found nothing parked
+                catchup.start(true);
+                assertThat(catchup.hasParkedReplay(ID)).as("replay parked by the start").isFalse();
+            }
+
+            // Then the replay thread relaunches the replay, while the stop is still held
+            await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.isRunning(ID)).as("running").isTrue());
+            assertThat(catchup.hasParkedReplay(ID)).as("replay parked").isFalse();
+            assertThat(stopping).as("the stop").isNotDone();
         }
+        assertThat(stopping).as("the stop").succeedsWithin(WAIT);
+        // The stop went on to stop the live delegate after the start, so this start is what brings it up again
+        assertThatStartRunsTheParkedReplayAndTheSubscriptionGoesLive();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Site.class)
+    void a_retry_that_gives_up_without_asking_stillWanted_while_a_stop_has_not_parked_the_replay_leaves_it_parked_and_start_runs_it_again_to_go_live(Site site) {
+        // Given a stop held at its claim, after it marked the model stopped and before it parks the replay
+        subscribeWhileTheWrappedModelRetries(site, true);
+        CompletableFuture<Void> stopping;
+        try (AbstractCatchupSubscriptionModel.Claim ignored = catchup.claim(ID)) {
+            stopping = CompletableFuture.runAsync(() -> catchup.stop());
+            await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.stopped).as("the model is stopped").isTrue());
+
+            // When the retry gives up on its last attempt while the stop is held
+            live.stopRetrying();
+            assertThat(live.retryEnded).as("the retry of the wrapped model gave up").succeedsWithin(WAIT);
+
+            // Then
+            await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.hasParkedReplay(ID)).as("replay parked by the replay while the stop is held").isTrue());
+            assertThat(stopping).as("the stop").isNotDone();
+        }
+        assertThat(stopping).as("the stop").succeedsWithin(WAIT);
+        assertThat(catchup.hasParkedReplay(ID)).as("replay parked after the stop").isTrue();
+        assertThat(errorsLogged()).as("errors logged").singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("it runs again once the subscription is resumed or start(true) is called on this model"));
+        live.stopRetrying();
+        catchup.start(true);
+        assertThatTheSubscriptionGoesLive();
     }
 
     private Subscription subscribeWhileTheWrappedModelRetries(Site site) {
+        return subscribeWhileTheWrappedModelRetries(site, false);
+    }
+
+    private Subscription subscribeWhileTheWrappedModelRetries(Site site, boolean givesUpWithoutAskingStillWanted) {
         eventStore = site.replaysByTime ? new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition() : new InMemoryEventStore(inMemorySubscriptionModel);
         List.of("event1", "event2", "event3").forEach(name -> write(eventStore, nameDefined(name)));
-        live = new RetryingLiveModel(inMemorySubscriptionModel, site.retriesGlobalCheckpoint);
+        live = new RetryingLiveModel(inMemorySubscriptionModel, site.retriesGlobalCheckpoint, givesUpWithoutAskingStillWanted);
         catchup = new StreamCatchupSubscriptionModel(live, eventStore, new CatchupSubscriptionModelConfig(100));
         StartAt startAt;
         if (site.replaysByTime) {
@@ -235,12 +303,16 @@ class StreamCatchupStopsRetryTest {
 
         catchup.start(true);
 
+        assertThatTheSubscriptionGoesLive();
+        assertThat(errorsLogged()).as("errors logged").isEmpty();
+    }
+
+    private void assertThatTheSubscriptionGoesLive() {
         await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.isRunning(ID)).as("running").isTrue());
         NameDefined afterStart = nameDefined("afterStart");
         write(eventStore, afterStart);
         await().atMost(WAIT).untilAsserted(() -> assertThat(received).as("received").contains(afterStart));
         assertThat(catchup.hasParkedReplay(ID)).as("replay parked").isFalse();
-        assertThat(errorsLogged()).as("errors logged").isEmpty();
     }
 
     // The line logged with the failure the retry threw, which is how a test knows the replay thread has handled it
@@ -276,20 +348,23 @@ class StreamCatchupStopsRetryTest {
     /**
      * A wrapped model whose first globalCheckpoint, or its first canResumeFrom, retries a failure for as long as the
      * stillWanted it is given answers true, and then throws the last failure, as the MongoDB models do for
-     * canResumeFrom. The one argument forms retry the same way, for as long as the test lets them, since they have no
+     * canResumeFrom. With givesUpWithoutAskingStillWanted it never reads stillWanted and throws the failure once the test
+     * calls stopRetrying, as a finite retry does when it gives up on its last attempt. The one argument forms retry the same way, for as long as the test lets them, since they have no
      * stillWanted to read.
      */
     private static final class RetryingLiveModel implements CheckpointAwareSubscriptionModel {
         private final InMemorySubscriptionModel delegate;
         private final boolean retriesGlobalCheckpoint;
+        private final boolean givesUpWithoutAskingStillWanted;
         private final AtomicBoolean retriesOnce = new AtomicBoolean(true);
         private volatile boolean stopRetrying;
         final CompletableFuture<Void> retrying = new CompletableFuture<>();
         final CompletableFuture<RuntimeException> retryEnded = new CompletableFuture<>();
 
-        private RetryingLiveModel(InMemorySubscriptionModel delegate, boolean retriesGlobalCheckpoint) {
+        private RetryingLiveModel(InMemorySubscriptionModel delegate, boolean retriesGlobalCheckpoint, boolean givesUpWithoutAskingStillWanted) {
             this.delegate = delegate;
             this.retriesGlobalCheckpoint = retriesGlobalCheckpoint;
+            this.givesUpWithoutAskingStillWanted = givesUpWithoutAskingStillWanted;
         }
 
         void stopRetrying() {
@@ -302,9 +377,9 @@ class StreamCatchupStopsRetryTest {
             }
             retrying.complete(null);
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
-            while (!stopRetrying && stillWanted.getAsBoolean()) {
+            while (!stopRetrying && (givesUpWithoutAskingStillWanted || stillWanted.getAsBoolean())) {
                 if (System.nanoTime() > deadline) {
-                    throw new AssertionError("stillWanted never turned false");
+                    throw new AssertionError("the retry was never ended");
                 }
                 LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(5));
             }

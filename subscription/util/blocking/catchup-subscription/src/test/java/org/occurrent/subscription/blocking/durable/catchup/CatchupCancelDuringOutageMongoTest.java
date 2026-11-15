@@ -63,6 +63,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -157,7 +158,7 @@ class CatchupCancelDuringOutageMongoTest {
         catchup.cancelSubscription(SUBSCRIPTION_ID);
 
         // Then the replay ends, and no attempt is logged after it
-        boolean started = startedAccordingTo(subscription);
+        boolean started = subscription.waitUntilStarted(Duration.ofSeconds(10));
         int attemptsWhenTheReplayEnded = attemptsLogged();
         await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).pollInterval(Duration.ofMillis(50))
                 .untilAsserted(() -> assertThat(attemptsLogged()).as("failed attempts logged after the replay ended").isEqualTo(attemptsWhenTheReplayEnded));
@@ -167,9 +168,11 @@ class CatchupCancelDuringOutageMongoTest {
 
     private void captureLogs() {
         Logger modelLog = (Logger) LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
+        modelLogged.list = new CopyOnWriteArrayList<>();
         modelLogged.start();
         modelLog.addAppender(modelLogged);
         Logger catchupLog = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
+        catchupLogged.list = new CopyOnWriteArrayList<>();
         catchupLogged.start();
         catchupLog.addAppender(catchupLogged);
     }
@@ -178,15 +181,6 @@ class CatchupCancelDuringOutageMongoTest {
         return (int) modelLogged.list.stream()
                 .filter(event -> event.getLevel() == Level.WARN && event.getFormattedMessage().contains("can resume"))
                 .count();
-    }
-
-    // A handle of a replay that ended on a failure either answers false or throws that failure, and neither is a start
-    private static boolean startedAccordingTo(Subscription subscription) {
-        try {
-            return subscription.waitUntilStarted(Duration.ofSeconds(10));
-        } catch (RuntimeException e) {
-            return false;
-        }
     }
 
     private void closeTheConnectionOfEveryAggregateOfTheLiveModel() {

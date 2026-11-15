@@ -3717,7 +3717,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     try {
                         ended = endUndecidedAttempt(subscriptionId, attempt, failure);
                     } finally {
-                        if (ended) {
+                        if (ended && attempt.toldUnwanted) {
+                            // A cancel, a shutdown or a later replay made the subscription model stop retrying, and the
+                            // handle answers as it does when one of them finds the replay between two calls
+                            attempt.replay.result.complete(new CancelledSubscription(subscriptionId));
+                        } else if (ended) {
                             attempt.replay.result.completeExceptionally(failure);
                         }
                     }
@@ -3793,6 +3797,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Any other failure runs it again after a backoff. A resume the live delegate refuses with
      * {@link SubscriptionAlreadyRunningException} ends it too, and the log says whether the live delegate runs the
      * subscription or holds it paused by then, and what resumes it.
+     * <p>
+     * A replay a subscribe started that fails while a stop runs that hasn't parked it yet is parked as the stop would
+     * park it, so start(true) runs it again.
      */
     private @Nullable Duration runAgainAfter(String subscriptionId, CatchupAttempt attempt, @Nullable Throwable failure) {
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
@@ -3812,6 +3819,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             }
             if (current && !attempt.abandoned() && !shuttingDown && failure instanceof AttemptNotMade) {
                 attempt.withdrawn = true;
+            }
+            if (current && !attempt.abandoned() && !shuttingDown && failure != null && stopped && !(failure instanceof SubscriptionAlreadyRunningException)) {
+                // A stop marked this model stopped and hasn't parked this replay yet, and stillWanted wasn't asked, as
+                // when a finite retry gives up on its last attempt. Parked as the stop parks it, so start(true) runs it.
+                attempt.backingOff = false;
+                parkIfStillCurrent(subscriptionId, attempt);
+                logFailure(subscriptionId, failure, "it runs again once the subscription is resumed or start(true) is called on this model");
+                return null;
             }
             if (current && (attempt.replay.resuming || attempt.withdrawn) && !attempt.abandoned() && !shuttingDown && !(failure instanceof SubscriptionAlreadyRunningException)) {
                 if (stopped) {

@@ -1087,6 +1087,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         return subscriptionModel.globalCheckpoint();
     }
 
+    /**
+     * Forwards to the wrapped model. A catch-up calls this overload from its replay thread, so a subclass that overrides
+     * {@link #globalCheckpoint()} overrides this overload as well.
+     */
     @Nullable
     @Override
     public Checkpoint globalCheckpoint(BooleanSupplier stillWanted) {
@@ -1098,6 +1102,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         return subscriptionModel.canResumeFrom(checkpoint);
     }
 
+    /**
+     * Forwards to the wrapped model. A catch-up calls this overload from its replay thread, so a subclass that overrides
+     * {@link #canResumeFrom(Checkpoint)} overrides this overload as well.
+     */
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint, BooleanSupplier stillWanted) {
         return subscriptionModel.canResumeFrom(checkpoint, stillWanted);
