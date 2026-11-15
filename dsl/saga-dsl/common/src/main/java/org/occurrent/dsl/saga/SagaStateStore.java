@@ -173,11 +173,14 @@ public interface SagaStateStore<S extends @Nullable Object> {
 
     /**
      * The first {@code limit} records under the quarantine {@code quarantineId} of {@code sagaId}, in
-     * {@link SkippedInput#ORDER}, by {@code seq}. Records under any other quarantine id are left out.
+     * {@link SkippedInput#ORDER}, by {@code seq} and then by {@code key}. Records under any other quarantine id are left
+     * out.
      * <p>
-     * No two records of one quarantine share a {@code seq}. A skip raises the instance's
+     * No two records a skip wrote share a {@code seq}. A skip raises the instance's
      * {@link SagaEnvelope#quarantineSkipCount()} before it writes the record, with the count it read as the record's
      * {@code seq}, so a crash between the two leaves a gap in the numbers and never a second record with the same one.
+     * Two records can share {@code -1}, the head record a release writes, when an earlier release kept its own head
+     * record under another key for the same input. The order by {@code key} keeps their order the same on every read.
      * <p>
      * The default throws {@link UnsupportedOperationException}.
      *

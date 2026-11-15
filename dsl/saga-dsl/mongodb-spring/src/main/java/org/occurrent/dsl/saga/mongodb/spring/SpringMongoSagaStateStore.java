@@ -318,7 +318,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     Indexes.compoundIndex(Indexes.ascending(SKIPPED_SAGA_ID), Indexes.ascending(SKIPPED_QUARANTINE_ID), Indexes.ascending(SKIPPED_KEY)),
                     new IndexOptions().unique(true));
             mongoOperations.getCollection(skippedInputsCollectionName).createIndex(
-                    Indexes.compoundIndex(Indexes.ascending(SKIPPED_SAGA_ID), Indexes.ascending(SKIPPED_QUARANTINE_ID), Indexes.ascending(SKIPPED_SEQ)));
+                    Indexes.compoundIndex(Indexes.ascending(SKIPPED_SAGA_ID), Indexes.ascending(SKIPPED_QUARANTINE_ID), Indexes.ascending(SKIPPED_SEQ), Indexes.ascending(SKIPPED_KEY)));
         });
     }
 
@@ -498,7 +498,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         Query query = Query.query(where(SKIPPED_SAGA_ID).is(Objects.requireNonNull(sagaId, "sagaId cannot be null"))
                         .and(SKIPPED_QUARANTINE_ID).is(Objects.requireNonNull(quarantineId, "quarantineId cannot be null")))
-                .with(Sort.by(Sort.Direction.ASC, SKIPPED_SEQ))
+                .with(Sort.by(Sort.Direction.ASC, SKIPPED_SEQ, SKIPPED_KEY))
                 .limit(limit);
         Supplier<List<Document>> read = () -> mongoOperations.find(query, Document.class, skippedInputsCollectionName);
         return retryStrategy.execute(read).stream().map(SpringMongoSagaStateStore::toSkippedInput).toList();

@@ -460,6 +460,21 @@ class InMemorySagaStateStoreTest {
         }
 
         @Test
+        void with_the_same_seq_are_read_in_key_order_whatever_order_they_were_written_in() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(-1, "b@2"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(-1, "a@1"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "g@7"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "f@6"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "e@5"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "d@4"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "c@3"));
+
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(
+                    new SkippedInput(-1, "a@1"), new SkippedInput(-1, "b@2"),
+                    new SkippedInput(3, "c@3"), new SkippedInput(3, "d@4"), new SkippedInput(3, "e@5"), new SkippedInput(3, "f@6"), new SkippedInput(3, "g@7"));
+        }
+
+        @Test
         void keep_the_first_record_of_a_key_and_its_seq() {
             store.recordSkippedInput("s1", "q1", new SkippedInput(2, "a@1"));
             store.recordSkippedInput("s1", "q1", new SkippedInput(5, "a@1"));

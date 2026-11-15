@@ -306,6 +306,23 @@ class SpringMongoSagaStateStoreReleaseTest {
     }
 
     @Test
+    void records_of_the_same_seq_are_read_in_key_order_whatever_order_they_were_written_in_and_in_the_same_order_on_every_read() {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        store.recordSkippedInput("order-9", "q-1", new SkippedInput(-1, "b@2"));
+        store.recordSkippedInput("order-9", "q-1", new SkippedInput(3, "d@4"));
+        store.recordSkippedInput("order-9", "q-1", new SkippedInput(-1, "a@1"));
+        store.recordSkippedInput("order-9", "q-1", new SkippedInput(3, "c@3"));
+
+        List<SkippedInput> first = store.findSkippedInputs("order-9", "q-1", 10);
+        List<SkippedInput> second = store.findSkippedInputs("order-9", "q-1", 10);
+
+        assertAll(
+                () -> assertThat(first).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(-1, "b@2"), new SkippedInput(3, "c@3"), new SkippedInput(3, "d@4")),
+                () -> assertThat(second).isEqualTo(first)
+        );
+    }
+
+    @Test
     void a_second_record_of_a_key_keeps_the_first_record_and_its_seq() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         store.recordSkippedInput("order-8", "q-1", new SkippedInput(2, "a@1"));

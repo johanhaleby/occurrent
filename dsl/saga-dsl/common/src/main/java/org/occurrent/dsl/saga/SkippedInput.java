@@ -31,14 +31,14 @@ import static java.util.Objects.requireNonNull;
  * {@code @cloudevent} suffix is never a stream version, so the two kinds cannot be mistaken for each other.
  *
  * @param seq the instance's {@link SagaEnvelope#quarantineSkipCount()} that the skip of the input raised before it
- *            recorded the input, so no two records of one quarantine share it. The input the instance was quarantined
+ *            recorded the input, so no two records a skip wrote share it. The input the instance was quarantined
  *            on is recorded at {@code -1} when a release starts, so it comes first
  * @param key the input's key
  */
 public record SkippedInput(long seq, String key) {
 
-    /** The order a release replays records in, by {@code seq} ascending. */
-    public static final Comparator<SkippedInput> ORDER = Comparator.comparingLong(SkippedInput::seq);
+    /** The order a release replays records in, by {@code seq} ascending and then by {@code key}. */
+    public static final Comparator<SkippedInput> ORDER = Comparator.comparingLong(SkippedInput::seq).thenComparing(SkippedInput::key);
 
     public SkippedInput {
         requireNonNull(key, "key cannot be null");
