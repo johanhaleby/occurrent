@@ -150,11 +150,12 @@ During a rolling upgrade a 0.34.0 node stalls on the first event for an `ACTIVE`
 applied an event with a stream version to, and the timers of such an instance wait while a 0.34.0 node holds the timer lease. Saga nodes have to be rolled in one rollout,
 without a long canary. A query written by hand for `status: "ACTIVE"` misses the instances stored as `ACTIVE_MARKED`.
 
-Going back to 0.34.0 is an explicit step. Once every 0.35.0 node has stopped, an `updateMany` sets `ACTIVE_MARKED` back
-to `ACTIVE`, and the 0.34.0 nodes start after it. 0.34.0 ignores the marks and drops them on its first save of each
-instance. A pending version is then never applied, and a late version below the watermark is skipped, as before this
-decision. The next 0.35.0 node reads such an instance as a pre-0.35.0 one, so nothing is applied twice. The upgrade
-guide gives the command.
+Going back to 0.34.0 is an explicit step. Once every 0.35.0 node has stopped, a query lists the `ACTIVE_MARKED`
+instances whose marks hold a version in `pending` or `legacyFailed`, which are the instances that lose a version. Then
+an `updateMany` sets `ACTIVE_MARKED` back to `ACTIVE`, and the 0.34.0 nodes start after it. 0.34.0 ignores the marks
+and drops them on its first save of each instance. A pending version is then never applied, and a late version below
+the watermark is skipped, as before this decision. The next 0.35.0 node reads such an instance as a pre-0.35.0 one, so
+nothing is applied twice. The upgrade guide gives both commands.
 
 An instance stores up to 256 extra numbers per stream and event type, and it does so even when the feed delivers in
 order, because the saga cannot know the next event will not be a late one. Each number is stored as a 64-bit integer, so

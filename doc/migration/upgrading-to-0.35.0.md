@@ -664,8 +664,18 @@ db.getCollection("saga-order-fulfilment")
   .find({ status: { $in: ["ACTIVE", "ACTIVE_MARKED"] } }, { state: 0 })
 ```
 
-To go back to 0.34.0, stop every 0.35.0 node, then give the `ACTIVE_MARKED` instances back their plain status before
-a 0.34.0 node starts:
+To go back to 0.34.0, stop every 0.35.0 node. Then list the `ACTIVE_MARKED` instances that hold a version that failed
+and waits to be applied again, in `pending` or `legacyFailed`. These are the instances that lose a version, as the
+paragraph after the update says:
+
+```javascript
+db.getCollection("saga-order-fulfilment")
+  .find({ status: "ACTIVE_MARKED", $or: [
+      { "streamMarks.pending.versions.0": { $exists: true } },
+      { "streamMarks.legacyFailed.0": { $exists: true } } ] }, { state: 0 })
+```
+
+Give every `ACTIVE_MARKED` instance back its plain status before a 0.34.0 node starts:
 
 ```javascript
 db.getCollection("saga-order-fulfilment")
