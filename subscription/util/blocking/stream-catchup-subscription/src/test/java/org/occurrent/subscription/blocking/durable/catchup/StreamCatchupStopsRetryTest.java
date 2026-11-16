@@ -425,6 +425,50 @@ class StreamCatchupStopsRetryTest {
         );
     }
 
+    @Test
+    void a_canResumeFrom_that_answers_false_once_a_stop_came_during_it_does_not_hold_the_subscription_as_unable_to_resume_and_start_runs_the_replay_again_to_go_live() {
+        Site site = Site.CAN_RESUME_FROM_AT_THE_START_OF_A_POSITION_REPLAY;
+        // Given a wrapped model whose first canResumeFrom answers false once a stop has marked the model stopped, and true after
+        CompletableFuture<Void> readStillWanted = new CompletableFuture<>();
+        CompletableFuture<Boolean> answeredByStillWanted = new CompletableFuture<>();
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        createModelsFor(site, false);
+        // A replay origin after the beginning, so a false that is read as lost history holds the subscription as unable to resume
+        StartAt startAt = StartAt.checkpoint(new StringBasedCheckpoint(CatchupCheckpoints.format(2, 1, 3, LIVE_START)));
+        live.doesNotRetry();
+        live.answersFalseOnceAfterReadingStillWanted(stillWanted -> {
+            if (Thread.currentThread().isVirtual() && firstCall.getAndSet(false)) {
+                readStillWanted.join();
+                answeredByStillWanted.complete(stillWanted.getAsBoolean());
+            }
+        });
+        Subscription subscription = catchup.subscribe(ID, startAt, toDomainEvents(received));
+        CompletableFuture<Void> stopping;
+        try (AbstractCatchupSubscriptionModel.Claim ignored = catchup.claim(ID)) {
+            stopping = CompletableFuture.runAsync(() -> catchup.stop());
+            await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.stopped).as("the model is stopped").isTrue());
+
+            // When canResumeFrom answers false while the stop is held
+            readStillWanted.complete(null);
+            assertThat(answeredByStillWanted).as("what stillWanted answered while the model was stopped").succeedsWithin(WAIT).isEqualTo(false);
+
+            // Then the replay parks itself instead of the false being read as lost history
+            await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.hasParkedReplay(ID)).as("replay parked by the replay while the stop is held").isTrue());
+        }
+        assertThat(stopping).as("the stop").succeedsWithin(WAIT);
+
+        // And start runs the replay again, which goes live
+        assertThatCode(() -> catchup.start(true)).as("starting the model, which runs the parked replay again").doesNotThrowAnyException();
+        AtomicBoolean started = new AtomicBoolean(false);
+        assertThatCode(() -> started.set(subscription.waitUntilStarted(WAIT))).as("waiting until the subscription started").doesNotThrowAnyException();
+        assertThat(started).as("the subscription started").isTrue();
+        assertThatTheSubscriptionGoesLive();
+        assertAll(
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
+    }
+
     private Subscription subscribeWhileTheWrappedModelRetries(Site site) {
         return subscribeWhileTheWrappedModelRetries(site, false);
     }
@@ -514,6 +558,7 @@ class StreamCatchupStopsRetryTest {
         private final boolean retriesGlobalCheckpoint;
         private final boolean givesUpWithoutAskingStillWanted;
         private final AtomicBoolean retriesOnce = new AtomicBoolean(true);
+        private final AtomicBoolean answersFalseOnce = new AtomicBoolean(false);
         private volatile boolean stopRetrying;
         private volatile @Nullable Consumer<BooleanSupplier> readsStillWantedInstead;
         final CompletableFuture<Void> retrying = new CompletableFuture<>();
@@ -533,6 +578,12 @@ class StreamCatchupStopsRetryTest {
         // The test then wants canResumeFrom to hand its stillWanted to the reader and answer true, instead of retrying
         void readsStillWantedInsteadOfRetrying(Consumer<BooleanSupplier> reader) {
             readsStillWantedInstead = reader;
+        }
+
+        // The test then wants the first canResumeFrom to read stillWanted through the reader, answer false, and later ones true
+        void answersFalseOnceAfterReadingStillWanted(Consumer<BooleanSupplier> reader) {
+            readsStillWantedInstead = reader;
+            answersFalseOnce.set(true);
         }
 
         void stopRetrying() {
@@ -579,7 +630,7 @@ class StreamCatchupStopsRetryTest {
             Consumer<BooleanSupplier> reader = readsStillWantedInstead;
             if (reader != null) {
                 reader.accept(stillWanted);
-                return true;
+                return !(Thread.currentThread().isVirtual() && answersFalseOnce.getAndSet(false));
             }
             if (!retriesGlobalCheckpoint) {
                 retryWhile(stillWanted);
