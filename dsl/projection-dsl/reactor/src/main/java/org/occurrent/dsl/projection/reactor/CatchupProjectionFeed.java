@@ -32,6 +32,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
+import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -375,7 +376,9 @@ public final class CatchupProjectionFeed<E> {
      * <p>
      * A view that calls this for an event a replay delivers asks for another catch-up each time a replay delivers that
      * event again. Each of those catch-ups runs once the one that asked has stored its marker, and replays only the
-     * events after that marker, so it does not deliver that event again. A feed built without a
+     * events after that marker. So it does not deliver that event again when the event is at or below the head the
+     * asking catch-up read, and delivers it at most once more otherwise, since the catch-up that delivers it again
+     * stores a head at or above it. A feed built without a
      * {@link CheckpointStorage} for the marker replays the whole history each time, and so without end.
      *
      * @return A {@link Mono} that completes when the catch-up replay has finished, the events fed from it have been
@@ -561,7 +564,7 @@ public final class CatchupProjectionFeed<E> {
             return Mono.just(ReplayStart.FROM_BEGINNING_UNMARKED);
         }
         return catchupMarker.read(id)
-                .map(stored -> Optional.of(GlobalCheckpoint.positionOf(stored)))
+                .map(stored -> Optional.of(CatchupMarkers.positionOf(id, stored)))
                 .defaultIfEmpty(Optional.empty())
                 .flatMap(storedPosition -> reader.currentPosition()
                         .map(head -> new ReplayStart(storedPosition.orElse(null), head)));

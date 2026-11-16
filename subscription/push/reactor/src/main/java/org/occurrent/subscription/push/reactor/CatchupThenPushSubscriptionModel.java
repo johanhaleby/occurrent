@@ -35,6 +35,7 @@ import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
 import org.occurrent.subscription.CatchupListener;
+import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.internal.ReplayFilters;
 import org.slf4j.Logger;
@@ -778,7 +779,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         return Mono.defer(() -> markerOperations.getOrDefault(subscriptionId, Mono.empty()))
                 .onErrorResume(__ -> Mono.empty())
                 .then(Mono.defer(() -> marker.read(subscriptionId)
-                        .map(stored -> Optional.of(GlobalCheckpoint.positionOf(stored)))
+                        .map(stored -> Optional.of(CatchupMarkers.positionOf(subscriptionId, stored)))
                         .defaultIfEmpty(Optional.empty())))
                 .flatMap(storedPosition -> reader.currentPosition()
                         .map(head -> new ReplayStart(storedPosition.orElse(null), head)));
