@@ -24,8 +24,10 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -159,6 +161,47 @@ class CatchupThenPushSubscriptionModelResumePositionTest {
         marker.save("proj", GlobalCheckpoint.of(2)).block();
 
         assertThat(start(store)).containsExactly("3");
+    }
+
+    @Test
+    void an_event_appended_while_the_marker_is_read_is_delivered_and_covered_by_the_stored_head() {
+        append("1", "2");
+        InMemoryCheckpointStorage appendingOnRead = new InMemoryCheckpointStorage() {
+            private boolean appended;
+
+            @Override
+            public Mono<Checkpoint> read(String subscriptionId) {
+                return Mono.defer(() -> {
+                    if (!appended) {
+                        appended = true;
+                        append("3");
+                    }
+                    return super.read(subscriptionId);
+                });
+            }
+        };
+        appendingOnRead.save("proj", GlobalCheckpoint.of(2)).block(Duration.ofSeconds(5));
+        List<String> delivered = new CopyOnWriteArrayList<>();
+
+        new CatchupThenPushSubscriptionModel(store, new PushSubscriptionModel(), appendingOnRead)
+                .subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.fromRunnable(() -> delivered.add(e.getId())))
+                .waitUntilStarted().block(Duration.ofSeconds(5));
+
+        assertThat(delivered).as("the event appended while the marker was read").containsExactly("3");
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(GlobalCheckpoint.positionOf(appendingOnRead.read("proj").block(Duration.ofSeconds(5))))
+                .as("stored marker, at least the position of the event appended while the marker was read").isGreaterThanOrEqualTo(3L));
+    }
+
+    @Test
+    void a_stored_marker_that_is_not_a_catch_up_marker_fails_the_catch_up_naming_the_id_and_suggesting_a_new_one() {
+        append("1");
+        marker.save("proj", new StringBasedCheckpoint("resume-token-xyz")).block(Duration.ofSeconds(5));
+
+        Throwable failure = catchThrowable(() -> new CatchupThenPushSubscriptionModel(store, new PushSubscriptionModel(), marker)
+                .subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.empty())
+                .waitUntilStarted().block(Duration.ofSeconds(5)));
+
+        assertThat(failure).hasMessageContaining("\"proj\"").hasMessageContaining("subscribe under a new id");
     }
 
     private List<String> start(PositionOrderedReader reader) {

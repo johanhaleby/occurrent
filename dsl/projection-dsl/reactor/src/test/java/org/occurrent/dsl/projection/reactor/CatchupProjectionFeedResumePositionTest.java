@@ -24,7 +24,9 @@ import org.occurrent.dsl.projection.reactor.ResumePositionFixtures.Counted;
 import org.occurrent.dsl.projection.reactor.ResumePositionFixtures.InMemoryLog;
 import org.occurrent.dsl.projection.reactor.ResumePositionFixtures.RecordingReplayAwareView;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Mono;
 
@@ -200,6 +202,44 @@ class CatchupProjectionFeedResumePositionTest {
         assertThat(storedPosition()).as("marker after goLive()").isEmpty();
     }
 
+    @Test
+    void an_event_appended_while_the_marker_is_read_is_delivered_and_covered_by_the_stored_head() {
+        log.append("1", "2");
+        catchUp();
+        InMemoryCheckpointStorage appendingOnRead = new InMemoryCheckpointStorage() {
+            private boolean appended;
+
+            @Override
+            public Mono<Checkpoint> read(String subscriptionId) {
+                return Mono.defer(() -> {
+                    if (!appended) {
+                        appended = true;
+                        log.append("3");
+                    }
+                    return super.read(subscriptionId);
+                });
+            }
+        };
+        appendingOnRead.save("counter", GlobalCheckpoint.of(2)).block(TIMEOUT);
+        RecordingReplayAwareView view = new RecordingReplayAwareView();
+
+        feed(view, appendingOnRead).catchUp().block(TIMEOUT);
+
+        assertThat(view.updates()).as("the event appended while the marker was read").containsExactly("3");
+        assertThat(GlobalCheckpoint.positionOf(appendingOnRead.read("counter").block(TIMEOUT)))
+                .as("stored marker, at least the position of the event appended while the marker was read").isGreaterThanOrEqualTo(3L);
+    }
+
+    @Test
+    void a_stored_marker_that_is_not_a_catch_up_marker_fails_the_catch_up_naming_the_id_and_suggesting_a_new_one() {
+        log.append("1");
+        marker.save("counter", new StringBasedCheckpoint("resume-token-xyz")).block(TIMEOUT);
+
+        Throwable failure = catchThrowable(() -> feed(new RecordingReplayAwareView()).catchUp().block(TIMEOUT));
+
+        assertThat(failure).hasMessageContaining("\"counter\"").hasMessageContaining("subscribe under a new id");
+    }
+
     // A stopped catch-up writes no marker, so a later one replays from where the stopped one started.
     private RecordingReplayAwareView stoppedAtTheFirstReplayedEvent() {
         AtomicReference<CatchupProjectionFeed<Counted>> feed = new AtomicReference<>();
@@ -220,6 +260,10 @@ class CatchupProjectionFeedResumePositionTest {
     }
 
     private CatchupProjectionFeed<Counted> feed(RecordingReplayAwareView view) {
-        return CatchupProjectionFeed.create("counter", view, Filter.all(), log, converter, Counted::eventId, marker);
+        return feed(view, marker);
+    }
+
+    private CatchupProjectionFeed<Counted> feed(RecordingReplayAwareView view, InMemoryCheckpointStorage markerStorage) {
+        return CatchupProjectionFeed.create("counter", view, Filter.all(), log, converter, Counted::eventId, markerStorage);
     }
 }
