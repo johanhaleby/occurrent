@@ -4,7 +4,9 @@ Date: 2026-11-13
 
 ## Status
 
-Accepted. Decides [#983](https://github.com/johanhaleby/occurrent/issues/983). Amends Decision point 4 of
+Accepted. Decides [#983](https://github.com/johanhaleby/occurrent/issues/983) in decision point 1, and the part of
+[#979](https://github.com/johanhaleby/occurrent/issues/979) about writes made while the application starts in decision
+points 2 and 3. Amends Decision point 4 of
 [ADR 127](0127-a-subscription-is-a-descriptor-and-the-annotation-stops-naming-the-concept.md), "A descriptor
 annotation is read after the singletons are instantiated". ADR 127 shipped in 0.34.0, so it is amended by reference
 here and gets a pointer in its Status section.
@@ -36,6 +38,14 @@ other inherited one. Finding it is not enough either. The `Method` declares the 
 the starters read the event type from the `Method`. A handler on `Base<E extends OrderEvent>` would subscribe to every
 `OrderEvent` on a class that extends `Base<Placed>`. A factory method whose return type has a type variable for its
 state type has the same problem.
+
+The starters registered every annotated handler once all singleton beans existed, and two kinds of handler missed a
+write made before that, from a `@PostConstruct` method for example. A `@Subscription`, `@StreamSubscription` or
+`@DcbSubscription` that started live, at `NOW` or at `DEFAULT` with nothing stored, began where the event store was
+when it registered. A `@SynchronousSubscription` runs on the thread that writes through the application service, and
+nothing replays a write to it. Neither logged anything. Under `occurrent.subscription.mode=MANUAL` the starters kept
+the synchronous subscription model stopped until the application started the subscriptions, and a write through the
+application service in that time was stored without reaching a synchronous handler.
 
 ## Decision
 
@@ -209,6 +219,72 @@ I rejected three smaller changes:
   setting keeps a handler that never runs and a log that says nothing about it. Occurrent is pre-1.0, and I'd rather
   correct a mistake with a migration path than keep it.
 
+### 2. A subscription that starts live begins where the event store was when the event store bean was created
+
+The post-processors read where the event store is, its live start, as the event store bean is created, in
+`postProcessAfterInitialization`. A first start of a `@Subscription`, `@StreamSubscription` or `@DcbSubscription` at
+`NOW`, or at `DEFAULT` with nothing stored, begins there:
+
+- With a `CheckpointStorage`, the starter stores the live start as the subscription's first checkpoint and starts it
+  at the subscription model's default, which resumes from that checkpoint.
+- At `NOW` with `resumeBehavior = SAME_AS_START_AT`, nothing is stored and the live subscription model starts there.
+- A subscription that has a checkpoint stored already, or whose start the application's `SubscriptionResumePoints`
+  gives, starts as in 0.34.0. So does any other one without a `CheckpointStorage`.
+
+The live start comes from the store the subscription model reads, the one Spring injects as its `EventStoreQueries`,
+or as its `DcbEventStore` when the `STREAM` capability is off, so the only one or the `@Primary` one. Another bean over
+the same collection can be created first and written through from a `@PostConstruct` method before that store
+exists. So the first event store bean that is created makes the starter create the model's store too, and that store
+reads its live start before such a write. When the first one is the model's store, Spring refuses to create it a
+second time with a `BeanCurrentlyInCreationException`, and the starter ignores that.
+
+The read happens at creation, not when a subscription first reads the event store, because a write between the two
+is the write the subscription would miss. The Mongo event stores and the in-memory one always return a scope from
+`openCatchupReadScope`. A Mockito mock returns `null`, so a context with one fails to start with an `IllegalStateException` that names that method.
+
+A bean built after startup, such as a `@Lazy` bean the startup scan can't see a handler on, reads its own live start
+when it is created, and its subscriptions begin there. A write between startup and that bean's creation is history
+to it, so a subscription at `NOW` doesn't get it.
+
+### 3. A write through the application service waits for the synchronous handlers
+
+The post-processors register the synchronous handlers first, `@SynchronousSubscription` and a synchronous
+`@Projection` or `@Snapshot`, in a scan of their own. The scan that registers the rest runs after it. A
+`WAIT_UNTIL_STARTED` replay and a saga can write while that second scan registers them, and the synchronous handlers
+get those writes.
+
+Until the first scan ends, the starters refuse a write through the application service. They wrap the synchronous
+dispatcher of the `ApplicationService` and `DcbApplicationService` they create in `StartupWriteGate`. Its
+`beforeWrite` throws `WriteRefusedException` while a post-processor reports the first scan unfinished. The application
+service calls `beforeWrite` in `execute`, on the caller's thread, before it reads anything, so nothing is stored. On
+the reactor stack `execute` returns a `Mono` that fails with it. The message names `ApplicationRunner` and
+`ApplicationReadyEvent`, since both run after the scan. A thread the application starts while it starts gets the same
+refusal until the first scan ends.
+
+The starters refuse such a write also when the application declares no synchronous handler, since the scan that would
+show there is none hasn't run yet either. A write made directly with `EventStore.write` or `DcbEventStore.append` is
+not refused. It never reaches a synchronous handler, whenever it is made, and decision point 2 gives it to a
+subscription that starts live.
+
+The synchronous subscription model also refuses a write while it is stopped and has a handler registered, and a write
+whose events a paused synchronous subscription matches. In 0.34.0 the write was stored, and the stopped or paused
+handler never got its events. The stream application service matches the paused filters against the events with the
+stream id and stream version the write gives them. A filter on the position or on the append id can't match before
+the event store writes the events, so it doesn't stop the write. `OccurrentSubscriptionsExtension` turns both refusals
+off, since a test stops the subscriptions it doesn't name and keeps writing.
+
+Under `MANUAL` the synchronous subscription model runs from the start. Stopped, it would refuse every write through
+the application service until the application started it.
+
+A synchronous handler on a bean the first scan can't see, such as a `@Lazy` bean whose declared type hides the
+annotation, registers when the bean is built and gets only the writes made after that. That holds for every such bean
+under `spring.main.lazy-initialization=true`.
+
+I rejected registering the synchronous handlers on the first write instead, from the thread that writes. A write from
+a `@PostConstruct` method asks for beans that are still being created, the writer itself among them, and the scan
+then fails with a `BeanCurrentlyInCreationException` that says nothing about the write. Refusing the write gives one
+error, with the place to write from in its message.
+
 ## Consequences
 
 - **A handler that never ran starts running after the upgrade.** It starts from its own start settings. When nothing
@@ -275,3 +351,18 @@ I rejected three smaller changes:
 - There is no OpenRewrite recipe, because nothing in the code says whether an inherited handler was meant to run. The
   code compiles unchanged. [The upgrade guide](../../migration/upgrading-to-0.35.0.md#a-handler-method-the-bean-inherits-is-registered)
   says who is affected and what to do.
+- **A write through the application service from a `@PostConstruct` method, an `InitializingBean` or a `@Bean`
+  method fails startup with `WriteRefusedException`.** It worked in 0.34.0, and the synchronous handlers registered
+  after it never got it. Moving the write to an `ApplicationRunner` or an `ApplicationReadyEvent` listener fixes it.
+- A test whose context has a Mockito mock of the event store fails to start with an `IllegalStateException` until the
+  mock returns a scope from `openCatchupReadScope`.
+- A subscription that starts live gets the events written directly to the event store while the application starts,
+  which 0.34.0 skipped.
+- Under `MANUAL` the synchronous handlers run on every write through the application service, also before the
+  application starts the subscriptions.
+- A write while the synchronous subscription model is stopped, or one whose events a paused synchronous subscription
+  matches, fails with `WriteRefusedException` instead of going past that handler.
+- #979 isn't closed. A subscription on a bean built after startup still misses what was written between startup and
+  the bean's creation.
+- The code compiles unchanged. [The upgrade guide](../../migration/upgrading-to-0.35.0.md#a-write-through-the-application-service-is-refused-while-the-application-starts)
+  says who is affected by decision points 2 and 3 and what to do.

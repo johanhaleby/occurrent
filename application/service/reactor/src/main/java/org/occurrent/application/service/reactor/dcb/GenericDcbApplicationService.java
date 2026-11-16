@@ -138,7 +138,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         @Nullable Function<List<E>, Mono<Void>> sideEffect = options.sideEffect();
         ReactiveSynchronousEventDispatcher.WriteCheck writeCheck;
         try {
-            // On the caller's thread and before hasSubscriptions(), since it can register handlers, see beforeWrite()
+            // On the caller's thread and before anything is read, see beforeWrite()
             writeCheck = synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
         } catch (RuntimeException refused) {
             return Mono.error(refused);

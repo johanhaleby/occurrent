@@ -18,20 +18,21 @@
 package org.occurrent.springboot.mongo.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.application.service.WriteRefusedException;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.springboot.common.internal.StartupGap;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 
-// Registers the synchronous handlers a write made during startup must reach before the model's own refusals are
-// asked, so the application service needs no startup logic of its own
-record StartupGapClosingDispatcher(SynchronousEventDispatcher delegate, List<StartupGap> startupGaps) implements SynchronousEventDispatcher {
+// Refuses a write through the application service until startup has registered the synchronous handlers, before the
+// model's own refusals are asked, so the application service needs no startup logic of its own
+record StartupWriteGate(SynchronousEventDispatcher delegate, List<StartupGap> startupGaps) implements SynchronousEventDispatcher {
 
     // One gap per annotation post-processor in the context, which is none when annotation processing is off
-    static SynchronousEventDispatcher closingTheStartupGap(SynchronousEventDispatcher dispatcher, ObjectProvider<StartupGap> startupGaps) {
+    static SynchronousEventDispatcher refusingWritesUntilStarted(SynchronousEventDispatcher dispatcher, ObjectProvider<StartupGap> startupGaps) {
         List<StartupGap> gaps = startupGaps.orderedStream().toList();
-        return gaps.isEmpty() ? dispatcher : new StartupGapClosingDispatcher(dispatcher, gaps);
+        return gaps.isEmpty() ? dispatcher : new StartupWriteGate(dispatcher, gaps);
     }
 
     @Override
@@ -46,7 +47,9 @@ record StartupGapClosingDispatcher(SynchronousEventDispatcher delegate, List<Sta
 
     @Override
     public WriteCheck beforeWrite() {
-        startupGaps.forEach(StartupGap::closeBeforeWrite);
+        if (startupGaps.stream().anyMatch(StartupGap::isOpen)) {
+            throw WriteRefusedException.beforeStartupCompleted();
+        }
         return delegate.beforeWrite();
     }
 }

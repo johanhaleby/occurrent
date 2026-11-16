@@ -140,7 +140,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
         @Nullable Consumer<List<E>> sideEffect = options.sideEffect();
-        // Before hasSubscriptions(), since it can register handlers, see beforeWrite()
+        // Before anything is read, so a refused write reads nothing, see beforeWrite()
         SynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? SynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
         @Nullable DcbReadOptions readOptions = readOptions(options);

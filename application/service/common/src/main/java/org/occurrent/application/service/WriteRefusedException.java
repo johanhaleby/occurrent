@@ -22,9 +22,9 @@ import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * Thrown by an application service before it writes anything, when a registered synchronous handler would never see
- * the events of that write. A synchronous handler has no replay, so a write it misses is lost to it for good, and the
- * application service refuses it instead. Nothing is stored, so the command can be run again once the handler runs.
+ * Thrown by an application service before it writes anything, when a synchronous handler would never see the events
+ * of that write. A synchronous handler has no replay, so a write it misses is lost to it for good, and the application
+ * service refuses it instead. Nothing is stored, so the command can be run again once the handler runs.
  */
 @NullMarked
 public class WriteRefusedException extends IllegalStateException {
@@ -47,5 +47,17 @@ public class WriteRefusedException extends IllegalStateException {
     public static WriteRefusedException synchronousSubscriptionsPaused(Set<String> subscriptionIds) {
         return new WriteRefusedException(("The synchronous subscriptions %s are paused and match the events of this write, so they would never see it. " +
                 "Resume them before writing.").formatted(new TreeSet<>(subscriptionIds)));
+    }
+
+    /**
+     * The Spring Boot starters refuse a write through the application service until they have registered every
+     * synchronous handler the application declares, which happens after all singleton beans are created.
+     *
+     * @return The refusal of a write made while the application is still starting, from a {@code @PostConstruct}
+     * method for example.
+     */
+    public static WriteRefusedException beforeStartupCompleted() {
+        return new WriteRefusedException("The application is still starting and has not registered all of its synchronous handlers, so some of them would never see this write. " +
+                "Write from an ApplicationRunner or an ApplicationReadyEvent listener, not from a @PostConstruct method, an InitializingBean or a @Bean method.");
     }
 }

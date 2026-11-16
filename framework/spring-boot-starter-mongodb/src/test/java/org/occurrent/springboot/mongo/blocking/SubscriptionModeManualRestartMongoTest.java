@@ -28,6 +28,7 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
@@ -157,20 +158,22 @@ class SubscriptionModeManualRestartMongoTest {
 
     /**
      * Appends an event before the subscription registers, standing in for one written while the application was down.
+     * It writes to the event store, since the application service refuses a write made while the application starts.
      */
     static class OfflineAppender {
         static final String APPENDED_WHILE_DOWN = "appended-while-down";
 
-        private final ApplicationService<TestEvent> applicationService;
+        private final EventStore eventStore;
+        private final CloudEventConverter<TestEvent> converter;
 
-        OfflineAppender(ApplicationService<TestEvent> applicationService) {
-            this.applicationService = applicationService;
+        OfflineAppender(EventStore eventStore, CloudEventConverter<TestEvent> converter) {
+            this.eventStore = eventStore;
+            this.converter = converter;
         }
 
         @PostConstruct
         void appendWhileDown() {
-            applicationService.execute(UUID.randomUUID().toString(),
-                    __ -> List.of(new TestEvent(APPENDED_WHILE_DOWN, new Date(), "name")));
+            eventStore.write(UUID.randomUUID().toString(), converter.toCloudEvent(new TestEvent(APPENDED_WHILE_DOWN, new Date(), "name")));
         }
     }
 
@@ -209,8 +212,8 @@ class SubscriptionModeManualRestartMongoTest {
         }
 
         @Bean
-        OfflineAppender offlineAppender(ApplicationService<TestEvent> applicationService) {
-            return new OfflineAppender(applicationService);
+        OfflineAppender offlineAppender(EventStore eventStore, CloudEventConverter<TestEvent> converter) {
+            return new OfflineAppender(eventStore, converter);
         }
 
         @Bean

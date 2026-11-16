@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.ExecuteFilter;
+import org.occurrent.application.service.internal.EventsAsWritten;
 import org.occurrent.application.service.internal.FailureAfterWrite;
 import org.occurrent.application.service.reactor.ApplicationService;
 import org.occurrent.application.service.reactor.ExecuteOptions;
@@ -115,7 +116,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         @Nullable Function<List<E>, Mono<Void>> sideEffect = executeOptions.sideEffect();
         ReactiveSynchronousEventDispatcher.WriteCheck writeCheck;
         try {
-            // On the caller's thread and before hasSubscriptions(), since it can register handlers, see beforeWrite()
+            // On the caller's thread and before anything is read, see beforeWrite()
             writeCheck = synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
         } catch (RuntimeException refused) {
             return Mono.error(refused);
@@ -147,7 +148,9 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                             }
                             List<CloudEvent> newCloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
                             List<E> writtenDomainEvents = newDomainEvents;
-                            writeCheck.check(newCloudEvents);
+                            if (writeCheck != ReactiveSynchronousEventDispatcher.WriteCheck.NONE) {
+                                writeCheck.check(EventsAsWritten.inStream(streamId, eventStream.version(), newCloudEvents));
+                            }
                             return eventStore.write(streamId, eventStream.version(), Flux.fromIterable(newCloudEvents))
                                     .flatMap(writeResult -> {
                                         Result<E> result = new Result<>(writeResult, writtenDomainEvents);

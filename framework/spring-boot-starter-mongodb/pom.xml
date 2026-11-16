@@ -245,5 +245,13 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- An event store with no live start, for the test of which store the start boundary comes from -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-inmemory</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 </project>

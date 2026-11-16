@@ -35,7 +35,6 @@ import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
-import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
@@ -45,8 +44,6 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
-
-import reactor.core.scheduler.Schedulers;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
@@ -138,8 +135,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // is still unknown is not attempted for ever.
     private final Set<String> alreadyBuiltToBeScanned = ConcurrentHashMap.newKeySet();
     private volatile boolean startupScanComplete;
-    // Set once every synchronous handler a bean definition shows is registered, by the synchronous pass of the
-    // startup scan or by a write made before it
+    // Set once the synchronous pass of the startup scan has registered every synchronous handler it can see
     private volatile boolean startupGapClosed;
 
     // The start boundary each bean built after startup read when it was created, by bean name, until it registers
@@ -337,45 +333,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
     }
 
-    // A write made before the synchronous pass above registers the synchronous handlers itself, with the scan that
-    // pass runs, so a handler declared then doesn't miss it. A lazy bean is passed over, since a write is no reason to
-    // create it, and a type is predicted without creating a FactoryBean to ask it for its product's type. A bean still
-    // being created when the scan asks for it, the writer itself or a bean the writer is created for, throws
-    // BeanCurrentlyInCreationException from the scan, before anything is written.
-    //
-    // No lock is taken. registrationLock held across getBean deadlocks against another thread whose bean writes as it
-    // is created, and two scans of one handler register it once. The scan subscribes in place unless the writer is on
-    // a Reactor non-blocking thread, where block() can throw.
     @Override
-    public void closeBeforeWrite() {
-        if (startupGapClosed) {
-            return;
-        }
-        boolean mayBlock = !Schedulers.isInNonBlockingThread();
-        String[] beanNames = applicationContext.getBeanDefinitionNames();
-        while (scan(beanNames, this::resolveScanTypeBeforeWrite, applicationContext::getBean, (name, resolved) -> () -> resolved, mayBlock, mayBlock, null, true)) {
-            beanNames = applicationContext.getBeanDefinitionNames();
-        }
-        startupGapClosed = true;
-    }
-
-    private @Nullable ScanType resolveScanTypeBeforeWrite(String beanName) {
-        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
-        if (beanFactory.containsBeanDefinition(beanName)) {
-            BeanDefinition definition = beanFactory.getMergedBeanDefinition(beanName);
-            if (definition.isLazyInit() || definition.isAbstract()) {
-                return null;
-            }
-        }
-        Class<?> recorded = userClassByBeanName.get(beanName);
-        if (recorded != null) {
-            return new ScanType(recorded, true);
-        }
-        if (beanFactory.containsSingleton(beanName) && !beanFactory.isFactoryBean(beanName)) {
-            return new ScanType(userClassOf(applicationContext.getBean(beanName)), true);
-        }
-        Class<?> type = beanFactory.getType(beanName, false);
-        return type == null ? null : new ScanType(ClassUtils.getUserClass(type), false);
+    public boolean isOpen() {
+        return !startupGapClosed;
     }
 
     // Whether a handler invocation for this name can reach the object the container published, rather than the

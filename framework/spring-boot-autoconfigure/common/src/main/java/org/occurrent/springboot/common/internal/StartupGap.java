@@ -23,21 +23,12 @@ package org.occurrent.springboot.common.internal;
  * method for example, reaches only the synchronous handlers already registered, and a handler that misses a write never
  * sees it.
  * <p>
- * The starter asks {@link #closeBeforeWrite()} before every write through the application service.
+ * The starter refuses every write through the application service while {@link #isOpen()} returns {@code true}.
  */
 public interface StartupGap {
 
     /**
-     * Registers every synchronous handler the context declares and has not registered yet, on the calling thread, when
-     * startup has not registered them all. A handler whose bean is lazy, or whose bean definition hides the annotation
-     * behind its declared type, is left out. Returns at once after startup.
-     *
-     * @throws org.springframework.beans.factory.BeanCurrentlyInCreationException (possibly wrapped in a
-     *                                                                            {@link org.springframework.beans.factory.BeanCreationException})
-     *                                                                            when a handler's bean can't be created
-     *                                                                            before the write, because the write is
-     *                                                                            made while that bean, or a bean it
-     *                                                                            needs, is still being created
+     * @return {@code true} until the startup scan has registered the synchronous handlers, then {@code false} for good.
      */
-    void closeBeforeWrite();
+    boolean isOpen();
 }

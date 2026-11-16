@@ -25,6 +25,7 @@ import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.ExecuteOptions;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.application.service.blocking.TransactionExecutor;
+import org.occurrent.application.service.internal.EventsAsWritten;
 import org.occurrent.application.service.internal.FailureAfterWrite;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -129,7 +130,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
               record Attempt<T1 extends @Nullable Object, T2>(T1 v1, T2 v2) {}
               // @formatter:on
 
-        // Before hasSubscriptions(), since it can register handlers, see beforeWrite()
+        // Before anything is read, so a refused write reads nothing, see beforeWrite()
         SynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? SynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
 
@@ -158,7 +159,9 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                 }
 
                 List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-                writeCheck.check(newEvents);
+                if (writeCheck != SynchronousEventDispatcher.WriteCheck.NONE) {
+                    writeCheck.check(EventsAsWritten.inStream(streamId, eventStream.version(), newEvents));
+                }
                 WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
 
                 if (dispatchSynchronously && !newEvents.isEmpty()) {

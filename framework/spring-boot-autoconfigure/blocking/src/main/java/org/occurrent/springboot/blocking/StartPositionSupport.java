@@ -152,18 +152,27 @@ class StartPositionSupport {
     private static @Nullable Supplier<@Nullable String> liveStartReaderOf(Object bean) {
         if (bean instanceof CatchupReads reads) {
             return () -> {
-                try (CatchupReadScope scope = reads.openCatchupReadScope(null)) {
+                try (CatchupReadScope scope = requireScope(reads.openCatchupReadScope(null), bean, "openCatchupReadScope")) {
                     return scope.liveStart();
                 }
             };
         } else if (bean instanceof DcbCatchupReads reads) {
             return () -> {
-                try (DcbCatchupReadScope scope = reads.openDcbCatchupReadScope(null)) {
+                try (DcbCatchupReadScope scope = requireScope(reads.openDcbCatchupReadScope(null), bean, "openDcbCatchupReadScope")) {
                     return scope.liveStart();
                 }
             };
         }
         return null;
+    }
+
+    // The Mongo and in-memory event stores always open a scope. A Mockito mock returns null, and the failure says so.
+    private static <S> S requireScope(@Nullable S scope, Object bean, String method) {
+        if (scope == null) {
+            throw new IllegalStateException(("The event store %s returned no scope from %s, so the start boundary of the annotated subscriptions can't be read. " +
+                    "A mocked event store has to return a scope from %s.").formatted(bean.getClass().getName(), method, method));
+        }
+        return scope;
     }
 
     // The boundary for a bean built after startup, read from the same event store, or null when there is none

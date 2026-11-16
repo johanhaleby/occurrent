@@ -204,15 +204,28 @@ class DefaultStartAtLeftOverCatchUpCheckpointMongoTest {
     }
 
     private static ConfigurableApplicationContext boot(String database, String applicationName, Class<? extends Handled> handlerType, String writtenBeforeSubscribing) {
+        if (!writtenBeforeSubscribing.isEmpty()) {
+            writeWhileDown(database, writtenBeforeSubscribing);
+        }
         SpringApplication application = new SpringApplication(TestApplication.class);
         application.addInitializers(context -> ((GenericApplicationContext) context).registerBean(handlerType));
-        return application.run(
+        return application.run(bootArgs(database, applicationName, ""));
+    }
+
+    // The start of a subscription at the present is read when the event store bean is created, so only what is written
+    // before the context starts is history. A context with subscriptions off writes it and is closed again.
+    private static void writeWhileDown(String database, String names) {
+        SpringApplication.run(TestApplication.class, bootArgs(database, "while-down", names, "--occurrent.subscription.enabled=false")).close();
+    }
+
+    private static String[] bootArgs(String database, String applicationName, String writtenBeforeSubscribing, String... more) {
+        return Stream.concat(Stream.of(
                 "--spring.application.name=" + applicationName,
                 "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(database),
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=stream",
                 "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + database,
-                "--test.before-subscribe=" + writtenBeforeSubscribing);
+                "--test.before-subscribe=" + writtenBeforeSubscribing), Stream.of(more)).toArray(String[]::new);
     }
 
     @SpringBootApplication
@@ -250,7 +263,7 @@ class DefaultStartAtLeftOverCatchUpCheckpointMongoTest {
             this.beforeSubscribe = Stream.of(beforeSubscribe.split(",")).filter(name -> !name.isBlank()).toList();
         }
 
-        // Subscriptions start once every singleton exists, so these are written before any of them does.
+        // Only the context that writes while the application is down has any, see writeWhileDown
         @PostConstruct
         void writeBeforeSubscribe() {
             if (beforeSubscribe.isEmpty()) {

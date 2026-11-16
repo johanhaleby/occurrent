@@ -160,11 +160,20 @@ class StartPositionSupport {
 
     private static @Nullable Supplier<@Nullable String> liveStartReaderOf(Object bean) {
         if (bean instanceof CatchupReads reads) {
-            return () -> Mono.usingWhen(reads.openCatchupReadScope(null), scope -> Mono.justOrEmpty(scope.liveStart()), CatchupReadScope::close).block();
+            return () -> Mono.usingWhen(requireScope(reads.openCatchupReadScope(null), bean, "openCatchupReadScope"), scope -> Mono.justOrEmpty(scope.liveStart()), CatchupReadScope::close).block();
         } else if (bean instanceof DcbCatchupReads reads) {
-            return () -> Mono.usingWhen(reads.openDcbCatchupReadScope(null), scope -> Mono.justOrEmpty(scope.liveStart()), DcbCatchupReadScope::close).block();
+            return () -> Mono.usingWhen(requireScope(reads.openDcbCatchupReadScope(null), bean, "openDcbCatchupReadScope"), scope -> Mono.justOrEmpty(scope.liveStart()), DcbCatchupReadScope::close).block();
         }
         return null;
+    }
+
+    // ReactorMongoEventStore always returns a Mono. A Mockito mock returns null, and the failure says so.
+    private static <S> S requireScope(@Nullable S scope, Object bean, String method) {
+        if (scope == null) {
+            throw new IllegalStateException(("The event store %s returned no scope from %s, so the start boundary of the annotated subscriptions can't be read. " +
+                    "A mocked event store has to return a scope from %s.").formatted(bean.getClass().getName(), method, method));
+        }
+        return scope;
     }
 
     // The boundary for a bean built after startup, read from the same event store, or null when there is none

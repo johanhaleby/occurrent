@@ -193,7 +193,8 @@ class ReactiveSubscriptionResumePointsMongoTest {
         }
 
         // When
-        ConfigurableApplicationContext second = start(database, Annotated.DEFAULT.subscriber, "live-3", checkpoints.get("history-1"));
+        writeWhileDown(database, "live-3");
+        ConfigurableApplicationContext second = start(database, Annotated.DEFAULT.subscriber, "", checkpoints.get("history-1"));
         try {
             Recording recording = second.getBean(Recording.class);
 
@@ -235,7 +236,8 @@ class ReactiveSubscriptionResumePointsMongoTest {
 
     // A process that replays a history in which every event hands over the checkpoint it was delivered with
     private static Map<String, String> aReplayDeliversTheCheckpointsOf(String database, String... names) {
-        ConfigurableApplicationContext ctx = startWithoutTheBean(database, "recorder", String.join(",", names));
+        writeWhileDown(database, String.join(",", names));
+        ConfigurableApplicationContext ctx = startWithoutTheBean(database, "recorder", "");
         try {
             Recording recording = ctx.getBean(Recording.class);
             await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
@@ -249,6 +251,14 @@ class ReactiveSubscriptionResumePointsMongoTest {
             // A live start opens at the start of the current second, so the history must be a second older to need a replay
             await().pollDelay(ofMillis(2100)).atMost(ofSeconds(5)).until(() -> true);
         }
+    }
+
+    // The start of a subscription at the present is read when the event store bean is created, so only what is written
+    // before the context starts is history. A context with subscriptions off appends it and is closed again.
+    private static void writeWhileDown(String database, String history) {
+        run(database, "none", history, "--occurrent.subscription.enabled=false").close();
+        // A live start opens at the start of the current second, so the history must be a second older to need a replay
+        await().pollDelay(ofMillis(2100)).atMost(ofSeconds(5)).until(() -> true);
     }
 
     private static ConfigurableApplicationContext start(String database, String subscribers, String history, String resumePoint) {

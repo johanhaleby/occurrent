@@ -29,6 +29,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -44,6 +45,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -75,6 +77,7 @@ class ProjectionAnnotationDurableResumeMongoTest {
     void resumes_from_the_stored_checkpoint_and_processes_only_events_that_arrived_while_down() {
         String[] args = bootArgs("projection-durable-resume");
 
+        writeWhileDown(args, "historic-1,historic-2");
         ConfigurableApplicationContext ctx1 = SpringApplication.run(FirstBootApplication.class, args);
         try {
             MongoOperations mongo = ctx1.getBean(MongoOperations.class);
@@ -89,6 +92,7 @@ class ProjectionAnnotationDurableResumeMongoTest {
             ctx1.close();
         }
 
+        writeWhileDown(args, "while-down-1");
         ConfigurableApplicationContext ctx2 = SpringApplication.run(SecondBootApplication.class, args);
         try {
             MongoOperations mongo = ctx2.getBean(MongoOperations.class);
@@ -109,6 +113,15 @@ class ProjectionAnnotationDurableResumeMongoTest {
         String[] args = bootArgs("projection-duplicate-id");
         assertThatThrownBy(() -> SpringApplication.run(DuplicateIdApplication.class, args).close())
                 .hasStackTraceContaining("Duplicate subscription/projection id");
+    }
+
+    // The start of a subscription at the present is read when the event store bean is created, so only what is written
+    // before the context starts is history. A context with subscriptions off appends it and is closed again.
+    private static void writeWhileDown(String[] args, String history) {
+        String[] whileDown = Arrays.copyOf(args, args.length + 2);
+        whileDown[args.length] = "--occurrent.subscription.enabled=false";
+        whileDown[args.length + 1] = "--test.history=" + history;
+        SpringApplication.run(FirstBootApplication.class, whileDown).close();
     }
 
     private static int count(MongoOperations mongo) {
@@ -147,8 +160,8 @@ class ProjectionAnnotationDurableResumeMongoTest {
         }
 
         @Bean
-        HistoryAppender historyAppender(ApplicationService<TestEvent> applicationService) {
-            return new HistoryAppender(applicationService);
+        HistoryAppender historyAppender(ApplicationService<TestEvent> applicationService, @Value("${test.history:}") List<String> history) {
+            return new HistoryAppender(applicationService, history);
         }
 
         @Bean
@@ -172,12 +185,6 @@ class ProjectionAnnotationDurableResumeMongoTest {
         }
 
         @Bean
-        OfflineAppender offlineAppender(ApplicationService<TestEvent> applicationService) {
-            return new OfflineAppender(applicationService);
-        }
-
-        @Bean
-        @DependsOn("offlineAppender")
         OrderCountProjection orderCountProjection() {
             return new OrderCountProjection();
         }
@@ -227,30 +234,19 @@ class ProjectionAnnotationDurableResumeMongoTest {
         }
     }
 
+    // Appends the events of test.history, which only the context that writes while the application is down is given
     static class HistoryAppender {
         private final ApplicationService<TestEvent> applicationService;
+        private final List<String> history;
 
-        HistoryAppender(ApplicationService<TestEvent> applicationService) {
+        HistoryAppender(ApplicationService<TestEvent> applicationService, List<String> history) {
             this.applicationService = applicationService;
+            this.history = history;
         }
 
         @jakarta.annotation.PostConstruct
         void appendHistory() {
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new OrderPlaced("historic-1")));
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new OrderPlaced("historic-2")));
-        }
-    }
-
-    static class OfflineAppender {
-        private final ApplicationService<TestEvent> applicationService;
-
-        OfflineAppender(ApplicationService<TestEvent> applicationService) {
-            this.applicationService = applicationService;
-        }
-
-        @jakarta.annotation.PostConstruct
-        void appendWhileDown() {
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new OrderPlaced("while-down-1")));
+            history.forEach(name -> applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new OrderPlaced(name))));
         }
     }
 

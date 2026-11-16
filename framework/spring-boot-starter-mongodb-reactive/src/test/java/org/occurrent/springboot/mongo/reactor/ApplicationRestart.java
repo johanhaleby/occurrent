@@ -42,6 +42,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -108,8 +109,7 @@ final class ApplicationRestart {
     <S extends Recorder> void run(String subscriptionId, Class<S> subscriberType, FirstBootEnds firstBootEnds,
                                   List<String> expectedFirstBoot, List<String> expectedSecondBoot, BootCheck bootCheck) {
         String firstBootAfterStart = firstBootEnds == FirstBootEnds.WHEN_THE_INITIAL_CHECKPOINT_IS_STORED ? "" : "live-1";
-        ConfigurableApplicationContext firstBoot = SpringApplication.run(application,
-                bootArgs(subscriptionId, "historic-1,historic-2", firstBootAfterStart));
+        ConfigurableApplicationContext firstBoot = boot(subscriptionId, "historic-1,historic-2", firstBootAfterStart);
         try {
             S subscriber = firstBoot.getBean(subscriberType);
             switch (firstBootEnds) {
@@ -126,8 +126,7 @@ final class ApplicationRestart {
             firstBoot.close();
         }
 
-        ConfigurableApplicationContext secondBoot = SpringApplication.run(application,
-                bootArgs(subscriptionId, "while-down-1", "live-2"));
+        ConfigurableApplicationContext secondBoot = boot(subscriptionId, "while-down-1", "live-2");
         try {
             S subscriber = secondBoot.getBean(subscriberType);
             awaitDelivered(subscriber, "live-2");
@@ -161,6 +160,29 @@ final class ApplicationRestart {
         });
     }
 
+    // The start of a subscription at the present is read when the event store bean is created, so only what is written
+    // before the context starts is history. A context with subscriptions off writes the events named by
+    // test.before-subscribe and is closed again, and the context under test is then booted with none to write.
+    private ConfigurableApplicationContext boot(String databaseName, String beforeSubscribe, String afterStart) {
+        return bootWritingHistoryFirst(application, bootArgs(databaseName, beforeSubscribe, afterStart));
+    }
+
+    // Takes the arguments of a boot that writes test.before-subscribe itself and boots the application as if there were none
+    static ConfigurableApplicationContext bootWritingHistoryFirst(Class<?> application, String[] args) {
+        boolean hasHistory = Stream.of(args).anyMatch(arg -> arg.startsWith(BEFORE_SUBSCRIBE) && arg.length() > BEFORE_SUBSCRIBE.length());
+        if (hasHistory) {
+            String[] whileDown = Stream.concat(
+                    Stream.of(args).map(arg -> arg.startsWith(AFTER_START) ? AFTER_START : arg),
+                    Stream.of("--occurrent.subscription.enabled=false")).toArray(String[]::new);
+            SpringApplication.run(application, whileDown).close();
+        }
+        String[] withoutHistory = Stream.of(args).map(arg -> arg.startsWith(BEFORE_SUBSCRIBE) ? BEFORE_SUBSCRIBE : arg).toArray(String[]::new);
+        return SpringApplication.run(application, withoutHistory);
+    }
+
+    private static final String BEFORE_SUBSCRIBE = "--test.before-subscribe=";
+    private static final String AFTER_START = "--test.after-start=";
+
     // Booted with SpringApplication.run rather than @SpringBootTest, so there is no @ServiceConnection and the url is
     // passed as an argument.
     private String[] bootArgs(String databaseName, String beforeSubscribe, String afterStart) {
@@ -169,8 +191,8 @@ final class ApplicationRestart {
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=" + capabilities,
                 "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName,
-                "--test.before-subscribe=" + beforeSubscribe,
-                "--test.after-start=" + afterStart
+                BEFORE_SUBSCRIBE + beforeSubscribe,
+                AFTER_START + afterStart
         };
     }
 
@@ -197,15 +219,18 @@ final class ApplicationRestart {
         EventWriter(Consumer<String> write, String beforeSubscribe, String afterStart, Runnable beforeAfterStart) {
             this.beforeAfterStart = beforeAfterStart;
             this.write = write;
-            this.beforeSubscribe = List.of(beforeSubscribe.split(","));
+            this.beforeSubscribe = beforeSubscribe.isEmpty() ? List.of() : List.of(beforeSubscribe.split(","));
             this.afterStart = afterStart.isEmpty() ? List.of() : List.of(afterStart.split(","));
         }
 
-        // Subscriptions register once every singleton exists, so these are written before any of them starts. A
-        // subscription starting at the present can still receive what the same MongoClient wrote up to a second
-        // earlier, so the pause keeps them out of reach of the NOW subscribers.
+        // Only the context that writes while the application is down is given any, see boot. A subscription starting at
+        // the present can still receive what the same MongoClient wrote up to a second earlier, so the pause keeps
+        // them out of reach of the NOW subscribers.
         @PostConstruct
         void writeBeforeSubscribe() throws InterruptedException {
+            if (beforeSubscribe.isEmpty()) {
+                return;
+            }
             beforeSubscribe.forEach(write);
             Thread.sleep(1500);
         }

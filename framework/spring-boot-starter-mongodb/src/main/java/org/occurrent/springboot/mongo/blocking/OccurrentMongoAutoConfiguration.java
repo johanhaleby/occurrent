@@ -464,8 +464,8 @@ public class OccurrentMongoAutoConfiguration<E> {
         // Wire the synchronous subscription dispatcher and transaction executor when present, so a
         // @SynchronousSubscription handler runs on the writer's thread, atomically with the write. Both are resolved
         // through ObjectProvider because they only exist when the feature is applicable, and either can be absent or
-        // user-replaced. A write made during startup first registers the synchronous handlers, see StartupGap.
-        synchronousEventDispatcher.ifAvailable(dispatcher -> builder.synchronousSubscriptions(StartupGapClosingDispatcher.closingTheStartupGap(dispatcher, startupGaps)));
+        // user-replaced. A write made before startup has registered the synchronous handlers is refused, see StartupGap.
+        synchronousEventDispatcher.ifAvailable(dispatcher -> builder.synchronousSubscriptions(StartupWriteGate.refusingWritesUntilStarted(dispatcher, startupGaps)));
         transactionExecutor.ifAvailable(builder::transactionExecutor);
         return builder.build();
     }
@@ -496,7 +496,7 @@ public class OccurrentMongoAutoConfiguration<E> {
         GenericDcbApplicationService.Builder<E> builder = GenericDcbApplicationService.builder(eventStore, cloudEventConverter).retryStrategy(retryStrategy);
         tagGeneratorProvider.ifAvailable(builder::tagGenerator);
         // Wire the synchronous subscription dispatcher and transaction executor when present (see occurrentApplicationService).
-        synchronousEventDispatcher.ifAvailable(dispatcher -> builder.synchronousSubscriptions(StartupGapClosingDispatcher.closingTheStartupGap(dispatcher, startupGaps)));
+        synchronousEventDispatcher.ifAvailable(dispatcher -> builder.synchronousSubscriptions(StartupWriteGate.refusingWritesUntilStarted(dispatcher, startupGaps)));
         transactionExecutor.ifAvailable(builder::transactionExecutor);
         return builder.build();
     }

@@ -21,6 +21,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
 import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
@@ -36,10 +37,12 @@ import java.util.Map;
 import java.util.OptionalLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
- * A catch-up needs an event store that opens a read scope, so an {@link EventStoreQueries} bean that is not a MongoDB store fails the context at startup. Container-free, since nothing here reaches MongoDB.
+ * A catch-up needs an event store that opens a read scope, so an {@link EventStoreQueries} bean that is not a MongoDB store fails the context at startup. The starter also reads the live start from that scope when it creates the store bean, so a store that opens no scope, such as an unstubbed Mockito mock, fails startup too. Container-free, since nothing here reaches MongoDB.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupReadsRequirementWiringTest {
@@ -71,14 +74,32 @@ class CatchupReadsRequirementWiringTest {
     @Test
     void an_event_store_queries_bean_that_implements_catchup_reads_starts_with_a_catchup_over_it() {
         contextRunner
-                .withBean(EventStoreQueries.class, () -> mock(QueriesWithCatchupReads.class))
+                .withBean(EventStoreQueries.class, CatchupReadsRequirementWiringTest::queriesWithCatchupReadsAndNoLiveStart)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean(SubscriptionModel.class)).isNotNull();
                 });
     }
 
+    @Test
+    void an_event_store_that_opens_no_scope_fails_the_context_at_startup_and_the_message_names_the_store_and_the_method_to_stub() {
+        contextRunner
+                .withBean(EventStoreQueries.class, () -> mock(QueriesWithCatchupReads.class))
+                .run(context -> assertThat(context).getFailure().rootCause()
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("QueriesWithCatchupReads")
+                        .hasMessageContaining("openCatchupReadScope"));
+    }
+
     interface QueriesWithCatchupReads extends EventStoreQueries, CatchupReads {
+    }
+
+    private static QueriesWithCatchupReads queriesWithCatchupReadsAndNoLiveStart() {
+        QueriesWithCatchupReads queries = mock(QueriesWithCatchupReads.class);
+        CatchupReadScope scope = mock(CatchupReadScope.class);
+        when(scope.liveStart()).thenReturn(null);
+        when(queries.openCatchupReadScope(any())).thenReturn(scope);
+        return queries;
     }
 
     private static final class InMemoryCheckpointStorage implements CheckpointStorage {

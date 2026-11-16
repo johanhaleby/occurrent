@@ -87,7 +87,7 @@ class ReactiveDefaultStartAtLeftOverCatchUpCheckpointMongoTest {
 
     @Test
     void subscription_without_start_at_is_delivered_what_was_written_while_it_was_down_when_a_catch_up_checkpoint_is_stored() {
-        try (ConfigurableApplicationContext firstBoot = SpringApplication.run(RestartApplication.class,
+        try (ConfigurableApplicationContext firstBoot = ApplicationRestart.bootWritingHistoryFirst(RestartApplication.class,
                 bootArgs("historic-1,historic-2", "live-1", "beginning"))) {
             Recorder subscriber = firstBoot.getBean(SubscriptionBeginning.class);
             ApplicationRestart.awaitDelivered(subscriber, "live-1");
@@ -101,7 +101,7 @@ class ReactiveDefaultStartAtLeftOverCatchUpCheckpointMongoTest {
             assertThat(GlobalCheckpoint.isGlobalCheckpoint(stored) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(stored)).as("catch-up checkpoint").isTrue();
         }
 
-        try (ConfigurableApplicationContext secondBoot = SpringApplication.run(RestartApplication.class,
+        try (ConfigurableApplicationContext secondBoot = ApplicationRestart.bootWritingHistoryFirst(RestartApplication.class,
                 bootArgs("while-down-1", "live-2", "default"))) {
             Recorder subscriber = secondBoot.getBean(SubscriptionDefault.class);
             ApplicationRestart.awaitDelivered(subscriber, "live-2");
