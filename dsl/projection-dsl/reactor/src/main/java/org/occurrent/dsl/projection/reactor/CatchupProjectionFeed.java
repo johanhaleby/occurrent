@@ -246,9 +246,10 @@ public final class CatchupProjectionFeed<E> {
      * A failing feed deletes its catch-up marker, refuses every later event that does not come from its fold, folds the
      * events it has already taken in and those its fold feeds it meanwhile, and then fails for good. A failed catch-up
      * starts it failing the same way, and also refuses each event from anywhere else that is still waiting, and does
-     * not fold it. Build a new feed, and once the marker is gone its catch-up replays the history. When deleting the
-     * marker still fails after 3 retries, the feed logs an error naming the feed id, and the marker has to be deleted
-     * by hand before building a new feed.
+     * not fold it. Build a new feed, and once the marker is gone its catch-up replays from the beginning. When deleting
+     * the marker still fails after 3 retries, the feed logs an error naming the feed id, and the marker has to be
+     * deleted by hand before building a new feed, or its catch-up resumes after the marker and does not fold a failed
+     * event at or below it again.
      * <p>
      * An event fed from code nothing waits for has no caller to tell, so when no replay can bring it back, it is lost
      * if its fold fails or the process stops before it is folded. An event the fold's code feeds on another thread

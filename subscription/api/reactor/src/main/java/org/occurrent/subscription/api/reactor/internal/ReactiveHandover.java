@@ -220,11 +220,12 @@ public final class ReactiveHandover<T, K> {
         }
 
         /**
-         * Undo {@link #markCaughtUp()}, so the next catch-up replays the history rather than skipping it. Called when
-         * this handover starts failing, on the source whose catch-up delivers live and on the source whose catch-up
-         * failed, see {@link ReactiveHandover#acceptReportingDelivery(Object)}, and on a source that wrote its marker
-         * while this handover started failing. A payload whose caller was told it was taken in can have failed, and a
-         * replay is the only thing left that can deliver it again. Awaited before this handover refuses anything for
+         * Delete what {@link #markCaughtUp()} stored, so the next catch-up replays from the beginning rather than
+         * resuming after it. Called when this handover starts failing, on the source whose catch-up delivers live and
+         * on the source whose catch-up failed, see {@link ReactiveHandover#acceptReportingDelivery(Object)}, and on a
+         * source that wrote its marker while this handover started failing. A payload whose caller was told it was
+         * taken in can have failed, and a replay from the beginning is the only thing left that can deliver it again
+         * when it sits at or below the stored marker. Awaited before this handover refuses anything for
          * that failure. An error signal from the returned {@link Mono} is retried 3 times and then logged, and the
          * handover goes on failing with the marker still in place. The default emits nothing.
          */
@@ -610,9 +611,9 @@ public final class ReactiveHandover<T, K> {
      * {@link Source#historyDone()} of a catch-up that replays, is folded after {@link Source#historyDone()} and before
      * the catch-up writes its marker, and so is every payload fed from its fold in turn. When one of them fails or is
      * refused, the rest are still folded, and then that catch-up fails, so the marker is not written and the next
-     * catch-up replays the history that fed it. A replay that is stopped or fails leaves them to the live sink. One
-     * offered there and subscribed only once the catch-up has folded them goes to the live sink too, and is folded
-     * after the marker.
+     * catch-up replays again from where this one started. A replay that is stopped or fails leaves them to the live
+     * sink. One offered there and subscribed only once the catch-up has folded them goes to the live sink too, and is
+     * folded after the marker.
      * <p>
      * A payload fed from {@link Source#alreadyDeliveredByReplay(Object)} counts as fed from the fold of the payload it
      * was called for, so one called for a live payload from other code holds back that payload's answer. Nobody waits,
@@ -626,7 +627,7 @@ public final class ReactiveHandover<T, K> {
      * taken in and every payload its own code feeds it meanwhile, and once none is left fails for good with that
      * failure. A failed catch-up also answers each
      * payload from other code still waiting with its failure, and does not deliver those. Each payload answered
-     * {@code true} gets its delivery attempt. Once the marker is gone, the next catch-up replays the history. An
+     * {@code true} gets its delivery attempt. Once the marker is gone, the next catch-up replays from the beginning. An
      * attempt to forget that takes longer than 5 seconds counts as failed. A forget that still fails after 3 retries
      * is logged, and the marker then has to be deleted before the next catch-up. A payload that no replay can bring
      * back and nobody waits for is lost when its delivery fails, or when the process stops before it is delivered.
@@ -1297,7 +1298,7 @@ public final class ReactiveHandover<T, K> {
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
         // the next sibling while the folds are still running. That wrote the marker mid-replay for an asynchronous
-        // fold, and since the marker makes a restart skip the replay, the unfolded events were lost with no error.
+        // fold, and since a restart resumes after the marker, the unfolded events were lost with no error.
         Mono<Void> replayFolded = alreadyDone.flatMap(done -> {
             if (done) {
                 // Waits for a replay already holding live delivery back, so this call does not report the handover
@@ -1366,9 +1367,10 @@ public final class ReactiveHandover<T, K> {
             }));
         });
         // This handover can start failing while this catch-up replays, and a marker written after the failure forgot
-        // it makes the next catch-up skip the replay that delivers the failed payload again. So the marker is not
-        // written once the failure has started, and is forgotten again when the failure started while it was being
-        // written, since the failure's own forget can have run first. A failure marks its start before it forgets.
+        // it makes the next catch-up resume after it, so a failed payload at or below it is not delivered again. So
+        // the marker is not written once the failure has started, and is forgotten again when the failure started
+        // while it was being written, since the failure's own forget can have run first. A failure marks its start
+        // before it forgets.
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> {
             if (done || answeredByAnotherReplay.get()) {
                 return Mono.<Void>empty();
@@ -2042,8 +2044,8 @@ public final class ReactiveHandover<T, K> {
         log.error("A payload of this {} with de-dup key {} failed to be delivered after its caller was told it was taken "
                 + "in. The {} refuses every other event from now on, delivers what it has already taken in, and then "
                 + "fails for good. Fix the cause, then replace it, a subscription by cancelling it and subscribing "
-                + "again, a projection feed by building a new one. Its catch-up replays the history once the catch-up "
-                + "marker is gone.", noun, dedupKey, noun, error);
+                + "again, a projection feed by building a new one. Its catch-up replays from the beginning once the "
+                + "catch-up marker is gone.", noun, dedupKey, noun, error);
         Source<T> source = liveSource.get();
         return forgetCaughtUp(source == null ? List.of() : List.of(source))
                 .then(Mono.fromRunnable(() -> {
@@ -2105,7 +2107,8 @@ public final class ReactiveHandover<T, K> {
         log.error("A catch-up of this {} failed. The {} refuses every event that does not come from its own handler "
                 + "from now on, delivers the events its handler fed it, and then fails for good. Fix the cause, then "
                 + "replace it, a subscription by cancelling it and subscribing again, a projection feed by building a "
-                + "new one. Its catch-up replays the history once the catch-up marker is gone.", noun, noun, error);
+                + "new one. Its catch-up replays from the beginning once the catch-up marker is gone.", noun, noun,
+                error);
         Source<T> live = liveSource.get();
         List<Source<T>> sources = live == null || live == source ? List.of(source) : List.of(source, live);
         // The pause and the replay turn stay held until this handover is failing, so a catch-up waiting for either
@@ -2211,9 +2214,10 @@ public final class ReactiveHandover<T, K> {
         failedForGood.tryEmitError(FailedForGood.INSTANCE);
     }
 
-    // Retried, since a marker left in place makes the next catch-up skip the replay that delivers a failed payload
-    // again, and an attempt that takes longer than forgetAttemptTimeout counts as failed. Never errors, and always
-    // completes, so the failure goes on either way, and the log line tells an operator what to remove.
+    // Retried, since a marker left in place makes the next catch-up resume after it, so a failed payload at or below
+    // it is not delivered again, and an attempt that takes longer than forgetAttemptTimeout counts as failed. Never
+    // errors, and always completes, so the failure goes on either way, and the log line tells an operator what to
+    // remove.
     private Mono<Void> forgetCaughtUp(List<Source<T>> sources) {
         return Flux.fromIterable(sources)
                 .concatMap(source -> subscribedAsOwnCode(Mono.defer(source::forgetCaughtUp), NOBODY_WAITS)
@@ -2221,8 +2225,9 @@ public final class ReactiveHandover<T, K> {
                         .retryWhen(Retry.backoff(FORGET_RETRIES, FORGET_FIRST_RETRY_DELAY))
                         .onErrorResume(forgetFailure -> {
                             log.error("The catch-up marker of this {} could not be forgotten, so its next catch-up "
-                                    + "skips the replay that delivers a failed event again. Delete the catch-up marker "
-                                    + "of this {} before replacing it.", noun, noun, forgetFailure);
+                                    + "resumes after it and does not deliver a failed event at or below it again. "
+                                    + "Delete the catch-up marker of this {} before replacing it.", noun, noun,
+                                    forgetFailure);
                             return Mono.empty();
                         }))
                 .then();
