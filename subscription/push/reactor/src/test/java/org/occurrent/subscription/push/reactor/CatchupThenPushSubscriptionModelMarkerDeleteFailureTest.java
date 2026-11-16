@@ -3,15 +3,11 @@ package org.occurrent.subscription.push.reactor;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
-import org.occurrent.eventstore.api.PositionRange;
-import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
-import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
@@ -26,40 +22,44 @@ import static org.awaitility.Awaitility.await;
 class CatchupThenPushSubscriptionModelMarkerDeleteFailureTest {
 
     @Test
-    void a_subscribe_after_a_cancel_whose_marker_delete_failed_replays_the_history() {
+    void a_subscribe_after_a_cancel_whose_marker_delete_failed_replays_only_the_events_after_the_surviving_marker() {
         // Given
         MarkerWhoseDeleteFails marker = new MarkerWhoseDeleteFails(1);
         PushSubscriptionModel feed = new PushSubscriptionModel();
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(historyOf("1", "2"), feed, marker);
+        InMemoryReactivePositionOrderedReader reader = historyOf("1", "2");
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
         caughtUp(model, marker);
 
         // When
         model.cancelSubscription("sub");
+        reader.append(List.of(event("3")));
         List<String> afterTheCancel = subscribe(model);
         feed.accept(event("live")).block(Duration.ofSeconds(5));
 
         // Then
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(afterTheCancel).contains("live"));
-        assertThat(afterTheCancel).as("events delivered to the subscription made after a cancel whose marker delete failed").containsExactly("1", "2", "live");
+        assertThat(afterTheCancel).as("events delivered to the subscription made after a cancel whose marker delete failed").containsExactly("3", "live");
     }
 
     @Test
-    void a_subscribe_after_a_cancel_replays_the_history_while_deleting_the_marker_keeps_failing() {
+    void a_subscribe_after_a_cancel_replays_only_the_events_after_the_marker_while_deleting_the_marker_keeps_failing() {
         // Given
         MarkerWhoseDeleteFails marker = new MarkerWhoseDeleteFails(Integer.MAX_VALUE);
         PushSubscriptionModel feed = new PushSubscriptionModel();
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(historyOf("1", "2"), feed, marker);
+        InMemoryReactivePositionOrderedReader reader = historyOf("1", "2");
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
         caughtUp(model, marker);
 
         // When
         model.cancelSubscription("sub");
+        reader.append(List.of(event("3")));
         List<String> afterTheCancel = subscribe(model);
         feed.accept(event("live")).block(Duration.ofSeconds(5));
 
         // Then
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(afterTheCancel).contains("live"));
-        assertThat(afterTheCancel).as("events delivered to the subscription made after a cancel whose marker delete keeps failing").containsExactly("1", "2", "live");
-        assertThat(marker.deleteAttempts.get()).as("attempts to delete the marker, by the cancel and again by the subscribe after it").isEqualTo(2);
+        assertThat(afterTheCancel).as("events delivered to the subscription made after a cancel whose marker delete keeps failing").containsExactly("3", "live");
+        assertThat(marker.deleteAttempts.get()).as("attempts to delete the marker, by the cancel only, since the marker is a resume position and not stale").isEqualTo(1);
     }
 
     private static void caughtUp(CatchupThenPushSubscriptionModel model, MarkerWhoseDeleteFails marker) {
@@ -73,23 +73,10 @@ class CatchupThenPushSubscriptionModelMarkerDeleteFailureTest {
         return delivered;
     }
 
-    private static PositionOrderedReader historyOf(String... ids) {
-        return new PositionOrderedReader() {
-            @Override
-            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
-                return Flux.fromArray(ids).map(CatchupThenPushSubscriptionModelMarkerDeleteFailureTest::event);
-            }
-
-            @Override
-            public Mono<Long> currentPosition() {
-                return Mono.just((long) ids.length);
-            }
-
-            @Override
-            public boolean writesPosition() {
-                return true;
-            }
-        };
+    private static InMemoryReactivePositionOrderedReader historyOf(String... ids) {
+        InMemoryReactivePositionOrderedReader reader = new InMemoryReactivePositionOrderedReader();
+        reader.append(java.util.Arrays.stream(ids).map(CatchupThenPushSubscriptionModelMarkerDeleteFailureTest::event).toList());
+        return reader;
     }
 
     private static CloudEvent event(String id) {

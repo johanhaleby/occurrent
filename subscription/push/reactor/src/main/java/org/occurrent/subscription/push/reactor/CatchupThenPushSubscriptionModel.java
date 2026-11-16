@@ -118,10 +118,11 @@ import java.util.function.Supplier;
  * A failing subscription deletes its catch-up marker, refuses every later event that does not come from its handler,
  * applies the events it has already taken in and those its handler writes meanwhile, and then fails for good. A
  * failed catch-up starts it failing the same way, and also refuses each event from anywhere else that is still
- * waiting, and does not apply it. Cancel the subscription and subscribe again, and its catch-up replays the history.
- * When deleting the marker still fails after 3 retries, the subscription logs an error naming the subscription id.
- * Subscribing again in this process replays the history anyway, and deletes the marker again first, but the marker
- * has to be deleted by hand before a restart. A written event that no replay can bring back and nothing waits for is
+ * waiting, and does not apply it. Cancel the subscription and subscribe again, and once the marker is gone its
+ * catch-up replays from the beginning. When deleting the marker still fails after 3 retries, the subscription logs an
+ * error naming the subscription id. The cancel deletes the marker again, and when that delete fails too, the marker
+ * has to be deleted by hand before subscribing again, or the catch-up resumes after it and does not apply a failed
+ * event at or below it again. A written event that no replay can bring back and nothing waits for is
  * lost when applying it fails, or when the process stops before it is applied.
  * <p>
  * Nothing records which live events the subscription has handled, and a crash before the handler has run
