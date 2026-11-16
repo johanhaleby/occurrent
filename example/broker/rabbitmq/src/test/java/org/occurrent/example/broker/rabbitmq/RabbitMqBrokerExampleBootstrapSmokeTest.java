@@ -75,8 +75,8 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
 
     /**
      * Proves the in-memory catch-up marker and the in-memory read model actually stay paired. A stray durable
-     * marker beside an in-memory read model would have this order caught up once, by the first {@code start(...)},
-     * then silently skipped by the second, since the marker would already claim the replay done. Both
+     * marker beside an in-memory read model would have the second {@code start(...)} replay only the events after
+     * the marker the first one stored, so this order would be missing from its fresh read model. Both
      * {@code start(...)} calls share this test's real Mongo, so the order is genuinely still there to replay.
      */
     @Test

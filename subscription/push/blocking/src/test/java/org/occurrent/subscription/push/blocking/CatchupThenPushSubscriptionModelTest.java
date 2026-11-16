@@ -251,7 +251,7 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
-    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
+    void a_restart_replays_only_the_events_after_the_stored_catchup_marker() {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
         AtomicReference<PushSubscriptionModel> sink = new AtomicReference<>();
         InMemoryEventStore store = new InMemoryEventStore(events -> {
@@ -271,7 +271,10 @@ class CatchupThenPushSubscriptionModelTest {
                 .waitUntilStarted();
         assertThat(firstRun).containsExactly("1", "2");
 
-        // Restart: fresh feed and model, same store and marker. The replay is skipped.
+        // Written while no model runs, so only a replay after the stored marker can deliver it.
+        store.write("s1", List.of(cloudEvent("3", "Updated")));
+
+        // Restart: fresh feed and model, same store and marker. The replay starts after the stored head.
         PushSubscriptionModel feed2 = new PushSubscriptionModel();
         sink.set(feed2);
         List<String> secondRun = new ArrayList<>();
@@ -280,16 +283,14 @@ class CatchupThenPushSubscriptionModelTest {
         restarted.listenForCatchup("proj", log);
         restarted.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> secondRun.add(ce.getId()))
                 .waitUntilStarted();
-        assertThat(secondRun).isEmpty();
+        assertThat(secondRun).as("events replayed on the restart, none of them from before the stored marker").containsExactly("3");
 
-        // Both signals, even though no replay ran. This restart is the case that decides where the boundary goes:
-        // it skips the replay entirely and never reaches replayCompleted(), so a boundary placed there would leave
-        // the projection reading history for the rest of the model's life.
+        // Both signals on every start, whether the replay is from the beginning or after a stored marker.
         assertThat(log.signals()).containsExactly("started:0", "historyRead:0");
 
-        // Only live events flow after the restart, resumed by the broker (here, the forwarding store).
-        store.write("s1", List.of(cloudEvent("3", "Updated")));
-        assertThat(secondRun).containsExactly("3");
+        // Live events flow after the replay, resumed by the broker (here, the forwarding store).
+        store.write("s1", List.of(cloudEvent("4", "Updated")));
+        assertThat(secondRun).containsExactly("3", "4");
     }
 
     @Test

@@ -236,7 +236,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 // Written with the consumer already torn down and boot 2 not yet built, so this queues on the broker
                 // exactly like a real restart leaves work behind. The forwarder keeps running (it never stopped), but
                 // nothing is consuming queue until boot 2's source exists. Proving this arrives once boot 2 comes up,
-                // without a full replay, is the other half of "resumes", not just that catch-up itself is skipped.
+                // without a replay from the beginning, is the other half of "resumes".
                 String orderIdQueuedWhileConsumerWasDown = "order-" + UUID.randomUUID();
                 OrderPlaced placedWhileConsumerWasDown = new OrderPlaced(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown, "Widget");
                 OrderShipped shippedWhileConsumerWasDown = new OrderShipped(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown);
@@ -265,7 +265,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
 
                 // Boot 2: a fresh model, a fresh source on the same queue, and a fresh Spring context, but the same
                 // catch-up marker and the same read-model store. A reader that counts its own replay calls proves the
-                // catch-up is skipped this time, not merely fast.
+                // catch-up replays only after the stored marker this time, not from the beginning.
                 CountingPositionOrderedReader countingReader = new CountingPositionOrderedReader(eventStore);
                 PushSubscriptionModel pushModel2 = new PushSubscriptionModel(DataFieldReader.refusing());
                 try (RabbitMqCloudEventSource source2 = RabbitMqCloudEventSource.builder(rabbitConnection, pushModel2, queue)
@@ -284,16 +284,17 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                         context2.refresh();
 
                         // The default startup mode waits for the catch-up before refresh() returns, so if it had
-                        // replayed, the counter would already be nonzero right here.
-                        assertThat(countingReader.replays()).isZero();
+                        // replayed from the beginning, the counter would already be nonzero right here.
+                        assertThat(countingReader.replaysFromTheBeginning()).isZero();
+                        assertThat(countingReader.replaysAfterAPosition()).isEqualTo(1);
                         assertThat(store.get(orderIdBeforeRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED");
 
                         // The order queued while the consumer was down arrives now that boot 2's source is live,
-                        // delivered from the broker's own backlog rather than from a replay, since the catch-up
-                        // marker already said this feed was caught up before this order was ever written.
+                        // delivered from the broker's own backlog or by the replay after the stored marker, and never by
+                        // a replay from the beginning, since the marker was stored before this order was ever written.
                         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                                 assertThat(store.get(orderIdQueuedWhileConsumerWasDown)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
-                        assertThat(countingReader.replays()).isZero();
+                        assertThat(countingReader.replaysFromTheBeginning()).isZero();
 
                         String orderIdAfterRestart = "order-" + UUID.randomUUID();
                         eventStore.write(orderIdAfterRestart, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdAfterRestart, "Gadget")));
@@ -302,7 +303,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                                 assertThat(store.get(orderIdAfterRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
 
-                        assertThat(countingReader.replays()).isZero();
+                        assertThat(countingReader.replaysFromTheBeginning()).isZero();
                     } finally {
                         context2.close();
                     }
@@ -494,22 +495,27 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         }
     }
 
-    /** Counts how many times a catch-up replay actually reads from the store, so a skipped catch-up is provable. */
+    /** Counts how many times a catch-up replay reads from the store, split by whether it starts from the beginning, so a replay from the beginning is provable. */
     private static final class CountingPositionOrderedReader implements PositionOrderedReader {
         private final PositionOrderedReader delegate;
-        private final AtomicInteger replayCount = new AtomicInteger();
+        private final AtomicInteger fromTheBeginning = new AtomicInteger();
+        private final AtomicInteger afterAPosition = new AtomicInteger();
 
         CountingPositionOrderedReader(PositionOrderedReader delegate) {
             this.delegate = delegate;
         }
 
-        int replays() {
-            return replayCount.get();
+        int replaysFromTheBeginning() {
+            return fromTheBeginning.get();
+        }
+
+        int replaysAfterAPosition() {
+            return afterAPosition.get();
         }
 
         @Override
         public Stream<CloudEvent> readInPositionOrder(org.occurrent.filter.Filter filter, org.occurrent.eventstore.api.PositionRange range) {
-            replayCount.incrementAndGet();
+            (range.afterPosition().isPresent() ? afterAPosition : fromTheBeginning).incrementAndGet();
             return delegate.readInPositionOrder(filter, range);
         }
 

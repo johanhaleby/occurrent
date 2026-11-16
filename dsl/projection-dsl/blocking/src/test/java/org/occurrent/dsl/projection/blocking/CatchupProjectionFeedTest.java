@@ -38,6 +38,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
@@ -788,12 +789,12 @@ class CatchupProjectionFeedTest {
         AtomicBoolean blockLookup = new AtomicBoolean();
         CheckpointStorage marker = new InMemoryCheckpointStorage() {
             @Override
-            public boolean exists(String subscriptionId) {
+            public Checkpoint read(String subscriptionId) {
                 if (Thread.currentThread().getName().equals("fold-3") && blockLookup.compareAndSet(true, false)) {
                     lookingUpMarker.countDown();
                     awaitOrFail(askedAfterStop);
                 }
-                return super.exists(subscriptionId);
+                return super.read(subscriptionId);
             }
         };
         AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
@@ -1089,7 +1090,7 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
+    void a_restart_replays_only_the_events_after_the_stored_catchup_marker() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
@@ -1100,14 +1101,17 @@ class CatchupProjectionFeedTest {
         feed("counter", store, converter, repo, marker).catchUp();
         assertThat(repo.get("counter")).isEqualTo(2);
 
-        // Restart: a fresh feed over the same store, repository, and marker. The replay is skipped, so the persisted
-        // count is not re-folded (which would double it to 4).
+        // Written while no feed runs, so only a replay after the stored marker folds it.
+        store.write("s", converter.toCloudEvents(List.of(new Counted("3"))));
+
+        // Restart: a fresh feed over the same store, repository, and marker. The replay starts after the stored head,
+        // so the persisted count is not re-folded from the beginning (which would give 5).
         CatchupProjectionFeed<Counted> restarted = feed("counter", store, converter, repo, marker);
         restarted.catchUp();
-        assertThat(repo.get("counter")).isEqualTo(2);
-
-        restarted.acceptAndWait(new Counted("3"));
         assertThat(repo.get("counter")).isEqualTo(3);
+
+        restarted.acceptAndWait(new Counted("4"));
+        assertThat(repo.get("counter")).isEqualTo(4);
     }
 
     @Test
