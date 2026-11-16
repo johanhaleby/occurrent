@@ -22,6 +22,7 @@ import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
+import org.occurrent.subscription.api.blocking.internal.SynchronousHandlersTestSwitch;
 
 import java.util.List;
 import java.util.function.Consumer;
@@ -48,7 +49,9 @@ import java.util.function.Consumer;
  * {@code PushSubscriptionModel} instead.
  */
 @NullMarked
-public class SynchronousSubscriptionModel extends RegisteringSubscribable implements SynchronousEventDispatcher, Consumer<List<CloudEvent>> {
+public class SynchronousSubscriptionModel extends RegisteringSubscribable implements SynchronousEventDispatcher, Consumer<List<CloudEvent>>, SynchronousHandlersTestSwitch {
+
+    private volatile boolean dropsEventsWhileStopped;
 
     /**
      * Several handlers, unlike the push models, which take one each. There is no broker and no acknowledgement to share
@@ -119,5 +122,13 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
     @Override
     public void accept(List<CloudEvent> cloudEvents) {
         dispatch(cloudEvents, false);
+    }
+
+    /**
+     * Internal, for test support only. See {@link SynchronousHandlersTestSwitch}.
+     */
+    @Override
+    public void dropEventsWhileStopped() {
+        dropsEventsWhileStopped = true;
     }
 }

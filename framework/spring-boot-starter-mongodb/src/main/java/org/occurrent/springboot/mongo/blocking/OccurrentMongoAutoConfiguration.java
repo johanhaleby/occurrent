@@ -383,14 +383,9 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Bean
     @ConditionalOnMissingBean(SynchronousSubscriptionModel.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
-    public SynchronousSubscriptionModel occurrentSynchronousSubscriptionModel(OccurrentProperties occurrentProperties, ObjectProvider<DataFieldReader> dataFieldReaderProvider) {
-        SynchronousSubscriptionModel synchronousSubscriptionModel = new SynchronousSubscriptionModel(dataFieldReaderProvider.getIfAvailable(DataFieldReader::refusing));
-        // Stopped up front rather than after registration, so a synchronous handler registered under MANUAL is paused
-        // from the outset and a write does not run it.
-        if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
-            synchronousSubscriptionModel.stop();
-        }
-        return synchronousSubscriptionModel;
+    public SynchronousSubscriptionModel occurrentSynchronousSubscriptionModel(ObjectProvider<DataFieldReader> dataFieldReaderProvider) {
+        // Running under MANUAL too, since a write a stopped synchronous handler never sees is lost to it for good
+        return new SynchronousSubscriptionModel(dataFieldReaderProvider.getIfAvailable(DataFieldReader::refusing));
     }
 
     /**

@@ -26,6 +26,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
+import org.occurrent.subscription.api.blocking.internal.SynchronousHandlersTestSwitch;
 
 import java.time.Duration;
 import java.util.*;
@@ -58,6 +59,12 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
 
     private OccurrentSubscriptionsExtension(List<SubscriptionModelLifeCycle> subscriptionModels) {
         this.subscriptionModels = List.copyOf(subscriptionModels);
+        // A test stops every synchronous handler and keeps writing, so a stopped one misses the write instead
+        for (SubscriptionModelLifeCycle model : this.subscriptionModels) {
+            if (model instanceof SynchronousHandlersTestSwitch synchronousHandlers) {
+                synchronousHandlers.dropEventsWhileStopped();
+            }
+        }
     }
 
     /**

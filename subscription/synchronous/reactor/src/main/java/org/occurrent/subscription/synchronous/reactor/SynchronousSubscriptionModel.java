@@ -22,6 +22,7 @@ import org.occurrent.application.service.reactor.ReactiveSynchronousEventDispatc
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
+import org.occurrent.subscription.api.reactor.internal.SynchronousHandlersTestSwitch;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -42,7 +43,9 @@ import java.util.List;
  * dispatch entry point. For an externally driven push feed (RabbitMQ, Kafka, ...) use {@code PushSubscriptionModel}.
  */
 @NullMarked
-public class SynchronousSubscriptionModel extends RegisteringSubscribable implements ReactiveSynchronousEventDispatcher {
+public class SynchronousSubscriptionModel extends RegisteringSubscribable implements ReactiveSynchronousEventDispatcher, SynchronousHandlersTestSwitch {
+
+    private volatile boolean dropsEventsWhileStopped;
 
     /**
      * Several handlers, unlike the push models, which take one each. There is no broker and no acknowledgement to share
@@ -97,5 +100,13 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
     @Override
     public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
         return transactional ? route(writtenCloudEvents) : routeIsolated(writtenCloudEvents);
+    }
+
+    /**
+     * Internal, for test support only. See {@link SynchronousHandlersTestSwitch}.
+     */
+    @Override
+    public void dropEventsWhileStopped() {
+        dropsEventsWhileStopped = true;
     }
 }
