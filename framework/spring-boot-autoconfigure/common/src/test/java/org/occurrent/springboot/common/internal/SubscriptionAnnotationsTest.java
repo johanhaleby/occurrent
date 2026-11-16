@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.common;
+package org.occurrent.springboot.common.internal;
 
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.description.modifier.Visibility;
@@ -54,8 +54,8 @@ import org.occurrent.springboot.common.shadowed.a.LeafOfPrivate;
 import org.occurrent.springboot.common.shadowed.b.MidAnnotated;
 import org.occurrent.springboot.common.other.CrossPackageMethods;
 import org.occurrent.springboot.common.other.CrossPackageSubscriptionBase;
-import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
-import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameterKind;
+import org.occurrent.springboot.common.internal.SubscriptionAnnotations.HandlerParameter;
+import org.occurrent.springboot.common.internal.SubscriptionAnnotations.HandlerParameterKind;
 import org.springframework.aop.TargetSource;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.context.support.GenericApplicationContext;

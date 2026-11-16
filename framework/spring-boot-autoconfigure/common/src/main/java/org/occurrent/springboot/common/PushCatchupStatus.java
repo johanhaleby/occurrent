@@ -48,7 +48,7 @@ import java.util.Objects;
  * Read-only on purpose, mirroring the DSL module's {@code SagaInstancesRegistry} / {@code SagaInstancesRegistryImpl}
  * split: registering a source and recording its progress is the framework's job and has no legitimate caller in
  * application code, so those methods are not on this interface at all rather than being public with a comment asking
- * callers not to use them. They live on {@link PushCatchupStatusImpl}, which the {@code @Projection} and {@code @Saga}
+ * callers not to use them. They live on {@link org.occurrent.springboot.common.internal.PushCatchupStatusImpl}, which the {@code @Projection} and {@code @Saga}
  * registrars look up by that concrete type. An application keeps injecting this interface by its established name;
  * only the writer moved.
  */

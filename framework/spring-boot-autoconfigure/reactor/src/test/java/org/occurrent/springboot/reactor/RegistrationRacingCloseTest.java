@@ -31,7 +31,7 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.PushCatchupStatus;
-import org.occurrent.springboot.common.PushCatchupStatusImpl;
+import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.SubscriptionMode;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;

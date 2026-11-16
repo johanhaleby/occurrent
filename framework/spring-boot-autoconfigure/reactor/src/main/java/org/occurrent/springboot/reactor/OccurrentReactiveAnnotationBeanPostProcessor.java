@@ -22,7 +22,7 @@ import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
-import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
