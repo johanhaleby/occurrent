@@ -335,6 +335,36 @@ class CatchupProjectionFeedResumePositionTest {
         assertThat(next.updates()).as("delivered by the next start of the same id").contains("X");
     }
 
+    @Test
+    void a_catch_up_the_view_asks_for_while_folding_a_replayed_event_does_not_deliver_an_event_at_or_below_the_head_the_asking_catch_up_read_when_no_marker_is_stored() {
+        log.append("1", "2", "3");
+
+        assertThat(foldsWhenFoldingAskedForACatchUpOn("2")).containsExactly("1", "2", "3");
+    }
+
+    @Test
+    void a_catch_up_the_view_asks_for_while_folding_a_replayed_event_does_not_deliver_an_event_at_or_below_the_head_the_asking_catch_up_read_when_a_marker_is_stored() {
+        log.append("1", "2", "3");
+        marker.save("counter", GlobalCheckpoint.of(1)).block(TIMEOUT);
+
+        assertThat(foldsWhenFoldingAskedForACatchUpOn("2")).containsExactly("2", "3");
+    }
+
+    private List<String> foldsWhenFoldingAskedForACatchUpOn(String eventId) {
+        List<String> folds = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feed = new AtomicReference<>();
+        java.util.function.BiFunction<EventMetadata, Counted, Mono<Void>> fold = (metadata, event) -> Mono.defer(() -> {
+            folds.add(event.eventId());
+            return event.eventId().equals(eventId) ? feed.get().catchUp() : Mono.empty();
+        });
+        feed.set(CatchupProjectionFeed.create("counter", fold, Filter.all(), log, converter, Counted::eventId, marker));
+
+        feed.get().catchUp().block(TIMEOUT);
+        feed.get().catchUp().block(TIMEOUT);
+
+        return folds;
+    }
+
     // A stopped catch-up writes no marker, so a later one replays from where the stopped one started.
     private RecordingReplayAwareView stoppedAtTheFirstReplayedEvent() {
         AtomicReference<CatchupProjectionFeed<Counted>> feed = new AtomicReference<>();

@@ -98,9 +98,10 @@ public final class ReactiveHandover<T, K> {
      */
     public interface Source<T> {
         /**
-         * Whether this catch-up skips its replay and goes straight to live. Subscribed before
-         * {@link #replayStarted()} and {@link #replay()}, so a source that replays after a stored position reads that
-         * position here.
+         * Whether this catch-up skips its replay and goes straight to live. Subscribed when the catch-up is asked for,
+         * and again once its turn to replay has come when another catch-up went live in between, both before
+         * {@link #replayStarted()} and {@link #replay()}. So a source that replays after a stored position reads the
+         * position the latest catch-up stored here.
          */
         Mono<Boolean> isAlreadyCaughtUp();
 
@@ -1293,9 +1294,14 @@ public final class ReactiveHandover<T, K> {
     private Mono<Boolean> startCountedCatchUp(Source<T> source, Throwable failedForGoodBefore, AtomicBoolean counted) {
         Sinks.One<Boolean> catchupDone = Sinks.one();
 
-        // Evaluate the marker once and reuse it, so the replay and the "record marker" step agree, and the marker is
-        // written only when the replay actually ran (not on a restart that skips it).
+        // Read once when the catch-up is asked and reused, so the replay and the marker write agree, and the marker is
+        // written only when the replay ran. Read again only on this catch-up's turn, below.
         Mono<Boolean> alreadyDone = source.isAlreadyCaughtUp().cache();
+        // Taken before that read, so a catch-up that goes live after it is known to have written a newer marker
+        long goneLiveWhenAsked = latestReplayGoneLive.get();
+        // Set when the read again on this catch-up's turn says it is caught up, so it replays nothing and writes no
+        // marker
+        AtomicBoolean caughtUpOnItsTurn = new AtomicBoolean();
         // Tracks whether replayStarted() ran and replayCompleted() has not yet closed it out, so the error handler
         // below knows whether there is a replay lifecycle left open to abandon, rather than calling replayAbandoned()
         // after a clean replayCompleted() has already told the view its batch is durable (ADR 110).
@@ -1369,12 +1375,25 @@ public final class ReactiveHandover<T, K> {
                         answeredByAnotherReplay.set(true);
                         return Mono.<Void>empty();
                     }
-                    return pauseLiveDelivery(pause);
+                    if (latestReplayGoneLive.get() == goneLiveWhenAsked) {
+                        return pauseLiveDelivery(pause);
+                    }
+                    // A catch-up went live after this one read the marker, so the stored marker can be newer than
+                    // the one read. Read again, so this replay starts from that one and a catch-up a fold asked for
+                    // does not replay what the catch-up that asked already delivered.
+                    return source.isAlreadyCaughtUp().defaultIfEmpty(false).flatMap(caughtUp -> {
+                        if (!caughtUp) {
+                            return pauseLiveDelivery(pause);
+                        }
+                        caughtUpOnItsTurn.set(true);
+                        releaseReplayTurn(holdsReplayTurn);
+                        return Mono.<Void>empty();
+                    });
                 }
                 refusedForAnotherFailure.set(true);
                 return Mono.<Void>error(refusal(failed));
             })).publishOn(Schedulers.boundedElastic()).then(Mono.defer(() -> {
-                if (answeredByAnotherReplay.get()) {
+                if (answeredByAnotherReplay.get() || caughtUpOnItsTurn.get()) {
                     return Mono.<Void>empty();
                 }
                 // Cleared again here, not only when this call was made, because the catch-up it waited for can have
@@ -1412,7 +1431,7 @@ public final class ReactiveHandover<T, K> {
         // while it was being written, since the failure's own forget can have run first. A failure marks its start
         // before it forgets.
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> {
-            if (done || answeredByAnotherReplay.get()) {
+            if (done || answeredByAnotherReplay.get() || caughtUpOnItsTurn.get()) {
                 return Mono.<Void>empty();
             }
             Throwable before = failure();
