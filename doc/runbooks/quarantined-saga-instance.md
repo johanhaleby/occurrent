@@ -178,7 +178,7 @@ Read `firstFailedAt()` as how long `failure.input()` has been failing. Each fail
 another event that failed on the same instance before it does not move it. A record written before 0.35.0 can hold an
 earlier instant, from when the instance started failing on some other event.
 
-It is a floor rather than an exact incident start. The value is when the failure was first recorded, and an earlier
+It is a ceiling rather than an exact incident start. The value is when the failure was first recorded, and an earlier
 failure of the same event that recorded nothing, one whose writes all lost their compare-and-set for instance, makes
 that later than when the event started failing. So the event may have been failing for longer than the difference
 between `firstFailedAt()` and now.
