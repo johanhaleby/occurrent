@@ -369,21 +369,22 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   its lease condition lets it. The id then reads absent and the next catch-up replays once.
 * A retried forget whose first attempt was applied changes the generation twice. Every attempt that read the
   generation in between has its marker fenced, and each of them costs one more replay.
-* During a rolling upgrade a forgotten marker can come back. The fence covers every forget a 0.35.0 node makes,
-  but a forget made on a 0.34.0 node, and a read on a 0.34.0 node, behave as in 0.34.0 until every
-  node runs 0.35.0. A 0.34.0 forget does not change the generation, so a late write after it brings the marker back
-  as it does today, and the 0.35.0 nodes read that marker as present too. It affects an application that cancels a
-  catch-up subscription on a 0.34.0 node during the rollout, while a marker write for the same id is still on its way
-  to the store. The next subscribe of that id then skips the replay it needed. No new case starts once the last
-  0.34.0 node is gone, but a marker that came back stays present until a 0.35.0 node forgets the id. On MongoDB this
-  happens only for an id no 0.35.0 node has forgotten, since a 0.34.0 save drops the stamp and any generation above
-  0 then fences the marker. On Redis it happens unless the last marker call a 0.35.0 node made on the id was a
-  forget, because the stamp sits in the generation hash, which a 0.34.0 save and a 0.34.0 delete leave alone. A
-  0.34.0 node's late write after a 0.35.0 forget still brings the marker back for the 0.34.0 nodes. No mixed order makes a node read a marker as present where an
-  all-0.34.0 deployment would read it absent. A 0.35.0 node saves and deletes the plain checkpoint under the same
-  conditions as 0.34.0, and on read it only adds the stamp check, which can turn present into absent and never the other
-  way. The one difference is a forget whose `$inc` has no majority yet. It sends no delete until a retried `$inc` gets
-  one, so the 0.34.0 nodes keep reading the marker until then, and go on reading it when the forget throws instead. The list under "In a mixed cluster" gives each case.
+* During a rolling upgrade a forgotten marker can come back. The fence covers every forget a 0.35.0 node makes, but a
+  forget made on a 0.34.0 node, and a read on a 0.34.0 node, behave as in 0.34.0 until every node runs 0.35.0. A
+  0.34.0 forget does not change the generation, so a late write after it brings the marker back as it does today. It
+  affects an application that cancels a catch-up subscription on a 0.34.0 node during the rollout, while a marker
+  write for the same id is still on its way to the store. On MongoDB the 0.35.0 nodes read that marker as present only
+  for an id no 0.35.0 node has forgotten, since a 0.34.0 save drops the stamp and any generation above 0 then fences
+  the marker. On Redis they read it as present unless the last marker call a 0.35.0 node made on the id was a forget,
+  because the stamp sits in the generation hash, which a 0.34.0 save and a 0.34.0 delete leave alone. Where the marker
+  reads as present, the next subscribe of that id skips the replay it needed. No new case starts once the last 0.34.0
+  node is gone, but a marker that came back stays present until a 0.35.0 node forgets the id. A 0.34.0 node's late
+  write after a 0.35.0 forget still brings the marker back for the 0.34.0 nodes. No mixed order makes a node read a
+  marker as present where an all-0.34.0 deployment would read it absent. A 0.35.0 node saves and deletes the plain
+  checkpoint under the same conditions as 0.34.0, and on read it only adds the stamp check, which can turn present
+  into absent and never the other way. The one difference is a forget whose `$inc` has no majority yet. It sends no
+  delete until a retried `$inc` gets one, so the 0.34.0 nodes keep reading the marker until then, and go on reading it
+  when the forget throws instead. The list under "In a mixed cluster" gives each case.
 * A downgrade keeps every marker where 0.34.0 reads it. A marker the generation fenced stays too, and a 0.34.0 node
   reads it as present, the exposure 0.34.0 has to any late write. The generation documents and hashes stay behind
   unread, and the migration guide says to leave them in place. Removing one puts that id's generation back at 0. On
