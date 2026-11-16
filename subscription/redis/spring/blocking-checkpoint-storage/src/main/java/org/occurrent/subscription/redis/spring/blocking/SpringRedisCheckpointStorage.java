@@ -135,8 +135,9 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * saved earlier can then read as present again. The marker calls throw {@link IllegalArgumentException} for every
  * subscription id a conditional {@link #save(String, Checkpoint, CheckpointWriteCondition) save} refuses in the same
  * mode, and for ids that start with {@code occurrent:catchup-marker:}. Plain {@link #read(String)}, {@code save} and
- * {@link #delete(String)} accept those ids, so a plain {@code save} or {@code delete} on an id equal to one of these
- * hash keys can replace or remove that hash.
+ * {@link #delete(String)} accept those ids. On an id equal to one of these hash keys, a plain {@code read} gets Redis's
+ * {@code WRONGTYPE} error on every attempt, so it never returns under the default {@link RetryStrategy}, and a plain
+ * {@code save} or {@code delete} can replace or remove that hash.
  */
 @NullMarked
 public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {

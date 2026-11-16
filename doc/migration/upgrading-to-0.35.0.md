@@ -1735,8 +1735,9 @@ read on a 0.34.0 node behaves as in 0.34.0 until every node runs 0.35.0:
   marker stays present after the upgrade until a 0.35.0 node forgets the id.
 - A 0.34.0 node's late write after a 0.35.0 forget still brings the marker back for the 0.34.0 nodes.
 - A forget on a 0.35.0 node deletes the checkpoint only after a majority has its generation raise. Until then the
-  0.34.0 nodes keep reading the marker. The default `RetryStrategy` of the MongoDB storages keeps trying, and when a
-  `RetryStrategy` of yours gives up, the forget throws without deleting.
+  0.34.0 nodes keep reading the marker. The default `RetryStrategy` of the MongoDB storages keeps trying. When a
+  `RetryStrategy` of yours gives up, or the storage shuts down while the forget retries, the forget throws without
+  deleting.
 
 No mixed order makes a node read a marker as present where an all-0.34.0 deployment reads it as absent. A 0.35.0 node
 saves and deletes the checkpoint under the same conditions as 0.34.0, and on read it only adds the generation check,
