@@ -94,7 +94,7 @@ class SagaReleaseSupportTest {
     }
 
     private static SagaFailure failedBy034(long streamVersion) {
-        return new SagaFailure("o1@" + streamVersion, streamVersion, QUARANTINED_AT, IllegalStateException.class.getName(), "boom");
+        return new SagaFailure("o1@" + streamVersion, streamVersion, QUARANTINED_AT, IllegalStateException.class.getName(), "boom", null, null);
     }
 
     // Applied up to version 6 of stream o1, with version 9 failing since it was quarantined
@@ -235,7 +235,7 @@ class SagaReleaseSupportTest {
     class TheWriteThatQuarantines {
 
         private final SagaEnvelope<OrderState> failing = instance(SagaStatus.ACTIVE, true,
-                new SagaFailure("o1@9", 9L, NOW.minus(BUDGET).minusSeconds(1), IllegalStateException.class.getName(), "boom"), null);
+                new SagaFailure("o1@9", 9L, NOW.minus(BUDGET).minusSeconds(1), IllegalStateException.class.getName(), "boom", null, null), null);
 
         private FailureRecord<OrderState> quarantine() {
             return SagaExecutionSupport.onFailure(saga(), "o1", failing, at(9), new IllegalStateException("boom"), NOW, BUDGET);

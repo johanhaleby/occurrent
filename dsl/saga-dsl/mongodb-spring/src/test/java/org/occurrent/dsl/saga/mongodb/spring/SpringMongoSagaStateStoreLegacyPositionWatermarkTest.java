@@ -222,7 +222,7 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
     void the_document_written_by_0_34_has_the_fields_the_store_writes_for_an_instance_with_a_position_watermark() {
         // Checks the fixture used below against what the store really writes.
         stateStore.compareAndSave(SAGA_ID, new SagaEnvelope<>(SAGA_ID, "awaiting-payment", SagaStatus.ACTIVE, 1, List.of(),
-                Map.of(SAGA_ID, 1L), 7L, NOW, NOW, null, null, true, null), 0);
+                Map.of(SAGA_ID, 1L), 7L, NOW, NOW, null, null, true, null, Map.of(), null), 0);
 
         Document writtenByTheStore = rawDocument();
 
@@ -267,7 +267,7 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
 
         SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
 
-        assertThat(read.failure()).isEqualTo(new SagaFailure("position:7", 7L, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom"));
+        assertThat(read.failure()).isEqualTo(new SagaFailure("position:7", 7L, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom", null, null));
     }
 
     @Test

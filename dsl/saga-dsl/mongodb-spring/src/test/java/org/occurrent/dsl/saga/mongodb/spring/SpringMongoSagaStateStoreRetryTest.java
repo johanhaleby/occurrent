@@ -82,13 +82,13 @@ class SpringMongoSagaStateStoreRetryTest {
     private static SagaEnvelope<Payment> payment(String sagaId) {
         return new SagaEnvelope<>(sagaId, new Payment(12L), SagaStatus.ACTIVE, 1,
                 List.of(new TimerEntry("payment", NOW.toEpochMilli())), Map.of(), null, NOW.minusSeconds(600),
-                NOW, null, null, true, null);
+                NOW, null, null, true, null, Map.of(), null);
     }
 
     private static SagaEnvelope<Payment> replacementPayment(String sagaId) {
         return new SagaEnvelope<>(sagaId, new Payment(99L), SagaStatus.ACTIVE, 2,
                 List.of(new TimerEntry("payment", NOW.toEpochMilli())), Map.of(), null, NOW.minusSeconds(600),
-                NOW, null, null, true, null);
+                NOW, null, null, true, null, Map.of(), null);
     }
 
     /** Wraps {@code real}, throwing a {@link DataAccessResourceFailureException} on the first {@code failures} calls to the method named {@code methodName} and delegating every other call and every other method unchanged. */

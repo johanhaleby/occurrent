@@ -83,7 +83,7 @@ class SpringMongoSagaStateStoreActiveMarkedTest {
     private static SagaEnvelope<String> envelope(String sagaId, SagaStatus status, long version, List<TimerEntry> timers,
                                                  @Nullable SagaFailure failure, Map<String, StreamMarks> marks) {
         return new SagaEnvelope<>(sagaId, "awaiting-payment", status, version, timers, Map.of("order-1", 6L), null,
-                NOW.minusSeconds(600), NOW, null, null, true, failure, marks);
+                NOW.minusSeconds(600), NOW, null, null, true, failure, marks, null);
     }
 
     private static SagaEnvelope<String> active(String sagaId, Map<String, StreamMarks> marks) {

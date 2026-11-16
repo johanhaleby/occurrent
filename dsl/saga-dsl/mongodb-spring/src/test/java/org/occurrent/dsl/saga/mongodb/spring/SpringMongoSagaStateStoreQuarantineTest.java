@@ -105,7 +105,7 @@ class SpringMongoSagaStateStoreQuarantineTest {
     private static SagaEnvelope<Payment> activePayment(String sagaId) {
         return new SagaEnvelope<>(sagaId, new Payment(12L), SagaStatus.ACTIVE, 1,
                 List.of(new TimerEntry("payment", NOW.toEpochMilli())), Map.of("order-1", 6L), 6L, NOW.minusSeconds(600),
-                NOW, null, null, true, failure());
+                NOW, null, null, true, failure(), Map.of(), null);
     }
 
     private static void makeTheStateUndecodable(MongoOperations mongoOperations, String sagaId) {
@@ -114,13 +114,13 @@ class SpringMongoSagaStateStoreQuarantineTest {
     }
 
     private static SagaFailure failure() {
-        return new SagaFailure("order-1@7", 7L, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom");
+        return new SagaFailure("order-1@7", 7L, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom", null, null);
     }
 
     private static SagaEnvelope<String> quarantined(String sagaId) {
         return new SagaEnvelope<>(sagaId, "awaiting-payment", SagaStatus.QUARANTINED, 1,
                 List.of(new TimerEntry("payment", NOW.toEpochMilli())), Map.of("order-1", 6L), 6L, NOW.minusSeconds(600),
-                NOW, null, null, true, failure());
+                NOW, null, null, true, failure(), Map.of(), null);
     }
 
     @Test
@@ -143,10 +143,10 @@ class SpringMongoSagaStateStoreQuarantineTest {
     void a_failure_record_from_a_store_with_no_global_position_round_trips_with_a_null_position() {
         // An event store built with withoutStreamPosition() gives its events a stream id and version and no position,
         // so the record that quarantines such an instance has none to hold either.
-        SagaFailure withoutPosition = new SagaFailure("order-2@7", null, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom");
+        SagaFailure withoutPosition = new SagaFailure("order-2@7", null, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom", null, null);
         SagaStateStore<String> store = new SpringMongoSagaStateStore<>(mongoOperations(), COLLECTION, String.class);
         store.compareAndSave("order-2", new SagaEnvelope<>("order-2", "awaiting-payment", SagaStatus.QUARANTINED, 1,
-                List.of(), Map.of("order-2", 6L), null, NOW.minusSeconds(600), NOW, null, null, true, withoutPosition), 0);
+                List.of(), Map.of("order-2", 6L), null, NOW.minusSeconds(600), NOW, null, null, true, withoutPosition, Map.of(), null), 0);
 
         SagaEnvelope<String> read = store.find("order-2").orElseThrow();
 
@@ -161,7 +161,7 @@ class SpringMongoSagaStateStoreQuarantineTest {
     void an_instance_that_failed_before_it_started_round_trips_as_one_that_has_not_started() {
         SagaStateStore<String> store = new SpringMongoSagaStateStore<>(mongoOperations(), COLLECTION, String.class);
         store.compareAndSave("order-3", new SagaEnvelope<>("order-3", null, SagaStatus.QUARANTINED, 1, List.of(),
-                Map.of(), null, NOW, NOW, null, null, false, failure()), 0);
+                Map.of(), null, NOW, NOW, null, null, false, failure(), Map.of(), null), 0);
 
         assertThat(store.find("order-3").orElseThrow().started()).isFalse();
     }
@@ -189,7 +189,7 @@ class SpringMongoSagaStateStoreQuarantineTest {
         SpringMongoSagaStateStore<Payment> store = paymentStore(mongoOperations);
         store.compareAndSave("order-5", new SagaEnvelope<>("order-5", new Payment(12L), SagaStatus.QUARANTINED, 1,
                 List.of(new TimerEntry("payment", NOW.toEpochMilli())), Map.of("order-1", 6L), 6L, NOW.minusSeconds(600),
-                NOW, null, null, true, failure()), 0);
+                NOW, null, null, true, failure(), Map.of(), null), 0);
         // The state an operator is most likely looking at is the one that no longer decodes, so make it undecodable.
         makeTheStateUndecodable(mongoOperations, "order-5");
 
@@ -250,7 +250,7 @@ class SpringMongoSagaStateStoreQuarantineTest {
 
         boolean saved = store.compareAndSaveWithoutState("order-9", new SagaEnvelope<>("order-9", read.state(),
                 SagaStatus.QUARANTINED, 2, read.timers(), read.streamWatermarks(), read.positionWatermark(),
-                read.createdAt(), NOW, null, null, true, failure()), 1);
+                read.createdAt(), NOW, null, null, true, failure(), Map.of(), null), 1);
 
         Document stored = requireNonNull(mongoOperations.findOne(Query.query(where("_id").is("order-9")), Document.class, COLLECTION));
         assertAll(
@@ -273,9 +273,9 @@ class SpringMongoSagaStateStoreQuarantineTest {
                 COLLECTION, flowStateType(), new JacksonCloudEventConverter.Builder<Object>(new ObjectMapper(), URI.create("urn:test")).build());
         FlowState<Object> refused = new NotTheFlowExecutorsState("awaiting-payment", List.of(), false);
         SagaEnvelope<FlowState<Object>> envelope = new SagaEnvelope<>("order-12", refused, SagaStatus.ACTIVE, 1,
-                List.of(), Map.of("order-1", 6L), 6L, NOW.minusSeconds(600), NOW, null, null, true, failure());
+                List.of(), Map.of("order-1", 6L), 6L, NOW.minusSeconds(600), NOW, null, null, true, failure(), Map.of(), null);
         flowStore.compareAndSave("order-12", new SagaEnvelope<>("order-12", null, SagaStatus.ACTIVE, 1, List.of(),
-                Map.of("order-1", 6L), 6L, NOW.minusSeconds(600), NOW, null, null, true, failure()), 0);
+                Map.of("order-1", 6L), 6L, NOW.minusSeconds(600), NOW, null, null, true, failure(), Map.of(), null), 0);
 
         assertAll(
                 // The companion half, so the state really is one this store cannot write.
@@ -300,7 +300,7 @@ class SpringMongoSagaStateStoreQuarantineTest {
                 new Update().set("currentStep", "awaiting-payment"), COLLECTION);
 
         store.compareAndSaveWithoutState("order-13", new SagaEnvelope<>("order-13", null, SagaStatus.QUARANTINED, 2,
-                List.of(), Map.of("order-1", 6L), 6L, NOW.minusSeconds(600), NOW, null, "shipped", true, failure()), 1);
+                List.of(), Map.of("order-1", 6L), 6L, NOW.minusSeconds(600), NOW, null, "shipped", true, failure(), Map.of(), null), 1);
 
         Document stored = requireNonNull(mongoOperations.findOne(Query.query(where("_id").is("order-13")), Document.class, COLLECTION));
         assertAll(
@@ -325,10 +325,10 @@ class SpringMongoSagaStateStoreQuarantineTest {
         MongoOperations mongoOperations = mongoOperations();
         SagaStateStore<Payment> store = paymentStore(mongoOperations);
         store.compareAndSave("order-11", activePayment("order-11"), 0);
-        SagaFailure withoutPosition = new SagaFailure("order-1@8", null, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom");
+        SagaFailure withoutPosition = new SagaFailure("order-1@8", null, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom", null, null);
 
         store.compareAndSaveWithoutState("order-11", new SagaEnvelope<>("order-11", null, SagaStatus.ACTIVE, 2,
-                List.of(), Map.of("order-1", 6L), 6L, NOW.minusSeconds(600), NOW, null, null, true, withoutPosition), 1);
+                List.of(), Map.of("order-1", 6L), 6L, NOW.minusSeconds(600), NOW, null, null, true, withoutPosition, Map.of(), null), 1);
 
         Document stored = requireNonNull(mongoOperations.findOne(Query.query(where("_id").is("order-11")), Document.class, COLLECTION));
         assertAll(

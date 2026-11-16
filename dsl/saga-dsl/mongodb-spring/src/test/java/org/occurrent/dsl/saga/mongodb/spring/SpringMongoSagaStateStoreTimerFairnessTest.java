@@ -84,7 +84,7 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
     }
 
     private static SagaEnvelope<String> instanceWith(String sagaId, List<TimerEntry> timers, long version) {
-        return new SagaEnvelope<>(sagaId, "awaiting-payment", SagaStatus.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null, null);
+        return new SagaEnvelope<>(sagaId, "awaiting-payment", SagaStatus.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null, null, true, null, Map.of(), null);
     }
 
     private Document rawDocument(String sagaId) {
@@ -215,7 +215,7 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
             recordingStore.compareAndSave("s" + i, instanceWith("s" + i, List.of(new TimerEntry("t", BASE - 5_000 + i))), 0);
             recordingStore.compareAndSave("m" + i, new SagaEnvelope<>("m" + i, "awaiting-payment", SagaStatus.ACTIVE, 1,
                     List.of(new TimerEntry("t", BASE - 5_000 + i)), Map.of(), null, NOW, NOW, null, null, true, null,
-                    Map.of("order", new SagaEnvelope.StreamMarks(1, Map.of()))), 0);
+                    Map.of("order", new SagaEnvelope.StreamMarks(1, Map.of())), null), 0);
         }
         recordingStore.findWithDueTimers(NOW, 3);
         Query query = requireNonNull(dueQuery.get(), "findWithDueTimers ran no find");

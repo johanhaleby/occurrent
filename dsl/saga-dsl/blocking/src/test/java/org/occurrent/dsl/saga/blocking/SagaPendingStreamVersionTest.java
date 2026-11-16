@@ -16,6 +16,9 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.codec.StoredSaga;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -203,11 +206,11 @@ class SagaPendingStreamVersionTest {
     }
 
     private SagaEnvelope<Basket> stored() {
-        return inMemory.find(BASKET).orElseThrow();
+        return SagaEnvelopes.of(inMemory, null).find(BASKET).orElseThrow();
     }
 
     private List<Long> pending() {
-        StreamMarks marks = inMemory.find(BASKET).map(instance -> instance.streamMarks().get(STREAM)).orElse(null);
+        StreamMarks marks = SagaEnvelopes.of(inMemory, null).find(BASKET).map(instance -> instance.streamMarks().get(STREAM)).orElse(null);
         return marks == null ? List.of() : marks.pending().getOrDefault(ITEM_ADDED_TYPE, List.of());
     }
 
@@ -279,7 +282,7 @@ class SagaPendingStreamVersionTest {
             deliverFailing(execution, itemAddedAt(1, "one"));
 
             // Then
-            Optional<SagaEnvelope<Basket>> inserted = inMemory.find(BASKET);
+            Optional<SagaEnvelope<Basket>> inserted = SagaEnvelopes.of(inMemory, null).find(BASKET);
             assertThat(inserted).isPresent();
             assertAll(
                     () -> assertThat(inserted.get().failure()).isNull(),
@@ -969,29 +972,34 @@ class SagaPendingStreamVersionTest {
         }
 
         @Override
-        public Optional<SagaEnvelope<Basket>> find(String sagaId) {
+        public SagaStateCodec<Basket> stateCodec() {
+            return delegate.stateCodec();
+        }
+
+        @Override
+        public Optional<StoredSaga> find(String sagaId) {
             aboutToRead();
             return delegate.find(sagaId);
         }
 
         @Override
-        public Optional<SagaEnvelope<Basket>> findWithoutState(String sagaId) {
+        public Optional<StoredSaga> findWithoutState(String sagaId) {
             aboutToRead();
             return delegate.findWithoutState(sagaId);
         }
 
         @Override
-        public boolean compareAndSave(String sagaId, SagaEnvelope<Basket> envelope, long expectedVersion) {
-            return write(() -> delegate.compareAndSave(sagaId, envelope, expectedVersion));
+        public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+            return write(() -> delegate.compareAndSave(saga, expectedVersion));
         }
 
         @Override
-        public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<Basket> envelope, long expectedVersion) {
-            return write(() -> delegate.compareAndSaveWithoutState(sagaId, envelope, expectedVersion));
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            return write(() -> delegate.compareAndSaveWithoutState(saga, expectedVersion));
         }
 
         @Override
-        public List<SagaEnvelope<Basket>> findWithDueTimers(Instant now, int limit) {
+        public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
             return delegate.findWithDueTimers(now, limit);
         }
 

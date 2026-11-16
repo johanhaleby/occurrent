@@ -112,7 +112,7 @@ class TimerConsumptionSupportTest {
                 .reactOnTimeout(storedTimerName, (state, timeout) -> List.of(SagaEffect.issue(new Ping(timeout.sagaId()))))
                 .build();
         SagaEnvelope<String> stored = new SagaEnvelope<>("s1", "active", SagaStatus.ACTIVE, 1,
-                List.of(new TimerEntry(storedTimerName, NOW.toEpochMilli())), Map.of(), null, NOW, NOW, null, null);
+                List.of(new TimerEntry(storedTimerName, NOW.toEpochMilli())), Map.of(), null, NOW, NOW, null, null, true, null, Map.of(), null);
 
         Outcome<String, Cmd> fired = SagaExecutionSupport.process(saga, "s1", stored, SagaInput.timeout("s1", TimerName.parse(storedTimerName)), EventMeta.NONE, NOW.plusSeconds(1));
 

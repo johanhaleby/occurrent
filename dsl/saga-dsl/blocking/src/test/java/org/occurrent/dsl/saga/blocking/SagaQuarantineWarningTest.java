@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.codec.StoredSaga;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -321,17 +323,32 @@ class SagaQuarantineWarningTest {
         private final SagaStateStore<S> delegate = SagaStateStore.inMemory();
 
         @Override
-        public Optional<SagaEnvelope<S>> find(String sagaId) {
+        public SagaStateCodec<S> stateCodec() {
+            return delegate.stateCodec();
+        }
+
+        @Override
+        public Optional<StoredSaga> find(String sagaId) {
             return delegate.find(sagaId);
         }
 
         @Override
-        public boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
-            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        public Optional<StoredSaga> findWithoutState(String sagaId) {
+            return delegate.findWithoutState(sagaId);
         }
 
         @Override
-        public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            return delegate.compareAndSaveWithoutState(saga, expectedVersion);
+        }
+
+        @Override
+        public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+            return delegate.compareAndSave(saga, expectedVersion);
+        }
+
+        @Override
+        public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
             return delegate.findWithDueTimers(now, limit);
         }
 

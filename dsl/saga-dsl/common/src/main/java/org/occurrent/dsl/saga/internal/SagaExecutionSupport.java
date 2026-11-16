@@ -302,7 +302,8 @@ public final class SagaExecutionSupport {
                 null,
                 true,
                 failureAfter(current, meta, terminal),
-                streamMarks);
+                streamMarks,
+                null);
         return Outcome.processed(next, commands, expectedVersion);
     }
 
@@ -359,16 +360,6 @@ public final class SagaExecutionSupport {
      */
     public static <S extends @Nullable Object> SagaEnvelope<S> withSkipFinished(SagaEnvelope<S> current) {
         return withBookkeeping(current, current.status(), current.updatedAt(), current.failure(), current.streamMarks(), current.quarantineSkipCount());
-    }
-
-    /**
-     * The instance {@code stored}, which a store kept quarantined without its {@link SagaFailure#quarantineId()} or its
-     * {@link SagaEnvelope#quarantineSkipCount()}, one version up with {@code status} and no skip count. Its failure
-     * record stays, so the input it failed on keeps the time it first failed and quarantines it again on its next
-     * failure.
-     */
-    public static <S extends @Nullable Object> SagaEnvelope<S> withQuarantineUndone(SagaEnvelope<S> stored, SagaStatus status) {
-        return withBookkeeping(stored, status, stored.updatedAt(), stored.failure(), stored.streamMarks(), null);
     }
 
     /** The {@link SkippedInput#seq()} a release records the input the instance was quarantined on under, before every skip. */
@@ -756,7 +747,7 @@ public final class SagaExecutionSupport {
         SagaFailure existing = currentFailure(current);
         Instant failingSince = failingSince(current, meta, now);
         if (existing == null) {
-            SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()));
+            SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()), null, null);
             boolean budgetUsedUp = Duration.between(failingSince, now).compareTo(quarantineAfter) >= 0;
             return failureRecord(saga, sagaId, current, record, budgetUsedUp ? SagaStatus.QUARANTINED : SagaStatus.ACTIVE, now, budgetUsedUp, meta, null, reorderWindow);
         }
@@ -775,7 +766,7 @@ public final class SagaExecutionSupport {
         // Name the input failing now, with the instant it first failed and what it is failing with. An input that fails
         // one way and then another is still the same input failing, and the later exception is the more useful one to
         // read.
-        SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()));
+        SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()), null, null);
         return failureRecord(saga, sagaId, current, record, budgetUsedUp ? SagaStatus.QUARANTINED : SagaStatus.ACTIVE, now, budgetUsedUp, meta, existing, reorderWindow);
     }
 

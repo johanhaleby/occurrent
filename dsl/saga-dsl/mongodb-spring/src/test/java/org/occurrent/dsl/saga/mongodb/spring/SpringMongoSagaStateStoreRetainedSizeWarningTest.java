@@ -121,7 +121,7 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
         FlowStateImpl<FlowEvent> state = new FlowStateImpl<>(
                 "waiting", ticks(retainedEventCount), 0, 0, false, null, ActionKind.NONE, -1);
         SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>(
-                sagaId, state, SagaStatus.ACTIVE, 0, List.of(), Map.of(), null, null, null, null, null);
+                sagaId, state, SagaStatus.ACTIVE, 0, List.of(), Map.of(), null, null, null, null, null, true, null, Map.of(), null);
         store.compareAndSave(sagaId, envelope, 0);
     }
 

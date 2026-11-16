@@ -98,7 +98,7 @@ class SpringMongoSagaStateStoreMongoTest {
     void round_trips_state_timers_and_watermarks() {
         SagaEnvelope<Counter> envelope = new SagaEnvelope<>("s2", new Counter(42), SagaStatus.ACTIVE, 1,
                 List.of(new TimerEntry("payment", 7_000)), Map.of("stream-a", 5L), 11L,
-                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null);
+                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null, true, null, Map.of(), null);
         store.compareAndSave("s2", envelope, 0);
 
         Optional<SagaEnvelope<Counter>> found = store.find("s2");
@@ -197,7 +197,7 @@ class SpringMongoSagaStateStoreMongoTest {
                 new SpringMongoSagaStateStore<>(mongoOperations, "saga-store-test-scalar-" + System.nanoTime(), String.class);
         SagaEnvelope<String> envelope = new SagaEnvelope<>("scalar-1", "AWAITING_PAYMENT", SagaStatus.ACTIVE, 1,
                 List.of(new TimerEntry("payment", 9_000)), Map.of("stream-a", 3L), 7L,
-                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null);
+                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null, true, null, Map.of(), null);
 
         scalarStore.compareAndSave("scalar-1", envelope, 0);
         Optional<SagaEnvelope<String>> found = scalarStore.find("scalar-1");
@@ -364,7 +364,7 @@ class SpringMongoSagaStateStoreMongoTest {
                 null, FlowStateImpl.ActionKind.NONE, -1);
         SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-1", awaitingPayment, SagaStatus.ACTIVE, 1,
                 List.of(new TimerEntry("payment", 4_000)), Map.of(), null,
-                Instant.ofEpochMilli(1_000), Instant.ofEpochMilli(1_000), null, null);
+                Instant.ofEpochMilli(1_000), Instant.ofEpochMilli(1_000), null, null, true, null, Map.of(), null);
         flowStore.compareAndSave("flow-1", envelope, 0);
 
         SagaEnvelope<FlowState<FlowEvent>> enumerated = flowStore.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(2_000), 10).getFirst();
@@ -387,7 +387,7 @@ class SpringMongoSagaStateStoreMongoTest {
     @Test
     void findByStatus_excludes_an_envelope_with_a_null_updatedAt() {
         SagaEnvelope<Counter> noUpdatedAt = new SagaEnvelope<>("no-updated-at", new Counter(1), SagaStatus.ACTIVE, 1,
-                List.of(), Map.of(), null, Instant.ofEpochMilli(1), null, null, null);
+                List.of(), Map.of(), null, Instant.ofEpochMilli(1), null, null, null, true, null, Map.of(), null);
         store.compareAndSave("no-updated-at", noUpdatedAt, 0);
 
         assertThat(store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(60_000), 10)).isEmpty();
@@ -402,7 +402,7 @@ class SpringMongoSagaStateStoreMongoTest {
         Instant updatedAt = Instant.ofEpochMilli(2_000);
         Instant completedAt = Instant.ofEpochMilli(3_000);
         SagaEnvelope<Counter> envelope = new SagaEnvelope<>("lifecycle-1", new Counter(1), SagaStatus.COMPLETED, 1,
-                List.of(), Map.of(), null, createdAt, updatedAt, completedAt, null);
+                List.of(), Map.of(), null, createdAt, updatedAt, completedAt, null, true, null, Map.of(), null);
         store.compareAndSave("lifecycle-1", envelope, 0);
 
         SagaEnvelope<Counter> found = store.find("lifecycle-1").orElseThrow();
@@ -426,7 +426,7 @@ class SpringMongoSagaStateStoreMongoTest {
         Instant createdAt = Instant.ofEpochMilli(10);
         Instant updatedAt = Instant.ofEpochMilli(20);
         SagaEnvelope<Counter> envelope = new SagaEnvelope<>("lifecycle-3", new Counter(1), SagaStatus.ACTIVE, 1,
-                List.of(new TimerEntry("t", 1_000)), Map.of(), null, createdAt, updatedAt, null, null);
+                List.of(new TimerEntry("t", 1_000)), Map.of(), null, createdAt, updatedAt, null, null, true, null, Map.of(), null);
         store.compareAndSave("lifecycle-3", envelope, 0);
 
         SagaEnvelope<Counter> found = store.findWithDueTimers(Instant.ofEpochMilli(2_000), 10).getFirst();
@@ -462,7 +462,7 @@ class SpringMongoSagaStateStoreMongoTest {
         Saga<FlowEvent, FlowState<FlowEvent>, Object> saga = flowSaga();
         FlowState<FlowEvent> withReceived = saga.evolve(saga.initialState(), SagaInput.event(new FlowStarted("flow-poll-step")));
         SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-poll-step", withReceived, SagaStatus.ACTIVE, 1,
-                List.of(new TimerEntry("step:started", 1_000)), Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null);
+                List.of(new TimerEntry("step:started", 1_000)), Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null, true, null, Map.of(), null);
         flowStore.compareAndSave("flow-poll-step", envelope, 0);
 
         SagaEnvelope<FlowState<FlowEvent>> polled = flowStore.findWithDueTimers(Instant.ofEpochMilli(2_000), 10).getFirst();
@@ -475,7 +475,7 @@ class SpringMongoSagaStateStoreMongoTest {
     }
 
     private static SagaEnvelope<Counter> activeAt(String id, Instant updatedAt) {
-        return new SagaEnvelope<>(id, new Counter(1), SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null, null);
+        return new SagaEnvelope<>(id, new Counter(1), SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null, null, true, null, Map.of(), null);
     }
 
     /**
@@ -499,7 +499,7 @@ class SpringMongoSagaStateStoreMongoTest {
         assertThat(finalState.received()).containsExactly(startEvent, continuedEvent);
 
         SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-1", finalState, SagaStatus.COMPLETED, 1,
-                List.of(), Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), Instant.ofEpochMilli(3), null);
+                List.of(), Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), Instant.ofEpochMilli(3), null, true, null, Map.of(), null);
         flowStore.compareAndSave("flow-1", envelope, 0);
 
         Optional<SagaEnvelope<FlowState<FlowEvent>>> found = flowStore.find("flow-1");
@@ -531,7 +531,7 @@ class SpringMongoSagaStateStoreMongoTest {
         FlowState<FlowEvent> withReceived = saga.evolve(saga.initialState(), SagaInput.event(new FlowStarted("flow-poll")));
         SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-poll", withReceived, SagaStatus.ACTIVE, 1,
                 List.of(new TimerEntry("step:started", 1_000)), Map.of(), null,
-                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null);
+                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null, true, null, Map.of(), null);
         flowStore.compareAndSave("flow-poll", envelope, 0);
 
         List<SagaEnvelope<FlowState<FlowEvent>>> due = flowStore.findWithDueTimers(Instant.ofEpochMilli(2_000), 10);
@@ -571,12 +571,12 @@ class SpringMongoSagaStateStoreMongoTest {
 
     private static SagaEnvelope<Counter> active(String id, Counter state, long version, List<TimerEntry> timers, long positionWatermark) {
         return new SagaEnvelope<>(id, state, SagaStatus.ACTIVE, version, timers, Map.of(),
-                positionWatermark == 0 ? null : positionWatermark, Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null, null);
+                positionWatermark == 0 ? null : positionWatermark, Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null, null, true, null, Map.of(), null);
     }
 
     private static SagaEnvelope<Counter> completed(String id, Counter state, long version) {
         return new SagaEnvelope<>(id, state, SagaStatus.COMPLETED, version, List.of(), Map.of(), null,
-                Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null);
+                Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null, true, null, Map.of(), null);
     }
 
     record Counter(int value) {

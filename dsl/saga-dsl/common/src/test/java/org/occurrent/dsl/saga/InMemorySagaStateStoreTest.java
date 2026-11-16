@@ -22,10 +22,12 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.codec.SagaCodec;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,18 +40,35 @@ class InMemorySagaStateStoreTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
 
     private final InMemorySagaStateStore<String> store = new InMemorySagaStateStore<>();
+    private final SagaCodec<String> codec = SagaCodec.of(store.stateCodec(), null);
+
+    private boolean compareAndSave(String sagaId, SagaEnvelope<String> envelope, long expectedVersion) {
+        return store.compareAndSave(codec.encode(envelope), expectedVersion);
+    }
+
+    private Optional<SagaEnvelope<String>> find(String sagaId) {
+        return store.find(sagaId).map(codec::decode);
+    }
+
+    private List<SagaEnvelope<String>> findWithDueTimers(Instant now, int limit) {
+        return store.findWithDueTimers(now, limit).stream().map(codec::decode).toList();
+    }
+
+    private List<SagaEnvelope<String>> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
+        return store.findByStatus(status, updatedBefore, limit).stream().map(codec::decode).toList();
+    }
 
     private static SagaEnvelope<String> envelope(String sagaId, String state, long version, List<TimerEntry> timers) {
-        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null, null);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null, null, true, null, Map.of(), null);
     }
 
     private static SagaEnvelope<String> completedEnvelope(String sagaId, String state, long version, List<TimerEntry> timers) {
-        return new SagaEnvelope<>(sagaId, state, SagaStatus.COMPLETED, version, timers, Map.of(), null, NOW, NOW, NOW, null);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.COMPLETED, version, timers, Map.of(), null, NOW, NOW, NOW, null, true, null, Map.of(), null);
     }
 
     private static SagaEnvelope<String> quarantinedEnvelope(String sagaId, String state, long version, List<TimerEntry> timers) {
-        SagaFailure failure = new SagaFailure("s@7", 7L, NOW, IllegalStateException.class.getName(), "boom");
-        return new SagaEnvelope<>(sagaId, state, SagaStatus.QUARANTINED, version, timers, Map.of(), null, NOW, NOW, null, null, true, failure);
+        SagaFailure failure = new SagaFailure("s@7", 7L, NOW, IllegalStateException.class.getName(), "boom", null, null);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.QUARANTINED, version, timers, Map.of(), null, NOW, NOW, null, null, true, failure, Map.of(), null);
     }
 
     private static SagaEnvelope<String> releasingEnvelope(String sagaId) {
@@ -58,7 +77,7 @@ class InMemorySagaStateStoreTest {
     }
 
     private static SagaEnvelope<String> activeEnvelopeUpdatedAt(String sagaId, Instant updatedAt) {
-        return new SagaEnvelope<>(sagaId, "a", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null, null);
+        return new SagaEnvelope<>(sagaId, "a", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null, null, true, null, Map.of(), null);
     }
 
     @Nested
@@ -66,42 +85,42 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void succeeds_inserting_a_new_instance_at_expected_version_0() {
-            boolean saved = store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            boolean saved = compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
 
             assertThat(saved).isTrue();
         }
 
         @Test
         void fails_a_second_insert_at_expected_version_0_once_an_instance_exists() {
-            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
 
-            boolean saved = store.compareAndSave("s1", envelope("s1", "b", 1, List.of()), 0);
+            boolean saved = compareAndSave("s1", envelope("s1", "b", 1, List.of()), 0);
 
             assertThat(saved).isFalse();
         }
 
         @Test
         void succeeds_updating_an_existing_instance_at_its_current_version() {
-            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
 
-            boolean saved = store.compareAndSave("s1", envelope("s1", "b", 2, List.of()), 1);
+            boolean saved = compareAndSave("s1", envelope("s1", "b", 2, List.of()), 1);
 
             assertAll(
                     () -> assertThat(saved).isTrue(),
-                    () -> assertThat(store.find("s1")).contains(envelope("s1", "b", 2, List.of()))
+                    () -> assertThat(find("s1")).contains(envelope("s1", "b", 2, List.of()))
             );
         }
 
         @Test
         void fails_when_expected_version_no_longer_matches_the_stored_version() {
-            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
-            store.compareAndSave("s1", envelope("s1", "b", 2, List.of()), 1);
+            compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            compareAndSave("s1", envelope("s1", "b", 2, List.of()), 1);
 
-            boolean saved = store.compareAndSave("s1", envelope("s1", "c", 2, List.of()), 1);
+            boolean saved = compareAndSave("s1", envelope("s1", "c", 2, List.of()), 1);
 
             assertAll(
                     () -> assertThat(saved).isFalse(),
-                    () -> assertThat(store.find("s1")).contains(envelope("s1", "b", 2, List.of()))
+                    () -> assertThat(find("s1")).contains(envelope("s1", "b", 2, List.of()))
             );
         }
     }
@@ -112,14 +131,14 @@ class InMemorySagaStateStoreTest {
         @Test
         void returns_the_stored_envelope() {
             SagaEnvelope<String> saved = envelope("s1", "a", 1, List.of());
-            store.compareAndSave("s1", saved, 0);
+            compareAndSave("s1", saved, 0);
 
-            assertThat(store.find("s1")).contains(saved);
+            assertThat(find("s1")).contains(saved);
         }
 
         @Test
         void returns_empty_for_an_unknown_id() {
-            assertThat(store.find("unknown")).isEmpty();
+            assertThat(find("unknown")).isEmpty();
         }
     }
 
@@ -129,12 +148,12 @@ class InMemorySagaStateStoreTest {
         @Test
         void returns_instances_in_ascending_order_of_their_effective_due_time() {
             long now = NOW.toEpochMilli();
-            store.compareAndSave("marked-late", envelope("marked-late", "a", 1, List.of(new TimerEntry("t", now - 5_000, now - 100))), 0);
-            store.compareAndSave("fired-latest", envelope("fired-latest", "a", 1, List.of(new TimerEntry("t", now - 500))), 0);
-            store.compareAndSave("fired-earliest", envelope("fired-earliest", "a", 1, List.of(new TimerEntry("t", now - 9_000))), 0);
-            store.compareAndSave("marked-mid", envelope("marked-mid", "a", 1, List.of(new TimerEntry("t", now - 8_000, now - 3_000))), 0);
+            compareAndSave("marked-late", envelope("marked-late", "a", 1, List.of(new TimerEntry("t", now - 5_000, now - 100))), 0);
+            compareAndSave("fired-latest", envelope("fired-latest", "a", 1, List.of(new TimerEntry("t", now - 500))), 0);
+            compareAndSave("fired-earliest", envelope("fired-earliest", "a", 1, List.of(new TimerEntry("t", now - 9_000))), 0);
+            compareAndSave("marked-mid", envelope("marked-mid", "a", 1, List.of(new TimerEntry("t", now - 8_000, now - 3_000))), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 10);
 
             assertThat(due).extracting(SagaEnvelope::sagaId)
                     .containsExactly("fired-earliest", "marked-mid", "fired-latest", "marked-late");
@@ -144,10 +163,10 @@ class InMemorySagaStateStoreTest {
         void breaks_ties_in_due_time_by_saga_id() {
             long now = NOW.toEpochMilli();
             for (String sagaId : List.of("c", "a", "d", "b")) {
-                store.compareAndSave(sagaId, envelope(sagaId, "a", 1, List.of(new TimerEntry("t", now - 1_000))), 0);
+                compareAndSave(sagaId, envelope(sagaId, "a", 1, List.of(new TimerEntry("t", now - 1_000))), 0);
             }
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 10);
 
             assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("a", "b", "c", "d");
         }
@@ -157,10 +176,10 @@ class InMemorySagaStateStoreTest {
             long now = NOW.toEpochMilli();
             for (int i = 0; i < 6; i++) {
                 String sagaId = "s" + i;
-                store.compareAndSave(sagaId, envelope(sagaId, "a", 1, List.of(new TimerEntry("t", now - 6_000 + i * 1_000L))), 0);
+                compareAndSave(sagaId, envelope(sagaId, "a", 1, List.of(new TimerEntry("t", now - 6_000 + i * 1_000L))), 0);
             }
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 3);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 3);
 
             assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("s0", "s1", "s2");
         }
@@ -168,10 +187,10 @@ class InMemorySagaStateStoreTest {
         @Test
         void an_instance_whose_timer_failed_ranks_behind_one_that_became_due_before_the_failure_was_marked() {
             long now = NOW.toEpochMilli();
-            store.compareAndSave("failed", envelope("failed", "a", 1, List.of(new TimerEntry("t", now - 9_000, now - 1_000))), 0);
-            store.compareAndSave("healthy", envelope("healthy", "a", 1, List.of(new TimerEntry("t", now - 4_000))), 0);
+            compareAndSave("failed", envelope("failed", "a", 1, List.of(new TimerEntry("t", now - 9_000, now - 1_000))), 0);
+            compareAndSave("healthy", envelope("healthy", "a", 1, List.of(new TimerEntry("t", now - 4_000))), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 1);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 1);
 
             assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("healthy");
         }
@@ -179,47 +198,47 @@ class InMemorySagaStateStoreTest {
         @Test
         void does_not_return_an_instance_whose_marker_is_still_in_the_future() {
             long now = NOW.toEpochMilli();
-            store.compareAndSave("backed-off", envelope("backed-off", "a", 1, List.of(new TimerEntry("t", now - 9_000, now + 1_000))), 0);
+            compareAndSave("backed-off", envelope("backed-off", "a", 1, List.of(new TimerEntry("t", now - 9_000, now + 1_000))), 0);
 
-            assertThat(store.findWithDueTimers(NOW, 10)).isEmpty();
+            assertThat(findWithDueTimers(NOW, 10)).isEmpty();
         }
 
         @Test
         void returns_active_instances_whose_earliest_timer_is_due() {
-            store.compareAndSave("due", envelope("due", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
-            store.compareAndSave("not-due", envelope("not-due", "a", 1, List.of(new TimerEntry("t", NOW.plusSeconds(60).toEpochMilli()))), 0);
-            store.compareAndSave("no-timer", envelope("no-timer", "a", 1, List.of()), 0);
+            compareAndSave("due", envelope("due", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("not-due", envelope("not-due", "a", 1, List.of(new TimerEntry("t", NOW.plusSeconds(60).toEpochMilli()))), 0);
+            compareAndSave("no-timer", envelope("no-timer", "a", 1, List.of()), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 10);
 
             assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("due");
         }
 
         @Test
         void excludes_completed_instances_even_when_a_timer_is_due() {
-            store.compareAndSave("completed", completedEnvelope("completed", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("completed", completedEnvelope("completed", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 10);
 
             assertThat(due).isEmpty();
         }
 
         @Test
         void excludes_quarantined_instances_even_when_a_timer_is_due() {
-            store.compareAndSave("quarantined", quarantinedEnvelope("quarantined", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("quarantined", quarantinedEnvelope("quarantined", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 10);
 
             assertThat(due).isEmpty();
         }
 
         @Test
         void respects_the_supplied_limit() {
-            store.compareAndSave("a", envelope("a", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
-            store.compareAndSave("b", envelope("b", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
-            store.compareAndSave("c", envelope("c", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("a", envelope("a", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("b", envelope("b", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("c", envelope("c", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 2);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 2);
 
             assertThat(due).hasSize(2);
         }
@@ -229,10 +248,10 @@ class InMemorySagaStateStoreTest {
             Instant createdAt = NOW.minusSeconds(120);
             Instant updatedAt = NOW.minusSeconds(30);
             SagaEnvelope<String> saved = new SagaEnvelope<>("due", "a", SagaStatus.ACTIVE, 1,
-                    List.of(new TimerEntry("t", NOW.toEpochMilli())), Map.of(), null, createdAt, updatedAt, null, null);
-            store.compareAndSave("due", saved, 0);
+                    List.of(new TimerEntry("t", NOW.toEpochMilli())), Map.of(), null, createdAt, updatedAt, null, null, true, null, Map.of(), null);
+            compareAndSave("due", saved, 0);
 
-            SagaEnvelope<String> found = store.findWithDueTimers(NOW, 10).getFirst();
+            SagaEnvelope<String> found = findWithDueTimers(NOW, 10).getFirst();
 
             assertAll(
                     () -> assertThat(found.createdAt()).isEqualTo(createdAt),
@@ -253,10 +272,10 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void returns_instances_with_the_given_status() {
-            store.compareAndSave("active-1", envelope("active-1", "a", 1, List.of()), 0);
-            store.compareAndSave("completed-1", completedEnvelope("completed-1", "a", 1, List.of()), 0);
+            compareAndSave("active-1", envelope("active-1", "a", 1, List.of()), 0);
+            compareAndSave("completed-1", completedEnvelope("completed-1", "a", 1, List.of()), 0);
 
-            List<SagaEnvelope<String>> active = store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10);
+            List<SagaEnvelope<String>> active = findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10);
 
             assertThat(active).extracting(SagaEnvelope::sagaId).containsExactly("active-1");
         }
@@ -268,10 +287,10 @@ class InMemorySagaStateStoreTest {
          */
         @Test
         void selects_on_the_requested_status_rather_than_always_active() {
-            store.compareAndSave("active-1", envelope("active-1", "a", 1, List.of()), 0);
-            store.compareAndSave("completed-1", completedEnvelope("completed-1", "a", 1, List.of()), 0);
+            compareAndSave("active-1", envelope("active-1", "a", 1, List.of()), 0);
+            compareAndSave("completed-1", completedEnvelope("completed-1", "a", 1, List.of()), 0);
 
-            List<SagaEnvelope<String>> completed = store.findByStatus(SagaStatus.COMPLETED, NOW.plusSeconds(1), 10);
+            List<SagaEnvelope<String>> completed = findByStatus(SagaStatus.COMPLETED, NOW.plusSeconds(1), 10);
 
             assertThat(completed).extracting(SagaEnvelope::sagaId).containsExactly("completed-1");
         }
@@ -285,11 +304,11 @@ class InMemorySagaStateStoreTest {
         @Test
         void truncates_a_tie_group_at_limit_without_failing() {
             Instant sameMillisecond = NOW.minusSeconds(30);
-            store.compareAndSave("tie-a", activeEnvelopeUpdatedAt("tie-a", sameMillisecond), 0);
-            store.compareAndSave("tie-b", activeEnvelopeUpdatedAt("tie-b", sameMillisecond), 0);
-            store.compareAndSave("tie-c", activeEnvelopeUpdatedAt("tie-c", sameMillisecond), 0);
+            compareAndSave("tie-a", activeEnvelopeUpdatedAt("tie-a", sameMillisecond), 0);
+            compareAndSave("tie-b", activeEnvelopeUpdatedAt("tie-b", sameMillisecond), 0);
+            compareAndSave("tie-c", activeEnvelopeUpdatedAt("tie-c", sameMillisecond), 0);
 
-            List<SagaEnvelope<String>> found = store.findByStatus(SagaStatus.ACTIVE, NOW, 2);
+            List<SagaEnvelope<String>> found = findByStatus(SagaStatus.ACTIVE, NOW, 2);
 
             assertAll(
                     () -> assertThat(found).hasSize(2),
@@ -300,40 +319,40 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void updatedBefore_is_exclusive() {
-            store.compareAndSave("exact", activeEnvelopeUpdatedAt("exact", NOW), 0);
+            compareAndSave("exact", activeEnvelopeUpdatedAt("exact", NOW), 0);
 
             assertAll(
-                    () -> assertThat(store.findByStatus(SagaStatus.ACTIVE, NOW, 10)).isEmpty(),
-                    () -> assertThat(store.findByStatus(SagaStatus.ACTIVE, NOW.plusMillis(1), 10))
+                    () -> assertThat(findByStatus(SagaStatus.ACTIVE, NOW, 10)).isEmpty(),
+                    () -> assertThat(findByStatus(SagaStatus.ACTIVE, NOW.plusMillis(1), 10))
                             .extracting(SagaEnvelope::sagaId).containsExactly("exact")
             );
         }
 
         @Test
         void orders_ascending_by_updatedAt_so_the_stalest_instance_is_first() {
-            store.compareAndSave("newest", activeEnvelopeUpdatedAt("newest", NOW), 0);
-            store.compareAndSave("oldest", activeEnvelopeUpdatedAt("oldest", NOW.minusSeconds(10)), 0);
-            store.compareAndSave("middle", activeEnvelopeUpdatedAt("middle", NOW.minusSeconds(5)), 0);
+            compareAndSave("newest", activeEnvelopeUpdatedAt("newest", NOW), 0);
+            compareAndSave("oldest", activeEnvelopeUpdatedAt("oldest", NOW.minusSeconds(10)), 0);
+            compareAndSave("middle", activeEnvelopeUpdatedAt("middle", NOW.minusSeconds(5)), 0);
 
-            List<SagaEnvelope<String>> found = store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10);
+            List<SagaEnvelope<String>> found = findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10);
 
             assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("oldest", "middle", "newest");
         }
 
         @Test
         void limit_truncates_after_ordering_to_the_stalest_N_not_an_arbitrary_N() {
-            store.compareAndSave("oldest", activeEnvelopeUpdatedAt("oldest", NOW.minusSeconds(10)), 0);
-            store.compareAndSave("middle", activeEnvelopeUpdatedAt("middle", NOW.minusSeconds(5)), 0);
-            store.compareAndSave("newest", activeEnvelopeUpdatedAt("newest", NOW), 0);
+            compareAndSave("oldest", activeEnvelopeUpdatedAt("oldest", NOW.minusSeconds(10)), 0);
+            compareAndSave("middle", activeEnvelopeUpdatedAt("middle", NOW.minusSeconds(5)), 0);
+            compareAndSave("newest", activeEnvelopeUpdatedAt("newest", NOW), 0);
 
-            List<SagaEnvelope<String>> found = store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 2);
+            List<SagaEnvelope<String>> found = findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 2);
 
             assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("oldest", "middle");
         }
 
         @Test
         void rejects_a_limit_below_1() {
-            assertThatThrownBy(() -> store.findByStatus(SagaStatus.ACTIVE, NOW, 0))
+            assertThatThrownBy(() -> findByStatus(SagaStatus.ACTIVE, NOW, 0))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("limit must be positive");
         }
@@ -341,10 +360,10 @@ class InMemorySagaStateStoreTest {
         @Test
         void excludes_an_envelope_with_a_null_updatedAt() {
             SagaEnvelope<String> noUpdatedAt = new SagaEnvelope<>("no-updated-at", "a", SagaStatus.ACTIVE, 1,
-                    List.of(), Map.of(), null, NOW, null, null, null);
-            store.compareAndSave("no-updated-at", noUpdatedAt, 0);
+                    List.of(), Map.of(), null, NOW, null, null, null, true, null, Map.of(), null);
+            compareAndSave("no-updated-at", noUpdatedAt, 0);
 
-            assertThat(store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(60), 10)).isEmpty();
+            assertThat(findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(60), 10)).isEmpty();
         }
     }
 
@@ -357,10 +376,10 @@ class InMemorySagaStateStoreTest {
             Instant updatedAt = NOW.minusSeconds(30);
             Instant completedAt = NOW;
             SagaEnvelope<String> saved = new SagaEnvelope<>("s1", "a", SagaStatus.COMPLETED, 1, List.of(), Map.of(), null,
-                    createdAt, updatedAt, completedAt, null);
-            store.compareAndSave("s1", saved, 0);
+                    createdAt, updatedAt, completedAt, null, true, null, Map.of(), null);
+            compareAndSave("s1", saved, 0);
 
-            SagaEnvelope<String> found = store.find("s1").orElseThrow();
+            SagaEnvelope<String> found = find("s1").orElseThrow();
 
             assertAll(
                     () -> assertThat(found.createdAt()).isEqualTo(createdAt),
@@ -371,9 +390,9 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void an_active_instance_has_no_completedAt() {
-            store.compareAndSave("s2", envelope("s2", "a", 1, List.of()), 0);
+            compareAndSave("s2", envelope("s2", "a", 1, List.of()), 0);
 
-            assertThat(store.find("s2")).hasValueSatisfying(e -> assertThat(e.completedAt()).isNull());
+            assertThat(find("s2")).hasValueSatisfying(e -> assertThat(e.completedAt()).isNull());
         }
     }
 
@@ -382,18 +401,18 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void removes_the_instance() {
-            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
 
             store.delete("s1");
 
-            assertThat(store.find("s1")).isEmpty();
+            assertThat(find("s1")).isEmpty();
         }
 
         @Test
         void is_a_no_op_for_an_unknown_id() {
             store.delete("unknown");
 
-            assertThat(store.find("unknown")).isEmpty();
+            assertThat(find("unknown")).isEmpty();
         }
     }
 
@@ -402,12 +421,12 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void lists_the_releasing_instances_in_ascending_id_order_up_to_the_limit() {
-            store.compareAndSave("c", releasingEnvelope("c"), 0);
-            store.compareAndSave("a", releasingEnvelope("a"), 0);
-            store.compareAndSave("d", releasingEnvelope("d"), 0);
-            store.compareAndSave("b", releasingEnvelope("b"), 0);
-            store.compareAndSave("0", envelope("0", "x", 1, List.of()), 0);
-            store.compareAndSave("1", quarantinedEnvelope("1", "x", 1, List.of()), 0);
+            compareAndSave("c", releasingEnvelope("c"), 0);
+            compareAndSave("a", releasingEnvelope("a"), 0);
+            compareAndSave("d", releasingEnvelope("d"), 0);
+            compareAndSave("b", releasingEnvelope("b"), 0);
+            compareAndSave("0", envelope("0", "x", 1, List.of()), 0);
+            compareAndSave("1", quarantinedEnvelope("1", "x", 1, List.of()), 0);
 
             assertAll(
                     () -> assertThat(store.findReleasingSagaIds(null, 10)).containsExactly("a", "b", "c", "d"),
@@ -418,7 +437,7 @@ class InMemorySagaStateStoreTest {
         @Test
         void lists_only_the_ids_strictly_after_the_given_one_in_ascending_order_up_to_the_limit() {
             for (String id : List.of("c", "a", "d", "b")) {
-                store.compareAndSave(id, releasingEnvelope(id), 0);
+                compareAndSave(id, releasingEnvelope(id), 0);
             }
 
             assertAll(
@@ -431,9 +450,9 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void lists_the_ids_after_one_that_is_not_there_and_is_not_releasing() {
-            store.compareAndSave("a", releasingEnvelope("a"), 0);
-            store.compareAndSave("c", releasingEnvelope("c"), 0);
-            store.compareAndSave("b", envelope("b", "x", 1, List.of()), 0);
+            compareAndSave("a", releasingEnvelope("a"), 0);
+            compareAndSave("c", releasingEnvelope("c"), 0);
+            compareAndSave("b", envelope("b", "x", 1, List.of()), 0);
 
             assertAll(
                     () -> assertThat(store.findReleasingSagaIds("b", 10)).containsExactly("c"),
@@ -551,7 +570,7 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void are_deleted_with_the_instance_under_its_quarantine_id_only_and_only_for_that_instance() {
-            store.compareAndSave("s1", releasingEnvelope("s1"), 0);
+            compareAndSave("s1", releasingEnvelope("s1"), 0);
             store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
             store.recordSkippedInput("s1", "q2", new SkippedInput(0, "b@1"));
             store.recordSkippedInput("s2", "q1", new SkippedInput(0, "c@1"));
@@ -559,7 +578,7 @@ class InMemorySagaStateStoreTest {
             store.delete("s1");
 
             assertAll(
-                    () -> assertThat(store.find("s1")).isEmpty(),
+                    () -> assertThat(find("s1")).isEmpty(),
                     () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
                     () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1")),
                     () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "c@1"))
@@ -568,14 +587,14 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void are_kept_when_the_instance_deleted_has_no_quarantine_id_or_there_is_none() {
-            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
             store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
 
             store.delete("s1");
             store.delete("missing");
 
             assertAll(
-                    () -> assertThat(store.find("s1")).isEmpty(),
+                    () -> assertThat(find("s1")).isEmpty(),
                     () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(0, "a@1"))
             );
         }

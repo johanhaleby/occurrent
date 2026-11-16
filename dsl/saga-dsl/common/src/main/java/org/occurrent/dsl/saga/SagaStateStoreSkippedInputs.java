@@ -27,16 +27,9 @@ import java.util.List;
  * holds every event, it refuses to start a saga with quarantine on when its store does not implement it. Call
  * {@code SagaRunnerConfig.disableQuarantine()} to run a saga on such a store.
  * <p>
- * A store that implements this persists every member of {@link SagaEnvelope} and {@link SagaFailure},
- * {@link SagaFailure#releasedAt()}, {@link SagaFailure#quarantineId()} and {@link SagaEnvelope#quarantineSkipCount()}
- * included, and in {@link SagaStateStore#delete(String)} removes the records under the quarantine id of the instance it
- * deletes. The executor reads an instance
- * back after the write that quarantines it and after a release starts, because an instance without a quarantine id or
- * a skip count records nothing it skips. When the quarantine id or the skip count did not persist, it writes the
- * instance back as it was before the quarantine and fails the input, so every delivery of that input fails until the
- * store persists both. When something outside the saga writes the instance before each attempt of that undo, the
- * instance stays quarantined without them and skips later inputs unrecorded. When a release finds one of those members
- * missing, it throws.
+ * A store that implements this removes, in {@link SagaStateStore#delete(String)}, the records under the quarantine id of
+ * the instance it deletes. It persists the quarantine id and the skip count of an instance like every other field,
+ * since it keeps the {@link org.occurrent.dsl.saga.codec.StoredSaga} it is given as it is.
  * <p>
  * The runner sees only the store it is given, so a decorator around a store that implements this has to implement it
  * too and pass each call on. On a subscription model that holds every event, a saga with quarantine on and a decorator

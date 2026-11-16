@@ -106,7 +106,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
     private static SagaEnvelope<String> instanceWith(Map<String, StreamMarks> marks, long version) {
         return new SagaEnvelope<>(SAGA_ID, "awaiting-payment", SagaStatus.ACTIVE, version, List.of(), Map.of(STREAM_ID, 12L, "other", 1L), null,
-                NOW, NOW, null, null, true, null, marks);
+                NOW, NOW, null, null, true, null, marks, null);
     }
 
     private void save(SagaEnvelope<String> envelope, long expectedVersion) {
@@ -360,7 +360,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
         private SagaEnvelope<String> failureRecordFor(SagaEnvelope<String> read) {
             return new SagaEnvelope<>(SAGA_ID, read.state(), SagaStatus.QUARANTINED, read.version() + 1, read.timers(), read.streamWatermarks(), null,
                     read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(),
-                    new SagaFailure(STREAM_ID + "@13", null, NOW, IllegalStateException.class.getName(), "boom"), read.streamMarks());
+                    new SagaFailure(STREAM_ID + "@13", null, NOW, IllegalStateException.class.getName(), "boom", null, null), read.streamMarks(), null);
         }
 
         @Test
@@ -391,7 +391,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             SagaEnvelope<String> record = failureRecordFor(read);
             SagaEnvelope<String> withOtherMarks = new SagaEnvelope<>(SAGA_ID, record.state(), record.status(), record.version(), record.timers(),
                     record.streamWatermarks(), null, record.createdAt(), record.updatedAt(), null, record.currentStep(), record.started(),
-                    record.failure(), other);
+                    record.failure(), other, null);
 
             // When
             stateStore.compareAndSaveWithoutState(SAGA_ID, withOtherMarks, read.version());
@@ -513,7 +513,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(PENDING_MARKS, 1), 0);
             SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
             SagaEnvelope<String> changed = new SagaEnvelope<>(SAGA_ID, "paid", SagaStatus.ACTIVE, 2, read.timers(), Map.of(STREAM_ID, 13L, "other", 1L),
-                    null, NOW, NOW.plusSeconds(60), null, null, true, null, read.streamMarks());
+                    null, NOW, NOW.plusSeconds(60), null, null, true, null, read.streamMarks(), null);
 
             // When
             save(changed, 1);
@@ -609,7 +609,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
         private SagaEnvelope<String> withMarks(SagaEnvelope<String> read, Map<String, StreamMarks> marks) {
             return new SagaEnvelope<>(SAGA_ID, read.state(), read.status(), read.version() + 1, read.timers(), read.streamWatermarks(), null,
-                    read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), marks);
+                    read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), marks, null);
         }
 
         @Test
@@ -650,7 +650,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             // Given
             Map<String, StreamMarks> insertedMarks = Map.of(STREAM_ID, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(PLACED_TYPE, List.of(1L))));
             SagaEnvelope<String> inserted = new SagaEnvelope<>(SAGA_ID, "initial", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null,
-                    NOW, NOW, null, null, false, null, insertedMarks);
+                    NOW, NOW, null, null, false, null, insertedMarks, null);
 
             // When
             boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, inserted, 0);
@@ -747,7 +747,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(LEGACY_FAILED_MARKS, 1), 0);
             SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
             SagaEnvelope<String> carried = new SagaEnvelope<>(SAGA_ID, read.state(), read.status(), read.version() + 1, read.timers(), read.streamWatermarks(),
-                    null, read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), read.streamMarks());
+                    null, read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), read.streamMarks(), null);
 
             // When
             boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, carried, read.version());
@@ -853,7 +853,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
         private SagaEnvelope<String> withMarks(SagaEnvelope<String> read, Map<String, StreamMarks> marks) {
             return new SagaEnvelope<>(SAGA_ID, read.state(), read.status(), read.version() + 1, read.timers(), read.streamWatermarks(), null,
-                    read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), marks);
+                    read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), marks, null);
         }
 
         @Test
@@ -975,7 +975,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             Map<String, StreamMarks> insertedMarks = Map.of(STREAM_ID,
                     new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(PLACED_TYPE, List.of(1L)), List.of(), Map.of(1L, since1)));
             SagaEnvelope<String> inserted = new SagaEnvelope<>(SAGA_ID, "initial", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null,
-                    NOW, NOW, null, null, false, null, insertedMarks);
+                    NOW, NOW, null, null, false, null, insertedMarks, null);
 
             // When
             boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, inserted, 0);
@@ -1079,7 +1079,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
         private void saveWithId(String id, Map<String, StreamMarks> marks) {
             SagaEnvelope<String> envelope = new SagaEnvelope<>(id, "awaiting-payment", SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM_ID, 12L, "other", 1L), null,
-                    NOW, NOW, null, null, true, null, marks);
+                    NOW, NOW, null, null, true, null, marks, null);
             assertThat(stateStore.compareAndSave(id, envelope, 0)).isTrue();
         }
 

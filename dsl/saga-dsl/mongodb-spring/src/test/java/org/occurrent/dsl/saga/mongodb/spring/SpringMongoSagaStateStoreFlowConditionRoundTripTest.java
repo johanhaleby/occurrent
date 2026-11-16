@@ -113,7 +113,7 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
         FlowStateImpl<ReviewEvent> original = new FlowStateImpl<>(
                 "awaiting-decision", received, 1, 1, false, null, ActionKind.NONE, -1);
         SagaEnvelope<FlowState<ReviewEvent>> envelope = new SagaEnvelope<>(
-                "review-1", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null);
+                "review-1", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null, true, null, Map.of(), null);
 
         boolean inserted = store.compareAndSave("review-1", envelope, 0);
         SagaEnvelope<FlowState<ReviewEvent>> roundTripped = store.find("review-1").orElseThrow();
@@ -141,7 +141,7 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
         FlowStateImpl<ReviewEvent> original = new FlowStateImpl<>(
                 "next", received, 1, 2, false, "awaiting-decision", 1, ActionKind.BRANCH, 0, null);
         SagaEnvelope<FlowState<ReviewEvent>> envelope = new SagaEnvelope<>(
-                "review-2", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null);
+                "review-2", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null, true, null, Map.of(), null);
 
         store.compareAndSave("review-2", envelope, 0);
         SagaEnvelope<FlowState<ReviewEvent>> roundTripped = store.find("review-2").orElseThrow();
@@ -237,7 +237,7 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
 
         FlowState<ReviewEvent> afterDelivery = saga.evolve(loaded, SagaInput.event(new Approved("e6", "backlog", 50)));
         boolean saved = store.compareAndSave("backlog",
-                new SagaEnvelope<>("backlog", afterDelivery, SagaStatus.ACTIVE, 2, List.of(), Map.of(), null, null, null, null, null), 1);
+                new SagaEnvelope<>("backlog", afterDelivery, SagaStatus.ACTIVE, 2, List.of(), Map.of(), null, null, null, null, null, true, null, Map.of(), null), 1);
         FlowState<ReviewEvent> roundTripped = store.find("backlog").orElseThrow().state();
 
         assertAll(
@@ -265,7 +265,7 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
         FlowStateImpl<ReviewEvent> original = new FlowStateImpl<>(
                 "awaiting-decision", received, 7, 2, false, "awaiting-decision", -1, ActionKind.NONE, -1, progress);
         SagaEnvelope<FlowState<ReviewEvent>> envelope = new SagaEnvelope<>(
-                "review-3", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null);
+                "review-3", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null, true, null, Map.of(), null);
 
         store.compareAndSave("review-3", envelope, 0);
         FlowStateImpl<ReviewEvent> roundTripped = (FlowStateImpl<ReviewEvent>) store.find("review-3").orElseThrow().state();

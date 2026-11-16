@@ -18,17 +18,20 @@ package org.occurrent.dsl.saga;
 
 import org.jspecify.annotations.Nullable;
 
+import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
+
 import java.time.Instant;
 import java.util.List;
 
 /**
  * Additional querying capabilities that may be supported by a {@link SagaStateStore} implementation, for observing
  * instances rather than running them. The executor never calls anything here. What it needs is
- * {@link SagaStateStore#find(String)}, {@link SagaStateStore#compareAndSave(String, SagaEnvelope, long)},
+ * {@link SagaStateStore#find(String)}, {@link SagaStateStore#compareAndSave(StoredSaga, long)},
  * {@link SagaStateStore#findWithDueTimers(Instant, int)}, and the two state-free members
  * {@link SagaStateStore#findWithoutState(String)} and
- * {@link SagaStateStore#compareAndSaveWithoutState(String, SagaEnvelope, long)}, which default to the first two. So a
- * store can run sagas perfectly well without implementing this.
+ * {@link SagaStateStore#compareAndSaveWithoutState(StoredSaga, long)}. So a store can run sagas perfectly well without
+ * implementing this.
  * <p>
  * It is a separate capability because enumeration asks a store to sort on a second field. {@link #findByStatus} must
  * return its instances ascending by {@code updatedAt}, while {@link SagaStateStore#findWithDueTimers(Instant, int)}
@@ -66,11 +69,12 @@ public interface SagaStateStoreQueries<S extends @Nullable Object> {
      *       this only excludes a hand-built envelope, and it keeps a store whose query engine skips a missing field
      *       from disagreeing with one that could have treated {@code null} as matching.</li>
      * </ul>
-     * Every returned envelope must answer every {@link SagaInstance} member, {@link SagaInstance#currentStep()} included.
-     * It need not carry the saga's {@code state}, which is not part of that view: a store is expected to answer this
-     * without reading state at all, so that enumeration costs the same whether an instance carries one event of history
-     * or a hundred. {@link SagaEnvelope#state()} may therefore be {@code null} on these results even for a healthy
-     * instance. Use {@link SagaStateStore#find(String)} when the state itself is wanted.
+     * Every returned instance must hold {@link SagaCodec#instanceFields()}, so it answers every {@link SagaInstance}
+     * member, {@link SagaInstance#currentStep()} included. It need not carry the saga's state, which is not part of
+     * that view: a store is expected to answer this without reading state at all, so that enumeration costs the same
+     * whether an instance carries one event of history or a hundred. A store matches the stored statuses of
+     * {@link SagaCodec#storedStatuses(SagaStatus)}. Use {@link SagaStateStore#find(String)} when the state itself is
+     * wanted.
      * <p>
      * A useful consequence: because observation reads no state, an instance whose state can no longer be decoded (a
      * received event whose class was renamed away, say) is still reported with its lifecycle intact, rather than making
@@ -81,5 +85,5 @@ public interface SagaStateStoreQueries<S extends @Nullable Object> {
      *
      * @throws IllegalArgumentException if {@code limit} is not positive
      */
-    List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit);
+    List<StoredSaga> findByStatus(SagaStatus status, Instant updatedBefore, int limit);
 }

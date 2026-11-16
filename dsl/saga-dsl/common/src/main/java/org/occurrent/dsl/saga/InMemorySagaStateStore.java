@@ -17,6 +17,10 @@
 package org.occurrent.dsl.saga;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.saga.codec.EncodedSaga;
+import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 
 import java.time.Instant;
 import java.util.*;
@@ -27,56 +31,86 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * An in-memory {@link SagaStateStore} backed by a {@link ConcurrentHashMap}, for tests and single-node use. The
- * compare-and-set save is atomic per instance via {@link ConcurrentMap#compute}.
+ * compare-and-set save is atomic per instance via {@link ConcurrentMap#compute}. It keeps the state object as it is, and
+ * keeps every other field in the form {@link SagaCodec} gives it, so an instance goes through the codec on every save
+ * and read as it does in any other store.
  *
  * @param <S> the user state type
  */
 public final class InMemorySagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S>, SagaStateStoreSkippedInputs {
 
-    private final ConcurrentMap<String, SagaEnvelope<S>> store = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, StoredSaga> store = new ConcurrentHashMap<>();
     private final ConcurrentMap<SkippedInputId, SkippedInput> skippedInputs = new ConcurrentHashMap<>();
 
     private record SkippedInputId(String sagaId, String quarantineId, String key) {
     }
 
     @Override
-    public Optional<SagaEnvelope<S>> find(String sagaId) {
+    public SagaStateCodec<S> stateCodec() {
+        return SagaStateCodec.identity();
+    }
+
+    @Override
+    public Optional<StoredSaga> find(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
         return Optional.ofNullable(store.get(sagaId));
     }
 
     @Override
-    public boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
-        requireNonNull(sagaId, "sagaId cannot be null");
-        requireNonNull(envelope, "envelope cannot be null");
+    public Optional<StoredSaga> findWithoutState(String sagaId) {
+        return find(sagaId);
+    }
+
+    @Override
+    public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+        requireNonNull(saga, "saga cannot be null");
+        return compareAndSet(saga, expectedVersion, existing -> saga);
+    }
+
+    @Override
+    public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+        requireNonNull(saga, "saga cannot be null");
+        return compareAndSet(saga, expectedVersion, existing -> {
+            if (existing == null) {
+                return saga;
+            }
+            // The stored state and the step derived from it stay where they are
+            Map<String, Object> fields = new LinkedHashMap<>(saga.encoded().fields());
+            for (String kept : List.of(SagaCodec.CURRENT_STEP, SagaCodec.STATE)) {
+                if (existing.encoded().fields().containsKey(kept)) {
+                    fields.put(kept, existing.encoded().fields().get(kept));
+                }
+            }
+            return new StoredSaga(saga.sagaId(), saga.version(), new EncodedSaga(fields), saga.index());
+        });
+    }
+
+    private boolean compareAndSet(StoredSaga saga, long expectedVersion, java.util.function.UnaryOperator<@Nullable StoredSaga> next) {
         boolean[] saved = {false};
-        store.compute(sagaId, (id, existing) -> {
+        store.compute(saga.sagaId(), (id, existing) -> {
             long current = existing == null ? 0 : existing.version();
             if (current != expectedVersion) {
                 return existing;
             }
             saved[0] = true;
-            return envelope;
+            return next.apply(existing);
         });
         return saved[0];
     }
 
     @Override
-    public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
+    public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
         requireNonNull(now, "now cannot be null");
         long nowMillis = now.toEpochMilli();
+        Set<String> active = SagaCodec.storedStatuses(SagaStatus.ACTIVE);
         // Sorted before truncating, so the instances that have been due longest are the ones kept. Ties go by saga id so
         // the answer does not depend on the map's iteration order.
         return store.values().stream()
                 // ACTIVE rather than "not completed", so a quarantined instance drops out of the poll and fires no timers.
                 // Firing one would advance its state across the gap the quarantine exists to hold open.
-                .filter(envelope -> envelope.status() == SagaStatus.ACTIVE)
-                .filter(envelope -> {
-                    OptionalLong earliest = envelope.earliestDueAtEpochMilli();
-                    return earliest.isPresent() && earliest.getAsLong() <= nowMillis;
-                })
-                .sorted(Comparator.<SagaEnvelope<S>>comparingLong(envelope -> envelope.earliestDueAtEpochMilli().getAsLong())
-                        .thenComparing(SagaEnvelope::sagaId))
+                .filter(saga -> active.contains(saga.index().storedStatus()))
+                .filter(saga -> saga.index().nextTimerDueAtEpochMilli() != null && saga.index().nextTimerDueAtEpochMilli() <= nowMillis)
+                .sorted(Comparator.<StoredSaga>comparingLong(saga -> saga.index().nextTimerDueAtEpochMilli()).thenComparing(StoredSaga::sagaId))
                 .limit(limit)
                 .toList();
     }
@@ -87,8 +121,8 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
             throw new IllegalArgumentException("limit must be positive, was " + limit);
         }
         return store.values().stream()
-                .filter(SagaEnvelope::isReleasing)
-                .map(SagaEnvelope::sagaId)
+                .filter(saga -> saga.index().releasing())
+                .map(StoredSaga::sagaId)
                 .filter(id -> after == null || id.compareTo(after) > 0)
                 .sorted()
                 .limit(limit)
@@ -140,20 +174,19 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     }
 
     @Override
-    public List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
+    public List<StoredSaga> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
         requireNonNull(status, "status cannot be null");
         requireNonNull(updatedBefore, "updatedBefore cannot be null");
         if (limit < 1) {
             throw new IllegalArgumentException("limit must be positive, was " + limit);
         }
+        Set<String> statuses = SagaCodec.storedStatuses(status);
+        long before = updatedBefore.toEpochMilli();
         // Sort before truncating, so "the first limit" is the stalest instances the contract promises
         return store.values().stream()
-                .filter(envelope -> envelope.status() == status)
-                .filter(envelope -> {
-                    Instant updatedAt = envelope.updatedAt();
-                    return updatedAt != null && updatedAt.isBefore(updatedBefore);
-                })
-                .sorted(Comparator.comparing(envelope -> requireNonNull(envelope.updatedAt())))
+                .filter(saga -> statuses.contains(saga.index().storedStatus()))
+                .filter(saga -> saga.index().updatedAtEpochMilli() != null && saga.index().updatedAtEpochMilli() < before)
+                .sorted(Comparator.comparingLong(saga -> requireNonNull(saga.index().updatedAtEpochMilli())))
                 .limit(limit)
                 .toList();
     }
@@ -161,11 +194,10 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     @Override
     public void delete(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
-        SagaEnvelope<S> removed = store.remove(sagaId);
+        StoredSaga removed = store.remove(sagaId);
         // Only the records of the instance removed here, so a later instance with the same id keeps the ones it wrote
         // under a quarantine id of its own
-        SagaFailure failure = removed == null ? null : removed.failure();
-        String quarantineId = failure == null ? null : failure.quarantineId();
+        String quarantineId = removed == null ? null : removed.index().quarantineId();
         if (quarantineId != null) {
             deleteSkippedInputs(sagaId, quarantineId);
         }
