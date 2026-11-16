@@ -206,6 +206,19 @@ class CatchupThenPushSubscriptionModelResumePositionTest {
     }
 
     @Test
+    void a_durable_catch_up_checkpoint_stored_in_the_four_part_form_is_read_as_a_marker_and_the_catch_up_resumes_after_its_position() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        store.write("s", List.of(event("1"), event("2"), event("3")));
+        long head = store.currentPosition();
+        marker.save("proj", GlobalCheckpoint.of(head - 1, new StringBasedCheckpoint("live-feed-token"), 0, head));
+
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        start(store, marker, delivered);
+
+        assertThat(delivered).containsExactly("3");
+    }
+
+    @Test
     void the_catchup_listener_hears_both_signals_on_a_start_from_the_beginning_and_on_a_start_after_a_marker() throws Exception {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
         store.write("s", List.of(event("1")));

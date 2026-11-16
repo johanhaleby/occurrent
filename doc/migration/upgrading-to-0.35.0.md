@@ -2990,7 +2990,10 @@ over, so a resume at a position before then still throws `UnknownSubscriptionExc
 ## A catch-up marker is the position the next catch-up resumes after
 
 This applies to `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` and `DomainEventFeed`, blocking and
-reactor, when you give them a `CheckpointStorage` for the catch-up marker.
+reactor, when you give them a `CheckpointStorage` for the catch-up marker. It also applies to every `@Projection` with
+`source = PUSH` in either Spring Boot starter, and every `@Saga` with `source = PUSH` in the blocking one, unless it
+sets `catchup = NONE`. The starters build the push model with the application's `CheckpointStorage` bean, so you never
+pass one yourself.
 
 In 0.34.0 a stored marker meant that the history had been read in full, and a catch-up that found it went live without
 a replay. In 0.35.0 every start reads the stored marker, reads the head of the event store with `currentPosition()`,

@@ -874,6 +874,13 @@ public final class BlockingHandover<T, K> {
                 }
                 return false;
             }
+            if (askedSources != null) {
+                // The asks taken at this turn read their marker when they asked, which can be before the run that
+                // asked stored its own. So the source this replay reports to reads the marker and the head again now
+                // that this call holds the replay turn, and every ask in it answered false when it asked, so the
+                // answer is not needed here.
+                askedSources.isAlreadyCaughtUp();
+            }
             source.replayStarted();
             replayOpen = true;
             try (Stream<T> history = source.replay()) {

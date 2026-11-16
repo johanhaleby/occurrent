@@ -19,6 +19,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.subscription.RoutingOutcome;
@@ -29,6 +30,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
@@ -36,13 +38,17 @@ import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.fail;
 import static org.occurrent.dsl.projection.blocking.ResumePositionFixtures.bufferedLiveDelivery;
 import static org.occurrent.dsl.projection.blocking.ResumePositionFixtures.converter;
 
@@ -51,25 +57,36 @@ import static org.occurrent.dsl.projection.blocking.ResumePositionFixtures.conve
  * catch-up resumes after. Every start is a fresh feed over the same store and marker storage, which is what a restart is.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
+@Timeout(60)
 class CatchupProjectionFeedResumePositionTest {
 
     private final CloudEventConverter<Counted> converter = converter();
     private final InMemoryEventStore store = new InMemoryEventStore();
     private final InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+    private final AtomicBoolean holdingTheSave = new AtomicBoolean();
+    private final CountDownLatch saveReached = new CountDownLatch(1);
+    private final CountDownLatch releaseSave = new CountDownLatch(1);
+    private final CountDownLatch liveAskRead = new CountDownLatch(1);
+    private final CountDownLatch releaseLiveAsk = new CountDownLatch(1);
+    private final CountDownLatch askedRunReadItsStart = new CountDownLatch(1);
 
     @Test
     void a_marker_that_was_deleted_and_then_written_late_makes_the_next_catch_up_replay_only_the_events_after_it() {
         write("1", "2");
-        long head = store.currentPosition();
+        long olderHead = store.currentPosition();
         catchUp(new CopyOnWriteArrayList<>());
-        marker.delete("counter");
-        marker.save("counter", GlobalCheckpoint.of(head));
         write("3");
+        catchUp(new CopyOnWriteArrayList<>());
+        long currentHead = GlobalCheckpoint.positionOf(marker.read("counter"));
+        assertThat(currentHead).as("newer head stored by the second start").isGreaterThan(olderHead);
+        marker.delete("counter");
+        marker.save("counter", GlobalCheckpoint.of(olderHead));
+        write("4");
 
         List<String> folded = new CopyOnWriteArrayList<>();
         catchUp(folded);
 
-        assertThat(folded).as("replayed after the surviving marker, nothing before it and nothing lost").containsExactly("3");
+        assertThat(folded).as("replayed after the late older marker, nothing before it and nothing lost").containsExactly("3", "4");
     }
 
     @Test
@@ -224,16 +241,96 @@ class CatchupProjectionFeedResumePositionTest {
     }
 
     @Test
+    void a_durable_catch_up_checkpoint_stored_in_the_four_part_form_is_read_as_a_marker_and_the_catch_up_resumes_after_its_position() {
+        write("1", "2", "3");
+        long head = store.currentPosition();
+        marker.save("counter", GlobalCheckpoint.of(head - 1, new StringBasedCheckpoint("live-feed-token"), 0, head));
+
+        List<String> folded = new CopyOnWriteArrayList<>();
+        catchUp(folded);
+
+        assertThat(folded).containsExactly("3");
+    }
+
+    @Test
     void a_catch_up_with_a_stored_marker_and_nothing_after_it_runs_an_empty_replay_and_goes_live() {
         write("1", "2");
+        long head = store.currentPosition();
         catchUp(new CopyOnWriteArrayList<>());
 
         List<String> folded = new CopyOnWriteArrayList<>();
-        CatchupProjectionFeed<Counted> feed = feed(event -> folded.add(event.eventId()));
+        RecordingReader reader = new RecordingReader();
+        CatchupProjectionFeed<Counted> feed = feed(event -> folded.add(event.eventId()), reader);
         feed.catchUp();
+        assertThat(reader.ranges).as("one replay, read after the marker").containsExactly(PositionRange.afterPosition(head));
+        assertThat(folded).as("the replay delivered nothing").isEmpty();
         feed.acceptAndWait(new Counted("3"));
 
-        assertThat(folded).containsExactly("3");
+        assertThat(folded).as("live after the empty replay").containsExactly("3");
+    }
+
+    @Test
+    void a_catch_up_asked_by_a_live_fold_that_read_its_start_before_the_asked_run_read_its_own_replays_after_the_head_that_run_found_stored() throws Exception {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                if (holdingTheSave.compareAndSet(true, false)) {
+                    saveReached.countDown();
+                    await(releaseSave, "the save to be released");
+                }
+                return super.save(subscriptionId, checkpoint, condition);
+            }
+        };
+        write("a");
+        CatchupProjectionFeed.create("counter", (MaterializedView<Counted>) event -> {
+        }, Filter.all(), store, converter, Counted::eventId, storage).catchUp();
+        write("E");
+        long headBeforeR1 = store.currentPosition();
+        AtomicReference<CatchupProjectionFeed<Counted>> feed = new AtomicReference<>();
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicBoolean askedOnE = new AtomicBoolean();
+        AtomicBoolean askedOnL = new AtomicBoolean();
+        // Asks for a catch-up from inside the update, once per event, so a replay that delivers one again does not ask again.
+        MaterializedView<Counted> askingView = event -> {
+            folded.add(event.eventId());
+            boolean ask = (event.eventId().equals("E") && askedOnE.compareAndSet(false, true))
+                    || (event.eventId().equals("L") && askedOnL.compareAndSet(false, true));
+            if (ask) {
+                feed.get().catchUp();
+            }
+        };
+        AtomicInteger readsOnR1 = new AtomicInteger();
+        RecordingReader reader = new RecordingReader();
+        reader.afterHeadRead = head -> {
+            String thread = Thread.currentThread().getName();
+            if (thread.equals("live-l")) {
+                // L has read the marker and the head, and is held before it asks the handover.
+                liveAskRead.countDown();
+                await(releaseLiveAsk, "the live ask to be released");
+            } else if (thread.equals("r1") && readsOnR1.incrementAndGet() == 3) {
+                // The third read on R1 is the asked run, since the first read and the one made when E asked came before it.
+                askedRunReadItsStart.countDown();
+            }
+        };
+        feed.set(CatchupProjectionFeed.create("counter", askingView, Filter.all(), reader, converter, Counted::eventId, storage));
+        holdingTheSave.set(true);
+
+        FutureTask<Void> r1 = new FutureTask<>(() -> feed.get().catchUp(), null);
+        new Thread(r1, "r1").start();
+        await(saveReached, "R1 to reach the save of its marker");
+        write("L");
+        FutureTask<Void> live = new FutureTask<>(() -> feed.get().acceptAndWait(new Counted("L")), null);
+        new Thread(live, "live-l").start();
+        await(liveAskRead, "L to read its start");
+        releaseSave.countDown();
+        await(askedRunReadItsStart, "the asked run to read its start");
+        releaseLiveAsk.countDown();
+
+        assertThat(r1).succeedsWithin(5, TimeUnit.SECONDS);
+        assertThat(live).succeedsWithin(5, TimeUnit.SECONDS);
+        assertThat(reader.ranges).as("the replay the asks ran, after the head R1 stored and not after the marker L read before it")
+                .element(1).isEqualTo(PositionRange.afterPosition(headBeforeR1));
+        assertThat(folded).as("E is folded by R1 and not again by the replay the asks ran").containsOnlyOnce("E");
     }
 
     @Test
@@ -316,6 +413,46 @@ class CatchupProjectionFeedResumePositionTest {
     }
 
     private CatchupProjectionFeed<Counted> feed(MaterializedView<Counted> view) {
-        return CatchupProjectionFeed.create("counter", view, Filter.all(), store, converter, Counted::eventId, marker);
+        return feed(view, store);
+    }
+
+    private CatchupProjectionFeed<Counted> feed(MaterializedView<Counted> view, PositionOrderedReader reader) {
+        return CatchupProjectionFeed.create("counter", view, Filter.all(), reader, converter, Counted::eventId, marker);
+    }
+
+    private static void await(CountDownLatch latch, String what) {
+        try {
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                fail("Timed out after 5 seconds waiting for " + what);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            fail("Interrupted while waiting for " + what);
+        }
+    }
+
+    // Records the range of every replay read, and lets a test act on the thread that has just read the head.
+    private final class RecordingReader implements PositionOrderedReader {
+        final List<PositionRange> ranges = new CopyOnWriteArrayList<>();
+        volatile java.util.function.LongConsumer afterHeadRead = head -> {
+        };
+
+        @Override
+        public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            ranges.add(range);
+            return store.readInPositionOrder(filter, range);
+        }
+
+        @Override
+        public long currentPosition() {
+            long head = store.currentPosition();
+            afterHeadRead.accept(head);
+            return head;
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return store.writesPosition();
+        }
     }
 }
