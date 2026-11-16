@@ -124,29 +124,32 @@ broker message nobody acknowledged, and the broker delivers it again.
 
 ### The replay callbacks
 
-`ReplayAware` and `ReactiveReplayAware` keep their 0.34.0 meaning, and so does the `CatchupListener` that
-`listenForCatchup` gives a push model. A start is one of three kinds:
+`ReplayAware` and `ReactiveReplayAware` keep their 0.34.0 meaning. A start is one of three kinds:
 
-* No replay. `goLive()` replays nothing and sends none of the callbacks, as in 0.34.0.
+* No replay. `goLive()` replays nothing and sends none of these callbacks, as in 0.34.0.
 * A replay from the beginning, when no marker is stored. The view gets `replayStarted()`, then `replayCompleted()` or
-  `replayAbandoned()`, and `alreadyDeliveredByReplay()` for a live copy of an event the replay delivered. The
-  `CatchupListener` gets `catchupStarted` and `historyRead`.
-* A replay after a stored position. Its events reach the view the way live events do, and none of those callbacks is
+  `replayAbandoned()`, and `alreadyDeliveredByReplay()` for a live copy of an event the replay delivered.
+* A replay after a stored position. Its events reach the view the way live events do, and none of these callbacks is
   sent.
 
 The handovers keep calling the source's `replayStarted()`, `replayCompleted()`, `replayAbandoned()` and
 `alreadyDeliveredByReplay()` on every replay, so the decision sits in each source. Both handovers call
 `isAlreadyCaughtUp()` before `replayStarted()`, `BlockingHandover` at line 720 and `ReactiveHandover` at line 1248 at
 `4d1cd8a916`. A marker source reads P and H there, answers `false`, and keeps both for the rest of that start. It passes
-the callbacks on to the view, or to the `CatchupListener`, only when P is absent. The blocking push model sends
-`catchupStarted` from that point instead of from the thread that launches the replay, which still sends it before the
-replay delivers anything.
+the callbacks on to the view only when P is absent.
 
 A view that rebuilds itself between `replayStarted()` and `replayCompleted()`, such as `CoalescingMaterializedView`,
 keeps seeing a rebuild only when it gets one. `RecordingMaterializedView` deletes every append it has recorded for the
-projection after `replayStarted()` or `catchupStarted`, so sending either for a replay after P would drop the records
-of appends the view still holds. Without them it records each replayed append as it applies it, and a live copy that
-the handover drops as a duplicate needs no record of its own.
+projection after `replayStarted()`, so sending it for a replay after P would drop the records of appends the view still
+holds. Without it the view records each replayed append as it applies it, and a live copy that the handover drops as a
+duplicate needs no record of its own.
+
+The `CatchupListener` that `listenForCatchup` gives a push model is unchanged. In 0.34.0 it already gets
+`catchupStarted` from the thread that launches the replay and `historyRead` before every drain, including the drain of
+a start that replays nothing (`BlockingHandover.java:1295` at `4d1cd8a916`), so it tells the listener that a catch-up
+has begun, not that the view is rebuilt. A replay from the beginning that a stop interrupts sends `catchupStarted` and
+no `historyRead`, and the recording records nothing until `historyRead` for a later catch-up. If the next start resumed
+after a position another node stored and sent neither, the recording would never record again.
 
 ### What was tried and dropped
 
