@@ -383,7 +383,17 @@ class SpringMongoSagaStateStoreReleaseTest {
     }
 
     @Test
-    void one_record_of_a_key_is_left_when_two_concurrent_callers_record_it_at_the_head() throws Exception {
+    void a_record_of_a_key_at_a_later_seq_moves_to_the_head_when_the_key_is_recorded_at_the_head() {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        store.recordSkippedInput("order-head-wins", "q-1", new SkippedInput(7, "a@1"));
+
+        store.recordSkippedInputAtHead("order-head-wins", "q-1", new SkippedInput(-1, "a@1"));
+
+        assertThat(store.findSkippedInputs("order-head-wins", "q-1", 10)).containsExactly(new SkippedInput(-1, "a@1"));
+    }
+
+    @Test
+    void the_head_record_of_a_key_is_the_one_left_when_another_caller_records_it_at_a_later_seq_at_once() throws Exception {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
@@ -401,7 +411,7 @@ class SpringMongoSagaStateStoreReleaseTest {
                         executor.submit(() -> {
                             bothReady.countDown();
                             go.await();
-                            store.recordSkippedInputAtHead(sagaId, "q-1", new SkippedInput(7, "a@1"));
+                            store.recordSkippedInput(sagaId, "q-1", new SkippedInput(7, "a@1"));
                             return null;
                         }));
                 assertThat(bothReady.await(10, TimeUnit.SECONDS)).isTrue();
@@ -411,7 +421,7 @@ class SpringMongoSagaStateStoreReleaseTest {
                 }
 
                 assertThat(store.findSkippedInputs(sagaId, "q-1", 10)).hasSize(1).singleElement()
-                        .isIn(new SkippedInput(-1, "a@1"), new SkippedInput(7, "a@1"));
+                        .isEqualTo(new SkippedInput(-1, "a@1"));
             }
         } finally {
             executor.shutdownNow();

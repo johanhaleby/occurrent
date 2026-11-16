@@ -359,12 +359,12 @@ public final class SagaRunner<E, C> {
         }
         Optional<HistoryRetainingSubscriptions> retention = HistoryRetainingSubscriptions.findIn(subscriptionModel);
         if (retention.isEmpty()) {
-            log.warn("Saga subscription '{}' runs on a subscription model that cannot say whether it still holds an event it delivered ({}), so the event a quarantined instance stopped on has to be treated as one that could not be obtained again, and quarantine is switched off for this saga. An instance that keeps failing is therefore never quarantined, which is the behaviour before 0.34.0. What its failing event holds up is decided by whatever feeds this subscription. A model answers by implementing HistoryRetainingSubscriptions, which the MongoDB subscription models do, and so does a catch-up model over one of them. A push feed on its own does not, because it is handed its events without being told where they came from, so it cannot establish that anything here still has them, whether or not something does. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+            logQuarantineSwitchedOff(config, "Saga subscription '{}' runs on a subscription model that cannot say whether it still holds an event it delivered ({}), so the event a quarantined instance stopped on has to be treated as one that could not be obtained again, and quarantine is switched off for this saga. An instance that keeps failing is therefore never quarantined, which is the behaviour before 0.34.0. What its failing event holds up is decided by whatever feeds this subscription. A model answers by implementing HistoryRetainingSubscriptions, which the MongoDB subscription models do, and so does a catch-up model over one of them. A push feed on its own does not, because it is handed its events without being told where they came from, so it cannot establish that anything here still has them, whether or not something does. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                     subscriptionId, subscriptionModel.getClass().getName());
             return config.disableQuarantine();
         }
         if (!retention.get().retainsEveryEvent()) {
-            log.warn("Saga subscription '{}' runs on a subscription model that cannot guarantee it holds every event it delivers ({}), so quarantine is switched off for this saga, and an instance that keeps failing is never quarantined, which is the behaviour before 0.34.0. What its failing event holds up is decided by whatever feeds this subscription. Quarantining the event an instance stopped on would be safe whenever this model still holds that one, but a quarantined instance skips everything addressed to it afterwards, and skipping acknowledges. On a model that holds only some of what it delivers, one of those later events may be a copy nothing else has. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+            logQuarantineSwitchedOff(config, "Saga subscription '{}' runs on a subscription model that cannot guarantee it holds every event it delivers ({}), so quarantine is switched off for this saga, and an instance that keeps failing is never quarantined, which is the behaviour before 0.34.0. What its failing event holds up is decided by whatever feeds this subscription. Quarantining the event an instance stopped on would be safe whenever this model still holds that one, but a quarantined instance skips everything addressed to it afterwards, and skipping acknowledges. On a model that holds only some of what it delivers, one of those later events may be a copy nothing else has. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                     subscriptionId, subscriptionModel.getClass().getName());
             return config.disableQuarantine();
         }
@@ -380,6 +380,16 @@ public final class SagaRunner<E, C> {
                                             + "or turn quarantine off with SagaRunnerConfig.disableQuarantine().");
         }
         return config;
+    }
+
+    // A budget the application set gets a WARN when it is turned off, as in 0.34.0. The default one gets a DEBUG, since
+    // an application that never asked for quarantine has nothing to act on
+    private static void logQuarantineSwitchedOff(SagaRunnerConfig config, String message, Object... arguments) {
+        if (config.quarantineAfterDefaulted()) {
+            log.debug(message, arguments);
+        } else {
+            log.warn(message, arguments);
+        }
     }
 
     /**
