@@ -1696,7 +1696,9 @@ Plain `read(id)` and `exists(id)` still find a marker saved with a generation th
 - You run MongoDB as a replica set or a sharded cluster. Both writes of a forget wait for `w: "majority"`, whatever
   write concern your collection or `MongoOperations` has. `readCatchupMarker(id)` reads the generation with
   `LINEARIZABLE` read concern, which a majority has to confirm. When no majority answers within 10 seconds, the
-  attempt fails, and the storage's `RetryStrategy` decides whether to try again. A standalone server refuses
+  attempt fails, and the storage's `RetryStrategy` decides whether to try again. On a client with a `timeoutMS` above
+  0, that `timeoutMS` bounds each attempt instead. A `timeoutMS` of 0 waits forever, so there the storage still gives
+  each attempt 10 seconds. A standalone server refuses
   `LINEARIZABLE`, and the storage then reads with `MAJORITY`.
 - You clean up the checkpoint collection or the Redis key space with a job of your own. Leave the generation documents
   and hashes in place. Removing one puts the generation of that subscription id back at 0, and a marker saved before
@@ -1728,8 +1730,19 @@ your storage the way you use `CheckpointStorageConformance`.
 
 ### Rolling upgrades and rolling back
 
-A rolling upgrade needs no migration, and the generation check covers every forget a 0.35.0 node makes. A forget or a
-read on a 0.34.0 node behaves as in 0.34.0 until every node runs 0.35.0:
+During a rolling upgrade a forgotten marker can come back. The generation check covers every forget a 0.35.0 node
+makes, but a forget or a read on a 0.34.0 node behaves as in 0.34.0 until every node runs 0.35.0.
+
+You're affected if you cancel a `CatchupThenPushSubscriptionModel` subscription on a 0.34.0 node during the rollout
+while a marker write for the same id is still on its way to the store. The cancel deletes the marker, the late write
+can bring it back, and the next subscribe of that id then skips the replay it needed, as in 0.34.0. No new case starts
+once the last 0.34.0 node is gone, but a marker that came back stays until a 0.35.0 node forgets the id. On MongoDB it
+comes back only for an id that no 0.35.0 node has forgotten yet. On Redis it comes back unless the last marker call a
+0.35.0 node made on the id was a forget. If you cancelled subscriptions during the rollout and need them to replay
+when you subscribe them again, cancel them once more after the last 0.34.0 node is gone, so a 0.35.0 node forgets
+their markers.
+
+In a mixed cluster:
 
 - A 0.34.0 forget doesn't change the generation. A late write after it brings the marker back, as in 0.34.0, and the
   marker stays present after the upgrade until a 0.35.0 node forgets the id.
