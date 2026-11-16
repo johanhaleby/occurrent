@@ -78,10 +78,14 @@ public interface SagaStateStoreQueries<S extends @Nullable Object> {
      * <p>
      * A useful consequence: because observation reads no state, an instance whose state can no longer be decoded (a
      * received event whose class was renamed away, say) is still reported with its lifecycle intact, rather than making
-     * the whole enumeration throw at the exact moment someone is looking into what went wrong.
-     * {@link SagaStateStore#find(String)} does still fail loudly on such an instance, which is correct, because its
-     * caller asked for the state. {@link SagaStateStore#findWithoutState(String)} is the by-id read with this method's
-     * property, and it is how the executor quarantines an instance it cannot load.
+     * the whole enumeration throw at the exact moment someone is looking into what went wrong. Decoding the state of
+     * what {@link SagaStateStore#find(String)} returns does still fail on such an instance, since that caller asked for
+     * the state. {@link SagaStateStore#findWithoutState(String)} is the by-id read with this method's property, and the
+     * executor reads an instance it cannot load through it to quarantine it.
+     * <p>
+     * Decoding a page of this method's results with {@link SagaCodec} still throws when one instance is stored as
+     * {@link SagaCodec#QUARANTINED_RECORDING} without its failure input, quarantine id or skip count, since a release
+     * of that instance couldn't replay what it skipped.
      *
      * @throws IllegalArgumentException if {@code limit} is not positive
      */

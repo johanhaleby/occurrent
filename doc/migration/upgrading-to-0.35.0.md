@@ -1103,8 +1103,12 @@ as it is. The design is in
 - Code that calls `find`, `findWithoutState`, `findWithDueTimers` or `SagaStateStoreQueries.findByStatus` on a store
   directly, for example a test that reads an instance back from `SagaStateStore.inMemory()`. These return `StoredSaga`.
 - Code that calls `compareAndSave` or `compareAndSaveWithoutState` on a store directly, for example a test that seeds
-  an instance. These take a `StoredSaga`.
+  an instance. These take a `StoredSaga`, and `compareAndSaveWithoutState` throws an `IllegalArgumentException` at
+  version 0, where 0.34.0 inserted the instance. Insert it with `compareAndSave`.
 - A flow saga on `SagaStateStore.inMemory()`.
+- A test on `SagaStateStore.inMemory()` that compares an instance's timestamps with a clock finer than a millisecond.
+  The store now keeps `createdAt`, `updatedAt`, `completedAt` and the failure's timestamps to the millisecond, and
+  `findByStatus` doesn't return an instance updated in the same millisecond as `updatedBefore`.
 - A flow saga on a `SpringMongoSagaStateStore` you build yourself with a `CloudEventConverter` other than the runner's.
   0.34.0 wrote the received events with the store's converter, and 0.35.0 reads them with the runner's, so an instance
   0.34.0 wrote is read through a converter that never wrote it. The Spring Boot starter gives both the same converter
@@ -1204,7 +1208,8 @@ Code that wrote an envelope to a store directly encodes it with the same codec f
 stateStore.compareAndSave(codec.encode(envelope), 0);
 ```
 
-For a flow saga, pass the application's `CloudEventConverter` instead of `null`.
+For a flow saga, pass the application's `CloudEventConverter` instead of `null`. A codec built with `null` throws
+`IllegalArgumentException` when it encodes a `FlowState`.
 
 ### Stored saga state
 

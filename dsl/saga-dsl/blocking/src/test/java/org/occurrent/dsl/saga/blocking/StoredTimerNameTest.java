@@ -75,7 +75,7 @@ class StoredTimerNameTest {
         Saga<LobbyEvent, FlowState<LobbyEvent>, LobbyCommand> saga = lobbySaga();
         SagaStateStore<FlowState<LobbyEvent>> store = SagaStateStore.inMemory();
         FlowState<LobbyEvent> awaitingPlayers = saga.evolve(saga.initialState(), SagaInput.event(new GameCreated("game-1")));
-        SagaEnvelopes.of(store, null).compareAndSave("game-1", storedWith(awaitingPlayers, "game-1", STORED_STEP_TIMER), 0);
+        SagaEnvelopes.of(store, converter).compareAndSave("game-1", storedWith(awaitingPlayers, "game-1", STORED_STEP_TIMER), 0);
         List<LobbyCommand> dispatched = new ArrayList<>();
 
         execution(saga, store, dispatched::add).pollTimers();
@@ -84,7 +84,7 @@ class StoredTimerNameTest {
         // ran. Consuming a fired timer is checked on the two core DSL timers, which stay active after firing.
         assertAll(
                 () -> assertThat(dispatched).as("the stored step timer still reaches the step's timeout reaction").containsExactly(new CancelGame("game-1")),
-                () -> assertThat(SagaEnvelopes.of(store, null).find("game-1")).hasValueSatisfying(e -> assertThat(e.isCompleted()).isTrue())
+                () -> assertThat(SagaEnvelopes.of(store, converter).find("game-1")).hasValueSatisfying(e -> assertThat(e.isCompleted()).isTrue())
         );
     }
 

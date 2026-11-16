@@ -260,6 +260,15 @@ class SagaCodecTest {
         }
 
         @Test
+        void decode_refuses_a_quarantined_recording_instance_that_lacks_its_failure_input() {
+            StoredSaga stored = withoutField(codec.encode(quarantined("q-1")), "s1", SagaCodec.FAILURE_INPUT);
+
+            Throwable thrown = catchThrowable(() -> codec.decode(stored));
+
+            assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("s1").hasMessageContaining(SagaCodec.FAILURE_INPUT);
+        }
+
+        @Test
         void decode_refuses_a_quarantined_recording_instance_that_lacks_its_skip_count() {
             StoredSaga stored = withoutField(codec.encode(withSkipCount(quarantined("q-1"), 0L)), "s1", SagaCodec.QUARANTINE_SKIP_COUNT);
 
@@ -701,11 +710,13 @@ class SagaCodecTest {
         }
 
         @Test
-        void a_codec_without_a_flow_converter_hands_a_flow_state_to_the_state_codec_unchanged() {
+        void a_codec_without_a_flow_converter_refuses_a_flow_state() {
             SagaCodec<FlowState<Tick>> plain = SagaCodec.of(SagaStateCodec.identity(), null);
-            FlowStateImpl<Tick> state = flowState();
 
-            assertThat(plain.encode(flowEnvelope(state)).encoded().fields()).containsEntry(SagaCodec.STATE, state);
+            assertThatThrownBy(() -> plain.encode(flowEnvelope(flowState())))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("s1")
+                    .hasMessageContaining("CloudEventConverter");
         }
     }
 

@@ -31,9 +31,10 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * An in-memory {@link SagaStateStore} backed by a {@link ConcurrentHashMap}, for tests and single-node use. The
- * compare-and-set save is atomic per instance via {@link ConcurrentMap#compute}. It keeps the state object as it is, and
- * keeps every other field in the form {@link SagaCodec} gives it, so an instance goes through the codec on every save
- * and read as it does in any other store.
+ * compare-and-set save is atomic per instance via {@link ConcurrentMap#compute}. It keeps every field in the form
+ * {@link SagaCodec} gives it, so an instance goes through the codec on every save and read as it does in any other
+ * store. The state of a core saga is that state object as it is, and the state of a flow saga is the map
+ * {@link SagaCodec} encodes it to, which the codec rebuilds on every read.
  *
  * @param <S> the user state type
  */

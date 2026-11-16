@@ -350,11 +350,15 @@ public final class SagaCodec<S extends @Nullable Object> {
     private SagaEnvelope<S> decode(StoredSaga stored, boolean withState) {
         requireNonNull(stored, "stored cannot be null");
         Map<String, Object> fields = stored.encoded().fields();
-        // Every write that quarantines an instance stores both, and without either a release can't replay the inputs the
-        // instance skipped
+        SagaFailure failure = decodeFailure(fields);
+        Long quarantineSkipCount = nullableLong(fields.get(QUARANTINE_SKIP_COUNT));
+        // Every write that quarantines an instance stores all three, and without any of them a release can't replay the
+        // inputs the instance skipped. The decoded values are checked, since a failure without its input decodes to none
+        // and takes its quarantine id with it.
         if (QUARANTINED_RECORDING.equals(fields.get(STATUS))) {
-            requireStored(stored.sagaId(), fields, FAILURE_QUARANTINE_ID);
-            requireStored(stored.sagaId(), fields, QUARANTINE_SKIP_COUNT);
+            requireStored(stored.sagaId(), FAILURE_INPUT, failure);
+            requireStored(stored.sagaId(), FAILURE_QUARANTINE_ID, failure == null ? null : failure.quarantineId());
+            requireStored(stored.sagaId(), QUARANTINE_SKIP_COUNT, quarantineSkipCount);
         }
         Object encodedState = withState ? fields.get(STATE) : null;
         S state = encodedState == null ? null : decodeState(encodedState);
@@ -377,11 +381,11 @@ public final class SagaCodec<S extends @Nullable Object> {
         return new SagaEnvelope<>(stored.sagaId(), state, readStatus((String) fields.get(STATUS)), stored.version(), timers,
                 streamWatermarks, nullableLong(fields.get(POSITION_WATERMARK)), instant(fields.get(CREATED_AT)),
                 instant(fields.get(UPDATED_AT)), instant(fields.get(COMPLETED_AT)), (String) fields.get(CURRENT_STEP), started,
-                decodeFailure(fields), decodeMarks(fields.get(STREAM_MARKS)), nullableLong(fields.get(QUARANTINE_SKIP_COUNT)));
+                failure, decodeMarks(fields.get(STREAM_MARKS)), quarantineSkipCount);
     }
 
-    private static void requireStored(String sagaId, Map<String, Object> fields, String field) {
-        if (fields.get(field) == null) {
+    private static void requireStored(String sagaId, String field, @Nullable Object decoded) {
+        if (decoded == null) {
             throw new IllegalStateException("Saga instance '%s' is stored as %s without %s. The store has to persist every field of the StoredSaga it is given."
                     .formatted(sagaId, QUARANTINED_RECORDING, field));
         }
@@ -482,6 +486,11 @@ public final class SagaCodec<S extends @Nullable Object> {
             // written one way and read the other.
             throw new IllegalArgumentException("a flow saga store can only persist the flow executor's FlowState (FlowStateImpl), got "
                                                + state.getClass().getName());
+        }
+        if (state instanceof FlowState<?>) {
+            // Without the converter the received events have no encoding, and the SagaStateCodec of a core saga would
+            // write the FlowState in a form the flow executor can't read back
+            throw new IllegalArgumentException("saga '" + sagaId + "' has a FlowState, which only a SagaCodec given the flow saga's CloudEventConverter can encode");
         }
         // Refused rather than stored, since a stored null reads back as an instance with no state
         return requireNonNull(stateCodec.encode(state), () -> "The SagaStateCodec " + stateCodec.getClass().getName() + " encoded the state of saga '"

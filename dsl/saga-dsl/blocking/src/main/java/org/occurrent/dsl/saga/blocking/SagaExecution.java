@@ -676,7 +676,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (!envelopes.compareAndSaveWithoutState(sagaId, releasing, current.version())) {
                 continue;
             }
-            log.info("Saga '{}' instance '{}' is releasing. It replays the event '{}' it was quarantined on and then the inputs it skipped.",
+            log.info("Saga '{}' instance '{}' is releasing. It replays the event '{}' it was quarantined on and then the inputs it skipped. "
+                     + "A release that ends QUARANTINED_AGAIN or QUARANTINED_EVENT_MISSING without replaying anything can also mean that the state store does not persist SagaFailure.releasedAt.",
                     subscriptionId, sagaId, head.key());
             return continueReleaseToTheEnd(sagaId, queries, records);
         }
