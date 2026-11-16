@@ -29,7 +29,9 @@ import java.util.Optional;
  * The MongoDB subscription models work out a {@link org.occurrent.subscription.StartAt#dynamic(java.util.function.Function)}
  * start position when they open the change stream, and refuse a catch-up's checkpoint they have no change stream
  * position for. They refuse a start at the present too when MongoDB gives them no position for it, and remove the
- * subscription. By then {@code subscribe} has returned, so the caller only learns about it from
+ * subscription. With {@code restartSubscriptionsOnChangeStreamHistoryLost} off they also refuse a subscription whose
+ * change stream history is lost, which MongoDB can report on any read, so also for a subscription that has run for a
+ * long time. By then {@code subscribe} has returned, so the caller only learns about it from
  * {@link Subscription#waitUntilStarted(java.time.Duration)}. A model that passes its subscriptions to such a model and
  * keeps state for them, such as a lease, needs to know so it can let go of that state. A restart from the present
  * after a loss of history, and a resume at the present, that gets no position isn't refused. The model holds the
@@ -46,7 +48,8 @@ import java.util.Optional;
 public interface StartRefusalReportingSubscriptions extends SubscriptionModelCapability {
 
     /**
-     * Adds a listener that is told about each start position this model refuses after {@code subscribe} has returned.
+     * Adds a listener that is told about each start position this model refuses after {@code subscribe} has returned,
+     * and about each subscription it refuses after a loss of its history.
      *
      * @param listener The listener to add.
      */
@@ -130,8 +133,10 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
          * Called once the model has refused the start position of {@code subscriptionId}. The model removed the
          * subscription and freed its id before calling, so a {@code subscribe} with the same id and a start position the
          * model accepts makes a new subscription, and one may already have done so by the time the listener runs. The
-         * model doesn't try the refused start again, and a handle of the refused subscription that waits for it to start
-         * throws the refusal.
+         * model doesn't try the refused start again, and a handle of the refused subscription throws the refusal from
+         * its next wait on, also one that answered earlier that the subscription started. A MongoDB subscription model
+         * calls this also for a subscription whose change stream history is lost while restarts after that are off,
+         * which can come long after the subscription started.
          * <p>
          * Called on the thread that would have read the subscription, without any lock of the model. The model calls
          * each listener in the order they were added. A listener that throws a {@link RuntimeException} is logged, and

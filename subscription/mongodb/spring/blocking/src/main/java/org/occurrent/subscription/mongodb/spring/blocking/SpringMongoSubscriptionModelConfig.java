@@ -89,13 +89,15 @@ public class SpringMongoSubscriptionModelConfig {
      * for, and tries the restart again as its {@code RetryStrategy} says. It restarts every other
      * subscription from the current time all the same, which it then reads from the change stream, and holds the
      * subscription paused when that read gives neither an event nor a resume token. {@code isPaused(id)} then answers
-     * {@code true}, an error in the log names the subscription, and {@code resumeSubscription(id)} reads the change
+     * {@code true}, an error in the log names the subscription, waiting for it to start throws an
+     * {@code UnsupportedStartAtException} until a resume starts it, and {@code resumeSubscription(id)} reads the change
      * stream again. A subscription that starts at the present is refused and removed when that read gives no position,
      * and waiting for it to start throws an {@code UnsupportedStartAtException}.
      * <p>
-     * While it is off, waiting for a subscription whose change stream history is lost as it opens, or with its first
-     * reply through a mongos, throws an {@code UnsupportedStartAtException} with MongoDB's error as its cause, and the
-     * subscription is removed.
+     * While it is off, the model refuses and removes a subscription whose change stream history is lost, whether
+     * MongoDB reports the loss as the change stream opens, with its first reply through a mongos, or on a later read.
+     * Waiting for the subscription to start then throws an {@code UnsupportedStartAtException} with MongoDB's error in
+     * its cause chain, also on a handle that answered earlier that the subscription started.
      *
      * @param restartSubscriptionsOnChangeStreamHistoryLost Whether or not to automatically restart a subscription, whose change stream history is lost.
      * @return A new instance of {@code SpringSubscriptionModelConfig}

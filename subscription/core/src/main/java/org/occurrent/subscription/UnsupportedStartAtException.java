@@ -23,8 +23,8 @@ package org.occurrent.subscription;
  * Which positions a model accepts is a property of the model rather than a bug. {@code InMemorySubscriptionModel}
  * keeps no history, so it starts from now or from its own default and nothing else, and a catch-up-then-push model
  * always replays from the beginning, so there is no position for a caller to choose. A MongoDB subscription model also
- * throws it for a start whose change stream history is gone while it is told not to restart such a subscription, with
- * MongoDB's error as the cause.
+ * throws it for a subscription whose change stream history is lost while it is told not to restart such a
+ * subscription, at its start or later, with MongoDB's error in its cause chain.
  */
 public final class UnsupportedStartAtException extends SubscriptionRefusedException {
 

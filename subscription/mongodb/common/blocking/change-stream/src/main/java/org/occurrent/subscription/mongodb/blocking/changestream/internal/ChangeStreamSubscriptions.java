@@ -60,7 +60,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -491,7 +490,7 @@ public final class ChangeStreamSubscriptions {
                 return present;
             });
             openedAt = new OpenedAt(openingPosition, currentStartAt.get());
-            boolean startsOnceTheFirstReplyCame = startsOnceTheFirstReplyCame(internalSubscription, openingPosition, presentToOpenAt.get());
+            boolean startsOnceTheFirstReplyCame = startsOnceTheFirstReplyCame(subscriptionId, internalSubscription, openingPosition, presentToOpenAt.get());
             ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, openingPosition, subscriptionModelContext);
             cursor = changeStreamDocumentsAtPosition.cursor();
             if (!internalSubscription.opened(cursor, openedAt)) {
@@ -622,15 +621,14 @@ public final class ChangeStreamSubscriptions {
     }
 
     // The start refusal listeners are told it is held, not refused, since a refusal tells them the id is free and this
-    // run keeps it. They are told also when an earlier wait counted this run as started, and the refusal then changes
-    // no handle. The history loss listeners were asked about a loss before the restart, and there is no position to
-    // tell them it restarts from. A waiter for this run to start, such as the handle a resume returned, is told the
-    // refusal, since it never starts, and so is the handle subscribe returned when no run has started yet, until a later
+    // run keeps it. The history loss listeners were asked about a loss before the restart, and there is no position to
+    // tell them it restarts from. The handle a resume returned for this run throws the refusal from its next wait on,
+    // also when an earlier wait counted this run as started, and so does the handle subscribe returned, until a later
     // run starts. The refusal is recorded before the run is removed from runningSubscriptions, as refuseStart does, so a
     // start(true) that finds the run gone reads the refusal
     private void heldPausedWithoutAPosition(String subscriptionId, InternalSubscription internalSubscription, NoPositionAtThePresent noPosition) {
         UnsupportedStartAtException refusal = noPosition.heldRefusalOf(subscriptionId, internalSubscription.currentStartAt.get());
-        if (pausedOnThisRun(subscriptionId, internalSubscription, () -> internalSubscription.recordHeldBeforeStarting(refusal))) {
+        if (pausedOnThisRun(subscriptionId, internalSubscription, () -> internalSubscription.recordHeld(refusal))) {
             internalSubscription.releaseWaitersOfAFailedStart();
             log.error("Cannot open the change stream of subscription {} at the present: {} It is paused, and resuming it asks MongoDB again.", subscriptionId, noPosition.getMessage(), noPosition);
             heldPaused(subscriptionId, refusal);
@@ -888,15 +886,21 @@ public final class ChangeStreamSubscriptions {
     // A mongos reports a position whose history is gone with the first reply of the change stream rather than as it
     // opens, so a run that opens at a position of the past through one counts as started only once that reply came.
     // The present the subscribe or this open read is never gone. Asked of MongoDB once per model, and again after a
-    // failed ask
-    private boolean startsOnceTheFirstReplyCame(InternalSubscription run, StartAt openingPosition, @Nullable Checkpoint presentToOpenAt) {
+    // failed ask. A failed ask waits for the first reply rather than failing the open, since that is right on a mongos
+    // and on a replica set alike and costs only the wait
+    private boolean startsOnceTheFirstReplyCame(String subscriptionId, InternalSubscription run, StartAt openingPosition, @Nullable Checkpoint presentToOpenAt) {
         if (!(openingPosition instanceof StartAt.StartAtCheckpoint atCheckpoint) || atCheckpoint.checkpoint == presentToOpenAt
                 || run.presentAtSubscribe.isTheAnswer(atCheckpoint.checkpoint)) {
             return false;
         }
         Boolean mongos = throughAMongos;
         if (mongos == null) {
-            mongos = MongoCommons.isMongos(model::runCommand);
+            try {
+                mongos = MongoCommons.isMongos(model::runCommand);
+            } catch (RuntimeException e) {
+                log.warn("Cannot ask MongoDB whether subscription {} reaches it through a mongos, so it counts as started once its change stream's first reply came.", subscriptionId, e);
+                return true;
+            }
             throughAMongos = mongos;
         }
         return mongos;
@@ -1550,42 +1554,43 @@ public final class ChangeStreamSubscriptions {
         return copy;
     }
 
-    // The answer of the handle subscribe returns. The first run to report it opened or to record a failure decides it,
-    // in one step.
+    // The answer of the handle subscribe returns. The first run that opens releases the waiters. A refusal of any run,
+    // also one after a run started, is the answer from then on, since the model forgot the subscription
     private static final class FirstStart {
         final CountDownLatch latch = new CountDownLatch(1);
-        private final AtomicReference<@Nullable Optional<UnsupportedStartAtException>> outcome = new AtomicReference<>();
-        // The refusal of a run held paused before any run started. Unlike a refusal it gives way to a later run that
-        // starts, since the subscription stays known and a resume can start it
-        private final AtomicReference<@Nullable UnsupportedStartAtException> heldBeforeStarting = new AtomicReference<>();
+        private volatile boolean started;
+        private final AtomicReference<@Nullable UnsupportedStartAtException> refusal = new AtomicReference<>();
+        // The refusal of a run held paused. Unlike a refusal it gives way to a later run that starts, since the
+        // subscription stays known and a resume can start it. A resume starts the next run only after this one is
+        // held, so a start never races the hold it clears
+        private volatile @Nullable UnsupportedStartAtException held;
 
         // A run that recorded a failure releases the waiters itself, once the id is free
         void started() {
-            if (outcome.compareAndSet(null, Optional.empty())) {
-                latch.countDown();
-            }
+            held = null;
+            started = true;
+            latch.countDown();
         }
 
         void recordFailure(UnsupportedStartAtException failure) {
-            outcome.compareAndSet(null, Optional.of(failure));
+            refusal.compareAndSet(null, failure);
         }
 
         void recordHeld(UnsupportedStartAtException refusal) {
-            heldBeforeStarting.set(refusal);
+            held = refusal;
         }
 
         @Nullable RuntimeException failure() {
-            Optional<UnsupportedStartAtException> decided = outcome.get();
-            if (decided != null) {
-                return decided.map(ChangeStreamSubscriptions::copyOf).orElse(null);
+            UnsupportedStartAtException refused = refusal.get();
+            if (refused != null) {
+                return copyOf(refused);
             }
-            UnsupportedStartAtException held = heldBeforeStarting.get();
-            return held == null ? null : copyOf(held);
+            UnsupportedStartAtException heldFor = held;
+            return heldFor == null ? null : copyOf(heldFor);
         }
 
         boolean hasStarted() {
-            Optional<UnsupportedStartAtException> decided = outcome.get();
-            return decided != null && decided.isEmpty();
+            return started && refusal.get() == null;
         }
     }
 
@@ -1598,7 +1603,7 @@ public final class ChangeStreamSubscriptions {
         // same filter.
         private final List<Bson> pipeline;
         final CountDownLatch startedLatch = new CountDownLatch(1);
-        // Set before startedLatch is released, when this run failed for good instead of opening its change stream
+        // Set when this run failed for good or is held paused, before startedLatch is released when it hadn't started
         private volatile @Nullable UnsupportedStartAtException startFailure;
         // Set when this run is held paused, and never cleared, since a resume replaces the run
         private volatile @Nullable UnsupportedStartAtException heldFor;
@@ -1826,22 +1831,19 @@ public final class ChangeStreamSubscriptions {
             startedLatch.countDown();
         }
 
-        // Only for a run that is still in the map, so a pause or a resume can't come after it. A handle that has already
-        // answered it started keeps that answer.
+        // Only for a run that is still in the map, so a pause or a resume can't come after it. Also after the run
+        // started, since a loss of history on a later read refuses it too, and a handle that answered it started then
+        // throws the refusal from its next wait on
         void recordFailureToStart(UnsupportedStartAtException failure) {
-            if (startedLatch.getCount() > 0) {
-                startFailure = failure;
-            }
+            startFailure = failure;
             firstStart.recordFailure(failure);
         }
 
         // As recordFailureToStart, for a run held paused, whose refusal a later run of the subscription can override by
         // starting
-        void recordHeldBeforeStarting(UnsupportedStartAtException refusal) {
+        void recordHeld(UnsupportedStartAtException refusal) {
             heldFor = refusal;
-            if (startedLatch.getCount() > 0) {
-                startFailure = refusal;
-            }
+            startFailure = refusal;
             firstStart.recordHeld(refusal);
         }
 

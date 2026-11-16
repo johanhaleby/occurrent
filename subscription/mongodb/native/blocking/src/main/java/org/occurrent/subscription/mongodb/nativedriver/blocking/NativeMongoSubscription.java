@@ -39,19 +39,25 @@ public record NativeMongoSubscription(String subscriptionId, CountDownLatch subs
     }
 
     /**
-     * Note that this only signals that the change stream cursor has been acquired, not that MongoDB has confirmed
-     * the cursor is healthy; a failure right after this returns is still possible and will trigger the subscription
-     * model's own restart-on-error handling.
+     * Answers {@code true} once the change stream of the subscription has opened. Through a mongos, a subscription
+     * that starts at a stored position, a checkpoint, an operation time or a resume token, counts as opened only once
+     * its change stream's first reply came, which can take up to the model's {@code maxAwaitTime}, or the server's
+     * default when none is set.
      * <p>
-     * Throws the {@link org.occurrent.subscription.UnsupportedStartAtException} when the model refused the start
-     * position, since the change stream then never opens.
+     * An open change stream doesn't mean that MongoDB has confirmed it is healthy. After a failure the model restarts
+     * the change stream, apart from a loss of its history with {@code restartSubscriptionsOnChangeStreamHistoryLost}
+     * off, which refuses the subscription as below.
+     * <p>
+     * Throws the {@link org.occurrent.subscription.UnsupportedStartAtException} when the model refused the
+     * subscription, at its start position or after a loss of its change stream's history. A refusal that comes after
+     * this answered {@code true} is thrown from the next call on, since the model no longer runs the subscription. A
+     * subscription held paused, because its restart from the present after a loss of history got no position, throws
+     * its refusal the same way. The handle {@code subscribe(..)} returned stops throwing it once a resume starts the
+     * subscription again.
      * <p>
      * It answers {@code true} also for a resumed subscription that waits for an action call from before its pause to
-     * return, so a caller isn't held back by a call that doesn't return. When the change stream of that subscription
-     * lost its history as it opened, the subscription can still stop after this answered {@code true}, or be held
-     * paused when its restart from the present gets no position.
-     * <a href="https://github.com/johanhaleby/occurrent/issues/1502">#1502</a> tracks a subscription that stops after
-     * this answered {@code true}.
+     * return, so a caller isn't held back by a call that doesn't return. A refusal of that subscription is thrown from
+     * the next call on, as for any other.
      */
     @Override
     public boolean waitUntilStarted(Duration timeout) {
