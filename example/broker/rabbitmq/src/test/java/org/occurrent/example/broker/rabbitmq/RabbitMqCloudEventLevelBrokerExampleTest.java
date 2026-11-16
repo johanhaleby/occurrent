@@ -179,8 +179,8 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         DurableSubscriptionModel forwarderSubscription = new DurableSubscriptionModel(forwarderSubscriptionModel, forwarderCheckpoints);
         // The forwarder and its subscription are built once, below, and run continuously through both boots.
         // Only the consumer side, the source, the push model and the projection's Spring context, is torn
-        // down and rebuilt between them. The same marker storage backs both boots, so the second catch-up
-        // resumes after the position the first stored, as it does after a real consumer restart.
+        // down and rebuilt between them. The same catch-up-complete marker backs both boots, which is the
+        // one thing a real consumer restart must preserve for resume (rather than replay) to be possible.
         CheckpointStorage pushCatchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "push-catchup-checkpoints");
         // The read-model store also survives the restart below, by being the same Java object both boots share
         // rather than a fresh one per boot, so the assertions can tell "resumed with state intact" apart from
@@ -236,7 +236,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 // Written with the consumer already torn down and boot 2 not yet built, so this queues on the broker
                 // exactly like a real restart leaves work behind. The forwarder keeps running (it never stopped), but
                 // nothing is consuming queue until boot 2's source exists. Proving this arrives once boot 2 comes up,
-                // without a replay from the beginning, is the other half of "resumes".
+                // without a full replay, is the other half of "resumes", not just that catch-up itself is skipped.
                 String orderIdQueuedWhileConsumerWasDown = "order-" + UUID.randomUUID();
                 OrderPlaced placedWhileConsumerWasDown = new OrderPlaced(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown, "Widget");
                 OrderShipped shippedWhileConsumerWasDown = new OrderShipped(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown);
@@ -265,7 +265,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
 
                 // Boot 2: a fresh model, a fresh source on the same queue, and a fresh Spring context, but the same
                 // catch-up marker and the same read-model store. A reader that counts its own replay calls proves the
-                // catch-up replays only after the stored marker this time, not from the beginning.
+                // catch-up is skipped this time, not merely fast.
                 CountingPositionOrderedReader countingReader = new CountingPositionOrderedReader(eventStore);
                 PushSubscriptionModel pushModel2 = new PushSubscriptionModel(DataFieldReader.refusing());
                 try (RabbitMqCloudEventSource source2 = RabbitMqCloudEventSource.builder(rabbitConnection, pushModel2, queue)
@@ -284,18 +284,16 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                         context2.refresh();
 
                         // The default startup mode waits for the catch-up before refresh() returns, so if it had
-                        // replayed from the beginning, the counter would already be nonzero right here.
-                        assertThat(countingReader.replaysFromTheBeginning()).isZero();
-                        assertThat(countingReader.replaysAfterAPosition()).isEqualTo(1);
+                        // replayed, the counter would already be nonzero right here.
+                        assertThat(countingReader.replays()).isZero();
                         assertThat(store.get(orderIdBeforeRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED");
 
                         // The order queued while the consumer was down arrives now that boot 2's source is live,
-                        // delivered from the broker's own backlog or by the replay after the stored marker, and never by
-                        // a replay from the beginning, since the marker was stored before this order was ever written.
+                        // delivered from the broker's own backlog rather than from a replay, since the catch-up
+                        // marker already said this feed was caught up before this order was ever written.
                         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                                 assertThat(store.get(orderIdQueuedWhileConsumerWasDown)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
-                        assertThat(countingReader.replaysFromTheBeginning()).isZero();
-                        assertThat(countingReader.replaysAfterAPosition()).isEqualTo(1);
+                        assertThat(countingReader.replays()).isZero();
 
                         String orderIdAfterRestart = "order-" + UUID.randomUUID();
                         eventStore.write(orderIdAfterRestart, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdAfterRestart, "Gadget")));
@@ -304,8 +302,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                                 assertThat(store.get(orderIdAfterRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
 
-                        assertThat(countingReader.replaysFromTheBeginning()).isZero();
-                        assertThat(countingReader.replaysAfterAPosition()).isEqualTo(1);
+                        assertThat(countingReader.replays()).isZero();
                     } finally {
                         context2.close();
                     }
@@ -497,27 +494,22 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         }
     }
 
-    /** Counts how many times a catch-up replay reads from the store, split by whether it starts from the beginning, so a replay from the beginning is provable. */
+    /** Counts how many times a catch-up replay actually reads from the store, so a skipped catch-up is provable. */
     private static final class CountingPositionOrderedReader implements PositionOrderedReader {
         private final PositionOrderedReader delegate;
-        private final AtomicInteger fromTheBeginning = new AtomicInteger();
-        private final AtomicInteger afterAPosition = new AtomicInteger();
+        private final AtomicInteger replayCount = new AtomicInteger();
 
         CountingPositionOrderedReader(PositionOrderedReader delegate) {
             this.delegate = delegate;
         }
 
-        int replaysFromTheBeginning() {
-            return fromTheBeginning.get();
-        }
-
-        int replaysAfterAPosition() {
-            return afterAPosition.get();
+        int replays() {
+            return replayCount.get();
         }
 
         @Override
         public Stream<CloudEvent> readInPositionOrder(org.occurrent.filter.Filter filter, org.occurrent.eventstore.api.PositionRange range) {
-            (range.afterPosition().isPresent() ? afterAPosition : fromTheBeginning).incrementAndGet();
+            replayCount.incrementAndGet();
             return delegate.readInPositionOrder(filter, range);
         }
 

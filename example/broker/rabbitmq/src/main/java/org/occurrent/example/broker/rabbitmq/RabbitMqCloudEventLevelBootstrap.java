@@ -97,11 +97,11 @@ import java.util.concurrent.Executors;
  * carry the same credentials in {@code rabbitUri}, for example
  * {@code amqp://broker-example:broker-example@localhost:5672}.
  * <p>
- * The catch-up marker is in-memory, paired with the in-memory read model rather than with the durable event store.
- * Losing both together on a restart keeps them consistent. A fresh run replays the store from the start and rebuilds the
- * read model to match. Pairing a durable marker with an in-memory read model instead would have the marker survive a
- * restart the read model does not, so a later catch-up replays only the events after the marker, and every order
- * projected before the restart stays permanently missing. A production
+ * The catch-up completion marker is in-memory, paired with the in-memory read model rather than with the durable
+ * event store. Losing both together on a real restart is honest. A fresh run replays the store from the start and
+ * rebuilds the read model to match. Pairing a durable marker with an in-memory read model instead would have the
+ * marker survive a restart the read model does not, so a later catch-up skips a replay the read model never
+ * actually received, and every order projected before the restart stays permanently missing. A production
  * deployment persists both the marker and the read model, in stores with the same lifetime, never just one of
  * the two.
  *

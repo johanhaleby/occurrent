@@ -38,7 +38,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.RoutingOutcome;
-import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
@@ -789,12 +789,12 @@ class CatchupProjectionFeedTest {
         AtomicBoolean blockLookup = new AtomicBoolean();
         CheckpointStorage marker = new InMemoryCheckpointStorage() {
             @Override
-            public Checkpoint read(String subscriptionId) {
+            public boolean exists(String subscriptionId) {
                 if (Thread.currentThread().getName().equals("fold-3") && blockLookup.compareAndSet(true, false)) {
                     lookingUpMarker.countDown();
                     awaitOrFail(askedAfterStop);
                 }
-                return super.read(subscriptionId);
+                return super.exists(subscriptionId);
             }
         };
         AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
@@ -1090,7 +1090,7 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    void a_restart_replays_only_the_events_after_the_stored_catchup_marker() {
+    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
@@ -1101,17 +1101,78 @@ class CatchupProjectionFeedTest {
         feed("counter", store, converter, repo, marker).catchUp();
         assertThat(repo.get("counter")).isEqualTo(2);
 
-        // Written while no feed runs, so only a replay after the stored marker folds it.
-        store.write("s", converter.toCloudEvents(List.of(new Counted("3"))));
-
-        // Restart: a fresh feed over the same store, repository, and marker. The replay starts after the stored head,
-        // so the persisted count is not re-folded from the beginning (which would give 5).
+        // Restart: a fresh feed over the same store, repository, and marker. The replay is skipped, so the persisted
+        // count is not re-folded (which would double it to 4).
         CatchupProjectionFeed<Counted> restarted = feed("counter", store, converter, repo, marker);
         restarted.catchUp();
-        assertThat(repo.get("counter")).isEqualTo(3);
+        assertThat(repo.get("counter")).isEqualTo(2);
 
-        restarted.acceptAndWait(new Counted("4"));
-        assertThat(repo.get("counter")).isEqualTo(4);
+        restarted.acceptAndWait(new Counted("3"));
+        assertThat(repo.get("counter")).isEqualTo(3);
+    }
+
+    @Test
+    void a_checkpoint_another_component_stored_under_the_id_makes_the_catch_up_skip_the_replay() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        marker.save("counter", new StringBasedCheckpoint("resume-token-xyz"));
+
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, marker);
+        feed.catchUp();
+
+        assertThat(repo.get("counter")).as("nothing replayed").isNull();
+        feed.acceptAndWait(new Counted("3"));
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
+    void a_catch_up_asked_from_inside_a_replayed_fold_runs_after_the_replay_finds_the_marker_and_skips() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicInteger replays = new AtomicInteger();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        AtomicBoolean asked = new AtomicBoolean();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        AtomicBoolean markerStoredWhenAsked = new AtomicBoolean();
+        MaterializedView<Counted> view = event -> {
+            folded.add(event.eventId());
+            if (asked.compareAndSet(false, true)) {
+                markerStoredWhenAsked.set(marker.exists("counter"));
+                feedRef.get().catchUp();
+            }
+        };
+        PositionOrderedReader counting = new PositionOrderedReader() {
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                replays.incrementAndGet();
+                return store.readInPositionOrder(filter, range);
+            }
+
+            @Override
+            public long currentPosition() {
+                return store.currentPosition();
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return store.writesPosition();
+            }
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", view, Filter.all(), counting, converter, Counted::eventId, marker);
+        feedRef.set(feed);
+
+        feed.catchUp();
+
+        assertThat(folded).containsExactly("1", "2");
+        assertThat(markerStoredWhenAsked).as("the marker is stored after the replay and the drain, so it is not there when the fold asks").isFalse();
+        assertThat(replays).as("one replay read, so the catch-up the fold asked for found the marker and skipped").hasValue(1);
+        assertThat(marker.exists("counter")).as("marker stored once the replay finished").isTrue();
     }
 
     @Test

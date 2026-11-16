@@ -32,6 +32,7 @@ import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
@@ -251,7 +252,7 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
-    void a_restart_replays_only_the_events_after_the_stored_catchup_marker() {
+    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
         AtomicReference<PushSubscriptionModel> sink = new AtomicReference<>();
         InMemoryEventStore store = new InMemoryEventStore(events -> {
@@ -271,10 +272,7 @@ class CatchupThenPushSubscriptionModelTest {
                 .waitUntilStarted();
         assertThat(firstRun).containsExactly("1", "2");
 
-        // Written while no model runs, so only a replay after the stored marker can deliver it.
-        store.write("s1", List.of(cloudEvent("3", "Updated")));
-
-        // Restart: fresh feed and model, same store and marker. The replay starts after the stored head.
+        // Restart: fresh feed and model, same store and marker. The replay is skipped.
         PushSubscriptionModel feed2 = new PushSubscriptionModel();
         sink.set(feed2);
         List<String> secondRun = new ArrayList<>();
@@ -283,14 +281,70 @@ class CatchupThenPushSubscriptionModelTest {
         restarted.listenForCatchup("proj", log);
         restarted.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> secondRun.add(ce.getId()))
                 .waitUntilStarted();
-        assertThat(secondRun).as("events replayed on the restart, none of them from before the stored marker").containsExactly("3");
+        assertThat(secondRun).isEmpty();
 
-        // Both signals on every start, whether the replay is from the beginning or after a stored marker.
+        // Both signals, even though no replay ran. This restart is the case that decides where the boundary goes:
+        // it skips the replay entirely and never reaches replayCompleted(), so a boundary placed there would leave
+        // the projection reading history for the rest of the model's life.
         assertThat(log.signals()).containsExactly("started:0", "historyRead:0");
 
-        // Live events flow after the replay, resumed by the broker (here, the forwarding store).
-        store.write("s1", List.of(cloudEvent("4", "Updated")));
-        assertThat(secondRun).containsExactly("3", "4");
+        // Only live events flow after the restart, resumed by the broker (here, the forwarding store).
+        store.write("s1", List.of(cloudEvent("3", "Updated")));
+        assertThat(secondRun).containsExactly("3");
+    }
+
+    @Test
+    void a_checkpoint_another_component_stored_under_the_id_makes_the_start_skip_the_replay() {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        marker.save("proj", new StringBasedCheckpoint("resume-token-xyz"));
+        AtomicReference<PushSubscriptionModel> sink = new AtomicReference<>();
+        InMemoryEventStore store = new InMemoryEventStore(events -> {
+            PushSubscriptionModel current = sink.get();
+            if (current != null) {
+                current.accept(events);
+            }
+        });
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        sink.set(feed);
+        List<String> delivered = new ArrayList<>();
+
+        new CatchupThenPushSubscriptionModel(store, feed, marker)
+                .subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()))
+                .waitUntilStarted();
+
+        assertThat(delivered).as("a stored checkpoint of any kind says the catch-up is done, so nothing is replayed").isEmpty();
+        store.write("s1", List.of(cloudEvent("3", "Updated")));
+        assertThat(delivered).containsExactly("3");
+    }
+
+    @Test
+    void subscribing_under_a_new_id_replays_the_whole_history_although_a_marker_is_stored_under_the_old_id() {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        AtomicReference<PushSubscriptionModel> sink = new AtomicReference<>();
+        InMemoryEventStore store = new InMemoryEventStore(events -> {
+            PushSubscriptionModel current = sink.get();
+            if (current != null) {
+                current.accept(events);
+            }
+        });
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
+        PushSubscriptionModel feed1 = new PushSubscriptionModel();
+        sink.set(feed1);
+        new CatchupThenPushSubscriptionModel(store, feed1, marker)
+                .subscribe("old-id", null, StartAt.subscriptionModelDefault(), ce -> {
+                })
+                .waitUntilStarted();
+        assertThat(marker.exists("old-id")).as("marker stored under the old id").isTrue();
+
+        PushSubscriptionModel feed2 = new PushSubscriptionModel();
+        sink.set(feed2);
+        List<String> delivered = new ArrayList<>();
+        new CatchupThenPushSubscriptionModel(store, feed2, marker)
+                .subscribe("new-id", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()))
+                .waitUntilStarted();
+
+        assertThat(delivered).containsExactly("1", "2");
     }
 
     @Test
@@ -1001,8 +1055,8 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(stopped.isRunning("proj")).isFalse();
         assertThat(firstRun).isNotEmpty();
 
-        // The whole point: a partial replay must not look like a finished one. A marker stored here would make the
-        // next start resume after the head, and the events never folded would be lost with nothing to show for it.
+        // The whole point: a partial replay must not look like a finished one. If the marker were written here, the
+        // next start would skip the replay and the events never folded would be lost with nothing to show for it.
         assertThat(marker.exists("proj")).isFalse();
 
         PushSubscriptionModel feed2 = new PushSubscriptionModel();
