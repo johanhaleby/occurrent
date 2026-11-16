@@ -48,8 +48,10 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * The checkpoint itself is an unprefixed, plain string value at a key named after the subscription id, exactly as it
  * has been since this storage shipped. A {@link CheckpointWriteCondition} needs somewhere to remember the version it
  * was judged against, and that goes in a second key, prefixed to keep it out of the checkpoint's own namespace. A
- * node still running a release before this one only ever does a plain {@code GET} against the first key, and that
- * value has not changed shape, so a rolling deploy stays safe.
+ * node on 0.32.0 or earlier only ever does a plain {@code GET} against the first key, and that value has not changed
+ * shape, so a rolling deploy from 0.32.0 stays safe. A node on 0.33.0 or 0.34.0 runs the conditional scripts too, and
+ * compares two versions above 2^53 as Lua numbers, so until every node runs this release such a node can accept a
+ * {@code notOlderThan} write older than the stored version.
  * <p>
  * Because the checkpoint key is a caller-chosen subscription id with no prefix of its own, a subscription could in
  * principle choose an id equal to the exact text of some other subscription's version key, and land its own
@@ -133,9 +135,9 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * again, which a subscription already has to handle.</li>
  * <li>A lost {@link #delete(String) delete} brings the checkpoint back. The next start of that subscription id resumes
  * from it instead of from the start position it was given.</li>
- * <li>A conditional {@link #save(String, Checkpoint, CheckpointWriteCondition) save}, {@code notOlderThan} or
- * {@code ifAbsent}, is judged against the version key, and a failover can roll that key back too. A write the condition
- * refused before the failover can then be accepted after it.</li>
+ * <li>A {@code notOlderThan} save is judged against the version key, and an {@code ifAbsent} save against the
+ * checkpoint key. A failover can roll either key back, and a write the condition refused before the failover can then
+ * be accepted after it.</li>
  * <li>A read can be stale. For a short while after a replica has taken its place, the old primary can still answer
  * {@link #read(String)}, {@link #exists(String)} or {@link #writeVersion(String)} with a value the new primary doesn't
  * have.</li>
