@@ -72,19 +72,24 @@ import java.util.stream.Stream;
 public final class BlockingHandover<T, K> {
 
     /**
-     * The replay side of a handover: whether the catch-up already ran, the position-ordered replay stream, and how to
-     * record that the catch-up completed.
+     * The replay side of a handover. It says whether the catch-up can skip its replay, gives the position-ordered
+     * replay stream, and records that the catch-up completed.
      */
     public interface Source<T> {
-        /** Whether a prior catch-up already completed, so this one should skip straight to going live. */
+        /**
+         * Whether this catch-up skips its replay and goes straight to live. Called before {@link #replayStarted()} and
+         * {@link #replay()}, so a source that replays after a stored position reads that position here.
+         */
         boolean isAlreadyCaughtUp();
 
-        /** The history to replay, in position order, from the beginning. Closed by the engine after use. */
+        /** The history to replay, in position order. Closed by the engine after use. */
         Stream<T> replay();
 
         /**
          * Record that the catch-up completed. Called after the replay has been consumed and the live buffer has been
-         * drained, so an implementation that reads "the current head" reads it <em>after</em> the replay, not before.
+         * drained. A source that stores where the next catch-up resumes stores the head it read before the replay,
+         * not one read here
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-is-the-position-the-next-catch-up-resumes-after.md">ADR 179</a>).
          */
         void markCaughtUp();
 
@@ -95,7 +100,7 @@ public final class BlockingHandover<T, K> {
          * attempt (a subscription id, say) has since been reassigned to a different one.
          * <p>
          * A stop is not a failure. {@link #markCaughtUp()} is not called and no failure is recorded, so the next
-         * catch-up replays the whole history and the handover stays usable.
+         * catch-up replays again from where the stopped catch-up started and the handover stays usable.
          * <p>
          * What the stop does with the live payloads depends on where the handover stood when the replay started. One
          * that had not gone live drains nothing and does not go live. Every payload a caller is waiting on in
@@ -625,8 +630,8 @@ public final class BlockingHandover<T, K> {
      * handover is no longer live. On a handover that is not live, a payload a caller waits on in the buffer is
      * answered the way a stop answers it once the last catch-up returns, and the rest stay for the next catch-up to
      * deliver. When an interrupt fails the marker write, every payload has been delivered and the handover stays
-     * live without a marker, so the next catch-up replays the whole history again. A later catch-up replays the
-     * history the interrupted one did not finish.
+     * live without a new marker, so the next catch-up replays again from where the interrupted one started. A later
+     * catch-up replays the history the interrupted one did not finish.
      * <p>
      * A catch-up with something to replay called from code this handover is running returns {@code true} without
      * waiting, since the deliveries and the replay it would wait for cannot end before that code returns. That code is

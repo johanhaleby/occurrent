@@ -29,6 +29,7 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
@@ -49,8 +50,8 @@ import java.util.stream.Stream;
  * {@link CloudEventConverter}. On {@link #catchUp()} it registers the live feed first (buffering), replays the
  * projection's history from the store in position order, folds each replayed event, then drains the buffer and goes
  * live, de-duplicating the replay-to-live overlap by an event-id extracted from the <em>domain</em> event (so the
- * de-dup does not depend on the CloudEvent id). A one-shot marker (an optional {@link CheckpointStorage}) makes a
- * restart skip the replay.
+ * de-dup does not depend on the CloudEvent id). A catch-up marker (an optional {@link CheckpointStorage}) stores the
+ * head read before each replay, and the next catch-up replays only the events after it.
  * <p>
  * A replayed event has a CloudEvent behind it, so the replay always folds with real {@link EventMetadata}. A live event
  * does not, so metadata on the live path is something the source supplies. Use {@link #acceptAndWait(EventMetadata, Object)}
@@ -118,8 +119,8 @@ public final class CatchupProjectionFeed<E> {
      * @param reader          Reads the projection's history in position order for the catch-up replay.
      * @param converter       Decodes replayed CloudEvents to domain events (replay only, never the live path).
      * @param eventId         Extracts a stable id from a domain event, the replay-to-live de-dup key.
-     * @param catchupMarker Records that the catch-up finished so a restart skips it, or {@code null} to always
-     *                        catch up.
+     * @param catchupMarker Stores the head read before each replay, so the next catch-up replays only the events
+     *                        after it, or {@code null} to replay the whole history on every catch-up.
      */
     public static <S extends @Nullable Object, E, ID> CatchupProjectionFeed<E> create(
             String id, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository,
@@ -307,8 +308,13 @@ public final class CatchupProjectionFeed<E> {
 
     /**
      * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), then drain
-     * the buffered live events and go live. Skipped if the catch-up marker already records completion. Call this once,
-     * after wiring the live feed, so events arriving during the replay are captured.
+     * the buffered live events and go live. Call this once, after wiring the live feed, so the feed buffers the events
+     * that arrive during the replay.
+     * <p>
+     * With no catch-up marker stored, the replay starts from the beginning and a {@link ReplayAware} view gets its
+     * callbacks. With one stored, the replay reads only the events after the stored position and the view gets them
+     * the way it gets live events, with none of the {@link ReplayAware} callbacks. Either way the catch-up reads the
+     * store's head before its replay and stores that head as the marker once it has caught up.
      * <p>
      * Runs on the calling thread. A caller that wants it off that thread runs it on a thread it owns, and calls
      * {@link #stopCatchUp()} to bring it back down.
@@ -321,7 +327,8 @@ public final class CatchupProjectionFeed<E> {
      * {@code catchUp()} replays the history it did not finish. When the interrupt fails the delivery of the events
      * buffered during the replay, this feed is not live afterwards, and the events it had not delivered are handled
      * as they are when a catch-up is stopped before this feed goes live. When it fails the marker write, every event
-     * has been delivered and this feed stays live, and a later {@code catchUp()} replays the whole history again.
+     * has been delivered and this feed stays live, and a later {@code catchUp()} replays from the marker stored
+     * before, or the whole history when none was stored.
      * <p>
      * A call the view makes while this feed is calling it, from its fold or from a callback such as
      * {@code replayStarted()}, returns without waiting for the replay, since that replay cannot start before the view's
@@ -336,10 +343,10 @@ public final class CatchupProjectionFeed<E> {
      * waits for it is not recognized, and waits for a replay that cannot start while it waits.
      * <p>
      * That replay can still be stopped by a {@link #stopCatchUp()} called after every call that asked for it, or
-     * refused because another catch-up on this feed failed after every such call and before the replay started, or,
-     * when the history turned out to be caught up already, before this feed went live. Another catch-up that fails
-     * while the replay runs does not refuse it. The view's code is not told, though a stopped replay calls
-     * {@code replayStarted()} and {@code replayAbandoned()} on a replay aware view like any other stopped replay. When
+     * refused because another catch-up on this feed failed after every such call and before the replay started.
+     * Another catch-up that fails while the replay runs does not refuse it. The view's code is not told, though a
+     * stopped replay from the beginning calls {@code replayStarted()} and {@code replayAbandoned()} on a replay aware
+     * view like any other stopped replay from the beginning. When
      * the replay fails, this feed refuses every later event, the same as after any other failed catch-up, unless it
      * failed on an interrupted thread. A {@code catchUp()} or {@link #goLive()} that runs the replay throws the
      * failure, and an {@link #acceptAndWait(Object)} that runs it, or the thread an {@link #acceptOrDefer(Object)}
@@ -359,20 +366,26 @@ public final class CatchupProjectionFeed<E> {
      * replay. Calls left this way replay only when such a call comes, so if none comes, the replay does not run.
      * <p>
      * A view that calls this for an event a replay delivers asks for another catch-up each time a replay delivers that
-     * event again. Each of those catch-ups replays again unless it finds the catch-up marker written, so a feed built
-     * without a {@link CheckpointStorage} for that marker replays without end.
+     * event again. Each of those catch-ups runs once the one that asked has stored its marker, and replays only the
+     * events after that marker, so it does not deliver that event again. A feed built without a
+     * {@link CheckpointStorage} for the marker replays the whole history each time, and so without end.
      */
     public void catchUp() {
         long stopsWhenAsked = stops.get();
         handover.catchUp(new BlockingHandover.Source<>() {
+            // Set in isAlreadyCaughtUp(), which the handover calls before replayStarted() and replay(). Volatile
+            // because a live delivery's thread reads it when it reports a duplicate (ADR 179).
+            private volatile ReplayStart start = ReplayStart.FROM_BEGINNING_UNMARKED;
+
             @Override
             public boolean isAlreadyCaughtUp() {
-                return CatchupProjectionFeed.this.isAlreadyCaughtUp();
+                start = readReplayStart();
+                return false;
             }
 
             @Override
             public Stream<Delivered<E>> replay() {
-                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
+                return reader.readInPositionOrder(replayFilter, start.range())
                         // Replay decodes CloudEvents, so metadata is available here (unlike the live acceptAndWait(E) path).
                         .map(cloudEvent -> Delivered.replayed(EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent)));
             }
@@ -384,33 +397,35 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public void markCaughtUp() {
-                CatchupProjectionFeed.this.markCaughtUp();
+                CatchupProjectionFeed.this.markCaughtUp(start);
             }
+
+            // A replay after a stored position is plain delivery, so only a replay from the beginning tells the view.
 
             @Override
             public void replayStarted() {
-                if (view instanceof ReplayAware replayAware) {
+                if (start.fromBeginning() && view instanceof ReplayAware replayAware) {
                     replayAware.replayStarted();
                 }
             }
 
             @Override
             public void replayCompleted() {
-                if (view instanceof ReplayAware replayAware) {
+                if (start.fromBeginning() && view instanceof ReplayAware replayAware) {
                     replayAware.replayCompleted();
                 }
             }
 
             @Override
             public void replayAbandoned() {
-                if (view instanceof ReplayAware replayAware) {
+                if (start.fromBeginning() && view instanceof ReplayAware replayAware) {
                     replayAware.replayAbandoned();
                 }
             }
 
             @Override
             public void alreadyDeliveredByReplay(Delivered<E> delivered) {
-                if (view instanceof ReplayAware replayAware) {
+                if (start.fromBeginning() && view instanceof ReplayAware replayAware) {
                     @Nullable EventMetadata metadata = delivered.metadata();
                     replayAware.alreadyDeliveredByReplay(metadata == null ? EventMetadata.empty() : metadata);
                 }
@@ -421,8 +436,9 @@ public final class CatchupProjectionFeed<E> {
     /**
      * Go live without a catch-up: drain whatever live events have buffered since {@link #acceptAndWait(Object)} was
      * first called, then deliver events directly from here on. Use this instead of {@link #catchUp()} for a feed whose
-     * events are not in the local event store, so there is nothing to replay. No completion marker is written, since
-     * nothing was replayed, so a later {@link #catchUp()} still replays the full history.
+     * events are not in the local event store, so there is nothing to replay. No catch-up marker is written, since
+     * nothing was replayed, so a later {@link #catchUp()} replays from the marker stored before, or the whole history
+     * when none was stored.
      * <p>
      * A call while {@link #catchUp()} is still replaying returns only once that replay has ended. When a catch-up on
      * this feed failed while it waited, it throws an {@link IllegalStateException} whose cause is a catch-up failure
@@ -455,16 +471,15 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
-     * Stop a replay still in flight. It notices at its next event and unwinds without writing the completion marker, so
-     * a partial replay is never recorded as a finished one and the next {@link #catchUp()} replays the whole history
-     * again. A stop is not a failure: the feed stays usable rather than rejecting every later event.
+     * Stop a replay still in flight. It notices at its next event and unwinds without writing the catch-up marker, so
+     * the next {@link #catchUp()} replays again from where the stopped one started. A stop is not a failure, so the
+     * feed stays usable rather than rejecting every later event.
      * <p>
      * It stops a catch-up asked for before it, whether its replay has started or not, and none asked for after it,
      * also when the view asks for one while the replay it stops is still running. The replay looks for a stop before
      * each event and once more after the last one, also when the history is empty. A stop after that last look is not
      * noticed, for example one that comes while a view that buffers during a replay writes that buffer in
-     * {@code replayCompleted()}. Neither is a stop before a catch-up that finds the marker already written, since that
-     * catch-up replays nothing. A catch-up that misses the stop goes live.
+     * {@code replayCompleted()}. A catch-up that misses the stop goes live.
      * <p>
      * What a stop the replay notices does with the live events depends on where the feed stood when the replay
      * started. One that had not gone live drains nothing and does not go live, and {@link #acceptAndWait(Object)} throws both
@@ -490,14 +505,36 @@ public final class CatchupProjectionFeed<E> {
         return Objects.requireNonNull(eventId.apply(event), "The eventId function returned null; every domain event must have a stable non-null id for de-duplication.");
     }
 
-    private boolean isAlreadyCaughtUp() {
-        return catchupMarker != null && catchupMarker.exists(id);
+    // The stored marker first and the head second, so the head is never older than the marker it replays after.
+    private ReplayStart readReplayStart() {
+        if (catchupMarker == null) {
+            return ReplayStart.FROM_BEGINNING_UNMARKED;
+        }
+        Checkpoint stored = catchupMarker.read(id);
+        Long storedPosition = stored == null ? null : GlobalCheckpoint.positionOf(stored);
+        return new ReplayStart(storedPosition, reader.currentPosition());
     }
 
-    private void markCaughtUp() {
+    private void markCaughtUp(ReplayStart start) {
         if (catchupMarker != null) {
-            // The stored position marks that the catch-up replay completed, not a live resume watermark.
-            catchupMarker.save(id, GlobalCheckpoint.of(reader.currentPosition()));
+            // The head read before the replay, so a lost or late write costs the next catch-up a longer replay and
+            // never an event (ADR 179).
+            catchupMarker.save(id, GlobalCheckpoint.of(start.head()));
+        }
+    }
+
+    // Where one catch-up replays from and the head it stores once caught up. A null stored position means no marker
+    // was stored, so the replay starts from the beginning.
+    private record ReplayStart(@Nullable Long storedPosition, long head) {
+        // For a feed with no marker storage, which neither reads a stored position nor writes a head.
+        static final ReplayStart FROM_BEGINNING_UNMARKED = new ReplayStart(null, -1);
+
+        boolean fromBeginning() {
+            return storedPosition == null;
+        }
+
+        PositionRange range() {
+            return storedPosition == null ? PositionRange.fromBeginning() : PositionRange.afterPosition(storedPosition);
         }
     }
 

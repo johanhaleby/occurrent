@@ -97,8 +97,8 @@ public final class DomainEventFeed<E> {
      *                        {@link #acceptAndWaitCloudEvent(CloudEvent)} and
      *                        {@link #acceptOrDeferCloudEvent(CloudEvent)}, which do.
      * @param eventId         Extracts a stable id from a domain event, the replay-to-live de-dup key.
-     * @param catchupMarker Records catch-up completion so a restart skips the replay, or {@code null}
-     *                        to always catch up.
+     * @param catchupMarker Stores the head read before each projection's replay, so its next catch-up replays only
+     *                        the events after it, or {@code null} to replay the whole history on every catch-up.
      */
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
                            Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker) {
@@ -539,8 +539,9 @@ public final class DomainEventFeed<E> {
     /**
      * Go live without a catch-up: skip straight past the one-time replay for the projection registered under
      * {@code id}, draining whatever live events it already buffered. Use this over {@link #catchUp(String)} when this
-     * feed's events are not in the local event store, so there is nothing to replay. No completion marker is written,
-     * so a later {@link #catchUp(String)} on the same projection still replays the full history.
+     * feed's events are not in the local event store, so there is nothing to replay. No catch-up marker is written,
+     * so a later {@link #catchUp(String)} on the same projection replays from the marker stored before, or the whole
+     * history when none was stored.
      * <p>
      * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection returns only
      * once the replay has ended, so {@link #acceptOrDeferCloudEvent(CloudEvent)} returns {@link RoutingOutcome#DELIVERED} for
@@ -565,7 +566,7 @@ public final class DomainEventFeed<E> {
     /**
      * Stop a catch-up replay that is still in flight, so a shutting-down application does not leave one folding into
      * a store that is closing with it. The replay notices at its next event and unwinds without writing the
-     * completion marker, so the next start replays the whole history again. An {@link #acceptAndWait(Object)} waiting on a
+     * catch-up marker, so the next start replays again from where the stopped one started. An {@link #acceptAndWait(Object)} waiting on a
      * replay that started before the feed went live throws rather than returning, so its listener does not
      * acknowledge the event, and so does one waiting on a catch-up that has not started yet. One waiting on a replay
      * started after {@link #goLive(String)} returns normally, since the feed still applies the events that arrived
