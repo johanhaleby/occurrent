@@ -468,7 +468,21 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     // Undone, because left QUARANTINED without an id the instance would skip this event's redelivery and
                     // every later input with nothing recorded
                     SagaStatus before = current == null ? SagaStatus.ACTIVE : current.status();
-                    if (undoneQuarantine(sagaId, withoutId, before)) {
+                    boolean undone;
+                    try {
+                        undone = undoneQuarantine(sagaId, withoutId, before);
+                    } catch (Throwable undoFailure) {
+                        // Logged here, since the catch below would only say the event could not be listed as pending
+                        rethrowIfNotTheInstances(undoFailure);
+                        log.error("Saga '{}' instance '{}' was quarantined on the event '{}', but its state store {} did not persist SagaFailure.quarantineId or SagaEnvelope.quarantineSkipCount, and undoing the quarantine failed because the state store failed. "
+                                        + "The event goes back to whatever feeds this subscription instead of being acknowledged. If the instance is still QUARANTINED without them, it skips every input without recording it.",
+                                subscriptionId, sagaId, meta.redeliveryKey(), stateStore.getClass().getName(), undoFailure);
+                        if (undoFailure != failure) {
+                            failure.addSuppressed(undoFailure);
+                        }
+                        return false;
+                    }
+                    if (undone) {
                         log.error("Saga '{}' instance '{}' was quarantined on the event '{}', but its state store {} did not persist SagaFailure.quarantineId or SagaEnvelope.quarantineSkipCount, so the quarantine was undone, unless another write had changed the instance first. "
                                         + "The event goes back to whatever feeds this subscription instead of being acknowledged, and every delivery of it fails the same way until the store persists both.",
                                 subscriptionId, sagaId, meta.redeliveryKey(), stateStore.getClass().getName(), failure);

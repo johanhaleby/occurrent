@@ -93,7 +93,8 @@ delivery of the event fails the same way until the store persists both fields, s
 changes the instance before that, the saga reads it again and writes it back again, up to
 `SagaRunnerConfig.maxCasAttempts` times. When the line says the quarantine could not be undone, something outside the saga wrote the instance on every
 attempt. The instance is then stored as `QUARANTINED` without them and skips every later input without recording it,
-so it can't be released with them.
+so it can't be released with them. When the line says undoing the quarantine failed, the store threw during the undo,
+and the instance may still be `QUARANTINED` without them. Read its status to find out.
 
 A release in step 5 logs lines of its own from the same logger. The one to alert on is an `ERROR` saying the instance
 is `QUARANTINED` again, and step 5 lists the others.
