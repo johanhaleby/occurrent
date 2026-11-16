@@ -675,9 +675,9 @@ public final class BlockingHandover<T, K> {
      * not run.
      * <p>
      * Code that calls this for a payload a replay delivers asks for another catch-up each time a replay delivers that
-     * payload, and with a source whose {@link Source#isAlreadyCaughtUp()} always answers {@code false} those replays do
-     * not end. Code that makes the call from a thread it switched to is not recognized, so it waits like any other
-     * caller, for deliveries or a replay that cannot end while that code waits.
+     * payload, and with a source that replays the whole history every time, such as a feed without a catch-up marker,
+     * those replays do not end. Code that makes the call from a thread it switched to is not recognized, so it waits
+     * like any other caller, for deliveries or a replay that cannot end while that code waits.
      *
      * @return {@code true} when the catch-up finished and the handover is live, or, for a call from code this handover
      * is running, once the catch-up has been asked for. {@code false} when

@@ -55,14 +55,15 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 /**
- * A one-time <strong>catch-up</strong> in front of a {@link PushSubscriptionModel}: on first subscribe it
- * replays a projection's history from the event store, then hands over to the live push feed, so a brand-new or rebuilt
- * projection is backfilled before it starts consuming the broker. It exists because a broker is not a log, so the push
- * feed alone cannot backfill a projection that started after events were already written.
+ * A <strong>catch-up</strong> in front of a {@link PushSubscriptionModel}: each time a subscription starts, it replays
+ * from the event store the events after the stored catch-up marker, or the whole history when none is stored, then
+ * hands over to the live push feed, so a projection is backfilled before it starts consuming the broker. It exists
+ * because a broker is not a log, so the push feed alone cannot backfill a projection that started after events were
+ * already written.
  * <p>
  * Contract (the "broker owns live-resume" model, see ADR 62):
  * <ul>
- *   <li><strong>Catch-up</strong> is Occurrent's job and runs once per subscription id. On subscribe this model
+ *   <li><strong>Catch-up</strong> is Occurrent's job and runs each time a subscription starts. On subscribe this model
  *       registers on the live feed first and buffers, replays the store {@code position}-ordered up to the head at read
  *       time via {@link PositionOrderedReader}, then drains the buffer and goes live. An event that commits during a
  *       replay that runs to the end, while the buffer has room, is delivered either by the replay or by the buffered
@@ -78,8 +79,7 @@ import java.util.stream.Stream;
  *       <p>
  *       The history here ends at the head of the store as the first attempt that reaches the replay reads it, so
  *       events written since do not count as getting further. When an attempt fails before the replay, while it
- *       checks whether the catch-up already completed or while it reads the head, the next attempt reads the head
- *       instead.
+ *       reads the stored catch-up marker or the head, the next attempt reads both again.
  *       <p>
  *       How far an attempt got is taken from the position of the events
  *       {@link PositionOrderedReader#readInPositionOrder} returns, so those events must have a position, as the event
