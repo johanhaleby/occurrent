@@ -213,7 +213,9 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
      * flag this sets is polled during a retry's backoff sleep, not only read the next time a failed attempt decides
      * whether to retry, so a {@link #close()} landing mid-sleep is caught at the next poll rather than waiting out
      * the rest of the backoff. See {@code RetryExecution}'s shutdown-predicate handling for the poll cadence. A
-     * publish after this fails with {@link RabbitMqPublishException}.
+     * publish after this fails with {@link RabbitMqPublishException}. Returns normally when the channel, or the
+     * connection under it, has already closed, including when it closes concurrently with this call. An unrelated
+     * {@link IOException} or {@link TimeoutException} from closing an otherwise open channel is still thrown.
      */
     @Override
     public void close() throws IOException, TimeoutException {
