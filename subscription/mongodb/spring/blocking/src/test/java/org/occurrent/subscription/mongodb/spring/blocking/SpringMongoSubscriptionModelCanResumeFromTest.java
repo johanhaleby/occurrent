@@ -35,6 +35,7 @@ import org.bson.Document;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -55,6 +56,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntConsumer;
@@ -309,6 +311,19 @@ class SpringMongoSubscriptionModelCanResumeFromTest {
                 .append("code", new BsonInt32(code))
                 .append("errmsg", new BsonString("command failed with code " + code));
         return new MongoCommandException(response, new ServerAddress());
+    }
+
+    @Test
+    void does_not_ask_mongodb_again_when_stillWanted_turns_false_while_the_retry_strategy_runs_its_listeners_with_no_backoff() {
+        AtomicInteger probes = new AtomicInteger();
+        AtomicBoolean wanted = new AtomicBoolean(true);
+        MongoSocketReadException failure = transientFailure();
+        useModelWhoseProbe(RetryStrategy.retry().backoff(Backoff.none()).onBeforeRetry(error -> wanted.set(false)), probes, failOnTheFirstAttempt(failure));
+        Checkpoint checkpoint = requireNonNull(subscriptionModel.globalCheckpoint());
+
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () ->
+                assertThatThrownBy(() -> subscriptionModel.canResumeFrom(checkpoint, wanted::get)).isSameAs(failure));
+        assertThat(probes).hasValue(1);
     }
 
     private static MongoSocketReadException transientFailure() {
