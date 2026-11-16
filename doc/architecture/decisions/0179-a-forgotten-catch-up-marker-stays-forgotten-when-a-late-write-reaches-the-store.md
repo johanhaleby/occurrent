@@ -197,8 +197,8 @@ In a mixed cluster:
   0.35.0 node reads that marker as present when the stamp from the last 0.35.0 save equals the current generation. That
   is the unfenced 0.34.0 forget from the previous point.
 
-Plain `read`, `exists`, `save` and `delete` keep their meaning and never touch the generation. On Redis they refuse an
-id with the generation hash's prefix.
+Plain `read`, `exists`, `save` and `delete` keep their meaning and never touch the generation. On Redis they, and
+`writeVersion`, refuse an id with the generation hash's prefix.
 
 On a sharded checkpoint collection the generation document's `_id` is an embedded document. MongoDB accepts an `_id` of
 any type other than an array, a regular expression or undefined, and a hashed index hashes an embedded document as one
