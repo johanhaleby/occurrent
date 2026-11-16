@@ -126,7 +126,8 @@ On MongoDB:
   When it fails after the `$inc`, a 0.35.0 node still reads the marker as absent. When the `$inc` fails, or its
   `wtimeout` passes, the store's `RetryStrategy` sends it again, and the delete waits until an `$inc` succeeds. The
   default `RetryStrategy` has no attempt limit, so the forget returns only once a majority has the raise. Under a
-  `RetryStrategy` that gives up, the forget throws to its caller without sending the delete, as `delete` throws today.
+  `RetryStrategy` that gives up, or once the store shuts down, which ends every retry, the forget throws to its caller
+  without sending the delete, as `delete` throws today.
   An `$inc` that passed its `wtimeout` may still have raised the generation, and the next attempt raises it once more.
 * On a standalone server, MongoDB refuses `LINEARIZABLE` with error code 123 (checked on 4.4.5). The store then reads
   the generation with `MAJORITY` and keeps doing so for its lifetime, without trying `LINEARIZABLE` again. A standalone
@@ -355,7 +356,7 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   waits for the round trip a `LINEARIZABLE` read makes to a majority. A standalone server answers as before. When no
   majority is reachable, each forget attempt fails after its `wtimeout` and each read attempt after its `maxTimeMS`.
   The default `RetryStrategy` then keeps trying, so the call returns once a majority is back, and only a
-  `RetryStrategy` that gives up makes it throw. The changelog
+  `RetryStrategy` that gives up, or the store shutting down, makes it throw. The changelog
   says the forget ignores a weaker write concern on the application's collection.
 * A late save whose stamp is not the current generation can replace a marker written under the current one, when
   its lease condition lets it. The id then reads absent and the next catch-up replays once.
@@ -369,8 +370,7 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   all-0.34.0 deployment would read it absent. A 0.35.0 node saves and deletes the plain checkpoint under the same
   conditions as 0.34.0, and on read it only adds the stamp check, which can turn present into absent and never the other
   way. The one difference is a forget whose `$inc` has no majority yet. It sends no delete until a retried `$inc` gets
-  one, so the 0.34.0 nodes keep reading the marker until then, and after the forget throws under a `RetryStrategy`
-  that gives up. The list under "In a mixed cluster" gives each case.
+  one, so the 0.34.0 nodes keep reading the marker until then, and go on reading it when the forget throws instead. The list under "In a mixed cluster" gives each case.
 * A downgrade keeps every marker where 0.34.0 reads it. A marker the generation fenced stays too, and a 0.34.0 node
   reads it as present, the exposure 0.34.0 has to any late write. The generation documents and hashes stay behind
   unread, and the migration guide says to leave them in place. Removing one puts that id's generation back at 0. On
