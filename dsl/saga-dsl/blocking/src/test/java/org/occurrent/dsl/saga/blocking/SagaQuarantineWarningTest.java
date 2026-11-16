@@ -39,6 +39,7 @@ import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -322,6 +323,25 @@ class SagaQuarantineWarningTest {
         );
     }
 
+    // The Spring Boot registrar sets the event store first and the strategy second, so the copy the strategy setter
+    // returns has to carry the queries along
+    @Test
+    void starts_with_quarantine_on_when_the_competing_consumer_strategy_is_set_after_the_event_store_queries() {
+        Retains model = new Retains();
+
+        Throwable thrown = catchThrowable(() -> SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .eventStoreQueries(new InMemoryEventStore())
+                .competingConsumerStrategy(new NeverLeader())
+                .run("orders", saga(), SagaStateStore.inMemory(), c -> {
+                }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)))
+                .close());
+
+        assertAll(
+                () -> assertThat(thrown).isNull(),
+                () -> assertThat(model.subscribed).isEqualTo(1)
+        );
+    }
+
     private void run(Subscribable model) {
         SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
                 .eventStoreQueries(new InMemoryEventStore())
@@ -399,6 +419,34 @@ class SagaQuarantineWarningTest {
         @Override
         public boolean retains(CloudEvent event) {
             return false;
+        }
+    }
+
+    private static final class NeverLeader implements CompetingConsumerStrategy {
+        @Override
+        public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
+            return false;
+        }
+
+        @Override
+        public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
+        }
+
+        @Override
+        public void releaseCompetingConsumer(String subscriptionId, String subscriberId) {
+        }
+
+        @Override
+        public boolean hasLock(String subscriptionId, String subscriberId) {
+            return false;
+        }
+
+        @Override
+        public void addListener(CompetingConsumerListener listenerConsumer) {
+        }
+
+        @Override
+        public void removeListener(CompetingConsumerListener listenerConsumer) {
         }
     }
 
