@@ -34,6 +34,7 @@ import java.net.URI;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -141,6 +142,52 @@ class CatchupThenPushSubscriptionModelResumePositionTest {
         assertThat(store.currentPosition()).as("the head moved during the replay").isGreaterThan(headBeforeTheReplay);
         assertThat(positionStoredBy(marker)).isEqualTo(headBeforeTheReplay);
         assertThat(delivered).as("the event written during the replay reaches the projection once, through the live feed").containsExactly("1", "2", "during");
+    }
+
+    @Test
+    void an_event_that_commits_after_the_head_was_read_at_a_position_before_it_reaches_the_projection_once_through_the_live_feed() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        store.write("s", List.of(event("1"), event("2")));
+        long head = store.currentPosition();
+
+        // The broker delivers a published event only to the registrations that exist when it is published. The late
+        // event X holds a position at or before the head, so the replay, which reads what was committed before it,
+        // does not return it, and only the live registration can.
+        PushSubscriptionModel broker = new PushSubscriptionModel();
+        liveFeed.set(broker);
+        PositionOrderedReader reservedBeforeTheHeadCommittedAfter = new PositionOrderedReader() {
+            private final AtomicBoolean published = new AtomicBoolean();
+
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return store.readInPositionOrder(filter, range);
+            }
+
+            @Override
+            public long currentPosition() {
+                long read = store.currentPosition();
+                if (published.compareAndSet(false, true)) {
+                    broker.accept(event("X"));
+                }
+                return read;
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return store.writesPosition();
+            }
+        };
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reservedBeforeTheHeadCommittedAfter, broker, marker);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
+        awaitCaughtUp(model);
+
+        assertThat(delivered).as("X delivered once, by the live registration made before the head was read").containsExactlyInAnyOrder("1", "2", "X");
+        assertThat(positionStoredBy(marker)).isEqualTo(head);
+
+        List<String> afterRestart = new CopyOnWriteArrayList<>();
+        start(store, marker, afterRestart);
+        assertThat(afterRestart).as("the next start replays after the marker and X is not in the store").isEmpty();
     }
 
     @Test

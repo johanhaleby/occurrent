@@ -34,6 +34,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
+import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
 
 import java.util.Objects;
@@ -369,7 +370,9 @@ public final class CatchupProjectionFeed<E> {
      * <p>
      * A view that calls this for an event a replay delivers asks for another catch-up each time a replay delivers that
      * event again. Each of those catch-ups runs once the one that asked has stored its marker, and replays only the
-     * events after that marker, so it does not deliver that event again. A feed built without a
+     * events after that marker. So it does not deliver that event again when the event is at or below the head the
+     * asking catch-up read, and delivers it at most once more otherwise, since the catch-up that delivers it again
+     * stores a head at or above it. A feed built without a
      * {@link CheckpointStorage} for the marker replays the whole history each time, and so without end.
      */
     public void catchUp() {
@@ -513,7 +516,7 @@ public final class CatchupProjectionFeed<E> {
             return ReplayStart.FROM_BEGINNING_UNMARKED;
         }
         Checkpoint stored = catchupMarker.read(id);
-        Long storedPosition = stored == null ? null : GlobalCheckpoint.positionOf(stored);
+        Long storedPosition = stored == null ? null : CatchupMarkers.positionOf(id, stored);
         return new ReplayStart(storedPosition, reader.currentPosition());
     }
 
