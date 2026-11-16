@@ -22,6 +22,8 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpointSource;
 
+import java.util.function.BooleanSupplier;
+
 /**
  * A {@link SubscriptionModel} that produces {@link CheckpointAwareCloudEvent} compatible {@link CloudEvent}'s.
  * This is useful for subscribers that want to persist the checkpoint for a given subscription if the event store doesn't
@@ -57,5 +59,43 @@ public interface CheckpointAwareSubscriptionModel extends SubscriptionModel, Glo
      */
     default boolean canResumeFrom(Checkpoint checkpoint) {
         return true;
+    }
+
+    /**
+     * {@link #globalCheckpoint()} for a caller that may stop wanting the answer while it waits for it. A catch-up
+     * subscription calls this on its replay thread, and {@code stillWanted} turns {@code false} once the subscription is
+     * cancelled, the catch-up model is stopped or shut down, or another replay took the subscription over. A model that
+     * retries a failure should check {@code stillWanted} before each new attempt. Once it is {@code false}, the model
+     * must throw the last failure instead of trying again, and not answer {@code null}, which a catch-up reads as a
+     * model that has no global checkpoint.
+     * <p>
+     * The default calls {@link #globalCheckpoint()} and never reads {@code stillWanted}. A model that wraps another one
+     * passes the call on to the model it wraps, with the same {@code stillWanted}.
+     *
+     * @param stillWanted {@code false} once the caller no longer wants the answer
+     * @return The global checkpoint for the database or {@code null} if there's an unresolvable problem
+     */
+    default @Nullable Checkpoint globalCheckpoint(BooleanSupplier stillWanted) {
+        return globalCheckpoint();
+    }
+
+    /**
+     * {@link #canResumeFrom(Checkpoint)} for a caller that may stop wanting the answer while it waits for it. A catch-up
+     * subscription calls this on its replay thread, and {@code stillWanted} turns {@code false} once the subscription is
+     * cancelled, the catch-up model is stopped or shut down, or another replay took the subscription over. A model that
+     * retries a failure should check {@code stillWanted} before each new attempt. Once it is {@code false}, the model
+     * must throw the last failure instead of trying again, and not answer {@code false}, which a catch-up reads as a
+     * feed that no longer has the history back to {@code checkpoint}. The MongoDB subscription models do that.
+     * <p>
+     * The default calls {@link #canResumeFrom(Checkpoint)} and never reads {@code stillWanted}. A model that wraps
+     * another one passes the call on to the model it wraps, with the same {@code stillWanted}.
+     *
+     * @param checkpoint  A position this model, or the model it wraps, returned from {@link #globalCheckpoint()} or
+     *                    attached to an event it delivered
+     * @param stillWanted {@code false} once the caller no longer wants the answer
+     * @return {@code false} if the feed no longer has the history back to {@code checkpoint}, otherwise {@code true}
+     */
+    default boolean canResumeFrom(Checkpoint checkpoint, BooleanSupplier stillWanted) {
+        return canResumeFrom(checkpoint);
     }
 }
