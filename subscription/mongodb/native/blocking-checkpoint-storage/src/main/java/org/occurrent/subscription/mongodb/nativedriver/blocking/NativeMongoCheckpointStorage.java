@@ -33,6 +33,7 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CatchupMarkerStorage;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.internal.CatchupMarkerGenerationReads;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -71,9 +72,9 @@ public class NativeMongoCheckpointStorage implements CatchupMarkerStorage {
     private final MongoCollection<Document> catchupMarkerLinearizableReads;
     private final RetryStrategy retryStrategy;
 
+    private final CatchupMarkerGenerationReads catchupMarkerGenerationReads = new CatchupMarkerGenerationReads();
+
     private volatile boolean shutdown = false;
-    // Set once the server refuses a LINEARIZABLE read, never cleared
-    private volatile boolean linearizableReadNotSupported = false;
 
     /**
      * Create a {@code CheckpointStorage} that uses the Native sync Java MongoDB driver to persists the checkpoint in MongoDB.
@@ -191,19 +192,11 @@ public class NativeMongoCheckpointStorage implements CatchupMarkerStorage {
     }
 
     private long readCatchupMarkerGeneration(String subscriptionId) {
-        if (!linearizableReadNotSupported) {
-            try {
-                return extractCatchupMarkerGeneration(catchupMarkerLinearizableReads.find(catchupMarkerGenerationFilter(subscriptionId))
+        return catchupMarkerGenerationReads.read(
+                () -> catchupMarkerLinearizableReads.find(catchupMarkerGenerationFilter(subscriptionId))
                         .maxTime(CATCHUP_MARKER_GENERATION_READ_MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
-                        .first());
-            } catch (RuntimeException e) {
-                if (!isLinearizableReadNotSupported(e)) {
-                    throw e;
-                }
-                linearizableReadNotSupported = true;
-            }
-        }
-        return extractCatchupMarkerGeneration(catchupMarkerMajorityReads.find(catchupMarkerGenerationFilter(subscriptionId)).first());
+                        .first(),
+                () -> catchupMarkerMajorityReads.find(catchupMarkerGenerationFilter(subscriptionId)).first());
     }
 
     @Override

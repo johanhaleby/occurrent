@@ -32,6 +32,7 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CatchupMarkerStorage;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.internal.CatchupMarkerGenerationReads;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.springframework.data.mongodb.core.MongoOperations;
 
@@ -71,9 +72,9 @@ public class SpringMongoCheckpointStorage implements CatchupMarkerStorage {
     private final String checkpointCollection;
     private final RetryStrategy retryStrategy;
 
+    private final CatchupMarkerGenerationReads catchupMarkerGenerationReads = new CatchupMarkerGenerationReads();
+
     private volatile boolean shutdown = false;
-    // Set once the server refuses a LINEARIZABLE read, never cleared
-    private volatile boolean linearizableReadNotSupported = false;
 
     /**
      * Create a {@link CheckpointStorage} that uses the Spring's {@link MongoOperations} to persist checkpoints in MongoDB.
@@ -170,21 +171,13 @@ public class SpringMongoCheckpointStorage implements CatchupMarkerStorage {
     }
 
     private long readCatchupMarkerGeneration(MongoCollection<Document> collection, String subscriptionId) {
-        if (!linearizableReadNotSupported) {
-            try {
-                MongoCollection<Document> linearizableReads = collection.withReadPreference(primary()).withReadConcern(ReadConcern.LINEARIZABLE);
-                return MongoCommons.extractCatchupMarkerGeneration(linearizableReads.find(MongoCommons.catchupMarkerGenerationFilter(subscriptionId))
+        return catchupMarkerGenerationReads.read(
+                () -> collection.withReadPreference(primary()).withReadConcern(ReadConcern.LINEARIZABLE)
+                        .find(MongoCommons.catchupMarkerGenerationFilter(subscriptionId))
                         .maxTime(MongoCommons.CATCHUP_MARKER_GENERATION_READ_MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
-                        .first());
-            } catch (RuntimeException e) {
-                if (!MongoCommons.isLinearizableReadNotSupported(e)) {
-                    throw e;
-                }
-                linearizableReadNotSupported = true;
-            }
-        }
-        MongoCollection<Document> majorityReads = collection.withReadPreference(primary()).withReadConcern(ReadConcern.MAJORITY);
-        return MongoCommons.extractCatchupMarkerGeneration(majorityReads.find(MongoCommons.catchupMarkerGenerationFilter(subscriptionId)).first());
+                        .first(),
+                () -> collection.withReadPreference(primary()).withReadConcern(ReadConcern.MAJORITY)
+                        .find(MongoCommons.catchupMarkerGenerationFilter(subscriptionId)).first());
     }
 
     @Override
