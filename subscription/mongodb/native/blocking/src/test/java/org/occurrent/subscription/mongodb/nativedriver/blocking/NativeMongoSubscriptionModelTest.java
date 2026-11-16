@@ -79,6 +79,8 @@ import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
@@ -2282,7 +2284,14 @@ public class NativeMongoSubscriptionModelTest {
                         recording.countDown();
                         awaitUpToTenSeconds(release);
                     }
-                    return invocation.callRealMethod();
+                    // Forwarded to the original, since the copy a spy makes would keep a state of its own
+                    Method method = invocation.getMethod();
+                    method.setAccessible(true);
+                    try {
+                        return method.invoke(own, invocation.getArguments());
+                    } catch (InvocationTargetException e) {
+                        throw e.getCause();
+                    }
                 })));
             } catch (ReflectiveOperationException e) {
                 throw new IllegalStateException(e);

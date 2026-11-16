@@ -476,6 +476,9 @@ public final class ChangeStreamSubscriptions {
         if (internalSubscription.isIntentionallyClosed()) {
             return;
         }
+        // Taken before anything here can throw, so only the first attempt to open the change stream counts the answer
+        // as fresh
+        boolean answerCameForThisOpen = internalSubscription.tookTheAnswerItWaitedFor();
         AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
         Consumer<CloudEvent> action = internalSubscription.action;
         MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = null;
@@ -490,7 +493,7 @@ public final class ChangeStreamSubscriptions {
                 return present;
             });
             openedAt = new OpenedAt(openingPosition, currentStartAt.get());
-            boolean startsOnceTheFirstReplyCame = startsOnceTheFirstReplyCame(subscriptionId, internalSubscription, openingPosition, presentToOpenAt.get());
+            boolean startsOnceTheFirstReplyCame = startsOnceTheFirstReplyCame(subscriptionId, internalSubscription, openingPosition, presentToOpenAt.get(), answerCameForThisOpen);
             ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, openingPosition, subscriptionModelContext);
             cursor = changeStreamDocumentsAtPosition.cursor();
             if (!internalSubscription.opened(cursor, openedAt)) {
@@ -513,7 +516,9 @@ public final class ChangeStreamSubscriptions {
                 List<Consumer<Checkpoint>> quietPositionConsumers = quietPositionConsumersFor(subscriptionId);
                 // Waits on the server for at most maxAwaitTime, and returns null when that batch has no document
                 ChangeStreamDocument<Document> changeStreamDocument = cursor.tryNext();
-                if (startsOnceTheFirstReplyCame) {
+                // Not for a run closed meanwhile, which the check below ends, so a run a resume replaced doesn't clear
+                // the hold of the run that replaced it
+                if (startsOnceTheFirstReplyCame && !internalSubscription.isIntentionallyClosed()) {
                     internalSubscription.started();
                     startsOnceTheFirstReplyCame = false;
                 }
@@ -885,12 +890,15 @@ public final class ChangeStreamSubscriptions {
 
     // A mongos reports a position whose history is gone with the first reply of the change stream rather than as it
     // opens, so a run that opens at a position of the past through one counts as started only once that reply came.
-    // The present the subscribe or this open read is never gone. Asked of MongoDB once per model, and again after a
-    // failed ask. A failed ask waits for the first reply rather than failing the open, since that is right on a mongos
-    // and on a replica set alike and costs only the wait
-    private boolean startsOnceTheFirstReplyCame(String subscriptionId, InternalSubscription run, StartAt openingPosition, @Nullable Checkpoint presentToOpenAt) {
+    // Only a present read for this open is never gone. That is the present this open read, and the answer to the
+    // subscribe's question for the present when it came while this run waited for it and this is the run's first open.
+    // An answer a run found already there, as after subscribing on a stopped model or after a pause before the first
+    // reply, can be gone by now. Asked of MongoDB once per model, and again after a failed ask. A failed ask waits for
+    // the first reply rather than failing the open, since that is right on a mongos and on a replica set alike and
+    // costs only the wait
+    private boolean startsOnceTheFirstReplyCame(String subscriptionId, InternalSubscription run, StartAt openingPosition, @Nullable Checkpoint presentToOpenAt, boolean answerCameForThisOpen) {
         if (!(openingPosition instanceof StartAt.StartAtCheckpoint atCheckpoint) || atCheckpoint.checkpoint == presentToOpenAt
-                || run.presentAtSubscribe.isTheAnswer(atCheckpoint.checkpoint)) {
+                || (answerCameForThisOpen && run.presentAtSubscribe.isTheAnswer(atCheckpoint.checkpoint))) {
             return false;
         }
         Boolean mongos = throughAMongos;
@@ -1422,6 +1430,7 @@ public final class ChangeStreamSubscriptions {
                 askAgainAfter(current);
                 current = asking;
             }
+            boolean answeredBeforeThisRun = current.isDone();
             current.run();
             while (true) {
                 try {
@@ -1429,6 +1438,9 @@ public final class ChangeStreamSubscriptions {
                     NoPositionAtThePresent given = noPosition;
                     if (given != null) {
                         throw given;
+                    }
+                    if (!answeredBeforeThisRun) {
+                        run.answerCameWhileItWaited();
                     }
                     return true;
                 } catch (TimeoutException e) {
@@ -1562,7 +1574,8 @@ public final class ChangeStreamSubscriptions {
         private final AtomicReference<@Nullable UnsupportedStartAtException> refusal = new AtomicReference<>();
         // The refusal of a run held paused. Unlike a refusal it gives way to a later run that starts, since the
         // subscription stays known and a resume can start it. A resume starts the next run only after this one is
-        // held, so a start never races the hold it clears
+        // held. A run the resume replaced skips started() once it is closed, but one that is closed while it calls
+        // started() can still clear the hold
         private volatile @Nullable UnsupportedStartAtException held;
 
         // A run that recorded a failure releases the waiters itself, once the id is free. So a run that starts after
@@ -1635,6 +1648,9 @@ public final class ChangeStreamSubscriptions {
         private volatile @Nullable InternalSubscription previous;
         // The read this run makes of the present for itself, as a resume or a restart from the present does
         final ReadOfThePresent readOfThePresent;
+        // Set when the answer to the subscribe's question for the present came while this run waited for it, and
+        // taken by the run's first open, so a retry that opens later doesn't count that answer as still in the oplog
+        private final AtomicBoolean answerItWaitedFor = new AtomicBoolean();
 
         private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, FirstStart firstStart) {
             this.log = log;
@@ -1644,6 +1660,14 @@ public final class ChangeStreamSubscriptions {
             this.presentAtSubscribe = presentAtSubscribe;
             this.action = action;
             this.firstStart = firstStart;
+        }
+
+        void answerCameWhileItWaited() {
+            answerItWaitedFor.set(true);
+        }
+
+        boolean tookTheAnswerItWaitedFor() {
+            return answerItWaitedFor.getAndSet(false);
         }
 
         // Under the same lock as movedUnlessReplacedTo, so an action of this run that returns after the pause waited

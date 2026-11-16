@@ -36,12 +36,8 @@ import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
-import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
-import org.testcontainers.containers.Container.ExecResult;
-import org.testcontainers.mongodb.MongoDBContainer;
+import org.occurrent.testsupport.mongodb.TwoShardMongoCluster;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -55,21 +51,18 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 /**
  * Starts subscriptions through a mongos, which reports a start position whose history is gone with the first reply of
- * the change stream rather than as the change stream opens. The cluster has one shard that holds the events, with a
- * one megabyte oplog, so a test can make that oplog forget a position. No shard of
- * {@code TwoShardMongoCluster} has a small oplog.
+ * the change stream rather than as the change stream opens. The events are on the second shard of a
+ * {@code TwoShardMongoCluster}, which has a one megabyte oplog, so a test can make that oplog forget a position.
  */
 @Timeout(600)
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SpringMongoSubscriptionModelThroughMongosTest {
 
-    private static final String SHARD = "rs2";
+    private static final int OPLOG_SIZE_MEGABYTES = 1;
     private static final int MONGOS_PORT = 27017;
-    private static final int SHARD_PORT = 27020;
     private static final Duration MAX_AWAIT_TIME = Duration.ofSeconds(10);
 
-    private static MongoDBContainer container;
-    private static String hostname;
+    private static TwoShardMongoCluster cluster;
 
     private String databaseName;
     private MongoClient mongoClient;
@@ -79,36 +72,21 @@ class SpringMongoSubscriptionModelThroughMongosTest {
 
     @BeforeAll
     static void start_cluster() {
-        container = new MongoDBContainer(ReplicaSetReadyMongoDBContainer.withDefaultVersion().getDockerImageName())
-                .withSharding()
-                .withEnv("GLIBC_TUNABLES", "glibc.pthread.rseq=1");
-        try {
-            container.start();
-            hostname = exec("sh", "-c", "hostname").getStdout().trim();
-            exec("sh", "-c", "mkdir -p /tmp/" + SHARD + " && mongod --bind_ip_all --shardsvr --replSet " + SHARD + " --port " + SHARD_PORT
-                    + " --dbpath /tmp/" + SHARD + " --fork --logpath /tmp/" + SHARD + ".log --wiredTigerCacheSizeGB 0.25 --oplogSize 1");
-            mongosh(SHARD_PORT, "rs.initiate({_id: '" + SHARD + "', members: [{_id: 0, host: '" + hostname + ":" + SHARD_PORT + "'}]});");
-            awaitShardPrimary();
-            mongosh(MONGOS_PORT, "assert(sh.addShard('" + SHARD + "/" + hostname + ":" + SHARD_PORT + "').ok === 1);");
-        } catch (RuntimeException | Error e) {
-            container.stop();
-            throw e;
-        }
+        cluster = TwoShardMongoCluster.start(OPLOG_SIZE_MEGABYTES);
     }
 
     @AfterAll
     static void stop_cluster() {
-        if (container != null) {
-            container.stop();
+        if (cluster != null) {
+            cluster.close();
         }
     }
 
     @BeforeEach
     void create_instances() {
-        databaseName = "mongos_" + UUID.randomUUID().toString().replace("-", "");
-        // The events are on the one-megabyte-oplog shard
-        mongosh(MONGOS_PORT, "assert(sh.enableSharding('" + databaseName + "', '" + SHARD + "').ok === 1);");
-        mongoClient = MongoClients.create(new ConnectionString(container.getConnectionString()));
+        // The events are on the shard with the one-megabyte oplog
+        databaseName = cluster.createDatabase(TwoShardMongoCluster.SECOND_SHARD);
+        mongoClient = MongoClients.create(new ConnectionString(cluster.getConnectionString()));
         mongoTemplate = new MongoTemplate(mongoClient, databaseName);
         mongoTemplate.getDb().createCollection("events");
         executor = Executors.newCachedThreadPool();
@@ -147,6 +125,70 @@ class SpringMongoSubscriptionModelThroughMongosTest {
         assertThat(waited).isLessThan(MAX_AWAIT_TIME.dividedBy(2));
     }
 
+    @Test
+    void a_resume_at_now_does_not_wait_for_the_first_reply_of_the_change_stream() {
+        // Given a started subscription on a quiet collection, paused
+        String subscriptionId = UUID.randomUUID().toString();
+        assertThat(subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
+        }).waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        subscriptionModel.pauseSubscription(subscriptionId);
+
+        // When
+        long startedAt = System.nanoTime();
+        boolean started = subscriptionModel.resumeSubscription(subscriptionId, StartAt.now()).waitUntilStarted(Duration.ofSeconds(5));
+        Duration waited = Duration.ofNanos(System.nanoTime() - startedAt);
+
+        // Then
+        assertThat(started).isTrue();
+        assertThat(waited).isLessThan(MAX_AWAIT_TIME.dividedBy(2));
+    }
+
+    @Test
+    void a_start_of_a_model_stopped_when_a_subscription_at_now_was_made_throws_the_refusal_when_that_present_has_left_the_oplog() {
+        // Given a subscription at the present made while the model is stopped, and an oplog that then forgets that present
+        subscriptionModel.stop();
+        String subscriptionId = UUID.randomUUID().toString();
+        Subscription subscription = subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
+        });
+        MongoOperationTimeCheckpoint presentAfterSubscribe = (MongoOperationTimeCheckpoint) requireNonNull(subscriptionModel.globalCheckpoint());
+        dropHistoryFrom(presentAfterSubscribe.operationTime);
+
+        // When
+        Throwable thrownByStart = catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(60), () -> subscriptionModel.start(true)));
+        Throwable thrownByWait = catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(60), () -> subscription.waitUntilStarted(Duration.ofSeconds(60))));
+
+        // Then
+        assertIsTheRefusalOfAHistoryLostFor(subscriptionId, thrownByStart);
+        assertIsTheRefusalOfAHistoryLostFor(subscriptionId, thrownByWait);
+    }
+
+    @Test
+    void a_resume_of_a_subscription_at_now_paused_before_its_first_reply_throws_the_refusal_when_that_present_has_left_the_oplog() {
+        // Given a subscription at the present that started and is paused before its change stream's first reply, and an oplog that then forgets that present
+        String subscriptionId = UUID.randomUUID().toString();
+        Subscription subscription = subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
+        });
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        subscriptionModel.pauseSubscription(subscriptionId);
+        MongoOperationTimeCheckpoint presentAfterPause = (MongoOperationTimeCheckpoint) requireNonNull(subscriptionModel.globalCheckpoint());
+        dropHistoryFrom(presentAfterPause.operationTime);
+
+        // When
+        Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+        Throwable thrownByResumed = catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(60), () -> resumed.waitUntilStarted(Duration.ofSeconds(60))));
+        Throwable thrownBySubscribed = catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(60), () -> subscription.waitUntilStarted(Duration.ofSeconds(60))));
+
+        // Then
+        assertIsTheRefusalOfAHistoryLostFor(subscriptionId, thrownByResumed);
+        assertIsTheRefusalOfAHistoryLostFor(subscriptionId, thrownBySubscribed);
+    }
+
+    private static void assertIsTheRefusalOfAHistoryLostFor(String subscriptionId, Throwable thrown) {
+        assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .hasMessageStartingWith("There was not enough oplog to resume subscription \"" + subscriptionId + "\"")
+                .rootCause().isInstanceOfSatisfying(MongoException.class, e -> assertThat(e.getCode()).isEqualTo(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE));
+    }
+
     private void assertRefusedFromTheWait(Consumer<Subscription> wait) {
         // Given a checkpoint the oplog of the shard no longer reaches back to
         MongoOperationTimeCheckpoint lost = (MongoOperationTimeCheckpoint) requireNonNull(subscriptionModel.globalCheckpoint());
@@ -172,8 +214,8 @@ class SpringMongoSubscriptionModelThroughMongosTest {
     // Writes ten megabytes into the shard through the mongos, then a small document every hundred milliseconds, until
     // the oldest entry of the shard's oplog is newer than the operation time, as ChangeStreamHistory does for a replica set
     private void dropHistoryFrom(BsonTimestamp operationTime) {
-        mongosh(MONGOS_PORT, "const filler = db.getSiblingDB('" + databaseName + "').getCollection('filler');"
-                + "const oplog = connect('mongodb://localhost:" + SHARD_PORT + "/local').getCollection('oplog.rs');"
+        cluster.mongoshOnSecondShard("const filler = connect('mongodb://localhost:" + MONGOS_PORT + "/" + databaseName + "').getCollection('filler');"
+                + "const oplog = db.getSiblingDB('local').getCollection('oplog.rs');"
                 + "const lostT = " + operationTime.getTime() + ", lostI = " + operationTime.getInc() + ";"
                 + "const reaches = () => { const ts = oplog.find().sort({$natural: 1}).limit(1).next().ts; return ts.t < lostT || (ts.t === lostT && ts.i <= lostI); };"
                 + "const deadline = Date.now() + 180000; let batches = 0;"
@@ -183,43 +225,5 @@ class SpringMongoSubscriptionModelThroughMongosTest {
                 + "  sleep(100);"
                 + "}"
                 + "filler.drop();");
-    }
-
-    private static void awaitShardPrimary() {
-        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
-        try {
-            while (System.nanoTime() < deadline) {
-                ExecResult result = container.execInContainer("mongosh", "--quiet", "--port", String.valueOf(SHARD_PORT), "--eval", "db.hello().isWritablePrimary");
-                if (result.getExitCode() == 0 && result.getStdout().trim().equals("true")) {
-                    return;
-                }
-                Thread.sleep(500);
-            }
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while waiting for the shard", e);
-        }
-        throw new IllegalStateException("The shard had no primary after 60 seconds");
-    }
-
-    private static void mongosh(int port, String script) {
-        exec("mongosh", "--quiet", "--port", String.valueOf(port), "--eval", "const assert = (c) => { if (!c) { throw new Error('assertion failed'); } };" + script);
-    }
-
-    private static ExecResult exec(String... command) {
-        try {
-            ExecResult result = container.execInContainer(command);
-            if (result.getExitCode() != 0) {
-                throw new IllegalStateException(String.join(" ", command) + " failed with exit code " + result.getExitCode() + ": " + result.getStdout() + result.getStderr());
-            }
-            return result;
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while running " + String.join(" ", command), e);
-        }
     }
 }

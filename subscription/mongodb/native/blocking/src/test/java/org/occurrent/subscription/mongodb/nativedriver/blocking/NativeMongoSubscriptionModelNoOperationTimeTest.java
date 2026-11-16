@@ -1354,6 +1354,8 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
 
         // Then: the handle had answered true, and the listeners were told only once the run was held, and not that it is refused
         assertThat(startedWhileTheCallIsStuck).as("resume handle answered while the call is stuck").isTrue();
+        assertThat(catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(1)))).as("thrown by the resume handle once the run is held")
+                .isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
         assertThat(readsWhileTheCallIsStuck).as("reads of the change stream that records the present while the call is stuck").isZero();
         assertThat(toldWhileTheCallIsStuck).as("subscriptions the listener was told are held paused while the call is stuck").isEmpty();
         assertThat(listener.heldPaused).as("subscriptions the listener was told are held paused").containsExactly(subscriptionId);
