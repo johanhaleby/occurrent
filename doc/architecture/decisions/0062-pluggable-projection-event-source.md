@@ -5,8 +5,8 @@ Date: 2026-07-18
 ## Status
 
 Accepted. The push subscription model and the v1 replay-then-push catch-up (broker owns live-resume) are
-implemented. Broker-independent resume (v2) is a deliberate non-goal, see the section below. The catch-up marker is
-amended by [ADR 179](0179-a-catch-up-marker-is-the-position-the-next-catch-up-resumes-after.md).
+implemented. Broker-independent resume (v2) is a deliberate non-goal, see the section below. The catch-up marker on the
+reactor stack is amended by [ADR 179](0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md).
 
 ## Context
 
