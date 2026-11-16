@@ -168,9 +168,10 @@ the old master acknowledged, and the counter then repeats a value:
    the attempt started.
 
 A random token is not repeated by a lost write, so the late save's stamp differs from the token the second forget set,
-and the marker reads absent. The read is one script, so it needs no order between two reads. The
-generation hash is never removed, since a removed hash puts the generation back at 0 and a late save from an attempt
-that read 0 would read present.
+and the marker reads absent. A counter that a failover rolls back repeats a generation for certain, as in the steps
+above. A random token is a `long` other than 0, so a forget draws the token an attempt read with a probability of about
+2^-64. The read is one script, so it needs no order between two reads. The generation hash is never removed, since a
+removed hash puts the generation back at 0 and a late save from an attempt that read 0 would read present.
 
 A failover on Redis can still lose any acknowledged checkpoint write, a forget included, as in 0.34.0. A lost forget
 brings its marker back, and the next catch-up for the id skips the replay that forget asked for. A master that a
@@ -267,10 +268,11 @@ with or without the rollback.
 
 A server that runs without journaling, such as a standalone server started with `--nojournal`, refuses `j: true` with
 error code 2 and the message `cannot use 'j' option when a host does not have journaling enabled` (checked on 4.4.5).
-The store matches the code and the message, since other mistakes also give code 2, and a fallback started by one of
-them would drop `j` from every later forget. It then sends the forget without `j` for its lifetime and logs a warning
-the first time. That server can't journal a forget, so a crash loses an acknowledged one the way it loses any other
-recent write. The guarantee that an acknowledged forget never rolls back holds only on a server with journaling.
+The store matches the code and the message, since other mistakes also give code 2, and a fallback started by one of them
+would drop `j` from every later forget. It then sends the forget without `j` for its lifetime and logs a warning the
+first time. That server can't journal a forget, so a crash loses an acknowledged one. The crash loses the other recent
+acknowledged writes too, the events included, so the forget can't be more durable than the store it fences. The
+guarantee that an acknowledged forget never rolls back holds only on a server with journaling.
 
 Without these concerns the fence would break on a failover. With MongoDB's default `local` read concern a primary can
 return an `$inc` that is not committed yet. The attempt reads generation 1 from it, the primary loses an election and
@@ -414,10 +416,13 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   call a 0.35.0 node made on the id was a forget, because the stamp sits in the generation hash, which a 0.34.0 save
   and a 0.34.0 delete leave alone. Where the marker reads as present, the next subscribe of that id skips the replay
   it needed. No new case starts once the last 0.34.0 node is gone, but a marker that came back stays present until a
-  0.35.0 node forgets the id. So the upgrade has a precondition. Don't cancel catch-up subscriptions on 0.34.0 nodes
-  during the rollout. An application that did, or whose reactor catch-up failed on a 0.34.0 node, cancels each of
-  those subscriptions once more after the last 0.34.0 node is gone, and that 0.35.0 forget fences the marker. The
-  migration guide gives the precondition and the remedy. A 0.34.0 node's late
+  0.35.0 node forgets the id. So the upgrade has a precondition, and it depends on the stack. On the blocking stack,
+  don't cancel catch-up subscriptions on 0.34.0 nodes during the rollout. An application that did cancels each of
+  those subscriptions once more after the last 0.34.0 node is gone, and that 0.35.0 forget fences the marker. On the
+  reactor stack a 0.34.0 catch-up that fails forgets its marker without a cancel. A 0.34.0 forget only deletes the
+  checkpoint, so the store can't tell an application which subscriptions to cancel once more. An application with
+  catch-up subscriptions on the reactor stack stops every 0.34.0 node before any 0.35.0 node starts. The migration
+  guide gives both preconditions and the remedy. A 0.34.0 node's late
   write after a 0.35.0 forget still brings the marker back for the 0.34.0 nodes. No mixed order makes a node read a
   marker as present where an all-0.34.0 deployment would read it absent. A 0.35.0 node saves and deletes the plain
   checkpoint under the same conditions as 0.34.0, and on read it only adds the stamp check, which can turn present
