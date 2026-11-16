@@ -965,6 +965,35 @@ class SagaReleaseTest {
         }
 
         @Test
+        void a_release_whose_instance_another_call_released_after_it_read_the_record_returns_released_and_does_not_replay_the_record() {
+            quarantinedOnPoisonWithTwoStreamKeyedSkipped();
+            failing.clear();
+            now.set(start.plus(Duration.ofHours(1)));
+            SagaExecution<OrderEvent, Order, OrderCommand> otherNode = execution(CONFIG);
+            AtomicInteger deletesWhenOtherCallEnded = new AtomicInteger();
+            AtomicInteger readsWhenOtherCallEnded = new AtomicInteger();
+            store.afterNextNonEmptyRead(() -> {
+                assertThat(otherNode.release(ORDER)).isEqualTo(ReleaseResult.RELEASED);
+                deletesWhenOtherCallEnded.set(store.deletedRecords.size());
+                readsWhenOtherCallEnded.set(queries.reads.get());
+            });
+            AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+
+            ReleaseResult result = releaseCatching(thrown);
+
+            assertAll(
+                    () -> assertThat(thrown.get()).as("what the release threw").isNull(),
+                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(store.deletedRecords.subList(deletesWhenOtherCallEnded.get(), store.deletedRecords.size()))
+                            .as("the records the release deleted after the other call released the instance").isEmpty(),
+                    () -> assertThat(queries.reads.get() - readsWhenOtherCallEnded.get())
+                            .as("the reads of the event store after the other call released the instance").isZero(),
+                    () -> assertThat(items()).containsExactly("poison", "a", "b"),
+                    () -> assertThat(packed()).containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b"))
+            );
+        }
+
+        @Test
         void a_release_whose_instance_another_call_released_and_quarantined_again_under_a_new_quarantine_id_after_it_read_the_record_does_not_replay_the_record_of_the_old_id() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             failing.clear();
