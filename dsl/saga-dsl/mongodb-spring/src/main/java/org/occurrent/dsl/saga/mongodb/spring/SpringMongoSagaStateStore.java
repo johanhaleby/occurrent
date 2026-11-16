@@ -156,8 +156,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * The status an instance is stored with when it is quarantined with a quarantine id, which is every instance 0.35.0
      * or later quarantines. It reads back as {@link SagaStatus#QUARANTINED}. 0.34.0 decodes the status with
      * {@code SagaStatus.valueOf} and throws on a string it does not know, so a 0.34.0 node that meets such an instance
-     * during a rolling upgrade fails on it and retries it, rather than skipping its inputs without recording them, which
-     * would leave a release with inputs it never replays.
+     * during a rolling upgrade fails on it instead of skipping its inputs without recording them, which would leave a
+     * release with inputs it never replays. The subscription, or the source's delivery failure policy, decides what then
+     * happens to the input.
      */
     public static final String QUARANTINED_RECORDING = "QUARANTINED_RECORDING";
     private static final List<String> QUARANTINED_STATUSES = List.of(SagaStatus.QUARANTINED.name(), QUARANTINED_RECORDING);
