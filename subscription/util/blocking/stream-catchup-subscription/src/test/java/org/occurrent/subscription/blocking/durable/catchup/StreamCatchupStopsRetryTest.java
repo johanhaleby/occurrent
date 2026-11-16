@@ -36,6 +36,7 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
@@ -469,6 +470,158 @@ class StreamCatchupStopsRetryTest {
         );
     }
 
+    @Test
+    void a_failure_of_canResumeFrom_for_a_replay_that_was_not_wanted_before_the_call_is_not_an_ordinary_failure_once_a_start_cleared_the_stop_during_it_and_the_replay_runs_again_to_go_live() throws Exception {
+        Site site = Site.CAN_RESUME_FROM_AT_THE_START_OF_A_POSITION_REPLAY;
+        // Given a subscribe whose replay registers after a stop copied the replays in flight, so the stop does not park it,
+        // and a wrapped model whose first canResumeFrom reads stillWanted, waits, and then throws
+        CompletableFuture<Boolean> answeredByStillWanted = new CompletableFuture<>();
+        CompletableFuture<Void> mayThrow = new CompletableFuture<>();
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        StartAt startAt = createModelsFor(site, false);
+        live.doesNotRetry();
+        live.failsOnceAfterReadingStillWanted(stillWanted -> {
+            if (Thread.currentThread().isVirtual() && firstCall.getAndSet(false)) {
+                answeredByStillWanted.complete(stillWanted.getAsBoolean());
+                mayThrow.join();
+            }
+        });
+        CompletableFuture<Void> inTheListener = new CompletableFuture<>();
+        CompletableFuture<Void> mayRegister = new CompletableFuture<>();
+        AtomicBoolean firstStart = new AtomicBoolean(true);
+        catchup.listenForCatchup(ID, new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                if (firstStart.getAndSet(false)) {
+                    inTheListener.complete(null);
+                    mayRegister.join();
+                }
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+            }
+        });
+        CompletableFuture<Subscription> subscribing = CompletableFuture.supplyAsync(() -> catchup.subscribe(ID, startAt, toDomainEvents(received)));
+        assertThat(inTheListener).as("the subscribe found the model running and is about to register its replay").succeedsWithin(WAIT);
+        catchup.stop();
+        assertThat(catchup.stopped).as("the model is stopped").isTrue();
+        mayRegister.complete(null);
+        Subscription subscription = subscribing.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+        assertThat(answeredByStillWanted).as("what stillWanted answered in the first canResumeFrom of the replay").succeedsWithin(WAIT).isEqualTo(false);
+
+        // When a start clears the stop before canResumeFrom throws
+        catchup.start(true);
+        assertThat(catchup.stopped).as("the model is stopped after the start").isFalse();
+        mayThrow.complete(null);
+
+        // Then the failure is not read as an ordinary one, so the replay is parked and run again instead of ending as one that did not go live
+        AtomicBoolean started = new AtomicBoolean(false);
+        assertThatCode(() -> started.set(subscription.waitUntilStarted(WAIT))).as("waiting until the subscription started").doesNotThrowAnyException();
+        assertThat(started).as("the subscription started").isTrue();
+        assertThatTheSubscriptionGoesLive();
+        assertThat(errorsLogged()).as("errors logged").isEmpty();
+    }
+
+    @Test
+    void a_canResumeFrom_that_answers_false_once_a_stop_came_during_it_and_a_start_cleared_the_stop_before_it_answered_does_not_hold_the_subscription_as_unable_to_resume_and_the_replay_runs_again_to_go_live() {
+        Site site = Site.CAN_RESUME_FROM_AT_THE_START_OF_A_POSITION_REPLAY;
+        // Given a wrapped model whose first canResumeFrom begins while the replay is wanted, waits, and then answers false
+        CompletableFuture<Void> began = new CompletableFuture<>();
+        CompletableFuture<Void> mayAnswer = new CompletableFuture<>();
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        createModelsFor(site, false);
+        // A replay origin after the beginning, so a false that is read as lost history holds the subscription as unable to resume
+        StartAt startAt = StartAt.checkpoint(new StringBasedCheckpoint(CatchupCheckpoints.format(2, 1, 3, LIVE_START)));
+        live.doesNotRetry();
+        live.answersFalseOnceAfterReadingStillWanted(stillWanted -> {
+            if (Thread.currentThread().isVirtual() && firstCall.getAndSet(false)) {
+                began.complete(null);
+                mayAnswer.join();
+            }
+        });
+        Subscription subscription = catchup.subscribe(ID, startAt, toDomainEvents(received));
+        assertThat(began).as("canResumeFrom began").succeedsWithin(WAIT);
+        CompletableFuture<Void> stopping;
+        try (AbstractCatchupSubscriptionModel.Claim ignored = catchup.claim(ID)) {
+            // And a stop held at its claim, after it marked the model stopped and before it parks the replay, and then a start that cleared it
+            stopping = CompletableFuture.runAsync(() -> catchup.stop());
+            await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.stopped).as("the model is stopped").isTrue());
+            catchup.start(true);
+            assertThat(catchup.stopped).as("the model is stopped after the start").isFalse();
+
+            // When canResumeFrom answers false
+            mayAnswer.complete(null);
+
+            // Then the false is not read as lost history, so the replay is parked and run again instead
+            AtomicBoolean started = new AtomicBoolean(false);
+            assertThatCode(() -> started.set(subscription.waitUntilStarted(WAIT))).as("waiting until the subscription started").doesNotThrowAnyException();
+            assertThat(started).as("the subscription started").isTrue();
+        }
+        assertThat(stopping).as("the stop").succeedsWithin(WAIT);
+        // The stop went on to stop the live delegate after the start, so this start is what brings it up again
+        catchup.start(true);
+        assertThatTheSubscriptionGoesLive();
+        assertAll(
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
+    }
+
+    @Test
+    void a_canResumeFrom_that_answers_false_once_a_failed_start_stopped_the_model_again_during_it_and_another_start_cleared_the_stop_does_not_hold_the_subscription_as_unable_to_resume_and_the_replay_runs_again_to_go_live() {
+        Site site = Site.CAN_RESUME_FROM_AT_THE_START_OF_A_POSITION_REPLAY;
+        // Given a wrapped model whose first canResumeFrom begins while the replay is wanted, waits, and then answers false
+        CompletableFuture<Void> began = new CompletableFuture<>();
+        CompletableFuture<Void> mayAnswer = new CompletableFuture<>();
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        createModelsFor(site, false);
+        // A replay origin after the beginning, so a false that is read as lost history holds the subscription as unable to resume
+        StartAt startAt = StartAt.checkpoint(new StringBasedCheckpoint(CatchupCheckpoints.format(2, 1, 3, LIVE_START)));
+        live.doesNotRetry();
+        live.answersFalseOnceAfterReadingStillWanted(stillWanted -> {
+            if (Thread.currentThread().isVirtual() && firstCall.getAndSet(false)) {
+                began.complete(null);
+                mayAnswer.join();
+            }
+        });
+        // And a model that was stopped, whose next start has its live delegate throw while the delegate does not run
+        catchup.stop();
+        CompletableFuture<Void> inTheLiveStart = new CompletableFuture<>();
+        CompletableFuture<Void> mayFailTheLiveStart = new CompletableFuture<>();
+        live.failsTheNextStartOnceAllowed(inTheLiveStart, mayFailTheLiveStart);
+        CompletableFuture<Void> failingStart = CompletableFuture.runAsync(() -> catchup.start(true));
+        assertThat(inTheLiveStart).as("the start reached the live delegate, after it allowed replays to run").succeedsWithin(WAIT);
+        assertThat(catchup.stopped).as("the model is stopped while the live delegate starts").isFalse();
+
+        // And a replay whose canResumeFrom began while the start was under way
+        Subscription subscription = catchup.subscribe(ID, startAt, toDomainEvents(received));
+        assertThat(began).as("canResumeFrom began").succeedsWithin(WAIT);
+        CompletableFuture<Void> secondStart;
+        try (AbstractCatchupSubscriptionModel.Claim ignored = catchup.claim(ID)) {
+            // And the failed start stopping the model again, held at its claim before it parks the replay, and then another start that cleared that stop
+            mayFailTheLiveStart.complete(null);
+            await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.stopped).as("the model is stopped again by the failed start").isTrue());
+            secondStart = CompletableFuture.runAsync(() -> catchup.start(true));
+            assertThat(secondStart).as("the second start").succeedsWithin(WAIT);
+            assertThat(catchup.stopped).as("the model is stopped after the second start").isFalse();
+
+            // When canResumeFrom answers false
+            mayAnswer.complete(null);
+
+            // Then the false is not read as lost history, so the replay is parked and run again instead
+            AtomicBoolean started = new AtomicBoolean(false);
+            assertThatCode(() -> started.set(subscription.waitUntilStarted(WAIT))).as("waiting until the subscription started").doesNotThrowAnyException();
+            assertThat(started).as("the subscription started").isTrue();
+        }
+        assertThat(failingStart).as("the failed start").failsWithin(WAIT).withThrowableThat().withMessageContaining("the live delegate failed to start");
+        assertThatTheSubscriptionGoesLive();
+        assertAll(
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
+        );
+    }
+
     private Subscription subscribeWhileTheWrappedModelRetries(Site site) {
         return subscribeWhileTheWrappedModelRetries(site, false);
     }
@@ -559,6 +712,9 @@ class StreamCatchupStopsRetryTest {
         private final boolean givesUpWithoutAskingStillWanted;
         private final AtomicBoolean retriesOnce = new AtomicBoolean(true);
         private final AtomicBoolean answersFalseOnce = new AtomicBoolean(false);
+        private final AtomicBoolean failsOnce = new AtomicBoolean(false);
+        private volatile @Nullable CompletableFuture<Void> enteredTheStartThatFails;
+        private volatile @Nullable CompletableFuture<Void> mayFailTheStart;
         private volatile boolean stopRetrying;
         private volatile @Nullable Consumer<BooleanSupplier> readsStillWantedInstead;
         final CompletableFuture<Void> retrying = new CompletableFuture<>();
@@ -584,6 +740,18 @@ class StreamCatchupStopsRetryTest {
         void answersFalseOnceAfterReadingStillWanted(Consumer<BooleanSupplier> reader) {
             readsStillWantedInstead = reader;
             answersFalseOnce.set(true);
+        }
+
+        // The test then wants the first canResumeFrom to read stillWanted through the reader and throw, and later ones to answer true
+        void failsOnceAfterReadingStillWanted(Consumer<BooleanSupplier> reader) {
+            readsStillWantedInstead = reader;
+            failsOnce.set(true);
+        }
+
+        // The test then wants the next start to signal that it reached this model, wait for the second future, and throw without starting the delegate
+        void failsTheNextStartOnceAllowed(CompletableFuture<Void> entered, CompletableFuture<Void> mayFail) {
+            mayFailTheStart = mayFail;
+            enteredTheStartThatFails = entered;
         }
 
         void stopRetrying() {
@@ -630,6 +798,9 @@ class StreamCatchupStopsRetryTest {
             Consumer<BooleanSupplier> reader = readsStillWantedInstead;
             if (reader != null) {
                 reader.accept(stillWanted);
+                if (Thread.currentThread().isVirtual() && failsOnce.getAndSet(false)) {
+                    throw new IllegalStateException("connection lost");
+                }
                 return !(Thread.currentThread().isVirtual() && answersFalseOnce.getAndSet(false));
             }
             if (!retriesGlobalCheckpoint) {
@@ -652,6 +823,14 @@ class StreamCatchupStopsRetryTest {
 
         @Override
         public void start(boolean resumeSubscriptionsAutomatically) {
+            CompletableFuture<Void> entered = enteredTheStartThatFails;
+            CompletableFuture<Void> mayFail = mayFailTheStart;
+            if (entered != null && mayFail != null) {
+                enteredTheStartThatFails = null;
+                entered.complete(null);
+                mayFail.join();
+                throw new IllegalStateException("the live delegate failed to start");
+            }
             delegate.start(resumeSubscriptionsAutomatically);
         }
 

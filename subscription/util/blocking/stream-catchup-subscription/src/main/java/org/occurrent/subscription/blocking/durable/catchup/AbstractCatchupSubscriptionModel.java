@@ -2158,46 +2158,63 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     // Calls the wrapped model with a stillWanted it can check between the attempts of a retry, so a cancel, stop or
-    // shutdown that comes during the retry ends it. The failure the call throws once the replay is no longer wanted,
-    // or after a stop came during the call, is recorded, and the replay then ends as cancelled, parked, shut down
-    // or taken over by a later attempt. Off a replay thread, as when a subclass calls one of the protected methods
-    // that call this, stillWanted is always true, as for the calls a subscribe makes.
+    // shutdown that comes during the retry ends it. The failure the call throws while the replay isn't wanted, before
+    // the call or once it throws, or after a stop came during the call, is recorded, and the replay then ends as
+    // cancelled, parked, shut down or taken over by a later attempt. Off a replay thread, as when a subclass calls one
+    // of the protected methods that call this, stillWanted is always true, as for the calls a subscribe makes.
     private <T> T callWrappedModel(Function<BooleanSupplier, T> call) {
         CatchupAttempt attempt = CURRENT_ATTEMPT.get();
         if (attempt == null) {
             return call.apply(() -> true);
         }
-        long stopsBefore = stops();
+        BeforeTheCall before = beforeTheCall(attempt);
         try {
             return call.apply(() -> stillWanted(attempt));
         } catch (Throwable failure) {
-            if (noLongerWantedSince(attempt, stopsBefore)) {
+            if (noLongerWantedSince(attempt, before)) {
                 attempt.unwantedFailure = failure;
             }
             throw failure;
         }
     }
 
-    // Whether the wrapped model can resume from liveFrom. On a replay thread, a false that came once the replay was no
-    // longer wanted, or after a stop came during the call, isn't read as lost history. It ends the call with a failure
-    // recorded as unwanted instead, so the replay ends as cancelled, parked, shut down or taken over by a later
-    // attempt. start(true) then asks the wrapped model again, and reads a false it answers then as lost history.
+    // Whether the wrapped model can resume from liveFrom. On a replay thread, a false that came while the replay wasn't
+    // wanted, before the call or once it answers, or after a stop came during the call, isn't read as lost history. It
+    // ends the call with a failure recorded as unwanted instead, so the replay ends as cancelled, parked, shut down or
+    // taken over by a later attempt. start(true) then asks the wrapped model again, and reads a false it answers then
+    // as lost history.
     private boolean wrappedModelCanResumeFrom(Checkpoint liveFrom) {
         CatchupAttempt attempt = CURRENT_ATTEMPT.get();
-        long stopsBefore = attempt == null ? 0 : stops();
+        if (attempt == null) {
+            return callWrappedModel(stillWanted -> subscriptionModel.canResumeFrom(liveFrom, stillWanted));
+        }
+        BeforeTheCall before = beforeTheCall(attempt);
         boolean canResume = callWrappedModel(stillWanted -> subscriptionModel.canResumeFrom(liveFrom, stillWanted));
-        if (canResume || attempt == null || !noLongerWantedSince(attempt, stopsBefore)) {
+        if (canResume || !noLongerWantedSince(attempt, before)) {
             return canResume;
         }
         IllegalStateException unwanted = new IllegalStateException("The subscription model answered that it no longer has the history from live start " + liveFrom.asString()
-                + " for catch-up subscription " + attempt.subscriptionId + " once the replay was no longer wanted, or after a stop came while it checked, so the answer isn't read as lost history.");
+                + " for catch-up subscription " + attempt.subscriptionId + " while the replay wasn't wanted, or after a stop came while it checked, so the answer isn't read as lost history.");
         attempt.unwantedFailure = unwanted;
         throw unwanted;
     }
 
-    // Whether attempt is no longer wanted, or a stop came since stops answered stopsBefore
-    private boolean noLongerWantedSince(CatchupAttempt attempt, long stopsBefore) {
-        return !stillWanted(attempt) || stopsBefore != stops();
+    // What stillWanted answered for an attempt right before a call to the wrapped model, and what stops answered then
+    private record BeforeTheCall(long stops, boolean wanted) {
+    }
+
+    // Read under the lifecycle lock, so the stop count and stopped belong to the same stop or start. A start can clear
+    // stopped before the call ends without counting a stop, so a replay that registered after a stop parked the others
+    // is only known to be unwanted from what stillWanted answered before the call.
+    private BeforeTheCall beforeTheCall(CatchupAttempt attempt) {
+        synchronized (lifecycleLock) {
+            return new BeforeTheCall(stops, stillWanted(attempt));
+        }
+    }
+
+    // Whether attempt wasn't wanted before the call or isn't wanted now, or a stop came since before was read
+    private boolean noLongerWantedSince(CatchupAttempt attempt, BeforeTheCall before) {
+        return !before.wanted() || !stillWanted(attempt) || before.stops() != stops();
     }
 
     // Whether failure is the one a call to the wrapped model threw once the replay was no longer wanted
@@ -2741,12 +2758,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@code stillWanted} that answers {@code false} once the attempt is cancelled, stopped, shut down or taken over by
      * a later attempt, so a retry the wrapped model runs ends then. Called on any other thread, {@code stillWanted}
      * always answers {@code true}, and the wrapped model retries as it does for the calls a subscribe makes.
-     * On that virtual thread, a {@code false} from {@code canResumeFrom} that came once the attempt was no longer
-     * wanted, or after a stop came during the call, isn't read as lost history, and the replay is parked or ends
-     * instead.
+     * On that virtual thread, a {@code false} from {@code canResumeFrom} that came while the attempt wasn't wanted,
+     * before the call or once it answered, or after a stop came during the call, isn't read as lost history, and the
+     * replay is parked or ends instead.
      *
      * @throws CatchupCannotResumeException if the wrapped model no longer has the history from the live start in
      *                                      {@code start}, and the first attempt started after the beginning of time
+     * @throws IllegalStateException        on that virtual thread, in place of a {@code false} from
+     *                                      {@code canResumeFrom} that isn't read as lost history. The replay parks or
+     *                                      ends only when it gets this same instance back, so an override that calls
+     *                                      this should rethrow it unwrapped
      */
     protected TimeReplayStart timeReplayStart(String subscriptionId, Checkpoint start, @Nullable String liveStart, @Nullable StartAt delegatedStartAt) {
         if (!(CatchupCheckpoints.parse(start) instanceof CatchupCheckpoints.Time stored)) {
@@ -2803,13 +2824,17 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@code stillWanted} that answers {@code false} once the attempt is cancelled, stopped, shut down or taken over by
      * a later attempt, so a retry the wrapped model runs ends then. Called on any other thread, {@code stillWanted}
      * always answers {@code true}, and the wrapped model retries as it does for the calls a subscribe makes.
-     * On that virtual thread, a {@code false} from {@code canResumeFrom} that came once the attempt was no longer
-     * wanted, or after a stop came during the call, isn't read as lost history, and the replay is parked or ends
-     * instead.
+     * On that virtual thread, a {@code false} from {@code canResumeFrom} that came while the attempt wasn't wanted,
+     * before the call or once it answered, or after a stop came during the call, isn't read as lost history, and the
+     * replay is parked or ends instead.
      *
      * @throws CatchupCannotResumeException if {@code start} is a checkpoint a time replay stored, a position above 0
      *                                      without a live start, or one whose live start the wrapped model no longer
      *                                      has the history from while the first attempt started above position 0
+     * @throws IllegalStateException        on that virtual thread, in place of a {@code false} from
+     *                                      {@code canResumeFrom} that isn't read as lost history. The replay parks or
+     *                                      ends only when it gets this same instance back, so an override that calls
+     *                                      this should rethrow it unwrapped
      */
     protected PositionReplayStart positionReplayStart(String subscriptionId, Checkpoint start, @Nullable String liveStart, @Nullable StartAt delegatedStartAt) {
         if (!(CatchupCheckpoints.parse(start) instanceof CatchupCheckpoints.Position stored)) {

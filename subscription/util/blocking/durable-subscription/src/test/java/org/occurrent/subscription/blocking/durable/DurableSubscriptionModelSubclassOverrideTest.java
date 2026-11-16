@@ -35,6 +35,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * A catch-up calls the two-argument globalCheckpoint and canResumeFrom, so a subclass of {@link DurableSubscriptionModel}
@@ -172,6 +173,29 @@ class DurableSubscriptionModelSubclassOverrideTest {
 
         // Then
         assertThat(wrapped.calls).as("calls the wrapped model got").containsExactly(new Call("canResumeFrom(Checkpoint)", null), new Call("globalCheckpoint()", null));
+    }
+
+    @Test
+    void a_one_argument_call_after_a_two_argument_call_has_thrown_does_not_see_its_stillWanted() {
+        // Given an override whose first call throws, and a two-argument call that has thrown through it
+        IllegalStateException overrideFailure = new IllegalStateException("the override failed");
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage()) {
+            @Override
+            public boolean canResumeFrom(Checkpoint checkpoint) {
+                if (firstCall.getAndSet(false)) {
+                    throw overrideFailure;
+                }
+                return super.canResumeFrom(checkpoint);
+            }
+        };
+        assertThatThrownBy(() -> model.canResumeFrom(WRAPPED_ANSWER, () -> true)).as("thrown by the two-argument call").isSameAs(overrideFailure);
+
+        // When a one-argument call follows on the same thread
+        model.canResumeFrom(WRAPPED_ANSWER);
+
+        // Then it reaches the wrapped model with no stillWanted, and never with the one of the call that has thrown
+        assertThat(wrapped.calls).as("calls the wrapped model got").containsExactly(new Call("canResumeFrom(Checkpoint)", null));
     }
 
     @Test
