@@ -139,19 +139,21 @@ shorten the replay after such a restart, and is not part of this decision.
 `cancelSubscription(id)` keeps deleting the marker, the same clean-up a cancel does for a durable subscription's
 checkpoint, so the next subscribe of the id replays from the beginning. It no longer promises that. A delete a failover
 loses, or a marker write the store applies after the delete, makes the next subscribe resume from the old position instead.
+A delete that throws on the reactor push model works as in 0.34.0. The next subscribe of the id in the same process
+tries the delete again and replays from the beginning, see "Fed-back events on the reactor stack".
 An application that needs a guaranteed rebuild, or that changes the filter or the projection, subscribes under a new
 subscription id. The blocking push model still
 deletes first and cancels nothing when the delete throws.
 
 ### Fed-back events on the reactor stack
 
-A handler or a view can write an event to the event store and feed it back, and `ReactiveHandover` answers such an
-event as taken in once it is queued, so no broker delivers it again. Say the live delivery of an event W is running
-when a catch-up A reads H. A holds live delivery back and waits for W's delivery to end before it replays, so that
-delivery is over before A writes H. What W's handler fed back is not. Take an event X that W's handler wrote and fed
-back, at a position at or below H, whose write committed after A's replay read past that position. A's replay does not
-read X, X waits in the live feed behind A's hold, and it is delivered only after A writes H. If that delivery fails, H
-is stored, the next start resumes after it, and nothing delivers X again.
+A handler or a view can write an event to the event store and feed it back, and `ReactiveHandover` answers such an event
+as taken in once it is queued, so no broker delivers it again. Say the live delivery of an event W is running when a
+catch-up A reads H. A holds live delivery back and waits for W's delivery to end before it replays, so that delivery is
+over before A writes H. What W's handler fed back is not. Take an event X that W's handler wrote and fed back, at a
+position at or below H, whose write committed after A's replay read past that position. A's replay does not read X, X
+waits in the live feed behind A's hold, and it is delivered only after A's write of H has completed, since the hold
+lasts until then. If that delivery fails, H is stored, the next start resumes after it, and nothing delivers X again.
 
 So `ReactiveHandover` does not write H while an event its own code fed, and that A's replay did not deliver, waits in
 the live feed. That holds whether or not W's caller still waits for W, since W's answer can have gone out before X is
@@ -161,9 +163,13 @@ read is delivered before H is written, and its live copy is skipped as a repeat.
 whenever it handles one, under steady live traffic, can keep the marker at P on every start, and each start then replays
 everything after P.
 
-`ReactiveHandover` also keeps deleting the marker through `Source.forgetCaughtUp()` when a delivery or a catch-up
-fails, as in 0.34.0, as a backstop behind that rule. It tries the delete four times and then logs. Only the reactor
-push model's `markersNotYetDeleted` is removed, and it is private, so no public API changes.
+`ReactiveHandover` also keeps deleting the marker through `Source.forgetCaughtUp()` when a delivery or a catch-up fails,
+as in 0.34.0, as a backstop behind that rule. It tries the delete four times and then logs. The reactor push model keeps
+`markersNotYetDeleted` from 0.34.0. An id whose last delete threw is in it, and the next catch-up of that id in the same
+process tries the delete again and replays from the beginning instead of resuming after the marker that is still stored.
+The set is kept in memory, so a restart empties it and the next start resumes after that marker. When the checkpoint
+stored under the id is not a catch-up marker, a durable subscription's for example, the catch-up fails naming the id and
+the backstop deletes nothing, since that checkpoint is not the catch-up's to delete.
 [#1552](https://github.com/johanhaleby/occurrent/issues/1552) tracks delivering the fed-back events before the marker
 is written, as `BlockingHandover` does, which would let the marker move on for a handler like that.
 
@@ -246,7 +252,8 @@ cost a longer replay, the API is unchanged, and the upgrade needs nothing.
   earlier catch-up stored it, so each start replays everything after it, until
   [#1552](https://github.com/johanhaleby/occurrent/issues/1552) delivers those events before the marker as the
   blocking stack does.
-* The reactor stack still deletes the marker when a delivery fails, as in 0.34.0, as a backstop.
+* The reactor stack still deletes the marker when a delivery fails, as in 0.34.0, as a backstop. When that delete
+  throws, the reactor push model's next catch-up of the id in the same process replays from the beginning, as in 0.34.0.
 * The ADR 177 order is unchanged. Step 1 reads the marker as a position, and step 4 writes H.
 * The reactor push model still takes no `CheckpointWriteVersionSource`
   ([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 29), so its marker writes pass `any()`. Nothing
