@@ -292,6 +292,10 @@ class SpringMongoSagaStateStoreMongoTest {
         store.compareAndSave("newest", activeAt("newest", Instant.ofEpochMilli(3_000)), 0);
         store.compareAndSave("oldest", activeAt("oldest", Instant.ofEpochMilli(1_000)), 0);
         store.compareAndSave("middle", activeAt("middle", Instant.ofEpochMilli(2_000)), 0);
+        // ACTIVE is stored as two strings and the (status, updatedAt) index orders by the string first, so only the sort
+        // puts the plain instance between the two marked ones.
+        storeAsActiveMarked("newest");
+        storeAsActiveMarked("oldest");
 
         List<SagaEnvelope<Counter>> found = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(4_000), 10);
 
@@ -300,9 +304,12 @@ class SpringMongoSagaStateStoreMongoTest {
 
     @Test
     void findByStatus_limit_truncates_after_ordering_to_the_stalest_N_not_an_arbitrary_N() {
-        store.compareAndSave("oldest", activeAt("oldest", Instant.ofEpochMilli(1_000)), 0);
-        store.compareAndSave("middle", activeAt("middle", Instant.ofEpochMilli(2_000)), 0);
         store.compareAndSave("newest", activeAt("newest", Instant.ofEpochMilli(3_000)), 0);
+        store.compareAndSave("middle", activeAt("middle", Instant.ofEpochMilli(2_000)), 0);
+        store.compareAndSave("oldest", activeAt("oldest", Instant.ofEpochMilli(1_000)), 0);
+        // The two stalest are stored as ACTIVE_MARKED and the newest as ACTIVE, so a read without the sort returns the newest first.
+        storeAsActiveMarked("middle");
+        storeAsActiveMarked("oldest");
 
         List<SagaEnvelope<Counter>> found = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(4_000), 2);
 
@@ -472,6 +479,10 @@ class SpringMongoSagaStateStoreMongoTest {
                 () -> assertThat(polled.currentStep()).as("yet currentStep is answered, from its own top-level field").isNotNull(),
                 () -> assertThat(polled.currentStep()).isEqualTo(flowStore.find("flow-poll-step").orElseThrow().currentStep())
         );
+    }
+
+    private void storeAsActiveMarked(String sagaId) {
+        mongoOperations.getCollection(collection).updateOne(new Document("_id", sagaId), new Document("$set", new Document("status", "ACTIVE_MARKED")));
     }
 
     private static SagaEnvelope<Counter> activeAt(String id, Instant updatedAt) {
