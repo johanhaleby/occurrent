@@ -131,12 +131,12 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
     interface StartRefusalListener {
         /**
          * Called once the model has refused the start position of {@code subscriptionId}. The model removed the
-         * subscription and freed its id before calling, so a {@code subscribe} with the same id and a start position the
-         * model accepts makes a new subscription, and one may already have done so by the time the listener runs. The
-         * model doesn't try the refused start again, and a handle of the refused subscription throws the refusal from
-         * its next wait on, also one that answered earlier that the subscription started. A MongoDB subscription model
-         * calls this also for a subscription whose change stream history is lost while restarts after that are off,
-         * which can come long after the subscription started.
+         * subscription and freed its id before calling, so a {@code subscribe} with the same id and a start position
+         * the model accepts makes a new subscription, and one may already have done so by the time the listener runs.
+         * The model doesn't try the refused start again, and every handle of the refused subscription throws the
+         * refusal from its next wait on, also one that answered earlier that the subscription started. A MongoDB
+         * subscription model calls this also for a subscription whose change stream history is lost while restarts
+         * after that are off, which can come long after the subscription started.
          * <p>
          * Called on the thread that would have read the subscription, without any lock of the model. The model calls
          * each listener in the order they were added. A listener that throws a {@link RuntimeException} is logged, and
@@ -151,8 +151,8 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
          * Called once the model holds {@code subscriptionId} paused because it got no position to open its change
          * stream at the present, after a loss of history or at a resume. Unlike {@link #handleStartRefusal}, the model
          * keeps the subscription and its id, a {@link SubscriptionModelLifeCycle#resumeSubscription(String)} asks for
-         * the present again, and a handle that still waits for the held run to start throws {@code refusal}. A resume or
-         * a cancel may already have run by the time the listener runs, and once the model no longer has the
+         * the present again, and every handle of the subscription throws {@code refusal} until a resume starts it. A
+         * resume or a cancel may already have run by the time the listener runs, and once the model no longer has the
          * subscription a {@code subscribe} with the same id may have made a new one. A listener that acts on the hold
          * later than the call can ask
          * {@link StartRefusalReportingSubscriptions#isHeldPausedFor(String, UnsupportedStartAtException)} first.
@@ -162,7 +162,7 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
          * {@link RuntimeException} is logged.
          *
          * @param subscriptionId The subscription the model holds paused.
-         * @param refusal        What a handle that waits for the held run to start throws.
+         * @param refusal        What every handle of the subscription throws until a resume starts it.
          */
         void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal);
 

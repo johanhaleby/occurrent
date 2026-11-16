@@ -50,14 +50,15 @@ public class SpringMongoSubscription implements Subscription {
     }
 
     /**
-     * Waits until the change stream of the subscription has opened. Through a mongos, a subscription
-     * that starts at a stored position, a checkpoint, an operation time or a resume token, counts as opened only once
-     * its change stream's first reply came, which can take up to the model's {@code maxAwaitTime}, or the server's
-     * default when none is set. So does a subscription at the present that opens at the position {@code subscribe(..)}
-     * read for it, unless its change stream opens right after that read on the first try. One made while the model was
-     * stopped and started later, one resumed after a pause before its first reply, and one whose first try to open
-     * failed wait, since that position can have left the oplog by then. The wait also ends,
-     * with {@code false}, when the subscription model is shut down.
+     * Waits until the change stream of the subscription has opened. Through a mongos, a subscription that opens at a
+     * stored position, a checkpoint, an operation time or a resume token, or at the position a resumed subscription
+     * read to, such as after a pause, {@code stop()} and {@code start(true)}, or a competing consumer's lease takeover,
+     * counts as opened only once its change stream's first reply came, which can take up to the model's
+     * {@code maxAwaitTime}, or the server's default when none is set. So does a subscription at the present that opens
+     * at the position {@code subscribe(..)} read for it, unless its change stream opens right after that read on the
+     * first try. One made while the model was stopped and started later, one resumed after a pause before its first
+     * reply, and one whose first try to open failed wait, since that position can have left the oplog by then. The wait
+     * also ends, with {@code false}, when the subscription model is shut down.
      * <p>
      * An open change stream doesn't mean that MongoDB has confirmed it is healthy. After a failure the model restarts
      * the change stream, apart from a loss of its history with {@code restartSubscriptionsOnChangeStreamHistoryLost}
@@ -67,8 +68,8 @@ public class SpringMongoSubscription implements Subscription {
      * subscription, at its start position or after a loss of its change stream's history. A refusal that comes after
      * this answered {@code true} is thrown from the next call on, since the model no longer runs the subscription. A
      * subscription held paused, because its restart from the present after a loss of history got no position, throws
-     * its refusal the same way. The handle {@code subscribe(..)} returned stops throwing it once a resume starts the
-     * subscription again.
+     * its refusal the same way. Every handle of the subscription answers so, the one {@code subscribe(..)} returned
+     * and each one a resume returned, and each stops throwing a hold once a resume starts the subscription again.
      * <p>
      * It answers {@code true} also for a resumed subscription that waits for an action call from before its pause to
      * return, so a caller isn't held back by a call that doesn't return. A refusal of that subscription is thrown from

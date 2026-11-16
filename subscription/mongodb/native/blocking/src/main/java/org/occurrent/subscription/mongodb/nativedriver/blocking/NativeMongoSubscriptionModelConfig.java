@@ -96,7 +96,8 @@ public class NativeMongoSubscriptionModelConfig {
      * While it is off, the model refuses and removes a subscription whose change stream history is lost, whether
      * MongoDB reports the loss as the change stream opens, with its first reply through a mongos, or on a later read.
      * Waiting for the subscription to start then throws an {@code UnsupportedStartAtException} with MongoDB's error in
-     * its cause chain, also on a handle that answered earlier that the subscription started.
+     * its cause chain, on every handle of the subscription, also one that answered earlier that the subscription
+     * started and one a resume returned.
      *
      * @param restartSubscriptionsOnChangeStreamHistoryLost Whether or not to automatically restart a subscription, whose change stream history is lost.
      * @return A new instance of {@code NativeMongoSubscriptionModelConfig}

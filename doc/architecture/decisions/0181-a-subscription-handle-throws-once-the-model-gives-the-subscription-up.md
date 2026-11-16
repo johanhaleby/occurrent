@@ -38,7 +38,10 @@ handle reports as not started.
   earlier call answered `true`, and so does every call after it. The refusal is an `UnsupportedStartAtException`, the
   same exception a refused start throws.
 * When the model holds the subscription paused until a resume, each call throws the reason until a resume starts the
-  subscription again. The handle the resume returned for the held run keeps throwing it.
+  subscription again.
+* Every handle of the subscription answers so, the one `subscribe(..)` returned and each one a resume returned,
+  whichever run it was returned for. A refusal or a hold of a later run reaches a handle a resume returned earlier, and
+  a later run that starts ends a hold for all of them.
 * A pause, a stop or a lost lock race still keeps the answer `true`, as ADR 105 decided, since the subscription stays
   known and the application or the model can start it again without changing it.
 

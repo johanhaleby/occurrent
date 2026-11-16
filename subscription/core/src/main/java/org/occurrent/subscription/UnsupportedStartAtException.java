@@ -20,11 +20,11 @@ package org.occurrent.subscription;
  * A start position this model does not accept, so the call was refused. Starting somewhere else instead would deliver
  * from a position the caller did not ask for, and silently losing or repeating history is worse than refusing.
  * <p>
- * Which positions a model accepts is a property of the model rather than a bug. {@code InMemorySubscriptionModel}
- * keeps no history, so it starts from now or from its own default and nothing else, and a catch-up-then-push model
- * always replays from the beginning, so there is no position for a caller to choose. A MongoDB subscription model also
- * throws it for a subscription whose change stream history is lost while it is told not to restart such a
- * subscription, at its start or later, with MongoDB's error in its cause chain.
+ * Which positions a model accepts is a property of the model rather than a bug. {@code InMemorySubscriptionModel} keeps
+ * no history, so it starts from now or from its own default and nothing else, and a catch-up-then-push model always
+ * replays from the beginning, so there is no position for a caller to choose. {@code NativeMongoSubscriptionModel} and
+ * {@code SpringMongoSubscriptionModel} also throw it for a subscription whose change stream history is lost while they
+ * are told not to restart such a subscription, at its start or later, with MongoDB's error in its cause chain.
  */
 public final class UnsupportedStartAtException extends SubscriptionRefusedException {
 
