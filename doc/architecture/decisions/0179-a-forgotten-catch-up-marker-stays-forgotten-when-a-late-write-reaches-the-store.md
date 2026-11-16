@@ -114,9 +114,10 @@ The marker stays where 0.34.0 keeps it, and the generation is stored beside it:
 On MongoDB:
 
 * `readCatchupMarker` reads the plain document first and the generation document second, two finds by exact `_id`,
-  both with `withReadPreference(primary())`. The plain read uses `ReadConcern.MAJORITY`. The generation read uses
-  `ReadConcern.LINEARIZABLE` with a `maxTimeMS`. The marker is present only when the plain document exists and its
-  `generation` equals the generation document's.
+  both with `withReadPreference(primary())` and a `maxTimeMS`. The plain read uses `ReadConcern.MAJORITY`, which
+  waits too on a collection whose creation no majority has acknowledged yet (seen on 4.4.5). The generation read uses
+  `ReadConcern.LINEARIZABLE`. The marker is present only when the plain document exists and its `generation` equals
+  the generation document's.
 * `saveCatchupMarker` is one `findOneAndUpdate` on the plain document, the conditional `$replaceWith` a checkpoint save
   already is, with `generation` added to the new document. It never reads the generation document, and it uses the
   write concern of the collection the application gave the store.
@@ -130,7 +131,7 @@ On MongoDB:
   without sending the delete, as `delete` throws today.
   An `$inc` that passed its `wtimeout` may still have raised the generation, and the next attempt raises it once more.
 * A client with a `timeoutMS` makes the driver send no `wtimeout` and no `maxTimeMS`. A `timeoutMS` above 0 then
-  bounds each forget write and the generation read. A `timeoutMS` of 0 waits forever, so the store gives those
+  bounds each forget write and each find of a read. A `timeoutMS` of 0 waits forever, so the store gives those
   commands an operation timeout of 10 seconds, the way ADR 149 bounds the position reservation of an append. Without
   it, a forget or a read on such a client blocked past 45 seconds while no majority answered (checked on 4.4.5 with
   driver 5.8.0).
