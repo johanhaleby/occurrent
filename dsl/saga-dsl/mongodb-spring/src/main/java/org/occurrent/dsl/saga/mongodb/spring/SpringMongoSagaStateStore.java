@@ -349,7 +349,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Query query = Query.query(statusIs(status).and(UPDATED_AT).lt(updatedBefore.toEpochMilli()))
                 .with(Sort.by(Sort.Direction.ASC, UPDATED_AT))
                 .limit(limit);
-        // Projected exactly like the due-timer query, so enumerating an instance whose state no longer decodes still works.
+        // Projected like the due-timer query, so a page doesn't read the state of every instance it lists
         project(query, SagaCodec.instanceFields());
         Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, collectionName);
         return retryStrategy.execute(read).stream().map(this::toStoredSaga).toList();

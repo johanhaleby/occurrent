@@ -154,7 +154,9 @@ public final class SagaSubscription implements AutoCloseable {
      *                               thrown when the runner was built without an
      *                               {@link org.occurrent.eventstore.api.blocking.EventStoreQueries}, when the state store
      *                               does not implement {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs}, and
-     *                               when it does not persist what a release writes
+     *                               when the store gives back an instance stored as {@code QUARANTINED_RECORDING}
+     *                               without its failure input, quarantine id or skip count. The message names the
+     *                               missing field
      * @throws SagaConcurrencyException when the release loses its compare-and-set {@code maxCasAttempts} times in a row,
      *                                  to start the release or to write a replayed input
      */

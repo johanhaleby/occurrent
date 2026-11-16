@@ -764,7 +764,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             firstRead = false;
             String quarantineId = current.quarantineId();
             if (quarantineId == null) {
-                throw new IllegalStateException("Saga '" + subscriptionId + "' instance '" + sagaId + "' is releasing with no quarantine id, which only a state store that does not persist SagaFailure.quarantineId leaves.");
+                throw new IllegalStateException("Saga '" + subscriptionId + "' instance '" + sagaId + "' is releasing with no quarantine id, so there are no recorded inputs to replay.");
             }
             // Read after the instance, so the write that turns it active expects a version from before this read
             List<SkippedInput> first = records.findSkippedInputs(sagaId, quarantineId, 1);

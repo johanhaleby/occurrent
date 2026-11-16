@@ -320,6 +320,9 @@ public final class SagaCodec<S extends @Nullable Object> {
         }
         if (envelope.quarantineSkipCount() != null) {
             fields.put(QUARANTINE_SKIP_COUNT, envelope.quarantineSkipCount());
+        } else if (QUARANTINED_RECORDING.equals(fields.get(STATUS))) {
+            // decode refuses it, so writing it would leave an instance no read can take back
+            requireStored(envelope.sagaId(), QUARANTINE_SKIP_COUNT, null);
         }
         S state = envelope.state();
         if (withState && state != null) {

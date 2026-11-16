@@ -22,8 +22,9 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Turns the user state of a saga into a value a store can persist, and back. The store supplies it, because how a user
- * state is represented depends on the store. The state of a flow saga never reaches it, since {@link SagaCodec} encodes
- * that one itself.
+ * state is represented depends on the store. {@link SagaCodec} encodes the state of a flow saga itself, or refuses it,
+ * so {@link #encode} never gets one. {@link #decode} gets a stored flow saga state when the {@code SagaCodec} was built
+ * without the flow saga's {@code CloudEventConverter}.
  *
  * @param <S> the user state type
  */

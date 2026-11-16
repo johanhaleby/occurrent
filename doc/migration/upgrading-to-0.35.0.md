@@ -1218,6 +1218,9 @@ Code that wrote an envelope to a store directly encodes it with the same codec f
 stateStore.compareAndSave(codec.encode(envelope), 0);
 ```
 
+`encode` throws an `IllegalStateException` for a quarantined envelope with no `quarantineSkipCount`, with the
+message a read of such an instance gives, since no read could take that instance back.
+
 For a flow saga, pass the application's `CloudEventConverter` instead of `null`. A codec built with `null` throws
 `IllegalArgumentException` when it encodes a `FlowState`.
 
@@ -1251,7 +1254,7 @@ Pass the components the removed constructor filled in:
 
 | Call | Add | For an instance with nothing in them |
 | --- | --- | --- |
-| `SagaEnvelope` with 13 arguments | `streamMarks` and `quarantineSkipCount`, after `failure` | `Map.of()` and `null` |
+| `SagaEnvelope` with 13 arguments | `streamMarks` and `quarantineSkipCount`, after `failure` | `Map.of()` and `null`, or a count for a `QUARANTINED` envelope whose failure has a quarantine id |
 | `SagaEnvelope` with 11 arguments | `started`, `failure`, `streamMarks` and `quarantineSkipCount`, after `currentStep` | `true`, `null`, `Map.of()` and `null` |
 | `SagaFailure` with 5 arguments | `releasedAt` and `quarantineId`, after `failureMessage` | `null` and `null` |
 

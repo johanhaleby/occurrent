@@ -614,7 +614,8 @@ public final class SagaExecutionSupport {
     }
 
     // Quarantined again during a release, under the same quarantine id. The skip count stays, since the records after
-    // the failing one stay, and is 0 only when a store lost it
+    // the failing one stay. SagaCodec refuses to read a releasing instance without one, so 0 is only ever taken for
+    // an envelope built in code
     private static <S extends @Nullable Object> SagaEnvelope<S> requarantined(SagaEnvelope<S> current, Instant now, SagaFailure record,
                                                                              Map<String, StreamMarks> streamMarks) {
         Long count = current.quarantineSkipCount();

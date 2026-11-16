@@ -80,9 +80,10 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         return compareAndSet(saga, expectedVersion, existing -> {
             // A positive expected version only matches an instance that is stored
             Map<String, Object> stored = requireNonNull(existing).encoded().fields();
-            // The stored state and the step derived from it stay where they are
+            // The stored state and the step derived from it stay as they are, and stay absent when nothing is stored
             Map<String, Object> fields = new LinkedHashMap<>(saga.encoded().fields());
             for (String kept : List.of(SagaCodec.CURRENT_STEP, SagaCodec.STATE)) {
+                fields.remove(kept);
                 if (stored.containsKey(kept)) {
                     fields.put(kept, stored.get(kept));
                 }
