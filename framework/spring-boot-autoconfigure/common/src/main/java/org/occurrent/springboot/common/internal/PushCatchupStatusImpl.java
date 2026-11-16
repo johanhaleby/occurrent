@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.common;
+package org.occurrent.springboot.common.internal;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.springboot.common.PushCatchupStatus;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;

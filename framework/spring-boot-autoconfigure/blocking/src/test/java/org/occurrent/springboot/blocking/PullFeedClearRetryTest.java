@@ -20,7 +20,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.projection.AppliedAppendStore;
-import org.occurrent.springboot.common.AppliedAppendRecordingRegistry;
+import org.occurrent.springboot.common.internal.AppliedAppendRecordingRegistry;
 import org.occurrent.dsl.projection.blocking.Projections;
 import org.occurrent.dsl.projection.blocking.RecordingMaterializedView;
 import org.occurrent.dsl.view.MaterializedView;
