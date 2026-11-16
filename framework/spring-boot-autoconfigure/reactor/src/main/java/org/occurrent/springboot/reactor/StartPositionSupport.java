@@ -24,7 +24,7 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.StartupWorkaround;
-import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
+import org.occurrent.springboot.common.internal.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;

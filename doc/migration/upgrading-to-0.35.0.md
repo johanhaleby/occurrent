@@ -38,6 +38,9 @@ other sections compile fine and behave differently, so read them first.
 - [`ComposedDefaultStartPosition` and its bean are removed](#composeddefaultstartposition-and-its-bean-are-removed).
   **Breaks the build** if you inject the `occurrentComposedDefaultStartPosition` bean, name the type, or call or
   override `occurrentCompetingDurableSubscriptionModel(..)`.
+- [Five types the Spring Boot starters share move to an internal package](#five-types-the-spring-boot-starters-share-move-to-an-internal-package).
+  **Breaks the build** if you refer to `SubscriptionAnnotations`, `PushCatchupStatusImpl`, `AsynchronousSubscribables`,
+  `AppliedAppendRecordingRegistry` or `PolledCatchupSignals`, and `UpgradeToOccurrent_0_35` rewrites the references.
 - [A held event is withdrawn instead of delivered without the lease](#a-held-event-is-withdrawn-instead-of-delivered-without-the-lease).
   `AttemptNotMade` moves from the nested `org.occurrent.retry.internal.RetryExecution.AttemptNotMade` to
   `org.occurrent.retry.AttemptNotMade`. **Breaks the build** if you name the nested class.
@@ -204,9 +207,11 @@ other sections compile fine and behave differently, so read them first.
   static method that hides an annotated static factory method of a superclass fails at startup the same way. A
   handler declared with a type variable gets only the type the bean's class gives it, which can narrow a handler that
   ran in 0.34.0, one of the bridge kind or one on a JDK proxy that can't be unwrapped. Compiles unchanged.
-- [`SubscriptionAnnotations` reads handlers as the bean's class sees them](#subscriptionannotations-reads-handlers-as-the-beans-class-sees-them).
-  Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly sees the changes
-  the starters make to find inherited handlers. Compiles unchanged.
+- [Five types the Spring Boot starters share move to an internal package](#five-types-the-spring-boot-starters-share-move-to-an-internal-package).
+  `SubscriptionAnnotations`, `PushCatchupStatusImpl`, `AsynchronousSubscribables`, `AppliedAppendRecordingRegistry`
+  and `PolledCatchupSignals` move to `org.occurrent.springboot.common.internal`, and `UpgradeToOccurrent_0_35` rewrites
+  the references. Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly
+  sees the changes the starters make to find inherited handlers. **Breaks the build** if you refer to one of the five.
 
 ### Brokers
 
@@ -235,6 +240,10 @@ other sections compile fine and behave differently, so read them first.
 
 ### The rewrite recipe
 
+Run `UpgradeToOccurrent_0_35` while the project still depends on 0.34.0, and then move the dependency to 0.35.0.
+`MoveAttemptNotMade_0_35` and `MoveSpringBootCommonTypesToInternal_0_35` look for each type at its old name, and once
+the dependency is 0.35.0 no type has that name, so they change nothing.
+
 - `org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35` adds the new bindings to a record pattern over
   `DcbAppendResult`, `DcbEventStream`, `DcbReadOptions` or `Snapshot`. See
   [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions) and
@@ -245,6 +254,10 @@ other sections compile fine and behave differently, so read them first.
 - `org.occurrent.MoveAttemptNotMade_0_35` changes each reference to `RetryExecution.AttemptNotMade` to
   `org.occurrent.retry.AttemptNotMade`. See
   [A held event is withdrawn instead of delivered without the lease](#a-held-event-is-withdrawn-instead-of-delivered-without-the-lease).
+- `org.occurrent.MoveSpringBootCommonTypesToInternal_0_35` changes each reference to `SubscriptionAnnotations` and its
+  nested types, `PushCatchupStatusImpl`, `AsynchronousSubscribables`, `AppliedAppendRecordingRegistry` and
+  `PolledCatchupSignals` to the package `org.occurrent.springboot.common.internal`. See
+  [Five types the Spring Boot starters share move to an internal package](#five-types-the-spring-boot-starters-share-move-to-an-internal-package).
 - No recipe rewrites a `DcbConsistencyToken` or the streams that create one. See
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
 
@@ -392,7 +405,9 @@ Every other capability is found only on a model that implements it. That is `Rep
 * `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
   `ManualStartSubscriptionModel` answers empty. There is no way to resume a competing subscription at a position yet.
   Pause and resume it through the `CompetingConsumerSubscriptionModel`. Over a `DurableSubscriptionModel` the resume
-  starts from the stored checkpoint. [#1304](https://github.com/johanhaleby/occurrent/issues/1304) decides how a resume at
+  starts from the stored checkpoint. The exception is a subscription subscribed at a `StartAt.checkpoint(..)` of its own
+  that has stored no checkpoint yet, while the checkpoint and write version stored for the id are the ones read when it
+  was subscribed, or that read failed. Its resume goes on from the position the model it wraps has read to. [#1304](https://github.com/johanhaleby/occurrent/issues/1304) decides how a resume at
   a position through a competing consumer should work.
 * `capability(CheckpointAwareSubscriptionModel.class)`, or another model type, on a wrapper that doesn't implement it
   answers empty where it used to answer the model beneath. On the stack the Spring Boot starter builds, a
@@ -2738,17 +2753,25 @@ checkpoint and, for a `@Projection`, `@Snapshot` or `@Saga`, its state. There is
 says whether an inherited handler was meant to run. See
 [ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md).
 
-## `SubscriptionAnnotations` reads handlers as the bean's class sees them
+## Five types the Spring Boot starters share move to an internal package
 
-Both Spring Boot starters read a bean's handlers through `SubscriptionAnnotations`, in the module they share. Three of
-its public methods change so that the starters find inherited handlers, see
-[A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered).
+Both Spring Boot starters read a bean's handlers through `SubscriptionAnnotations`, in the module they share. It moves
+from `org.occurrent.springboot.common` to `org.occurrent.springboot.common.internal`, and so do four other types the
+starters share, `PushCatchupStatusImpl`, `AsynchronousSubscribables`, `AppliedAppendRecordingRegistry` and
+`PolledCatchupSignals`. That package isn't part of the public API, so these types can change in any release.
+`PushCatchupStatus`, the interface an application injects to read where each push projection and saga is in its
+catch-up, stays in `org.occurrent.springboot.common`. Three methods of `SubscriptionAnnotations` also change so that the
+starters find inherited handlers, see [A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered).
 
 ### Who is affected
 
-Code outside the starters that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter`.
+Code outside the starters that refers to one of the five types, or to a nested type of `SubscriptionAnnotations`, stops
+compiling. Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` also gets the
+changes below.
 
 ### What changes
+
+The four other types move unchanged. Three methods of `SubscriptionAnnotations` change.
 
 - `invokeDescriptorFactory` runs a factory method that the class of the unwrapped bean inherits unchanged, where
   0.34.0 refused every factory method that class didn't declare itself. Behind a CGLIB proxy whose target can't be
@@ -2766,9 +2789,12 @@ Code outside the starters that calls `invokeDescriptorFactory`, `runsImplementat
 
 ### What to do
 
-The code compiles unchanged. Where you call one of the three methods, check what your code does with the new answer
-for an inherited factory method, a package-private method declared again in another package, or a handler declared
-with a type variable.
+`UpgradeToOccurrent_0_35` rewrites the imports and fully qualified names to the new package. A later release can change
+these types with no recipe and no section in an upgrade guide, so code that keeps calling them can stop compiling or
+behave differently on any upgrade. Code that injects `PushCatchupStatusImpl` to read catch-up progress can inject
+`PushCatchupStatus` instead. Where you call one of the three methods, check what your code does with the new
+answer for an inherited factory method, a package-private method declared again in another package, or a handler
+declared with a type variable.
 
 ## `ComposedDefaultStartPosition` and its bean are removed
 

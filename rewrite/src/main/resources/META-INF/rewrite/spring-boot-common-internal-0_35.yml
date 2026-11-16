@@ -1,0 +1,65 @@
+#
+# Copyright 2026 Johan Haleby
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MoveSpringBootCommonTypesToInternal_0_35
+displayName: Move the types the Spring Boot starters share to org.occurrent.springboot.common.internal
+description: >-
+  SubscriptionAnnotations, PushCatchupStatusImpl, AsynchronousSubscribables, AppliedAppendRecordingRegistry and
+  PolledCatchupSignals move from org.occurrent.springboot.common to org.occurrent.springboot.common.internal, since
+  they are code the Spring Boot starters share and not part of the public API. Rewrites every import and fully
+  qualified reference to them, the nested types of SubscriptionAnnotations included. See
+  doc/migration/upgrading-to-0.35.0.md.
+recipeList:
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations$HandlerParameterKind
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations$HandlerParameterKind
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations$HandlerParameter
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations$HandlerParameter
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations$StreamSubscriptionDefinition
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations$StreamSubscriptionDefinition
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations$ResolvedTypeFilter
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.SubscriptionAnnotations$ResolvedTypeFilter
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.PushCatchupStatusImpl
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.PushCatchupStatusImpl
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.AsynchronousSubscribables
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.AsynchronousSubscribables
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.AppliedAppendRecordingRegistry
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.AppliedAppendRecordingRegistry
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.common.PolledCatchupSignals
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.PolledCatchupSignals
+      ignoreDefinition: true
+  # Runs after the ChangeType entries, which add an unused import of a nested type when they qualify an enum
+  # constant access such as HandlerParameterKind.EVENT
+  - org.occurrent.rewrite.RemoveUnusedSubscriptionAnnotationsNestedTypeImports_0_35
