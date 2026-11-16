@@ -30,19 +30,19 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.application.service.WriteRefusedException;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
-import org.springframework.beans.factory.BeanCreationException;
-import org.springframework.beans.factory.BeanCurrentlyInCreationException;
-import org.springframework.beans.factory.BeanFactory;
-import org.springframework.beans.factory.config.ConfigurableBeanFactory;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Lazy;
+import org.springframework.context.event.EventListener;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -56,22 +56,22 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * A write made while the application starts, from a {@code @PostConstruct} method for example, reaches only the
- * synchronous handlers that are registered by then, and a handler that misses a write never sees it. The starter
- * therefore registers the non-lazy synchronous handlers its bean definitions show before such a write goes through.
- * <p>
- * A handler whose bean is still being created when the write needs it cannot be registered. The write then fails
- * with {@code BeanCurrentlyInCreationException} before anything is stored, instead of going through unseen.
+ * A write through the application service is refused while the application starts, until the synchronous handlers
+ * are registered, since a handler that is not registered yet would never see it. The refusal is a
+ * {@link WriteRefusedException} that fails startup and names where such a write belongs, and nothing is stored.
+ * A write from an {@code ApplicationRunner} or an {@code ApplicationReadyEvent} listener goes through and reaches the
+ * synchronous handlers, and a write straight to the event store is not refused, since it never dispatches to a handler.
  * <p>
  * Each scenario boots its own application with {@code SpringApplication.run}, on a database of its own.
  */
-@DisplayName("A write made while the application starts")
+@DisplayName("A write through the application service while the application starts")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Testcontainers
 @Timeout(180)
@@ -83,57 +83,91 @@ class WriteDuringStartupMongoTest {
     static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     @Test
-    void an_application_with_no_synchronous_handler_can_write_from_a_post_construct_method() {
+    void a_write_from_a_post_construct_method_fails_startup_and_stores_nothing() {
+        String database = "post-construct-with-handler";
+
+        Throwable thrown = catchThrowable(() -> boot(ReceiverAfterWriterApplication.class, database).close());
+
+        assertStartupWasRefused(thrown);
+        assertThat(storedEvents(database)).as("events stored").isZero();
+    }
+
+    @Test
+    void a_write_from_a_post_construct_method_is_refused_when_no_synchronous_handler_is_declared() {
         String database = "zero-synchronous";
 
-        try (ConfigurableApplicationContext context = bootSuccessfully(ZeroSynchronousApplication.class, database)) {
-            assertThat(context.getBean(StartupWriter.class).written).as("the writer's write went through").isTrue();
+        Throwable thrown = catchThrowable(() -> boot(ZeroSynchronousApplication.class, database).close());
+
+        assertStartupWasRefused(thrown);
+        assertThat(storedEvents(database)).as("events stored").isZero();
+    }
+
+    @Test
+    void a_synchronous_handler_bean_that_writes_from_its_own_post_construct_method_is_refused() {
+        String database = "writer-with-handler";
+
+        Throwable thrown = catchThrowable(() -> boot(WriterWithItsOwnHandlerApplication.class, database).close());
+
+        assertStartupWasRefused(thrown);
+        assertThat(storedEvents(database)).as("events stored").isZero();
+    }
+
+    @Test
+    void a_write_from_an_application_runner_goes_through_and_reaches_a_synchronous_handler() {
+        String database = "runner-writer";
+
+        try (ConfigurableApplicationContext context = bootSuccessfully(RunnerWriterApplication.class, database)) {
+            assertThat(context.getBean(SynchronousReceiver.class).received()).extracting(TestEvent::name).containsExactly("written-by-runner");
             assertThat(storedEvents(database)).as("events stored").isEqualTo(1);
         }
     }
 
     @Test
-    void a_write_from_a_post_construct_method_reaches_a_synchronous_handler_on_a_bean_created_after_the_writer() {
-        try (ConfigurableApplicationContext context = bootSuccessfully(ReceiverAfterWriterApplication.class, "receiver-after-writer")) {
-            SynchronousReceiver receiver = context.getBean(SynchronousReceiver.class);
+    void a_write_from_an_application_ready_event_listener_goes_through_and_reaches_a_synchronous_handler() {
+        String database = "ready-listener-writer";
 
-            assertThat(receiver.received()).extracting(TestEvent::name).containsExactly("written-at-startup");
+        try (ConfigurableApplicationContext context = bootSuccessfully(ReadyListenerWriterApplication.class, database)) {
+            assertThat(context.getBean(SynchronousReceiver.class).received()).extracting(TestEvent::name).containsExactly("written-on-ready");
+            assertThat(storedEvents(database)).as("events stored").isEqualTo(1);
         }
     }
 
     @Test
-    void a_lazy_synchronous_handler_bean_is_not_created_by_the_write_and_does_not_see_it() {
-        try (ConfigurableApplicationContext context = bootSuccessfully(LazyReceiverApplication.class, "lazy-receiver")) {
-            StartupWriter writer = context.getBean(StartupWriter.class);
-            LazySynchronousReceiver receiver = context.getBean(LazySynchronousReceiver.class);
+    void a_write_straight_to_the_event_store_from_a_post_construct_method_is_not_refused() {
+        String database = "direct-store-write";
 
-            assertThat(writer.created).as("beans the writer found created right after its write").doesNotContain("lazyReceiver");
-            assertThat(receiver.received()).as("what the lazy handler received").isEmpty();
+        try (ConfigurableApplicationContext context = bootSuccessfully(DirectStoreWriterApplication.class, database)) {
+            assertThat(context.getBean(DirectStoreWriter.class).written).as("the writer's write went through").isTrue();
+            assertThat(storedEvents(database)).as("events stored").isEqualTo(1);
         }
     }
 
     @Test
-    void a_write_made_by_a_bean_that_declares_a_synchronous_handler_itself_fails_startup_and_stores_nothing() {
-        String database = "writer-with-handler";
+    void a_write_from_a_second_thread_started_during_startup_is_refused_and_the_same_write_goes_through_once_started() {
+        String database = "second-thread-writer";
 
-        Throwable thrown = catchThrowable(() -> boot(WriterWithItsOwnHandlerApplication.class, database).close());
+        try (ConfigurableApplicationContext context = bootSuccessfully(SecondThreadWriterApplication.class, database)) {
+            Throwable refused = context.getBean(SecondThreadWriter.class).outcome.get();
 
-        assertThat(causeChainOf(thrown)).as("the failure of startup and what caused it").anyMatch(BeanCurrentlyInCreationException.class::isInstance);
-        assertThat(storedEvents(database)).as("events stored").isZero();
+            assertThat(refused).as("what the second thread's write threw while the application started").isNotNull();
+            assertThat(causeChainOf(refused)).as("what caused it").anyMatch(WriteRefusedException.class::isInstance);
+            assertThat(storedEvents(database)).as("events stored after the refusal").isZero();
+
+            context.getBean(ApplicationService.class).execute(UUID.randomUUID().toString(), __ -> List.of(new Written("written-once-started")));
+
+            assertThat(storedEvents(database)).as("events stored once started").isEqualTo(1);
+        }
     }
 
-    @Test
-    void a_write_made_while_a_bean_it_needs_is_created_for_the_writer_fails_startup_and_stores_nothing() {
-        String database = "handler-needs-writer";
-
-        Throwable thrown = catchThrowable(() -> boot(HandlerNeedsTheWriterApplication.class, database).close());
-
-        assertThat(causeChainOf(thrown)).as("the failure of startup and what caused it").anyMatch(BeanCurrentlyInCreationException.class::isInstance);
-        assertThat(storedEvents(database)).as("events stored").isZero();
+    private static void assertStartupWasRefused(Throwable thrown) {
+        assertThat(thrown).as("what booting threw").isNotNull();
+        List<Throwable> chain = causeChainOf(thrown);
+        assertThat(chain).as("the failure of startup and what caused it").anyMatch(WriteRefusedException.class::isInstance);
+        Throwable refusal = chain.stream().filter(WriteRefusedException.class::isInstance).findFirst().orElseThrow();
+        assertThat(refusal.getMessage()).as("where the refusal says such a write belongs").contains("ApplicationRunner").contains("ApplicationReadyEvent");
     }
 
-    private static List<Throwable> causeChainOf(@org.jspecify.annotations.Nullable Throwable thrown) {
-        assertThat(thrown).as("what booting threw").isNotNull().isInstanceOf(BeanCreationException.class);
+    private static List<Throwable> causeChainOf(Throwable thrown) {
         List<Throwable> chain = new ArrayList<>();
         for (Throwable t = thrown; t != null && !chain.contains(t); t = t.getCause()) {
             chain.add(t);
@@ -164,26 +198,65 @@ class WriteDuringStartupMongoTest {
                 "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE);
     }
 
-    // Writes while it is being created, which is before the startup scan has registered anything
+    // Writes through the application service while it is being created, which is before the startup scan has registered anything
     static class StartupWriter {
         private final ApplicationService<TestEvent> applicationService;
-        private final BeanFactory beanFactory;
-        volatile boolean written;
-        // Which of the lazy bean's names the container holds a singleton for, right after the write
-        final List<String> created = new CopyOnWriteArrayList<>();
 
-        StartupWriter(ApplicationService<TestEvent> applicationService, BeanFactory beanFactory) {
+        StartupWriter(ApplicationService<TestEvent> applicationService) {
             this.applicationService = applicationService;
-            this.beanFactory = beanFactory;
         }
 
         @PostConstruct
         void write() {
             applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new Written("written-at-startup")));
+        }
+    }
+
+    // Starts a thread that writes and waits for it, so the write is made before the application has started
+    static class SecondThreadWriter {
+        private final ApplicationService<TestEvent> applicationService;
+        final AtomicReference<Throwable> outcome = new AtomicReference<>();
+
+        SecondThreadWriter(ApplicationService<TestEvent> applicationService) {
+            this.applicationService = applicationService;
+        }
+
+        @PostConstruct
+        void write() throws InterruptedException {
+            Thread thread = new Thread(() -> outcome.set(catchThrowable(() ->
+                    applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new Written("written-by-second-thread"))))));
+            thread.start();
+            thread.join();
+        }
+    }
+
+    static class DirectStoreWriter {
+        private final EventStore eventStore;
+        private final CloudEventConverter<TestEvent> converter;
+        volatile boolean written;
+
+        DirectStoreWriter(EventStore eventStore, CloudEventConverter<TestEvent> converter) {
+            this.eventStore = eventStore;
+            this.converter = converter;
+        }
+
+        @PostConstruct
+        void write() {
+            eventStore.write(UUID.randomUUID().toString(), List.of(converter.toCloudEvent(new Written("written-straight-to-the-store"))));
             written = true;
-            if (((ConfigurableBeanFactory) beanFactory).containsSingleton("lazyReceiver")) {
-                created.add("lazyReceiver");
-            }
+        }
+    }
+
+    static class ReadyListenerWriter {
+        private final ApplicationService<TestEvent> applicationService;
+
+        ReadyListenerWriter(ApplicationService<TestEvent> applicationService) {
+            this.applicationService = applicationService;
+        }
+
+        @EventListener(ApplicationReadyEvent.class)
+        void write() {
+            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new Written("written-on-ready")));
         }
     }
 
@@ -191,19 +264,6 @@ class WriteDuringStartupMongoTest {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
         @SynchronousSubscription(id = "synchronousReceiver")
-        void on(Written event) {
-            received.add(event);
-        }
-
-        List<TestEvent> received() {
-            return received;
-        }
-    }
-
-    static class LazySynchronousReceiver {
-        private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
-
-        @SynchronousSubscription(id = "lazySynchronousReceiver")
         void on(Written event) {
             received.add(event);
         }
@@ -227,16 +287,6 @@ class WriteDuringStartupMongoTest {
         }
 
         @SynchronousSubscription(id = "writerSynchronousHandler")
-        void on(Written event) {
-        }
-    }
-
-    // Needs the writer, so it is being created when the writer is, and the write needs its handler registered
-    static class ReceiverThatNeedsTheWriter {
-        ReceiverThatNeedsTheWriter(StartupWriter writer) {
-        }
-
-        @SynchronousSubscription(id = "dependentSynchronousReceiver")
         void on(Written event) {
         }
     }
@@ -266,8 +316,8 @@ class WriteDuringStartupMongoTest {
     static class ZeroSynchronousApplication {
 
         @Bean
-        StartupWriter startupWriter(ApplicationService<TestEvent> applicationService, BeanFactory beanFactory) {
-            return new StartupWriter(applicationService, beanFactory);
+        StartupWriter startupWriter(ApplicationService<TestEvent> applicationService) {
+            return new StartupWriter(applicationService);
         }
     }
 
@@ -278,32 +328,13 @@ class WriteDuringStartupMongoTest {
     static class ReceiverAfterWriterApplication {
 
         @Bean
-        StartupWriter startupWriter(ApplicationService<TestEvent> applicationService, BeanFactory beanFactory) {
-            return new StartupWriter(applicationService, beanFactory);
+        StartupWriter startupWriter(ApplicationService<TestEvent> applicationService) {
+            return new StartupWriter(applicationService);
         }
 
         @Bean
         SynchronousReceiver synchronousReceiver() {
             return new SynchronousReceiver();
-        }
-    }
-
-    @Configuration(proxyBeanMethods = false)
-    @EnableAutoConfiguration
-    @EnableOccurrent
-    @Import(EventConverters.class)
-    static class LazyReceiverApplication {
-
-        @Bean
-        StartupWriter startupWriter(ApplicationService<TestEvent> applicationService, BeanFactory beanFactory) {
-            return new StartupWriter(applicationService, beanFactory);
-        }
-
-        // Declared as its own type, which the startup scan reads a handler from. It is built there, after the write.
-        @Bean
-        @Lazy
-        LazySynchronousReceiver lazyReceiver() {
-            return new LazySynchronousReceiver();
         }
     }
 
@@ -323,17 +354,67 @@ class WriteDuringStartupMongoTest {
     @EnableAutoConfiguration
     @EnableOccurrent
     @Import(EventConverters.class)
-    static class HandlerNeedsTheWriterApplication {
+    static class RunnerWriterApplication {
 
-        // Declared first, so it is created first and creates the writer for its constructor
         @Bean
-        ReceiverThatNeedsTheWriter receiverThatNeedsTheWriter(StartupWriter writer) {
-            return new ReceiverThatNeedsTheWriter(writer);
+        SynchronousReceiver synchronousReceiver() {
+            return new SynchronousReceiver();
         }
 
         @Bean
-        StartupWriter startupWriter(ApplicationService<TestEvent> applicationService, BeanFactory beanFactory) {
-            return new StartupWriter(applicationService, beanFactory);
+        ApplicationRunner runnerWriter(ApplicationService<TestEvent> applicationService) {
+            return args -> applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new Written("written-by-runner")));
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrent
+    @Import(EventConverters.class)
+    static class ReadyListenerWriterApplication {
+
+        @Bean
+        SynchronousReceiver synchronousReceiver() {
+            return new SynchronousReceiver();
+        }
+
+        @Bean
+        ReadyListenerWriter readyListenerWriter(ApplicationService<TestEvent> applicationService) {
+            return new ReadyListenerWriter(applicationService);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrent
+    @Import(EventConverters.class)
+    static class DirectStoreWriterApplication {
+
+        @Bean
+        SynchronousReceiver synchronousReceiver() {
+            return new SynchronousReceiver();
+        }
+
+        @Bean
+        DirectStoreWriter directStoreWriter(EventStore eventStore, CloudEventConverter<TestEvent> converter) {
+            return new DirectStoreWriter(eventStore, converter);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrent
+    @Import(EventConverters.class)
+    static class SecondThreadWriterApplication {
+
+        @Bean
+        SynchronousReceiver synchronousReceiver() {
+            return new SynchronousReceiver();
+        }
+
+        @Bean
+        SecondThreadWriter secondThreadWriter(ApplicationService<TestEvent> applicationService) {
+            return new SecondThreadWriter(applicationService);
         }
     }
 

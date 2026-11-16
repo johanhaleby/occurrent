@@ -31,14 +31,12 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.reactor.ApplicationService;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.DependsOn;
-import org.springframework.context.annotation.Import;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Mono;
@@ -52,6 +50,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -66,62 +65,59 @@ import static org.awaitility.Awaitility.await;
  */
 @DisplayName("Reactive StreamSubscription startAt: DEFAULT and NOW never replay history older than a second")
 @DisplayNameGeneration(ReplaceUnderscores.class)
-@SpringBootTest(
-        classes = ReactiveStreamSubscriptionStartPositionAnnotationMongoTest.StartPositionApplication.class,
-        properties = {
-                "occurrent.event-store.capabilities=stream",
-                "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:reactive-stream-start-position-test"
-        }
-)
-@Import(ReactiveStreamSubscriptionStartPositionAnnotationMongoTest.MongoDbContainerConfiguration.class)
 @Testcontainers
-@Timeout(60)
+@Timeout(120)
 class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
 
     private static final URI SOURCE = URI.create("urn:occurrent:reactive-stream-start-position-test");
 
-    @Autowired
-    private ApplicationService<TestEvent> applicationService;
-
-    @Autowired
-    private DefaultPositionSubscriber defaultPositionSubscriber;
-
-    @Autowired
-    private NowPositionSubscriber nowPositionSubscriber;
+    @Container
+    static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     @Test
-    void default_and_now_never_replay_history_older_than_a_second_only_live_events() {
-        // Neither subscriber's handler is ever invoked for the historic event, and consequently neither
-        // sees it in received() either, even after settling.
-        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
-            assertThat(defaultPositionSubscriber.invocationCount()).isZero();
-            assertThat(defaultPositionSubscriber.received()).isEmpty();
-        });
-        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
-            assertThat(nowPositionSubscriber.invocationCount()).isZero();
-            assertThat(nowPositionSubscriber.received()).isEmpty();
-        });
+    void default_and_now_never_replay_history_older_than_a_second_only_live_events() throws InterruptedException {
+        // The start of a subscription at the present is read when the event store bean is created, so only what is
+        // written before the context starts is history. A context with subscriptions off writes it and is closed again.
+        SpringApplication.run(StartPositionApplication.class, bootArgs("--occurrent.subscription.enabled=false", "--test.history=historic")).close();
+        // A live start opens at the start of the current second, so the history must be a second older to be excluded
+        Thread.sleep(2100);
 
-        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("live-default"))).block();
-        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("live-now"))).block();
+        try (ConfigurableApplicationContext context = SpringApplication.run(StartPositionApplication.class, bootArgs())) {
+            @SuppressWarnings("unchecked")
+            ApplicationService<TestEvent> applicationService = context.getBean(ApplicationService.class);
+            DefaultPositionSubscriber defaultPositionSubscriber = context.getBean(DefaultPositionSubscriber.class);
+            NowPositionSubscriber nowPositionSubscriber = context.getBean(NowPositionSubscriber.class);
 
-        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                assertThat(defaultPositionSubscriber.received()).extracting(TestEvent::name).containsExactly("live-default"));
-        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                assertThat(nowPositionSubscriber.received()).extracting(TestEvent::name).containsExactly("live-now"));
+            // Neither subscriber's handler is ever invoked for the historic event, and consequently neither
+            // sees it in received() either, even after settling.
+            await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
+                assertThat(defaultPositionSubscriber.invocationCount()).isZero();
+                assertThat(defaultPositionSubscriber.received()).isEmpty();
+            });
+            await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
+                assertThat(nowPositionSubscriber.invocationCount()).isZero();
+                assertThat(nowPositionSubscriber.received()).isEmpty();
+            });
+
+            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("live-default"))).block();
+            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("live-now"))).block();
+
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(defaultPositionSubscriber.received()).extracting(TestEvent::name).containsExactly("live-default"));
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(nowPositionSubscriber.received()).extracting(TestEvent::name).containsExactly("live-now"));
+        }
+    }
+
+    private static String[] bootArgs(String... more) {
+        return Stream.concat(Stream.of(
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("reactive-stream-start-position"),
+                "--spring.main.web-application-type=none",
+                "--occurrent.event-store.capabilities=stream",
+                "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE), Stream.of(more)).toArray(String[]::new);
     }
 
     // --- inner application and configuration classes ---
-
-    @TestConfiguration(proxyBeanMethods = false)
-    static class MongoDbContainerConfiguration {
-
-        @Bean
-        @ServiceConnection
-        MongoDBContainer mongoDbContainer() {
-            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
-        }
-    }
 
     @SpringBootApplication
     @EnableOccurrentReactive
@@ -140,21 +136,18 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
                     .build();
         }
 
-        // Appends history before either subscriber starts, so a wrongly-replaying subscriber would be caught. Both
-        // subscribe more than a second after it, see HistoryAppender.
+        // Appends the history named by test.history, which only the boot with subscriptions off is given
         @Bean
-        HistoryAppender historyAppender(ApplicationService<TestEvent> applicationService) {
-            return new HistoryAppender(applicationService);
+        HistoryAppender historyAppender(ApplicationService<TestEvent> applicationService, @Value("${test.history:}") List<String> history) {
+            return new HistoryAppender(applicationService, history);
         }
 
         @Bean
-        @DependsOn("historyAppender")
         DefaultPositionSubscriber defaultPositionSubscriber() {
             return new DefaultPositionSubscriber();
         }
 
         @Bean
-        @DependsOn("historyAppender")
         NowPositionSubscriber nowPositionSubscriber() {
             return new NowPositionSubscriber();
         }
@@ -162,17 +155,18 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
 
     static class HistoryAppender {
         private final ApplicationService<TestEvent> applicationService;
+        private final List<String> history;
 
-        HistoryAppender(ApplicationService<TestEvent> applicationService) {
+        HistoryAppender(ApplicationService<TestEvent> applicationService, List<String> history) {
             this.applicationService = applicationService;
+            this.history = history;
         }
 
-        // Waits a second and a half once the history is written, since a subscription started at the present can
-        // also receive what the same MongoClient wrote up to a second before it, which the at-least-once contract allows
         @PostConstruct
-        void appendHistory() throws InterruptedException {
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("historic"))).block();
-            Thread.sleep(1500);
+        void appendHistory() {
+            for (String name : history) {
+                applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent(name))).block();
+            }
         }
     }
 

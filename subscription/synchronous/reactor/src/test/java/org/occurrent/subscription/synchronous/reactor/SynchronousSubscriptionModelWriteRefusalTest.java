@@ -123,6 +123,59 @@ class SynchronousSubscriptionModelWriteRefusalTest {
     }
 
     @Test
+    void a_write_to_the_stream_a_paused_subscription_filters_on_is_refused_and_stores_nothing() {
+        model.subscribe("orders-projection", StreamSubscriptionFilter.filter(Filter.streamId("x")), event -> Mono.fromRunnable(() -> handled.add(event.getType())));
+        model.pauseSubscription("orders-projection");
+
+        StepVerifier.create(applicationService.execute("x", events -> List.of(new TestEvent("NameDefined"))))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(WriteRefusedException.class).hasMessageContaining("orders-projection"))
+                .verify();
+
+        assertThat(eventStore.contains("x")).as("the refused write was stored").isFalse();
+        assertThat(handled).isEmpty();
+    }
+
+    @Test
+    void a_write_to_another_stream_than_the_one_a_paused_subscription_filters_on_goes_through() {
+        model.subscribe("orders-projection", StreamSubscriptionFilter.filter(Filter.streamId("x")), event -> Mono.fromRunnable(() -> handled.add(event.getType())));
+        model.pauseSubscription("orders-projection");
+
+        StepVerifier.create(applicationService.execute("y", events -> List.of(new TestEvent("NameDefined"))))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        assertThat(eventStore.contains("y")).as("the write was stored").isTrue();
+        assertThat(eventStore.contains("x")).as("the other stream was written").isFalse();
+    }
+
+    @Test
+    void a_write_that_gives_an_event_the_stream_version_a_paused_subscription_filters_on_is_refused_and_stores_nothing() {
+        model.subscribe("orders-projection", StreamSubscriptionFilter.filter(Filter.streamVersion(1)), event -> Mono.fromRunnable(() -> handled.add(event.getType())));
+        model.pauseSubscription("orders-projection");
+        String streamId = UUID.randomUUID().toString();
+
+        StepVerifier.create(applicationService.execute(streamId, events -> List.of(new TestEvent("NameDefined"))))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(WriteRefusedException.class).hasMessageContaining("orders-projection"))
+                .verify();
+
+        assertThat(eventStore.contains(streamId)).as("the refused write was stored").isFalse();
+        assertThat(handled).isEmpty();
+    }
+
+    @Test
+    void a_write_that_gives_no_event_the_stream_version_a_paused_subscription_filters_on_goes_through() {
+        model.subscribe("orders-projection", StreamSubscriptionFilter.filter(Filter.streamVersion(2)), event -> Mono.fromRunnable(() -> handled.add(event.getType())));
+        model.pauseSubscription("orders-projection");
+        String streamId = UUID.randomUUID().toString();
+
+        StepVerifier.create(applicationService.execute(streamId, events -> List.of(new TestEvent("NameDefined"))))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        assertThat(eventStore.contains(streamId)).as("the write was stored").isTrue();
+    }
+
+    @Test
     void a_write_that_a_paused_subscription_does_not_match_goes_through() {
         model.subscribe("orders-projection", StreamSubscriptionFilter.filter(Filter.type("NameDefined")), event -> Mono.fromRunnable(() -> handled.add("orders-projection")));
         model.subscribe("other-projection", StreamSubscriptionFilter.filter(Filter.type("NameWasChanged")), event -> Mono.fromRunnable(() -> handled.add("other-projection")));

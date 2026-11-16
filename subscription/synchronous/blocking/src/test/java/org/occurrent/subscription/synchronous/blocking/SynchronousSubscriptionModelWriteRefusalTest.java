@@ -146,6 +146,55 @@ class SynchronousSubscriptionModelWriteRefusalTest {
     }
 
     @Test
+    void a_write_to_the_stream_a_paused_subscription_filters_on_is_refused_and_stores_nothing() {
+        model.subscribe("orders-projection", StreamSubscriptionFilter.filter(Filter.streamId("x")), event -> handled.add(event.getType()));
+        model.pauseSubscription("orders-projection");
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute("x", events -> List.of(new TestEvent("NameDefined"))));
+
+        assertThat(thrown).isInstanceOf(WriteRefusedException.class).hasMessageContaining("orders-projection");
+        assertThat(eventStore.exists("x")).as("the refused write was stored").isFalse();
+        assertThat(handled).isEmpty();
+    }
+
+    @Test
+    void a_write_to_another_stream_than_the_one_a_paused_subscription_filters_on_goes_through() {
+        model.subscribe("orders-projection", StreamSubscriptionFilter.filter(Filter.streamId("x")), event -> handled.add(event.getType()));
+        model.pauseSubscription("orders-projection");
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute("y", events -> List.of(new TestEvent("NameDefined"))));
+
+        assertThat(thrown).isNull();
+        assertThat(eventStore.exists("y")).as("the write was stored").isTrue();
+        assertThat(eventStore.exists("x")).as("the other stream was written").isFalse();
+    }
+
+    @Test
+    void a_write_that_gives_an_event_the_stream_version_a_paused_subscription_filters_on_is_refused_and_stores_nothing() {
+        model.subscribe("orders-projection", StreamSubscriptionFilter.filter(Filter.streamVersion(1)), event -> handled.add(event.getType()));
+        model.pauseSubscription("orders-projection");
+        String streamId = UUID.randomUUID().toString();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(streamId, events -> List.of(new TestEvent("NameDefined"))));
+
+        assertThat(thrown).isInstanceOf(WriteRefusedException.class).hasMessageContaining("orders-projection");
+        assertThat(eventStore.exists(streamId)).as("the refused write was stored").isFalse();
+        assertThat(handled).isEmpty();
+    }
+
+    @Test
+    void a_write_that_gives_no_event_the_stream_version_a_paused_subscription_filters_on_goes_through() {
+        model.subscribe("orders-projection", StreamSubscriptionFilter.filter(Filter.streamVersion(2)), event -> handled.add(event.getType()));
+        model.pauseSubscription("orders-projection");
+        String streamId = UUID.randomUUID().toString();
+
+        Throwable thrown = catchThrowable(() -> applicationService.execute(streamId, events -> List.of(new TestEvent("NameDefined"))));
+
+        assertThat(thrown).isNull();
+        assertThat(eventStore.exists(streamId)).as("the write was stored").isTrue();
+    }
+
+    @Test
     void a_dcb_write_that_a_paused_subscription_matches_is_refused_and_the_message_names_the_subscription() {
         var dcbApplicationService = dcbApplicationService();
         model.subscribe("orders-projection", StreamSubscriptionFilter.filter(Filter.type("NameDefined")), event -> handled.add(event.getType()));
