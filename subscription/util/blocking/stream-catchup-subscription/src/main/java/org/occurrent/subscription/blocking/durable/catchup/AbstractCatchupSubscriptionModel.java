@@ -116,6 +116,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // A leaf lock, held only to read or write stopped and the fields below, so no method is called and no other lock
     // is taken while it is held
     private final Object lifecycleLock = new Object();
+    // Orders start(..), stop() and shutdown() of this model and of every other child of the same dispatcher
+    private final ReentrantLock modelLock;
     // Moves on with every start and stop, so a start whose live delegate failed can tell whether another came after it
     private long lifecycleGeneration = 0;
     // Moves on with every stop, so a call to the wrapped model can tell whether a stop came while it ran
@@ -290,6 +292,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.cancelsStarted = sharedState.cancelsStarted;
         this.handedOver = sharedState.handedOver;
         this.askedFirst = sharedState.askedFirst;
+        this.modelLock = sharedState.modelLock;
         HistoryLossReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.addHistoryLossListener(historyLossListener));
     }
 
@@ -314,6 +317,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final AtomicLong cancelsStarted = new AtomicLong();
         private final ConcurrentMap<String, HandedOver> handedOver = new ConcurrentHashMap<>();
         private final Set<AskedFirst> askedFirst = ConcurrentHashMap.newKeySet();
+        // Taken by start(..), stop() and shutdown(), so one of them runs at a time across every child
+        private final ReentrantLock modelLock = new ReentrantLock();
     }
 
     // A subscribe whose function is asked with no claim held, kept from before the function is asked until the
@@ -816,10 +821,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Stops the live delegate and parks every replay in flight, as {@link #stopReplay()} describes, also when parking
      * one throws. It waits up to a second for an event a replay already handed to the subscriber's action, before the
      * live delegate stops, and logs a {@code WARN} past that.
+     * <p>
+     * It runs alone, as {@link #lockTheModel(String)} describes. A {@link #start(boolean)} or {@code shutdown()} under
+     * way is waited for, with no deadline, and so is the live delegate's {@code stop()}. A live delegate whose
+     * {@code stop()} waits with no deadline for its actions to return therefore never returns when one of those actions
+     * calls {@code start(..)} or {@code stop()} on this model.
+     *
+     * @throws IllegalStateException when called from inside the action of a replay of this model, or from a thread on
+     *                               which the model is in the middle of a call for one of its subscriptions. Nothing
+     *                               was changed then.
      */
     @Override
     public void stop() {
-        runEach(List.<Runnable>of(this::stopReplay, getWrappedSubscriptionModel()::stop), Runnable::run);
+        try (ModelLock ignored = lockTheModel("stop()")) {
+            runEach(List.<Runnable>of(this::stopReplay, getWrappedSubscriptionModel()::stop), Runnable::run);
+        }
     }
 
     /**
@@ -831,7 +847,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * <p>
      * When starting the live delegate throws, a model that was stopped before the call stops again and parks a replay
      * that ran in the meantime, as {@link #stop()} does. It doesn't stop again when the delegate runs afterwards, or
-     * when another start or stop of this model, or a resume of the delegate, came while the delegate was starting.
+     * when a resume of the delegate came while the delegate was starting.
      * Once a later resume of the delegate returns, the model is started again, unless a {@link #stop()} came first.
      * When the delegate throws on being asked whether it runs, the model stops again, and what the delegate threw is
      * added to the start's failure as suppressed.
@@ -848,26 +864,35 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * and one cancelled by then is skipped. The first resume that throws is thrown once all of them are resumed. Reading
      * the stored positions to decide this counts as part of starting the live delegate, so when it throws, the model
      * stops again as it does when the live delegate throws.
+     * <p>
+     * It runs alone, as {@link #lockTheModel(String)} describes, and waits with no deadline for a {@link #stop()} or
+     * {@code shutdown()} under way.
+     *
+     * @throws IllegalStateException when called from inside the action of a replay of this model, or from a thread on
+     *                               which the model is in the middle of a call for one of its subscriptions. Nothing
+     *                               was changed then.
      */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        StartAttempt attempt = beginStart();
-        final boolean resumeEachHere;
-        try {
-            resumeEachHere = resumeSubscriptionsAutomatically && anyResumeReplays();
-            getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && !resumeEachHere);
-        } catch (Throwable e) {
-            undoStart(attempt, attempt.wasStopped() && runsAfterFailedStart(getWrappedSubscriptionModel(), e), e);
-            throw e;
+        try (ModelLock ignored = lockTheModel("start(..)")) {
+            StartAttempt attempt = beginStart();
+            final boolean resumeEachHere;
+            try {
+                resumeEachHere = resumeSubscriptionsAutomatically && anyResumeReplays();
+                getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && !resumeEachHere);
+            } catch (Throwable e) {
+                undoStart(attempt, attempt.wasStopped() && runsAfterFailedStart(getWrappedSubscriptionModel(), e), e);
+                throw e;
+            }
+            List<Runnable> resumes = new ArrayList<>();
+            if (resumeSubscriptionsAutomatically) {
+                resumes.add(this::relaunchParkedReplays);
+            }
+            if (resumeEachHere) {
+                resumes.add(() -> resumeEach(subscriptionsTheLiveDelegateHoldsPaused(), this::resumeSubscription));
+            }
+            runEach(resumes, Runnable::run);
         }
-        List<Runnable> resumes = new ArrayList<>();
-        if (resumeSubscriptionsAutomatically) {
-            resumes.add(this::relaunchParkedReplays);
-        }
-        if (resumeEachHere) {
-            resumes.add(() -> resumeEach(subscriptionsTheLiveDelegateHoldsPaused(), this::resumeSubscription));
-        }
-        runEach(resumes, Runnable::run);
     }
 
     /**
@@ -4051,17 +4076,20 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * <p>
      * A replay lets no event through to the subscriber's action once it is parked. A call to the action that a replay
      * started before that is waited for, up to a second for all of them together. Past the second this returns all the
-     * same and logs a {@code WARN} naming the subscriptions whose action still runs. Called from inside an action, it
-     * doesn't wait for that action. It waits for each replay of this model it claims, cancelled or not, so a stop after
-     * a cancel whose action still runs waits for that action again, and a cancel after this doesn't wait for a replay
-     * this parked.
+     * same and logs a {@code WARN} naming the subscriptions whose action still runs. It waits for each replay of this
+     * model it claims, cancelled or not, so a stop after a cancel whose action still runs waits for that action again,
+     * and a cancel after this doesn't wait for a replay this parked.
+     * <p>
+     * It runs alone and throws {@link IllegalStateException} where {@link #stop()} does.
      */
     public void stopReplay() {
-        List<ActionInFlight> admitted = new ArrayList<>();
-        try {
-            stopReplayLeavingTheActions(admitted);
-        } finally {
-            awaitTheAdmittedActions(admitted, "stop");
+        try (ModelLock ignored = lockTheModel("stopReplay()")) {
+            List<ActionInFlight> admitted = new ArrayList<>();
+            try {
+                stopReplayLeavingTheActions(admitted);
+            } finally {
+                awaitTheAdmittedActions(admitted, "stop");
+            }
         }
     }
 
@@ -4080,21 +4108,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         parkReplaysInFlight(admitted);
     }
 
-    // Adds to admitted each call to the subscriber's action that a parked replay let through, apart from one on the
-    // calling thread, also when parking another one throws
+    // Adds to admitted each call to the subscriber's action that a parked replay let through, also when parking another
+    // one throws. Never called on a replay thread, which lockTheModel refuses
     private void parkReplaysInFlight(List<ActionInFlight> admitted) {
         if (shuttingDown) {
             return;
         }
-        CatchupAttempt calling = CURRENT_ATTEMPT.get();
         runEach(List.copyOf(currentAttempt.entrySet()), entry -> {
             CatchupAttempt attempt = entry.getValue();
             if (attempt.owner == this) {
                 try (Claim ignored = claim(entry.getKey(), STOPPED_ALL_THE_SAME); HandoverLock alsoIgnored = lockHandover(entry.getKey())) {
                     parkIfStillCurrent(entry.getKey(), attempt);
-                    if (attempt != calling) {
-                        admitted.add(new ActionInFlight(entry.getKey(), attempt.actionReturned, attempt.actionUnwanted));
-                    }
+                    admitted.add(new ActionInFlight(entry.getKey(), attempt.actionReturned, attempt.actionUnwanted));
                 }
             }
         });
@@ -4106,11 +4131,60 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * still parking it.
      */
     public void resumeReplay() {
-        synchronized (lifecycleLock) {
-            stopped = false;
-            stoppedByFailedStart = false;
-            lifecycleGeneration++;
+        try (ModelLock ignored = lockTheModel("resumeReplay()")) {
+            synchronized (lifecycleLock) {
+                stopped = false;
+                stoppedByFailedStart = false;
+                lifecycleGeneration++;
+            }
         }
+    }
+
+    /**
+     * Takes the lock that lets one {@link #start(boolean)}, {@link #stop()} or {@code shutdown()} of this model, or of
+     * any other child of the same dispatcher, run at a time, and waits for it with no deadline. {@code call} names the
+     * call in the exception.
+     *
+     * @throws IllegalStateException when the calling thread runs a catch-up replay of this model or of another child of
+     *                               the same dispatcher, which it does inside the subscriber's action, or holds the
+     *                               {@link #claim} for one of their subscriptions. Nothing was changed then.
+     */
+    ModelLock lockTheModel(String call) {
+        if (replaysOrClaimsOnTheCallingThread()) {
+            throw new IllegalStateException("Cannot call " + call + " from inside the action of a catch-up replay of this model, or from a thread on which the model is in the middle of a call"
+                    + " for one of its subscriptions. Call it from another thread. " + NOTHING_CHANGED);
+        }
+        return takeTheModelLock();
+    }
+
+    /**
+     * Takes the lock as {@link #lockTheModel(String)} does, for a {@code shutdown()}, apart from on a thread that
+     * {@link #lockTheModel(String)} refuses, where it takes nothing, so such a shutdown doesn't wait for a start or a
+     * stop under way.
+     */
+    ModelLock lockTheModelForShutdown() {
+        return replaysOrClaimsOnTheCallingThread() ? () -> {
+        } : takeTheModelLock();
+    }
+
+    private ModelLock takeTheModelLock() {
+        modelLock.lock();
+        return modelLock::unlock;
+    }
+
+    // A replay thread of a child of another dispatcher may call, since nothing that call waits for runs on that thread
+    private boolean replaysOrClaimsOnTheCallingThread() {
+        CatchupAttempt calling = CURRENT_ATTEMPT.get();
+        return (calling != null && calling.owner.modelLock == modelLock)
+                || lifecycleClaims.values().stream().anyMatch(claim -> claim.lock.isHeldByCurrentThread());
+    }
+
+    /**
+     * The lock {@link #lockTheModel(String)} took, given back on {@link #close()}.
+     */
+    interface ModelLock extends AutoCloseable {
+        @Override
+        void close();
     }
 
     /**

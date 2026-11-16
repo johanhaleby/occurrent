@@ -2673,23 +2673,23 @@ class StreamCatchupSubscriptionModelTest {
 
     @Test
     @Timeout(30)
-    void a_stop_called_from_inside_the_action_of_a_replay_does_not_wait_for_that_action() throws InterruptedException {
+    void a_stop_called_from_inside_the_action_of_a_replay_is_refused_and_the_replay_goes_on() throws InterruptedException {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
         write(eventStore, nameDefined("event1"));
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
-        AtomicLong stopTookMillis = new AtomicLong(-1);
-        CountDownLatch stopReturned = new CountDownLatch(1);
+        AtomicReference<Throwable> thrownByTheStop = new AtomicReference<>();
+        CountDownLatch stopReturnedOrThrew = new CountDownLatch(1);
 
         try {
             subscription.subscribe("subscription", StartAtTime.beginningOfTime(), cloudEvent -> {
-                long before = System.nanoTime();
-                subscription.stop();
-                stopTookMillis.set(Duration.ofNanos(System.nanoTime() - before).toMillis());
-                stopReturned.countDown();
+                thrownByTheStop.set(catchThrowable(subscription::stop));
+                stopReturnedOrThrew.countDown();
             });
 
-            assertThat(stopReturned.await(5, TimeUnit.SECONDS)).as("the stop made from the action returned").isTrue();
-            assertThat(stopTookMillis.get()).as("how many milliseconds the stop from inside the action took").isLessThan(500);
+            assertThat(stopReturnedOrThrew.await(5, TimeUnit.SECONDS)).as("the stop made from the action returned or threw").isTrue();
+            assertThat(thrownByTheStop.get()).as("what the stop made from the action of a replay of the model threw").isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Call it from another thread.").hasMessageContaining("Nothing was changed.");
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(subscription.isRunning("subscription")).as("whether the replay handed over to the live subscription after the refused stop").isTrue());
         } finally {
             subscription.shutdown();
         }

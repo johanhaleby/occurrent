@@ -613,8 +613,10 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
 
     @Override
     public void shutdown() {
-        markShuttingDown();
-        subscriptionModel.shutdown();
+        try (ModelLock ignored = lockTheModelForShutdown()) {
+            markShuttingDown();
+            subscriptionModel.shutdown();
+        }
     }
 
     static boolean isTimeBasedCheckpoint(StartAt startAt, Class<?> contextType) {

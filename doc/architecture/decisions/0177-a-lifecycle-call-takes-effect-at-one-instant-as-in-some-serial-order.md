@@ -193,6 +193,10 @@ has a deadline, so a wrapped model or a checkpoint storage that never returns ho
 A `start(..)` or `stop()` called from an action on a replay thread, or from a thread that holds a claim, throws at once,
 because it would wait for a per-id call that can only finish on that thread.
 
+A `shutdown()` called from such a thread doesn't throw, because it waits for no replay and no per-id call. It goes ahead
+without the model lock, since a `start(..)` or `stop()` under way may be waiting for that same thread to return from the
+action or to give back its claim.
+
 Handover locks are counted and removed like claims. ADR 131 says its registry of handover locks is never reclaimed.
 Under this rule it keeps an entry only while a call or a replay thread uses it ([#1257](https://github.com/johanhaleby/occurrent/issues/1257)).
 A replay thread holds the lock for one decision at a time, to let one event through or to begin one store, so between

@@ -137,6 +137,8 @@ other sections compile fine and behave differently, so read them first.
   rebuild takes a new subscription id. Compiles unchanged.
 - [A blocking catch-up's cancel and stop wait for a replayed event in the action](#a-blocking-catch-ups-cancel-and-stop-wait-for-a-replayed-event-in-the-action).
   The call waits up to a second for an action the replay already started, and logs a `WARN` past that. Compiles unchanged.
+- [A blocking catch-up's start and stop throw from inside a replay's action](#a-blocking-catch-ups-start-and-stop-throw-from-inside-a-replays-action).
+  A `start(..)` or `stop()` from a replay's action throws `IllegalStateException`. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
   `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached. Over
   `ReactorMongoSubscriptionModel` it fails only when MongoDB's reply to `hello` has no `localTime`, where 0.34.0 didn't
@@ -2858,11 +2860,12 @@ the subscriber's action that is under way.
 * Past the second, the call returns all the same and logs a `WARN` naming the subscription. After a cancel the replay
   hands the action no further event. After a stop it hands it none until `start(true)` or `resumeSubscription(id)`
   runs the replay again.
-* A cancel holds the subscription's claim while it waits. A `pauseSubscription(id)`, `cancelSubscription(id)`,
-  `resumeSubscription(id)` or `stop()` that the action of `id` makes on the replay thread while another thread holds
-  that claim throws `IllegalStateException` at once, as in 0.34.0. That can now happen for up to a second longer per
+* A cancel holds the subscription's claim while it waits. A `pauseSubscription(id)`, `cancelSubscription(id)` or
+  `resumeSubscription(id)` that the action of `id` makes on the replay thread while another thread holds that claim
+  throws `IllegalStateException` at once, as in 0.34.0. That can now happen for up to a second longer per
   cancel.
-* A cancel or a stop made from inside a replay's action doesn't wait for that action. `shutdown()` doesn't wait.
+* A cancel made from inside a replay's action doesn't wait for that action. A stop made there throws, see
+  [below](#a-blocking-catch-ups-start-and-stop-throw-from-inside-a-replays-action). `shutdown()` doesn't wait.
 * A subscribe of an id right after a cancel of it returns at once, as in 0.34.0. Its replay waits on its own thread
   until the cancelled replay's call to the action has returned, also when a `stop()` came between the cancel and the
   subscribe.
@@ -2894,6 +2897,38 @@ With `PersistCheckpointDuringCatchupPhase` configured, a cancel also waits for a
 runs, so give a checkpoint storage that can block a timeout of its own. A live subscription model of your own that a
 catch-up wraps must return from `cancelSubscription` without waiting for a call to the action under way, and must
 not store its position past an event whose action threw `AttemptNotMade`.
+
+## A blocking catch-up's start and stop throw from inside a replay's action
+
+`start(..)` and `stop()` on the blocking `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` and
+`CatchupSubscriptionModel` now run one at a time, together with `shutdown()`. A `start(..)` or `stop()` called from
+inside the action of a replay of the same model throws `IllegalStateException` and changes nothing. See
+[ADR 177](../architecture/decisions/0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md).
+
+### Who is affected
+
+Code that stops or starts a blocking catch-up model from the action of one of its subscriptions while that
+subscription replays history. In 0.34.0 a `stop()` from there parked the replay and returned. A call from the action
+of another model's subscription, or from the action once the subscription has gone live, is not affected.
+
+### What changes
+
+* A `start(..)` or `stop()` from a replay's action throws `IllegalStateException` with "Nothing was changed." in its
+  message, and so does one from a thread on which the model is in the middle of a call for one of its subscriptions.
+* `shutdown()` from those threads doesn't throw, and goes ahead without waiting for a `start(..)` or `stop()` under
+  way.
+* Elsewhere, each of `start(..)`, `stop()` and `shutdown()` waits, with no deadline, until one already under way on
+  the model has returned.
+* A wrapped model whose `stop()` waits with no deadline for its actions to return now never returns when one of those
+  actions calls `start(..)` or `stop()` on the catch-up model. The MongoDB subscription models give up on an action
+  after a second, and `InMemorySubscriptionModel` doesn't wait for one.
+
+### What to do
+
+Hand the call to another thread, for example an executor the action submits it to, and let the action return. Don't
+wait in the action for that call to finish, since a `stop()` waits up to a second for the action. If you wrap a
+subscription model of your own whose `stop()` waits for its actions, give that wait a deadline when an action may call
+`start(..)` or `stop()` on the catch-up model.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 

@@ -333,15 +333,18 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // stopReplayLeavingTheActions() rather than a child's own stop(), which would reach the shared live delegate once
     // per child. The children have to be told so a replay already in flight stops delivering and is parked. A child
     // that fails to park a replay doesn't keep the others or the live delegate from stopping. The stop then waits once,
-    // up to a second in all, for the actions the children's replays let through, before the live delegate stops.
+    // up to a second in all, for the actions the children's replays let through, before the live delegate stops. The
+    // children share one model lock, so the whole stop runs alone against a start or a shutdown of any of them.
     @Override
     public void stop() {
-        List<AbstractCatchupSubscriptionModel.ActionInFlight> admitted = new ArrayList<>();
-        List<Runnable> steps = new ArrayList<>();
-        presentCatchupModels().forEach(model -> steps.add(() -> model.stopReplayLeavingTheActions(admitted)));
-        steps.add(() -> AbstractCatchupSubscriptionModel.awaitTheAdmittedActions(admitted, "stop"));
-        steps.add(getWrappedSubscriptionModel()::stop);
-        AbstractCatchupSubscriptionModel.runEach(steps, Runnable::run);
+        try (AbstractCatchupSubscriptionModel.ModelLock ignored = anyCatchupModel().lockTheModel("stop()")) {
+            List<AbstractCatchupSubscriptionModel.ActionInFlight> admitted = new ArrayList<>();
+            List<Runnable> steps = new ArrayList<>();
+            presentCatchupModels().forEach(model -> steps.add(() -> model.stopReplayLeavingTheActions(admitted)));
+            steps.add(() -> AbstractCatchupSubscriptionModel.awaitTheAdmittedActions(admitted, "stop"));
+            steps.add(getWrappedSubscriptionModel()::stop);
+            AbstractCatchupSubscriptionModel.runEach(steps, Runnable::run);
+        }
     }
 
     // The claim is shared by every child, so any of them hands it out
@@ -357,8 +360,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // beginStart() rather than a child's own start(), for the same reason stop() uses stopReplay(). The parked replays
     // run again only once the live delegate is started, so each hands over to a delegate that runs, and only when
     // resuming automatically, as the delegate itself resumes only then. When the delegate's start throws, each child
-    // that was stopped stops again, unless the delegate runs, or another start or stop of that child, or a resume of
-    // the delegate, came in the meantime. The delegate is asked whether it runs once, before any child takes its lock.
+    // that was stopped stops again, unless the delegate runs, or a resume of the delegate came in the meantime. The
+    // whole start runs alone under the model lock the children share. The delegate is asked whether it runs once,
+    // before any child takes its lock.
     // When a subscription the delegate holds paused would replay on resumeSubscription(..), a replay that a cancel ended
     // for one hasn't returned yet, or a cancel is under way, the delegate starts without resuming anything and each
     // subscription it holds paused, or that a cancel is under way for while they are listed, is resumed as
@@ -368,29 +372,31 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // a delegate that throws does.
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        Map<AbstractCatchupSubscriptionModel, AbstractCatchupSubscriptionModel.StartAttempt> attempts = new LinkedHashMap<>();
-        presentCatchupModels().forEach(model -> attempts.put(model, model.beginStart()));
-        final AbstractCatchupSubscriptionModel replaysOnResume;
-        try {
-            replaysOnResume = resumeSubscriptionsAutomatically
-                    ? presentCatchupModels().filter(AbstractCatchupSubscriptionModel::anyResumeReplays).findFirst().orElse(null)
-                    : null;
-            getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && replaysOnResume == null);
-        } catch (Throwable e) {
-            boolean liveDelegateRuns = attempts.values().stream().anyMatch(AbstractCatchupSubscriptionModel.StartAttempt::wasStopped)
-                    && AbstractCatchupSubscriptionModel.runsAfterFailedStart(getWrappedSubscriptionModel(), e);
-            attempts.forEach((model, attempt) -> model.undoStart(attempt, liveDelegateRuns, e));
-            throw e;
+        try (AbstractCatchupSubscriptionModel.ModelLock ignored = anyCatchupModel().lockTheModel("start(..)")) {
+            Map<AbstractCatchupSubscriptionModel, AbstractCatchupSubscriptionModel.StartAttempt> attempts = new LinkedHashMap<>();
+            presentCatchupModels().forEach(model -> attempts.put(model, model.beginStart()));
+            final AbstractCatchupSubscriptionModel replaysOnResume;
+            try {
+                replaysOnResume = resumeSubscriptionsAutomatically
+                        ? presentCatchupModels().filter(AbstractCatchupSubscriptionModel::anyResumeReplays).findFirst().orElse(null)
+                        : null;
+                getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && replaysOnResume == null);
+            } catch (Throwable e) {
+                boolean liveDelegateRuns = attempts.values().stream().anyMatch(AbstractCatchupSubscriptionModel.StartAttempt::wasStopped)
+                        && AbstractCatchupSubscriptionModel.runsAfterFailedStart(getWrappedSubscriptionModel(), e);
+                attempts.forEach((model, attempt) -> model.undoStart(attempt, liveDelegateRuns, e));
+                throw e;
+            }
+            // Each also when an earlier one throws, so a parked replay whose claim fails holds up no other subscription
+            List<Runnable> resumes = new ArrayList<>();
+            if (resumeSubscriptionsAutomatically) {
+                resumes.add(() -> AbstractCatchupSubscriptionModel.runEach(presentCatchupModels().toList(), AbstractCatchupSubscriptionModel::relaunchParkedReplays));
+            }
+            if (replaysOnResume != null) {
+                resumes.add(() -> AbstractCatchupSubscriptionModel.resumeEach(replaysOnResume.subscriptionsTheLiveDelegateHoldsPaused(), this::resumeSubscription));
+            }
+            AbstractCatchupSubscriptionModel.runEach(resumes, Runnable::run);
         }
-        // Each also when an earlier one throws, so a parked replay whose claim fails holds up no other subscription
-        List<Runnable> resumes = new ArrayList<>();
-        if (resumeSubscriptionsAutomatically) {
-            resumes.add(() -> AbstractCatchupSubscriptionModel.runEach(presentCatchupModels().toList(), AbstractCatchupSubscriptionModel::relaunchParkedReplays));
-        }
-        if (replaysOnResume != null) {
-            resumes.add(() -> AbstractCatchupSubscriptionModel.resumeEach(replaysOnResume.subscriptionsTheLiveDelegateHoldsPaused(), this::resumeSubscription));
-        }
-        AbstractCatchupSubscriptionModel.runEach(resumes, Runnable::run);
     }
 
     // Asks the catch-up children too, because a replay is running before the live delegate has registered the
@@ -635,18 +641,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @PreDestroy
     @Override
     public void shutdown() {
-        // Every child flagged before any forgets the state they share, see flagShuttingDown
-        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::flagShuttingDown);
-        if (streamCatchupSubscriptionModel != null) {
-            streamCatchupSubscriptionModel.markShuttingDown();
+        try (AbstractCatchupSubscriptionModel.ModelLock ignored = anyCatchupModel().lockTheModelForShutdown()) {
+            // Every child flagged before any forgets the state they share, see flagShuttingDown
+            presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::flagShuttingDown);
+            presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::markShuttingDown);
+            subscriptionModel.shutdown();
         }
-        if (dcbCatchupSubscriptionModel != null) {
-            dcbCatchupSubscriptionModel.markShuttingDown();
-        }
-        if (agnosticCatchupSubscriptionModel != null) {
-            agnosticCatchupSubscriptionModel.markShuttingDown();
-        }
-        subscriptionModel.shutdown();
     }
 
     static boolean isTimeBasedCheckpoint(StartAt startAt) {

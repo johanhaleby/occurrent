@@ -232,7 +232,7 @@ class CatchupSubscriptionModelStopAndStartTest {
 
     @ParameterizedTest
     @MethodSource("models")
-    void a_failing_start_keeps_the_model_started_when_a_start_true_returned_while_it_was_starting_the_live_model(BiFunction<FakeLiveModel, EventStoreQueries, SubscriptionModel> modelOver) {
+    void a_start_true_that_waited_for_a_failing_start_while_it_was_starting_the_live_model_leaves_the_model_started(BiFunction<FakeLiveModel, EventStoreQueries, SubscriptionModel> modelOver) {
         FakeLiveModel live = new FakeLiveModel();
         SubscriptionModel model = modelOver.apply(live, history());
         model.stop();
@@ -242,10 +242,12 @@ class CatchupSubscriptionModelStopAndStartTest {
         live.failNextStart = FailMode.BEFORE_EFFECT;
         CompletableFuture<Throwable> failing = CompletableFuture.supplyAsync(() -> catchThrowable(() -> model.start(false)));
         awaitWithin(live.startEntered);
-        model.start(true);
-        assertThat(a.waitUntilStarted(STARTED_WITHIN)).as("a started by the start(true)").isTrue();
+        CompletableFuture<Void> starting = callOnAnotherThread(() -> model.start(true));
+        assertThat(starting).as("the start(true) while the failing start is under way").isNotDone();
         release.countDown();
         assertThat(failing.join()).isInstanceOf(IllegalStateException.class);
+        assertThat(starting).as("the start(true)").succeedsWithin(STARTED_WITHIN);
+        assertThat(a.waitUntilStarted(STARTED_WITHIN)).as("a started by the start(true)").isTrue();
         List<String> receivedByB = new CopyOnWriteArrayList<>();
 
         Subscription b = model.subscribe("b", StartAtTime.beginningOfTime(), e -> receivedByB.add(e.getId()));
@@ -387,13 +389,13 @@ class CatchupSubscriptionModelStopAndStartTest {
 
     @ParameterizedTest
     @MethodSource("models")
-    void a_stop_while_a_failing_start_was_starting_the_live_model_keeps_the_model_stopped(BiFunction<FakeLiveModel, EventStoreQueries, SubscriptionModel> modelOver) {
+    void a_stop_that_waited_for_a_failing_start_while_it_was_starting_the_live_model_keeps_the_model_stopped(BiFunction<FakeLiveModel, EventStoreQueries, SubscriptionModel> modelOver) {
         FakeLiveModel live = new FakeLiveModel();
         SubscriptionModel model = modelOver.apply(live, history());
         model.stop();
         List<String> receivedByA = new CopyOnWriteArrayList<>();
         model.subscribe("a", StartAtTime.beginningOfTime(), e -> receivedByA.add(e.getId()));
-        failStartWhile(model, live, model::stop);
+        failStartWhileAnotherCallWaits(model, live, model::stop);
 
         model.subscribe("b", StartAtTime.beginningOfTime(), e -> {});
 
@@ -495,7 +497,7 @@ class CatchupSubscriptionModelStopAndStartTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void a_replay_in_flight_hands_over_when_a_start_returns_before_a_failing_start_parks_it(boolean resumeSubscriptionsAutomatically) throws InterruptedException {
+    void a_replay_in_flight_hands_over_when_a_start_waits_for_a_failing_start_that_has_not_parked_it_yet(boolean resumeSubscriptionsAutomatically) throws InterruptedException {
         FakeLiveModel live = new FakeLiveModel();
         GatedHistory history = history();
         ParkWaitingStreamCatchupSubscriptionModel model = new ParkWaitingStreamCatchupSubscriptionModel(live, history);
@@ -516,10 +518,16 @@ class CatchupSubscriptionModelStopAndStartTest {
         releaseFailingStart.countDown();
         awaitWithin(model.aboutToPark);
 
-        model.start(resumeSubscriptionsAutomatically);
+        CompletableFuture<Void> starting = callOnAnotherThread(() -> model.start(resumeSubscriptionsAutomatically));
+        assertThat(starting).as("the start while the failing start has not parked the replay").isNotDone();
         model.park.countDown();
         failing.join(STARTED_WITHIN.toMillis());
+        assertThat(starting).as("the start").succeedsWithin(STARTED_WITHIN);
         gate.countDown();
+        if (!resumeSubscriptionsAutomatically) {
+            // The failing start parked the replay before the start came, and a start(false) does not run it again
+            model.resumeSubscription("a");
+        }
 
         assertThat(a.waitUntilStarted(STARTED_WITHIN)).as("a started").isTrue();
         live.publish(cloudEvent("3"));
@@ -612,6 +620,39 @@ class CatchupSubscriptionModelStopAndStartTest {
             release.countDown();
         }
         assertThat(failing.join()).as("the failing start threw").isInstanceOf(IllegalStateException.class);
+    }
+
+    // Runs start(false) on another thread with a live model whose start fails before it takes effect, calls waitingCall on
+    // a third thread once that start has begun, and returns when both have returned. The call has to wait for the start
+    private static void failStartWhileAnotherCallWaits(SubscriptionModel model, FakeLiveModel live, Runnable waitingCall) {
+        CountDownLatch release = new CountDownLatch(1);
+        live.blockNextStartUntil = release;
+        live.failNextStart = FailMode.BEFORE_EFFECT;
+        CompletableFuture<Throwable> failing = CompletableFuture.supplyAsync(() -> catchThrowable(() -> model.start(false)));
+        awaitWithin(live.startEntered);
+        CompletableFuture<Void> waiting = callOnAnotherThread(waitingCall);
+        try {
+            assertThat(waiting).as("the call while the failing start is under way").isNotDone();
+        } finally {
+            release.countDown();
+        }
+        assertThat(failing.join()).as("the failing start threw").isInstanceOf(IllegalStateException.class);
+        assertThat(waiting).as("the call that waited for the failing start").succeedsWithin(STARTED_WITHIN);
+    }
+
+    // Runs the call on another thread and returns once it has returned or waits, so a test can tell the call is held back
+    private static CompletableFuture<Void> callOnAnotherThread(Runnable call) {
+        CompletableFuture<Void> returned = new CompletableFuture<>();
+        Thread thread = Thread.ofPlatform().daemon().start(() -> {
+            try {
+                call.run();
+                returned.complete(null);
+            } catch (Throwable e) {
+                returned.completeExceptionally(e);
+            }
+        });
+        await().atMost(STARTED_WITHIN).until(() -> returned.isDone() || thread.getState() == Thread.State.WAITING || thread.getState() == Thread.State.TIMED_WAITING || thread.getState() == Thread.State.BLOCKED);
+        return returned;
     }
 
     private static CloudEvent cloudEvent(String id) {

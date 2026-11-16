@@ -121,7 +121,6 @@ class CatchupLifecyclePropertyTest {
         assertThat(run.notes).as(run.toString()).isEmpty();
     }
 
-    @Disabled("#1237: a start(false) that runs inside a stop() clears what the stop set, so the stop's park runs the replay again and its action starts after the stop returned. Shrunk plain history=0us start=0us [[subscribe(a), start(false)], [subscribe(a), cancel(b), stop]] and [[subscribe(a), stop], [subscribe(a), start(false)]], seed -781864361498931721, at 1000 tries")
     @Property(tries = 200)
     void s2_without_pause_no_action_starts_after_a_cancel_or_a_stop_has_returned(@ForAll("mixedScenariosWithoutPause") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
