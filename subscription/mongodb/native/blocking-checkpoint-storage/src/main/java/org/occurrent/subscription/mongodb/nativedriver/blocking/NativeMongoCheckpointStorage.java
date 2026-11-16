@@ -117,10 +117,15 @@ public class NativeMongoCheckpointStorage implements CatchupMarkerStorage {
         requireNonNull(checkpointCollection, "checkpointCollection cannot be null");
         requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.checkpointCollection = checkpointCollection;
-        this.catchupMarkerForgets = checkpointCollection.withWriteConcern(CATCHUP_MARKER_FORGET_WRITE_CONCERN);
-        this.catchupMarkerMajorityReads = checkpointCollection.withReadPreference(primary()).withReadConcern(ReadConcern.MAJORITY);
-        this.catchupMarkerLinearizableReads = checkpointCollection.withReadPreference(primary()).withReadConcern(ReadConcern.LINEARIZABLE);
+        this.catchupMarkerForgets = withCatchupMarkerTimeout(checkpointCollection.withWriteConcern(CATCHUP_MARKER_FORGET_WRITE_CONCERN), CATCHUP_MARKER_FORGET_WRITE_TIMEOUT);
+        this.catchupMarkerMajorityReads = withCatchupMarkerTimeout(checkpointCollection.withReadPreference(primary()).withReadConcern(ReadConcern.MAJORITY), CATCHUP_MARKER_READ_MAX_TIME);
+        this.catchupMarkerLinearizableReads = withCatchupMarkerTimeout(checkpointCollection.withReadPreference(primary()).withReadConcern(ReadConcern.LINEARIZABLE), CATCHUP_MARKER_READ_MAX_TIME);
         this.retryStrategy = retryStrategy;
+    }
+
+    private static MongoCollection<Document> withCatchupMarkerTimeout(MongoCollection<Document> collection, Duration timeout) {
+        Long timeoutMillis = catchupMarkerTimeoutMillis(collection.getTimeout(TimeUnit.MILLISECONDS), timeout);
+        return timeoutMillis == null ? collection : collection.withTimeout(timeoutMillis, TimeUnit.MILLISECONDS);
     }
 
 
@@ -184,7 +189,9 @@ public class NativeMongoCheckpointStorage implements CatchupMarkerStorage {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         Supplier<CatchupMarker> read = () -> {
             // The checkpoint document first and the generation second, so the answer held at one instant
-            Document markerDocument = catchupMarkerMajorityReads.find(eq(ID, subscriptionId)).first();
+            Document markerDocument = catchupMarkerMajorityReads.find(eq(ID, subscriptionId))
+                    .maxTime(CATCHUP_MARKER_READ_MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
+                    .first();
             long generation = readCatchupMarkerGeneration(subscriptionId);
             return catchupMarkerOf(markerDocument, generation);
         };
@@ -194,9 +201,11 @@ public class NativeMongoCheckpointStorage implements CatchupMarkerStorage {
     private long readCatchupMarkerGeneration(String subscriptionId) {
         return catchupMarkerGenerationReads.read(
                 () -> catchupMarkerLinearizableReads.find(catchupMarkerGenerationFilter(subscriptionId))
-                        .maxTime(CATCHUP_MARKER_GENERATION_READ_MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
+                        .maxTime(CATCHUP_MARKER_READ_MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
                         .first(),
-                () -> catchupMarkerMajorityReads.find(catchupMarkerGenerationFilter(subscriptionId)).first());
+                () -> catchupMarkerMajorityReads.find(catchupMarkerGenerationFilter(subscriptionId))
+                        .maxTime(CATCHUP_MARKER_READ_MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
+                        .first());
     }
 
     @Override

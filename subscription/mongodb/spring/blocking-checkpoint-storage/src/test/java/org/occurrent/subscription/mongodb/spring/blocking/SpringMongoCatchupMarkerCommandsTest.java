@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.testsupport.mongodb.RecordingCommandListener;
@@ -43,6 +44,8 @@ import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -68,8 +71,15 @@ class SpringMongoCatchupMarkerCommandsTest {
     // w:1 and secondaryPreferred, so every majority write concern and every primary read in a command came from the store
     @BeforeEach
     void open_a_store_on_a_template_at_w_1_that_prefers_secondaries() {
+        openStore(settings -> {
+        });
+    }
+
+    private void openStore(Consumer<MongoClientSettings.Builder> customizer) {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("springmarkercommands"));
-        mongoClient = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).writeConcern(WriteConcern.W1).addCommandListener(commands).build());
+        MongoClientSettings.Builder settings = MongoClientSettings.builder().applyConnectionString(connectionString).writeConcern(WriteConcern.W1).addCommandListener(commands);
+        customizer.accept(settings);
+        mongoClient = MongoClients.create(settings.build());
         MongoTemplate mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         mongoTemplate.setReadPreference(ReadPreference.secondaryPreferred());
         storage = new SpringMongoCheckpointStorage(mongoTemplate, COLLECTION);
@@ -81,7 +91,7 @@ class SpringMongoCatchupMarkerCommandsTest {
     }
 
     @Test
-    void read_finds_the_marker_at_majority_then_the_generation_linearizable_with_a_time_limit_both_on_the_primary() {
+    void read_finds_the_marker_at_majority_then_the_generation_linearizable_both_with_a_time_limit_on_the_primary() {
         // When
         storage.readCatchupMarker(subscriptionId);
 
@@ -93,6 +103,7 @@ class SpringMongoCatchupMarkerCommandsTest {
         assertAll(
                 () -> assertThat(markerRead.document().getDocument("filter").get("_id")).as("%s", markerRead).isEqualTo(new BsonString(subscriptionId)),
                 () -> assertThat(markerRead.readConcernLevel()).as("%s", markerRead).isEqualTo("majority"),
+                () -> assertThat(markerRead.document().get("maxTimeMS")).as("%s", markerRead).isIn(new BsonInt32((int) TEN_SECONDS_IN_MILLIS), new BsonInt64(TEN_SECONDS_IN_MILLIS)),
                 () -> assertThat(readPreferenceMode(markerRead)).as("%s", markerRead).isIn(PRIMARY_MODES),
                 () -> assertThat(generationRead.document().getDocument("filter").get("_id")).as("%s", generationRead).isEqualTo(generationId()),
                 () -> assertThat(generationRead.readConcernLevel()).as("%s", generationRead).isEqualTo("linearizable"),
@@ -130,6 +141,73 @@ class SpringMongoCatchupMarkerCommandsTest {
         assertThat(saves).as("%s", saves).hasSize(1);
         Command save = saves.get(0);
         assertThat(save.document().getDocument("writeConcern", new BsonDocument()).get("w")).as("%s", save).isEqualTo(new BsonInt32(1));
+    }
+
+    @Test
+    void forget_on_a_client_with_an_infinite_operation_timeout_sends_both_writes_with_a_max_time_of_at_most_the_write_timeout() {
+        // Given
+        mongoClient.close();
+        openStore(settings -> settings.timeout(0, TimeUnit.SECONDS));
+        commands.clear();
+
+        // When
+        storage.forgetCatchupMarker(subscriptionId);
+
+        // Then
+        List<Command> writes = collectionCommands();
+        assertThat(writes).extracting(Command::name).as("%s", writes).containsExactly("update", "delete");
+        assertAll(writes.stream().map(write -> (Executable) () ->
+                assertThat(maxTimeMillis(write)).as("%s", write).isBetween(1L, TEN_SECONDS_IN_MILLIS)).toList());
+    }
+
+    @Test
+    void read_on_a_client_with_an_infinite_operation_timeout_sends_both_finds_with_a_max_time_of_at_most_the_read_limit() {
+        // Given
+        mongoClient.close();
+        openStore(settings -> settings.timeout(0, TimeUnit.SECONDS));
+        commands.clear();
+
+        // When
+        storage.readCatchupMarker(subscriptionId);
+
+        // Then
+        List<Command> finds = commands.commands("find", COLLECTION);
+        assertThat(finds).as("%s", finds).hasSize(2);
+        Command markerRead = finds.get(0);
+        Command generationRead = finds.get(1);
+        assertAll(
+                () -> assertThat(markerRead.readConcernLevel()).as("%s", markerRead).isEqualTo("majority"),
+                () -> assertThat(maxTimeMillis(markerRead)).as("%s", markerRead).isBetween(1L, TEN_SECONDS_IN_MILLIS),
+                () -> assertThat(generationRead.readConcernLevel()).as("%s", generationRead).isEqualTo("linearizable"),
+                () -> assertThat(maxTimeMillis(generationRead)).as("%s", generationRead).isBetween(1L, TEN_SECONDS_IN_MILLIS)
+        );
+    }
+
+    @Test
+    void forget_and_read_on_a_client_with_an_operation_timeout_keep_the_timeout_of_the_client() {
+        // Given
+        mongoClient.close();
+        openStore(settings -> settings.timeout(2, TimeUnit.SECONDS));
+        commands.clear();
+
+        // When
+        storage.forgetCatchupMarker(subscriptionId);
+        storage.readCatchupMarker(subscriptionId);
+
+        // Then
+        List<Command> all = collectionCommands();
+        assertThat(all).extracting(Command::name).as("%s", all).containsExactly("update", "delete", "find", "find");
+        assertAll(all.stream().map(command -> (Executable) () ->
+                assertThat(maxTimeMillis(command)).as("%s", command).isBetween(1L, 2_000L)).toList());
+    }
+
+    private List<Command> collectionCommands() {
+        return commands.commands().stream().filter(command -> COLLECTION.equals(command.collection())).toList();
+    }
+
+    // Absent is reported as 0, which a bound never is
+    private static long maxTimeMillis(Command command) {
+        return command.document().containsKey("maxTimeMS") ? command.document().getNumber("maxTimeMS").longValue() : 0L;
     }
 
     private static String readPreferenceMode(Command command) {

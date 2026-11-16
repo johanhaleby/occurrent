@@ -503,14 +503,27 @@ public class MongoCommons {
     public static final Duration CATCHUP_MARKER_FORGET_WRITE_TIMEOUT = Duration.ofSeconds(10);
 
     /**
-     * How long the linearizable read of a generation may run on the server before it throws.
+     * How long each find of a marker read may run on the server before it throws. A {@code MAJORITY} find waits too,
+     * on a collection whose creation a majority hasn't acknowledged yet.
      */
-    public static final Duration CATCHUP_MARKER_GENERATION_READ_MAX_TIME = Duration.ofSeconds(10);
+    public static final Duration CATCHUP_MARKER_READ_MAX_TIME = Duration.ofSeconds(10);
 
     /**
      * The write concern of both writes of a forget, whatever write concern the application set on its collection.
      */
     public static final WriteConcern CATCHUP_MARKER_FORGET_WRITE_CONCERN = WriteConcern.MAJORITY.withWTimeout(CATCHUP_MARKER_FORGET_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+    /**
+     * The operation timeout a forget write or a find of a marker read needs on a collection whose timeout is
+     * {@code collectionTimeoutMillis}, or {@code null} when it needs none. A client with {@code timeoutMS} makes the
+     * driver send neither the {@code wtimeout} of {@link #CATCHUP_MARKER_FORGET_WRITE_CONCERN} nor the
+     * {@code maxTimeMS} of {@link #CATCHUP_MARKER_READ_MAX_TIME}, and a {@code timeoutMS} of 0 waits forever,
+     * so it gets {@code timeout} instead. Any other {@code timeoutMS} bounds the command as it is. ADR 149 bounds the
+     * position reservation of an append the same way.
+     */
+    public static @Nullable Long catchupMarkerTimeoutMillis(@Nullable Long collectionTimeoutMillis, Duration timeout) {
+        return collectionTimeoutMillis != null && collectionTimeoutMillis == 0 ? timeout.toMillis() : null;
+    }
 
     /**
      * The error code a server that is not a replica set member refuses a {@code LINEARIZABLE} read with

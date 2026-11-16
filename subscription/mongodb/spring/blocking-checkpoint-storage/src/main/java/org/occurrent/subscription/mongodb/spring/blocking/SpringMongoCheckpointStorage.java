@@ -162,8 +162,9 @@ public class SpringMongoCheckpointStorage implements CatchupMarkerStorage {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         Supplier<CatchupMarker> read = () -> mongoOperations.execute(checkpointCollection, collection -> {
             // The checkpoint document first and the generation second, so the answer held at one instant
-            MongoCollection<Document> majorityReads = collection.withReadPreference(primary()).withReadConcern(ReadConcern.MAJORITY);
-            Document markerDocument = majorityReads.find(eq(ID, subscriptionId)).first();
+            Document markerDocument = catchupMarkerMajorityReads(collection).find(eq(ID, subscriptionId))
+                    .maxTime(MongoCommons.CATCHUP_MARKER_READ_MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
+                    .first();
             long generation = readCatchupMarkerGeneration(collection, subscriptionId);
             return MongoCommons.catchupMarkerOf(markerDocument, generation);
         });
@@ -172,12 +173,13 @@ public class SpringMongoCheckpointStorage implements CatchupMarkerStorage {
 
     private long readCatchupMarkerGeneration(MongoCollection<Document> collection, String subscriptionId) {
         return catchupMarkerGenerationReads.read(
-                () -> collection.withReadPreference(primary()).withReadConcern(ReadConcern.LINEARIZABLE)
+                () -> withCatchupMarkerTimeout(collection.withReadPreference(primary()).withReadConcern(ReadConcern.LINEARIZABLE), MongoCommons.CATCHUP_MARKER_READ_MAX_TIME)
                         .find(MongoCommons.catchupMarkerGenerationFilter(subscriptionId))
-                        .maxTime(MongoCommons.CATCHUP_MARKER_GENERATION_READ_MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
+                        .maxTime(MongoCommons.CATCHUP_MARKER_READ_MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
                         .first(),
-                () -> collection.withReadPreference(primary()).withReadConcern(ReadConcern.MAJORITY)
-                        .find(MongoCommons.catchupMarkerGenerationFilter(subscriptionId)).first());
+                () -> catchupMarkerMajorityReads(collection).find(MongoCommons.catchupMarkerGenerationFilter(subscriptionId))
+                        .maxTime(MongoCommons.CATCHUP_MARKER_READ_MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
+                        .first());
     }
 
     @Override
@@ -196,12 +198,25 @@ public class SpringMongoCheckpointStorage implements CatchupMarkerStorage {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         // Retried apart, so a failed delete never raises the generation again, and a failed raise never sends the delete
         Runnable raiseGeneration = () -> mongoOperations.execute(checkpointCollection, collection ->
-                collection.withWriteConcern(MongoCommons.CATCHUP_MARKER_FORGET_WRITE_CONCERN)
+                catchupMarkerForgets(collection)
                         .updateOne(MongoCommons.catchupMarkerGenerationFilter(subscriptionId), MongoCommons.raiseCatchupMarkerGeneration(), new UpdateOptions().upsert(true)));
         executeWithRetry(raiseGeneration, __ -> !shutdown, retryStrategy).run();
         Runnable delete = () -> mongoOperations.execute(checkpointCollection, collection ->
-                collection.withWriteConcern(MongoCommons.CATCHUP_MARKER_FORGET_WRITE_CONCERN).deleteOne(eq(ID, subscriptionId)));
+                catchupMarkerForgets(collection).deleteOne(eq(ID, subscriptionId)));
         executeWithRetry(delete, __ -> !shutdown, retryStrategy).run();
+    }
+
+    private static MongoCollection<Document> catchupMarkerMajorityReads(MongoCollection<Document> collection) {
+        return withCatchupMarkerTimeout(collection.withReadPreference(primary()).withReadConcern(ReadConcern.MAJORITY), MongoCommons.CATCHUP_MARKER_READ_MAX_TIME);
+    }
+
+    private static MongoCollection<Document> catchupMarkerForgets(MongoCollection<Document> collection) {
+        return withCatchupMarkerTimeout(collection.withWriteConcern(MongoCommons.CATCHUP_MARKER_FORGET_WRITE_CONCERN), MongoCommons.CATCHUP_MARKER_FORGET_WRITE_TIMEOUT);
+    }
+
+    private static MongoCollection<Document> withCatchupMarkerTimeout(MongoCollection<Document> collection, Duration timeout) {
+        Long timeoutMillis = MongoCommons.catchupMarkerTimeoutMillis(collection.getTimeout(TimeUnit.MILLISECONDS), timeout);
+        return timeoutMillis == null ? collection : collection.withTimeout(timeoutMillis, TimeUnit.MILLISECONDS);
     }
 
     /**
