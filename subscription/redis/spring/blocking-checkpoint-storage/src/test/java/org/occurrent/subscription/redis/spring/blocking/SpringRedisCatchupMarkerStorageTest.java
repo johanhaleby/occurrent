@@ -23,6 +23,8 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.subscription.CatchupMarker;
 import org.occurrent.subscription.Checkpoint;
@@ -34,13 +36,19 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.Duration;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -151,6 +159,82 @@ class SpringRedisCatchupMarkerStorageTest {
             storage.saveCatchupMarker(id, MARKER, generation, CheckpointWriteCondition.any());
         }).as("forget, read and save").doesNotThrowAnyException();
         assertThat(storage.readCatchupMarker(id).isPresent()).as("present").isTrue();
+    }
+
+    static Stream<Arguments> plainCallsThatRefuseAGenerationKeyAsSubscriptionId() {
+        Map<String, Consumer<SpringRedisCheckpointStorage>> calls = new java.util.LinkedHashMap<>();
+        String id = SpringRedisCheckpointStorage.generationKey("orders");
+        calls.put("read", storage -> storage.read(id));
+        calls.put("save any", storage -> storage.save(id, MARKER, CheckpointWriteCondition.any()));
+        calls.put("save notOlderThan", storage -> storage.save(id, MARKER, CheckpointWriteCondition.notOlderThan(1)));
+        calls.put("save ifAbsent", storage -> storage.save(id, MARKER, CheckpointWriteCondition.ifAbsent()));
+        calls.put("delete", storage -> storage.delete(id));
+        calls.put("exists", storage -> storage.exists(id));
+        calls.put("writeVersion", storage -> storage.writeVersion(id));
+        return calls.entrySet().stream().flatMap(call -> Stream.of(
+                Arguments.of(call.getKey() + " in cluster-safe mode", false, call.getValue()),
+                Arguments.of(call.getKey() + " in standalone mode", true, call.getValue())));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("plainCallsThatRefuseAGenerationKeyAsSubscriptionId")
+    void a_plain_call_refuses_the_generation_hash_of_another_subscription_and_leaves_it_untouched(String call, boolean standalone, Consumer<SpringRedisCheckpointStorage> plainCall) {
+        // Given
+        SpringRedisCheckpointStorage storage = standalone ? SpringRedisCheckpointStorage.forStandalone(redisTemplate) : new SpringRedisCheckpointStorage(redisTemplate);
+        storage.forgetCatchupMarker("orders");
+        String generationKey = SpringRedisCheckpointStorage.generationKey("orders");
+        Set<String> keysBefore = requireNonNull(redisTemplate.keys("*"));
+        Map<Object, Object> hashBefore = redisTemplate.opsForHash().entries(generationKey);
+
+        // When
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> plainCall.accept(storage));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).as(call).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("reserves for its own generation keys"),
+                () -> assertThat(hashBefore).as("generation hash before").isNotEmpty(),
+                () -> assertThat(requireNonNull(redisTemplate.keys("*"))).as("keys").isEqualTo(keysBefore),
+                () -> assertThat(redisTemplate.opsForHash().entries(generationKey)).as("generation hash").isEqualTo(hashBefore),
+                () -> assertThat(storage.readCatchupMarker("orders").isPresent()).as("marker present").isFalse(),
+                () -> assertThat(storage.readCatchupMarker("orders").generation()).as("generation").isEqualTo(Long.parseLong((String) hashBefore.get("generation")))
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void evaluates_write_conditions_for_answers_false_for_an_id_with_the_generation_key_prefix_in_either_mode(boolean standalone) {
+        SpringRedisCheckpointStorage storage = standalone ? SpringRedisCheckpointStorage.forStandalone(redisTemplate) : new SpringRedisCheckpointStorage(redisTemplate);
+
+        assertAll(
+                () -> assertThat(storage.evaluatesWriteConditionsFor("occurrent:catchup-marker:orders")).as("generation key of orders").isFalse(),
+                () -> assertThat(storage.evaluatesWriteConditionsFor("occurrent:catchup-marker:")).as("bare prefix").isFalse(),
+                () -> assertThat(storage.evaluatesWriteConditionsFor("orders")).as("ordinary id").isTrue()
+        );
+    }
+
+    @Test
+    void the_marker_calls_throw_instead_of_retrying_forever_when_the_generation_key_holds_a_string() {
+        // Given, a 0.34.0 node or an outside client left a string where the generation hash goes
+        SpringRedisCheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        redisTemplate.opsForValue().set(SpringRedisCheckpointStorage.generationKey(subscriptionId), "not a hash");
+
+        // When, then
+        assertAll(
+                () -> assertTimeoutPreemptively(Duration.ofSeconds(5), () -> assertThatThrownBy(() -> storage.readCatchupMarker(subscriptionId)).as("read").hasStackTraceContaining("WRONGTYPE")),
+                () -> assertTimeoutPreemptively(Duration.ofSeconds(5), () -> assertThatThrownBy(() -> storage.saveCatchupMarker(subscriptionId, MARKER, 0, CheckpointWriteCondition.any())).as("save").hasStackTraceContaining("WRONGTYPE")),
+                () -> assertTimeoutPreemptively(Duration.ofSeconds(5), () -> assertThatThrownBy(() -> storage.forgetCatchupMarker(subscriptionId)).as("forget").hasStackTraceContaining("WRONGTYPE")),
+                () -> assertThat(redisTemplate.opsForValue().get(SpringRedisCheckpointStorage.generationKey(subscriptionId))).as("string left in place").isEqualTo("not a hash")
+        );
+    }
+
+    @Test
+    void a_plain_read_throws_instead_of_retrying_forever_when_the_checkpoint_key_holds_a_hash() {
+        // Given
+        SpringRedisCheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        redisTemplate.opsForHash().put(subscriptionId, "field", "value");
+
+        // When, then
+        assertTimeoutPreemptively(Duration.ofSeconds(5), () -> assertThatThrownBy(() -> storage.read(subscriptionId)).hasStackTraceContaining("WRONGTYPE"));
     }
 
     private static void setGeneration(String subscriptionId, long generation) {

@@ -81,6 +81,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -432,6 +433,21 @@ class SpringRedisCheckpointStorageTest {
         assertThatThrownBy(() -> storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.any()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("reserves for its own version keys");
+    }
+
+    @Test
+    void write_version_refuses_a_subscription_id_with_the_version_key_prefix_or_the_generation_key_prefix_in_either_mode() {
+        CheckpointStorage clusterSafe = new SpringRedisCheckpointStorage(redisTemplate);
+        CheckpointStorage standalone = SpringRedisCheckpointStorage.forStandalone(redisTemplate);
+        String versionKeyId = SpringRedisCheckpointStorage.versionKey("orders");
+
+        assertAll(
+                () -> assertThatThrownBy(() -> clusterSafe.writeVersion(versionKeyId)).as("cluster-safe, version key").isInstanceOf(IllegalArgumentException.class).hasMessageContaining("reserves for its own version keys"),
+                () -> assertThatThrownBy(() -> standalone.writeVersion(versionKeyId)).as("standalone, version key").isInstanceOf(IllegalArgumentException.class).hasMessageContaining("reserves for its own version keys"),
+                () -> assertThatThrownBy(() -> clusterSafe.writeVersion("occurrent:catchup-marker:orders")).as("cluster-safe, generation key").isInstanceOf(IllegalArgumentException.class).hasMessageContaining("reserves for its own generation keys"),
+                () -> assertThatThrownBy(() -> standalone.writeVersion("occurrent:catchup-marker:orders")).as("standalone, generation key").isInstanceOf(IllegalArgumentException.class).hasMessageContaining("reserves for its own generation keys"),
+                () -> assertThat(redisTemplate.keys("*")).as("keys").isEmpty()
+        );
     }
 
     @Test

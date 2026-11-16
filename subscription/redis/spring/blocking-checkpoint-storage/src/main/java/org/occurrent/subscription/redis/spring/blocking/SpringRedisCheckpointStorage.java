@@ -97,7 +97,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * or {@link CheckpointWriteCondition#ifAbsent()}. That refusal is what keeps {@link #evaluatesWriteConditions()}
  * true without exception in that mode, rather than true for every id except the one shape Cluster would otherwise
  * refuse two calls downstream, and {@link #evaluatesWriteConditionsFor(String)} answers {@code false} for that shape
- * (and for the version key's own reserved namespace below, in both modes) and {@code true} for every other id.
+ * (and for the namespaces this storage reserves below, in both modes) and {@code true} for every other id.
  * {@link #forStandalone(RedisOperations)} builds the other mode instead, for a deployment that is standalone or
  * replicated rather than Cluster, where slot alignment is not a concept a server has, so nothing needs protecting
  * from it. There, a conditional write accepts every subscription id the Cluster-safe mode refuses for slot
@@ -132,12 +132,13 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * version key. Each marker call is one Lua script over those keys. {@link #forgetCatchupMarker(String)} sets the
  * generation to a random number other than {@code 0}, so a later forget doesn't repeat a generation that a failover
  * lost. Don't delete these hashes. Deleting one puts the generation of that id back at {@code 0}, and a marker
- * saved earlier can then read as present again. The marker calls throw {@link IllegalArgumentException} for every
+ * saved earlier can then read as present again. Every call, plain or marker, throws {@link IllegalArgumentException}
+ * for a subscription id that starts with {@code occurrent:catchup-marker:}, the same way it does for the version key's
+ * prefix, so no call of this class can replace or remove one of these hashes. The marker calls also throw it for every
  * subscription id a conditional {@link #save(String, Checkpoint, CheckpointWriteCondition) save} refuses in the same
- * mode, and for ids that start with {@code occurrent:catchup-marker:}. Plain {@link #read(String)}, {@code save} and
- * {@link #delete(String)} accept those ids. On an id equal to one of these hash keys, a plain {@code read} gets Redis's
- * {@code WRONGTYPE} error on every attempt, so it never returns under the default {@link RetryStrategy}, and a plain
- * {@code save} or {@code delete} can replace or remove that hash.
+ * mode. A 0.34.0 node, or a client outside this class, can still write a string at one of these keys. A call that then
+ * gets Redis's {@code WRONGTYPE} error throws it at once instead of retrying, since every later attempt would get it
+ * too.
  */
 @NullMarked
 public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
@@ -285,6 +286,10 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
 
     private volatile boolean shutdown;
 
+    // CROSSSLOT and WRONGTYPE fail the same way on every attempt, so retrying either would never return under the
+    // default RetryStrategy, whose max attempts is infinite
+    private final Predicate<Throwable> retryUnlessShutdownOrUnretryable = e -> !shutdown && !isClusterSlotMismatch(e) && !isWrongType(e);
+
     /**
      * Create a {@link CheckpointStorage} that uses the Native sync Java MongoDB driver to persists the checkpoint in Redis.
      * It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between
@@ -316,7 +321,7 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
 
     /**
      * Create a {@link CheckpointStorage} for a standalone or replicated Redis deployment, where a conditional write
-     * accepts every subscription id outside the version key's own reserved namespace (see the class javadoc),
+     * accepts every subscription id outside the namespaces this storage reserves (see the class javadoc),
      * including the one shape a conditional write refuses in Cluster-safe mode.
      * It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms
      * and progressively go up to max 2 seconds wait time between each retry when reading/saving/deleting the
@@ -328,7 +333,7 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
      * javadoc describes for the other constructors.
      *
      * @param redis The {@link RedisOperations} that'll be used to store the checkpoint
-     * @return A {@link CheckpointStorage} that accepts every subscription id outside the reserved namespace for a
+     * @return A {@link CheckpointStorage} that accepts every subscription id outside the reserved namespaces for a
      * conditional write
      */
     public static SpringRedisCheckpointStorage forStandalone(RedisOperations<String, String> redis) {
@@ -337,7 +342,7 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
 
     /**
      * Create a {@link CheckpointStorage} for a standalone or replicated Redis deployment, where a conditional write
-     * accepts every subscription id outside the version key's own reserved namespace (see the class javadoc),
+     * accepts every subscription id outside the namespaces this storage reserves (see the class javadoc),
      * including the one shape a conditional write refuses in Cluster-safe mode.
      * <p>
      * Do not use this against a Cluster deployment. Nothing here can tell one apart from a standalone or replicated
@@ -347,7 +352,7 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
      *
      * @param redis         The {@link RedisOperations} that'll be used to store the checkpoint
      * @param retryStrategy A custom retry strategy to use if there's a problem reading/saving/deleting the checkpoint to the Redis storage.
-     * @return A {@link CheckpointStorage} that accepts every subscription id outside the reserved namespace for a
+     * @return A {@link CheckpointStorage} that accepts every subscription id outside the reserved namespaces for a
      * conditional write
      */
     public static SpringRedisCheckpointStorage forStandalone(RedisOperations<String, String> redis, RetryStrategy retryStrategy) {
@@ -366,14 +371,14 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
     /**
      * {@inheritDoc}
      *
-     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
-     *                                   its own version keys, see the class javadoc. Specific to this
-     *                                   implementation, not part of the {@link CheckpointStorage} contract.
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with one of the prefixes this storage reserves
+     *                                   for its own keys, see the class javadoc. Specific to this implementation, not
+     *                                   part of the {@link CheckpointStorage} contract.
      */
     @Nullable
     @Override
     public Checkpoint read(String subscriptionId) {
-        requireOutsideVersionKeyNamespace(subscriptionId);
+        requireOutsideReservedNamespaces(subscriptionId);
         Supplier<@Nullable Checkpoint> read = () -> {
             String checkpoint = redis.opsForValue().get(subscriptionId);
             if (checkpoint == null) {
@@ -382,14 +387,14 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
             return new StringBasedCheckpoint(checkpoint);
         };
 
-        return executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
+        return executeWithRetry(read, retryUnlessShutdownOrUnretryable, retryStrategy).get();
     }
 
     /**
      * {@inheritDoc}
      *
-     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
-     *                                  its own version keys, see the class javadoc, or if {@code condition} is
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with one of the prefixes this storage reserves
+     *                                  for its own keys, see the class javadoc, or if {@code condition} is
      *                                  {@link CheckpointWriteCondition#notOlderThan(long)} or
      *                                  {@link CheckpointWriteCondition#ifAbsent()} and {@code subscriptionId} is
      *                                  one of the shapes the class javadoc names Redis Cluster cannot align a slot
@@ -402,7 +407,7 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
         requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
-        requireOutsideVersionKeyNamespace(subscriptionId);
+        requireOutsideReservedNamespaces(subscriptionId);
         return switch (condition) {
             case CheckpointWriteCondition.Any ignored -> saveUnconditionally(subscriptionId, checkpoint);
             case CheckpointWriteCondition.NotOlderThan notOlderThan -> saveConditionally(subscriptionId, checkpoint, condition, NOT_OLDER_THAN_SCRIPT,
@@ -416,19 +421,19 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
             redis.opsForValue().set(subscriptionId, checkpoint.asString());
             return checkpoint;
         };
-        return requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
+        return requireNonNull(executeWithRetry(save, retryUnlessShutdownOrUnretryable, retryStrategy).get());
     }
 
     /**
      * Runs a write script and turns its return code into either the saved checkpoint or a refusal.
      * <p>
-     * The refusal, and a Cluster {@code CROSSSLOT} failure, are both excluded from the retry strategy's own
-     * predicate, not merely allowed to exhaust it. This storage's default {@link RetryStrategy} is
-     * {@code exponentialBackoff}, whose default max attempts is infinite, so either one left inside the ordinary
+     * The refusal, a Cluster {@code CROSSSLOT} failure and a {@code WRONGTYPE} failure are all excluded from the retry
+     * strategy's own predicate, not merely allowed to exhaust it. This storage's default {@link RetryStrategy} is
+     * {@code exponentialBackoff}, whose default max attempts is infinite, so any of them left inside the ordinary
      * retry path would retry a write that can never succeed and hang the delivery thread forever. Excluding the
      * refusal is what {@link CheckpointWriteConditionNotFulfilledException}'s javadoc means by "must never be
-     * retried on the path that threw it", and a slot mismatch is the same kind of failure, just reported by Cluster
-     * instead of by this class.
+     * retried on the path that threw it", and a slot mismatch or a key of the wrong type is the same kind of
+     * failure, just reported by Redis instead of by this class.
      */
     private Checkpoint saveConditionally(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition, RedisScript<Long> script, byte[]... extraArgs) {
         // Standalone mode has no slot to protect, so it skips this restriction entirely rather than narrowing it.
@@ -449,19 +454,27 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
             throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, condition);
         };
 
-        Predicate<Throwable> retryUnlessShutdownOrRefused = e -> !shutdown && !(e instanceof CheckpointWriteConditionNotFulfilledException) && !isClusterSlotMismatch(e);
+        Predicate<Throwable> retryUnlessShutdownOrRefused = retryUnlessShutdownOrUnretryable.and(e -> !(e instanceof CheckpointWriteConditionNotFulfilledException));
         return requireNonNull(executeWithRetry(save, retryUnlessShutdownOrRefused, retryStrategy).get());
     }
 
-    // The checkpoint key is subscriptionId itself, unprefixed, and every version key starts with VERSION_KEY_PREFIX,
-    // so a subscription id that starts with it too could be the exact text of some other subscription's version
-    // key. A save, delete, or read against that id would then land on the wrong subscription's stored version
-    // instead of its own checkpoint. Refusing the prefix outright is enough to rule that out entirely, since no
-    // version key this class ever builds starts with anything else.
-    private static void requireOutsideVersionKeyNamespace(String subscriptionId) {
+    // The checkpoint key is subscriptionId itself, unprefixed, and every version key starts with VERSION_KEY_PREFIX
+    // and every generation hash with GENERATION_KEY_PREFIX, so a subscription id that starts with either could be the
+    // exact text of some other subscription's version key or generation hash. A save, delete, or read against that
+    // id would then read or write the wrong subscription's stored version or generation instead of its own
+    // checkpoint, and a delete of a generation hash puts a forgotten marker back. Refusing both prefixes outright
+    // rules that out, since no key this class builds other than the checkpoint key starts with anything else.
+    private static void requireOutsideReservedNamespaces(String subscriptionId) {
         if (subscriptionId.startsWith(VERSION_KEY_PREFIX)) {
             throw new IllegalArgumentException("Subscription id \"" + subscriptionId + "\" cannot be used, since it starts with \"" + VERSION_KEY_PREFIX + "\", the prefix this storage reserves for its own version keys, and could otherwise be the exact key some other subscription's version is stored under.");
         }
+        if (subscriptionId.startsWith(GENERATION_KEY_PREFIX)) {
+            throw new IllegalArgumentException("Subscription id \"" + subscriptionId + "\" cannot be used, since it starts with \"" + GENERATION_KEY_PREFIX + "\", the prefix this storage reserves for its own generation keys, and could otherwise be the exact key some other subscription's catch-up marker generation is stored under.");
+        }
+    }
+
+    private static boolean isInReservedNamespace(String subscriptionId) {
+        return subscriptionId.startsWith(VERSION_KEY_PREFIX) || subscriptionId.startsWith(GENERATION_KEY_PREFIX);
     }
 
     // False for the one subscription id shape the class javadoc names, where clusterHashTag falls back to the whole
@@ -495,6 +508,19 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
         return false;
     }
 
+    // A key holding another type than the command expects, for example a generation hash that a 0.34.0 node or a
+    // client outside this class replaced with a string, fails the same way on every attempt. Redis 5 puts the reply
+    // after a script prefix, so this matches the reply text anywhere in the message rather than at its start.
+    private static boolean isWrongType(Throwable e) {
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            String message = cause.getMessage();
+            if (message != null && message.contains("WRONGTYPE Operation against a key holding the wrong kind of value")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // True unconditionally, in both modes. The comparison is real on a standalone server, a replicated one, and on
     // Cluster, since versionKey's hash tag keeps both keys the script touches in the same slot for every
     // subscription id a conditional write accepts. In Cluster-safe mode, the one shape it does not accept,
@@ -509,7 +535,7 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
     /**
      * {@inheritDoc}
      * <p>
-     * Answers {@code false} for a subscription id in the version key's own reserved namespace, in either mode,
+     * Answers {@code false} for a subscription id in one of the namespaces this storage reserves, in either mode,
      * since {@link #save(String, Checkpoint, CheckpointWriteCondition)} refuses that id outright before it looks at
      * {@code condition} at all, {@code any()} included. Otherwise answers {@code true} for every subscription id in
      * standalone mode ({@link #forStandalone(RedisOperations)}). In Cluster-safe mode (the other constructors),
@@ -519,18 +545,26 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
     @Override
     public boolean evaluatesWriteConditionsFor(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        if (subscriptionId.startsWith(VERSION_KEY_PREFIX)) {
+        if (isInReservedNamespace(subscriptionId)) {
             return false;
         }
         return standalone || isClusterSlotAlignable(subscriptionId);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with one of the prefixes this storage reserves
+     *                                  for its own keys, see the class javadoc. Specific to this implementation, not
+     *                                  part of the {@link CheckpointStorage} contract.
+     */
     @Override
     public OptionalLong writeVersion(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
+        requireOutsideReservedNamespaces(subscriptionId);
         Supplier<@Nullable Long> read = () -> redis.execute(READ_VERSION_SCRIPT, RedisSerializer.string(), RESULT_SERIALIZER,
                 List.of(versionKey(subscriptionId)));
-        Long storedVersion = executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
+        Long storedVersion = executeWithRetry(read, retryUnlessShutdownOrUnretryable, retryStrategy).get();
         return storedVersion == null || storedVersion == NO_VERSION_STORED ? OptionalLong.empty() : OptionalLong.of(storedVersion);
     }
 
@@ -540,14 +574,14 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
      * Unlike {@link #save(String, Checkpoint, CheckpointWriteCondition)}, this never throws for a subscription id
      * shape Redis Cluster cannot align a slot for, see the class javadoc for why deleting one is always safe.
      *
-     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
-     *                                  its own version keys, see the class javadoc. Specific to this
-     *                                  implementation, not part of the {@link CheckpointStorage} contract.
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with one of the prefixes this storage reserves
+     *                                  for its own keys, see the class javadoc. Specific to this implementation, not
+     *                                  part of the {@link CheckpointStorage} contract.
      */
     @Override
     public void delete(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        requireOutsideVersionKeyNamespace(subscriptionId);
+        requireOutsideReservedNamespaces(subscriptionId);
         Supplier<Long> deleteBoth = () -> {
             try {
                 return redis.delete(List.of(subscriptionId, versionKey(subscriptionId)));
@@ -570,24 +604,24 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
                 return 0L;
             }
         };
-        executeWithRetry(deleteBoth, __ -> !shutdown, retryStrategy).get();
+        executeWithRetry(deleteBoth, retryUnlessShutdownOrUnretryable, retryStrategy).get();
     }
 
     /**
      * {@inheritDoc}
      *
-     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
-     *                                  its own version keys, see the class javadoc. Specific to this
-     *                                  implementation, not part of the {@link CheckpointStorage} contract.
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with one of the prefixes this storage reserves
+     *                                  for its own keys, see the class javadoc. Specific to this implementation, not
+     *                                  part of the {@link CheckpointStorage} contract.
      */
     @Override
     public boolean exists(String subscriptionId) {
-        requireOutsideVersionKeyNamespace(subscriptionId);
+        requireOutsideReservedNamespaces(subscriptionId);
         Supplier<Boolean> exists = () -> {
             Boolean result = redis.hasKey(subscriptionId);
             return result != null && result;
         };
-        return Boolean.TRUE.equals(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
+        return Boolean.TRUE.equals(executeWithRetry(exists, retryUnlessShutdownOrUnretryable, retryStrategy).get());
     }
 
     /**
@@ -610,7 +644,7 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
             String marker = (String) requireNonNull(redis.getValueSerializer().deserialize(reply.get(1)));
             return new CatchupMarker(new StringBasedCheckpoint(marker), generation);
         };
-        return requireNonNull(executeWithRetry(read, retryUnlessShutdownOrCrossSlot(), retryStrategy).get());
+        return requireNonNull(executeWithRetry(read, retryUnlessShutdownOrUnretryable, retryStrategy).get());
     }
 
     /**
@@ -633,7 +667,7 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
         Supplier<Long> save = () -> redis.execute(SAVE_CATCHUP_MARKER_SCRIPT, conditionArgsSerializer, RESULT_SERIALIZER,
                 List.of(subscriptionId, versionKey(subscriptionId), generationKey(subscriptionId)),
                 marker.asString(), digits(generation), conditionName.getBytes(StandardCharsets.UTF_8), digits(writeVersion));
-        Long outcome = executeWithRetry(save, retryUnlessShutdownOrCrossSlot(), retryStrategy).get();
+        Long outcome = executeWithRetry(save, retryUnlessShutdownOrUnretryable, retryStrategy).get();
         return outcome != null && outcome == 1L;
     }
 
@@ -649,7 +683,7 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
         // A new generation for each attempt, so a retry never puts back a generation that a forget in between replaced
         Supplier<@Nullable Long> forget = () -> redis.execute(FORGET_CATCHUP_MARKER_SCRIPT, conditionArgsSerializer, RESULT_SERIALIZER,
                 List.of(subscriptionId, versionKey(subscriptionId), generationKey(subscriptionId)), digits(newGeneration()));
-        executeWithRetry(forget, retryUnlessShutdownOrCrossSlot(), retryStrategy).get();
+        executeWithRetry(forget, retryUnlessShutdownOrUnretryable, retryStrategy).get();
     }
 
     private long newGeneration() {
@@ -664,18 +698,10 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
         return Long.toString(value).getBytes(StandardCharsets.UTF_8);
     }
 
-    private Predicate<Throwable> retryUnlessShutdownOrCrossSlot() {
-        return e -> !shutdown && !isClusterSlotMismatch(e);
-    }
-
-    // The checks a conditional save makes, plus the generation hash's own prefix, since a checkpoint key with that
-    // text would be some other subscription id's generation hash
+    // The checks a conditional save makes
     private void requireUsableForCatchupMarker(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        requireOutsideVersionKeyNamespace(subscriptionId);
-        if (subscriptionId.startsWith(GENERATION_KEY_PREFIX)) {
-            throw new IllegalArgumentException("Subscription id \"" + subscriptionId + "\" cannot be used for a catch-up marker, since it starts with \"" + GENERATION_KEY_PREFIX + "\", the prefix this storage reserves for its own generation keys.");
-        }
+        requireOutsideReservedNamespaces(subscriptionId);
         if (!standalone && !isClusterSlotAlignable(subscriptionId)) {
             throw new IllegalArgumentException("Subscription id \"" + subscriptionId + "\" cannot be used for a catch-up marker, since Redis Cluster would hash the checkpoint key and this storage's generation key for it to different slots and refuse the marker calls for crossing slots.");
         }
