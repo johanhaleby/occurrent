@@ -283,7 +283,8 @@ The retry sets a new random generation instead, so the late save's stamp differs
 except with a probability of about 2^-64. Redis draws its token the same way, for the lost write a failover causes
 there.
 
-A server that runs without journaling, such as a standalone server started with `--nojournal`, refuses `j: true` with
+A WiredTiger server that runs without journaling, such as a standalone server started with `--nojournal`, refuses
+`j: true` with
 error code 2 and the message `cannot use 'j' option when a host does not have journaling enabled` (checked on 4.4.5).
 The store matches the code and the message, since other mistakes also give code 2. It then fails the forget at once
 with an `IllegalStateException` that says catch-up marker storage needs a MongoDB server with journaling, and doesn't
@@ -426,6 +427,13 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   The default `RetryStrategy` then keeps trying, so the call returns once a majority is back, and only a
   `RetryStrategy` that gives up, or the store shutting down, makes it throw. The changelog
   says the forget ignores a weaker write concern on the application's collection.
+* MongoDB's in-memory storage engine, part of MongoDB Enterprise, is not a supported place for the checkpoint
+  collection. Its [documentation](https://www.mongodb.com/docs/manual/core/inmemory/) says that it acknowledges a write
+  that asks for `j: true` at once, since it has no journal, and that a replica set with an in-memory voting member must
+  set `writeConcernMajorityJournalDefault` to `false`. With that setting a majority write can roll back when a majority
+  of the members crash and restart. So a forget there doesn't fail with the `IllegalStateException` above. It succeeds,
+  a rollback can then undo it, the marker comes back, and the next catch-up skips the replay the forget asked for. The
+  store doesn't check which engine the server runs, so keep the checkpoint collection on WiredTiger.
 * A late save whose stamp is not the current generation can replace a marker written under the current one, when
   its lease condition lets it. The id then reads absent and the next catch-up replays once.
 * A retried forget whose first attempt was applied changes the generation twice. Every attempt that read the
