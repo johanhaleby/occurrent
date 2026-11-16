@@ -26,8 +26,10 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupListener;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.net.URI;
@@ -40,6 +42,7 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * The catch-up marker is the position the next catch-up resumes after (ADR 179). Every start in these tests is a fresh
@@ -214,6 +217,46 @@ class CatchupThenPushSubscriptionModelResumePositionTest {
 
         assertThat(fromTheBeginning.signals).containsExactly("started", "historyRead");
         assertThat(afterTheMarker.signals).containsExactly("started", "historyRead");
+    }
+
+    @Test
+    void an_event_written_while_the_marker_is_read_is_replayed_and_covered_by_the_marker_stored_after_the_catch_up() throws Exception {
+        AtomicBoolean armed = new AtomicBoolean();
+        InMemoryCheckpointStorage writingOnRead = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint read(String subscriptionId) {
+                Checkpoint stored = super.read(subscriptionId);
+                if (armed.compareAndSet(true, false)) {
+                    store.write("s", List.of(event("late")));
+                }
+                return stored;
+            }
+        };
+        store.write("s", List.of(event("1"), event("2")));
+        start(store, writingOnRead, new CopyOnWriteArrayList<>());
+        armed.set(true);
+
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        start(store, writingOnRead, delivered);
+
+        assertThat(delivered).as("the event written during the marker read").containsExactly("late");
+        assertThat(positionStoredBy(writingOnRead)).as("the head was read after the marker, so it includes the late event")
+                .isEqualTo(store.currentPosition());
+    }
+
+    @Test
+    void a_stored_checkpoint_that_is_not_a_catch_up_marker_fails_the_subscribe_naming_the_id_and_the_way_out() {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        marker.save("proj", new StringBasedCheckpoint("resume-token-xyz"));
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        liveFeed.set(feed);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+
+        var subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+
+        assertThat(catchThrowable(subscription::waitUntilStarted))
+                .hasMessageContaining("proj").hasMessageContaining("subscribe under a new id").isInstanceOf(IllegalStateException.class);
     }
 
     private CatchupThenPushSubscriptionModel start(PositionOrderedReader reader, InMemoryCheckpointStorage marker, List<String> delivered) throws Exception {
