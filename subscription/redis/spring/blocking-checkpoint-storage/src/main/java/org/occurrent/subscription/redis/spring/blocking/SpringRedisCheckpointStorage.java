@@ -193,10 +193,14 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
 
     // KEYS[1] = checkpoint key, KEYS[2] = version key. ARGV[1] = checkpoint value. Accepted only when the
     // checkpoint key does not exist yet, whatever version would be stored. The version key is left untouched
-    // either way, since ifAbsent is about whether a checkpoint is stored, not a version. Returns a string, see
-    // READ_VERSION_SCRIPT.
+    // either way, since ifAbsent is about whether a checkpoint is stored, not a version. A stored checkpoint equal to
+    // ARGV[1] counts as written, since a retry whose first attempt wrote and lost its reply finds it, and the MongoDB
+    // storages answer the same. Returns a string, see READ_VERSION_SCRIPT.
     private static final RedisScript<String> IF_ABSENT_SCRIPT = RedisScript.of("""
             if redis.call('EXISTS', KEYS[1]) == 1 then
+                if redis.call('GET', KEYS[1]) == ARGV[1] then
+                    return '-1'
+                end
                 return redis.call('GET', KEYS[2]) or '-2'
             end
             redis.call('SET', KEYS[1], ARGV[1])
