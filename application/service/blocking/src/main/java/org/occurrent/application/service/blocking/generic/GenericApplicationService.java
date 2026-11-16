@@ -126,12 +126,19 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
             throw new UnsupportedOperationException("The provided EventStore implementation does not support reading with a StreamReadFilter. EventStore must implement ReadEventStreamWithFilter in order to use filters when reading.");
         }
 
+        // Before anything is read, so a refused write reads nothing, see beforeWrite()
+        SynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? SynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
+        // Closed once the write and its dispatch are done, so a pause or a stop meanwhile waits for them
+        try (writeCheck) {
+            return executeAdmitted(streamId, executeOptions, functionThatCallsDomainModel, sideEffect, filter, writeCheck);
+        }
+    }
+
+    private WriteResult executeAdmitted(String streamId, ExecuteOptions<E> executeOptions, Function<List<E>, List<E>> functionThatCallsDomainModel,
+                                        @Nullable Consumer<List<E>> sideEffect, @Nullable StreamReadFilter filter, SynchronousEventDispatcher.WriteCheck writeCheck) {
         // @formatter:off
               record Attempt<T1 extends @Nullable Object, T2>(T1 v1, T2 v2) {}
               // @formatter:on
-
-        // Before anything is read, so a refused write reads nothing, see beforeWrite()
-        SynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? SynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
 
         FailureAfterWrite failureAfterWrite = new FailureAfterWrite();

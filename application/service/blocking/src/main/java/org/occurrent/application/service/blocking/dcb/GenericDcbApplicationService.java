@@ -142,6 +142,14 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         @Nullable Consumer<List<E>> sideEffect = options.sideEffect();
         // Before anything is read, so a refused write reads nothing, see beforeWrite()
         SynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? SynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
+        // Closed once the append and its dispatch are done, so a pause or a stop meanwhile waits for them
+        try (writeCheck) {
+            return executeAdmitted(criteria, options, functionThatCallsDomainModel, sideEffect, writeCheck);
+        }
+    }
+
+    private Optional<DcbAppendResult> executeAdmitted(DcbCriteria criteria, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel,
+                                                      @Nullable Consumer<List<E>> sideEffect, SynchronousEventDispatcher.WriteCheck writeCheck) {
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
         @Nullable DcbReadOptions readOptions = readOptions(options);
         boolean versionsRequested = options.versionsRequested();

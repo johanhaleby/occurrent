@@ -507,7 +507,9 @@ class ProjectionAnnotationRegistrar {
     // owner that composed it, never from a probe or an annotation-only predicate:
     //   1. The composition structurally has no catch-up layer at all (the durable-only case of ADR 132 decision 9), a
     //      known fact resolveCatchupModel's ComposedCatchupModel branch already verified, not an unobserved absence.
-    //   2. NOW with resumeBehavior SAME_AS_START_AT, which is StartAt.now() on every start. On the stream composition
+    //   2. NOW with resumeBehavior SAME_AS_START_AT, which on every start begins at the boundary that start takes
+    //      (StartAt.checkpoint from StartPositionSupport's liveOnlyStart), or at StartAt.now() without one, and never
+    //      at a stored checkpoint. On the stream composition
     //      ReactiveNowStartAtLeftOverCheckpointMongoTest boots, neither a restart nor a resume replays from a catch-up
     //      checkpoint in storage. An application-supplied model that resumes from a stored
     //      position anyway is not seen here.

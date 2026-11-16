@@ -114,14 +114,6 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
             throw new UnsupportedOperationException("The provided EventStore implementation does not support reading with a StreamReadFilter. EventStore must implement ReadEventStreamWithFilter in order to use filters when reading.");
         }
         @Nullable Function<List<E>, Mono<Void>> sideEffect = executeOptions.sideEffect();
-        ReactiveSynchronousEventDispatcher.WriteCheck writeCheck;
-        try {
-            // On the caller's thread and before anything is read, see beforeWrite()
-            writeCheck = synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
-        } catch (RuntimeException refused) {
-            return Mono.error(refused);
-        }
-        boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
         @Nullable Long fromStreamVersion = executeOptions.fromStreamVersion();
         int skip = fromStreamVersion == null ? 0 : Math.toIntExact(fromStreamVersion);
 
@@ -132,6 +124,10 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         // write keeps exactly its prior semantics and applications without synchronous subscriptions pay no transaction
         // overhead. The side-effect is composed after the retry so it runs once on success, not per attempt.
         return Mono.defer(() -> {
+            // Asked per subscription and before anything is read, see beforeWrite(), so a Mono built before a stop or
+            // before the first synchronous handler registered answers for the moment it runs
+            ReactiveSynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
+            boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
             FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
             // Asked inside the transaction, since the answer depends on what's open, and before the write, so a failure here undoes nothing
             Function<Boolean, Mono<Result<E>>> readDecideWriteUnit = openedTransaction -> Mono.defer(() -> {
@@ -179,7 +175,9 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                             return Mono.just(result.writeResult());
                         }
                         return sideEffect.apply(result.newDomainEvents()).thenReturn(result.writeResult());
-                    });
+                    })
+                    // A pause or a stop meanwhile waits for this, or applies now when it couldn't block
+                    .doFinally(__ -> writeCheck.close());
         });
     }
 

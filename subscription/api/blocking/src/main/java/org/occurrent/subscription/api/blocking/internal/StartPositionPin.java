@@ -23,6 +23,8 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static java.util.Objects.requireNonNull;
 
@@ -32,6 +34,14 @@ import static java.util.Objects.requireNonNull;
  * two nodes pinning at the same moment resolves by order where the storage can compare the two positions, see ADR 130.
  */
 public final class StartPositionPin {
+
+    private static final Logger log = LoggerFactory.getLogger(StartPositionPin.class);
+
+    private static final String UNCONDITIONAL_WRITE_WARNING = "Checkpoint storage {} does not evaluate write conditions for subscription {}, so the first " +
+                                                             "position recorded for it is written unconditionally. Two nodes recording a first position " +
+                                                             "for this subscription at the same moment can then lose the events between the two positions. " +
+                                                             "Answer true from evaluatesWriteConditionsFor(String) on a storage that does evaluate " +
+                                                             "ifAbsent(), or use one of the storages Occurrent ships, to close that.";
 
     private StartPositionPin() {
     }
@@ -63,6 +73,10 @@ public final class StartPositionPin {
         // comparing positions atomically with any write it makes, so it is never fooled by that replacement the way
         // trusting checkpointAlreadyExisted alone would be. checkpointAlreadyExisted stays as the fallback's own
         // signal, for a storage that answered resolveFirstCheckpointRace empty. See ADR 130.
+        if (!checkpointStorage.evaluatesWriteConditionsFor(subscriptionId)) {
+            saveUnconditionally(checkpointStorage, subscriptionId, checkpointAlreadyExisted, position);
+            return;
+        }
         try {
             checkpointStorage.save(subscriptionId, position, CheckpointWriteCondition.ifAbsent());
         } catch (CheckpointWriteConditionNotFulfilledException e) {
@@ -77,6 +91,18 @@ public final class StartPositionPin {
             }
             refuseUnlessTheStoredPositionIsTheOneRead(checkpointStorage, subscriptionId, position);
         }
+    }
+
+    // A storage that refuses ifAbsent() with UnsupportedOperationException gets the write it got before the pin
+    // existed, as DurableSubscriptionModel gives it, logged rather than refused, since refusing would take out a
+    // storage that has worked until now. A stored checkpoint is left alone, because an unconditional write would move
+    // the subscription off it.
+    private static void saveUnconditionally(CheckpointStorage storage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
+        if (checkpointAlreadyExisted) {
+            return;
+        }
+        log.warn(UNCONDITIONAL_WRITE_WARNING, storage.getClass().getName(), subscriptionId);
+        storage.save(subscriptionId, position);
     }
 
     // Something was stored between the read above and this write, so it was written where this class cannot order

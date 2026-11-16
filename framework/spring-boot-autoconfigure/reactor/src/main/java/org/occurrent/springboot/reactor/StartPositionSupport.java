@@ -42,20 +42,21 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.internal.StartPositionPin;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.beans.factory.BeanCurrentlyInCreationException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
-import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.context.ApplicationContext;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 /**
@@ -71,6 +72,8 @@ import java.util.function.Supplier;
  */
 class StartPositionSupport {
 
+    private static final Logger log = LoggerFactory.getLogger(StartPositionSupport.class);
+
     private final ApplicationContext applicationContext;
 
     private record Boundary(Supplier<@Nullable String> reader, @Nullable String liveStart) {
@@ -78,7 +81,7 @@ class StartPositionSupport {
 
     // The boundary each unproxied bean that opens catch-up read scopes reported when it was created, by bean name
     private final Map<String, Boundary> boundaries = new ConcurrentHashMap<>();
-    private boolean boundaryStoreRequested;
+    private final AtomicBoolean boundaryStoreRequested = new AtomicBoolean();
     // The boundary of each subscription a bean built after startup registers, in place of the context's
     private final Map<String, String> lateLiveStarts = new ConcurrentHashMap<>();
 
@@ -86,47 +89,71 @@ class StartPositionSupport {
         this.applicationContext = applicationContext;
     }
 
-    // Only the bean itself, never a proxy, so reading the boundary invokes no advice and looks nothing up by name.
-    // Every such bean records its own, and the store the subscription model reads decides which one counts, so a store
-    // with no live start, such as the in-memory one, can't stand in for it. A failed read fails the bean, since
-    // starting without the boundary would skip what is written during startup.
-    synchronized void recordStartBoundaryOf(Object bean, String beanName) {
-        if (boundaries.containsKey(beanName) || AopUtils.isAopProxy(bean) || Schedulers.isInNonBlockingThread()) {
+    // Read from the bean itself, so reading the boundary invokes no advice and looks nothing up by name. A proxy with a
+    // single target is read through that target, and any other proxy is skipped with a warning. Every such bean records
+    // its own, and the store the subscription model reads decides which one counts, so a store with no live start, such
+    // as the in-memory one, can't stand in for it. A failed read fails the bean, since starting without the boundary
+    // would skip what is written during startup.
+    //
+    // Holds no lock, since creating the store below waits for a thread already creating it, and that thread enters
+    // here from the store's own callback.
+    void recordStartBoundaryOf(Object bean, String beanName) {
+        if (boundaries.containsKey(beanName) || Schedulers.isInNonBlockingThread()) {
             return;
         }
-        @Nullable Supplier<@Nullable String> reader = liveStartReaderOf(bean);
+        @Nullable Object target = unproxied(bean, beanName);
+        if (target == null) {
+            return;
+        }
+        @Nullable Supplier<@Nullable String> reader = liveStartReaderOf(target);
         if (reader == null) {
             return;
         }
-        boundaries.put(beanName, new Boundary(reader, reader.get()));
+        boundaries.putIfAbsent(beanName, new Boundary(reader, reader.get()));
         createBoundaryStoreOnce();
     }
 
+    private static @Nullable Object unproxied(Object bean, String beanName) {
+        if (!AopUtils.isAopProxy(bean)) {
+            return bean;
+        }
+        @Nullable Object target = AopProxyUtils.getSingletonTarget(bean);
+        if (target == null && (bean instanceof CatchupReads || bean instanceof DcbCatchupReads)) {
+            log.warn("The event store bean {} is a proxy without a single target, so the annotated subscriptions that start live can't begin where the event store was when it was " +
+                     "created, and start where the event store is when they subscribe, as in 0.34.0. An event written while the application starts can then be missed.", beanName);
+        }
+        return target;
+    }
+
     // Another store on the same collection can write while the application starts, before the store the model reads
-    // exists. Creating the stores it is picked from at the first store's callback reads its boundary before such a
-    // write can happen. Picking it instantiates every candidate, so the bean whose callback this is gets skipped rather
-    // than created a second time, and a store that depends on it records its boundary as its own creation finishes.
+    // exists. Creating that store at the first store's callback reads its boundary before such a write can happen. It is
+    // the only or the @Primary store of its type, as the blocking stack picks it, so no other store is created here.
+    // Spring refuses to create the bean whose callback this is a second time, which is the usual case of one store, and
+    // a store that depends on that bean, and both record their boundary as their own creation finishes.
     private void createBoundaryStoreOnce() {
-        if (boundaryStoreRequested) {
+        if (!boundaryStoreRequested.compareAndSet(false, true)) {
             return;
         }
-        boundaryStoreRequested = true;
-        if (!(applicationContext.getAutowireCapableBeanFactory() instanceof ConfigurableBeanFactory beanFactory)) {
-            return;
+        Set<EventStoreCapability> capabilities = applicationContext.getBeanProvider(OccurrentProperties.class).getIfAvailable(OccurrentProperties::new).getEventStore().getCapabilities();
+        try {
+            if (capabilities.contains(EventStoreCapability.STREAM)) {
+                uniqueOrPrimary(EventStore.class);
+            }
+            if (capabilities.contains(EventStoreCapability.DCB)) {
+                uniqueOrPrimary(DcbEventStore.class);
+            }
+        } catch (BeanCreationException e) {
+            if (!e.contains(BeanCurrentlyInCreationException.class)) {
+                throw e;
+            }
         }
-        Set<String> names = new LinkedHashSet<>(List.of(applicationContext.getBeanNamesForType(EventStore.class)));
-        names.addAll(List.of(applicationContext.getBeanNamesForType(DcbEventStore.class)));
-        for (String name : names) {
-            if (beanFactory.isCurrentlyInCreation(name)) {
-                continue;
-            }
-            try {
-                applicationContext.getBean(name);
-            } catch (BeanCreationException e) {
-                if (!e.contains(BeanCurrentlyInCreationException.class)) {
-                    throw e;
-                }
-            }
+    }
+
+    private void uniqueOrPrimary(Class<?> type) {
+        try {
+            applicationContext.getAutowireCapableBeanFactory().resolveNamedBean(type);
+        } catch (NoSuchBeanDefinitionException noneOrSeveralAndNoPrimary) {
+            // Nothing to create, and the subscription model's own wiring decides what that means
         }
     }
 

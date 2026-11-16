@@ -32,6 +32,10 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.WriteRefusedException;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
+import org.occurrent.application.service.dcb.TagGenerator;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.ApplicationRunner;
@@ -40,6 +44,7 @@ import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.event.EventListener;
@@ -54,6 +59,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
@@ -78,6 +84,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 class WriteDuringStartupMongoTest {
 
     private static final URI SOURCE = URI.create("urn:occurrent:write-during-startup");
+    private static final Tag DCB_TAG = Tag.parse("name:written");
 
     @Container
     static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
@@ -107,6 +114,26 @@ class WriteDuringStartupMongoTest {
         String database = "writer-with-handler";
 
         Throwable thrown = catchThrowable(() -> boot(WriterWithItsOwnHandlerApplication.class, database).close());
+
+        assertStartupWasRefused(thrown);
+        assertThat(storedEvents(database)).as("events stored").isZero();
+    }
+
+    @Test
+    void a_write_from_the_post_construct_method_of_a_lazy_bean_that_a_synchronous_handler_bean_pulls_in_while_the_synchronous_handlers_register_fails_startup() {
+        String database = "lazy-writer-pulled-in-by-a-synchronous-handler";
+
+        Throwable thrown = catchThrowable(() -> boot(LazyWriterPulledInApplication.class, database).close());
+
+        assertStartupWasRefused(thrown);
+        assertThat(storedEvents(database)).as("events stored").isZero();
+    }
+
+    @Test
+    void a_dcb_write_from_a_post_construct_method_fails_startup_and_stores_nothing() {
+        String database = "dcb-post-construct";
+
+        Throwable thrown = catchThrowable(() -> boot(DcbStartupWriterApplication.class, database, "stream,dcb").close());
 
         assertStartupWasRefused(thrown);
         assertThat(storedEvents(database)).as("events stored").isZero();
@@ -191,10 +218,14 @@ class WriteDuringStartupMongoTest {
     }
 
     private static ConfigurableApplicationContext boot(Class<?> application, String database) {
+        return boot(application, database, "stream");
+    }
+
+    private static ConfigurableApplicationContext boot(Class<?> application, String database, String capabilities) {
         return SpringApplication.run(application,
                 "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(database),
                 "--spring.main.web-application-type=none",
-                "--occurrent.event-store.capabilities=stream",
+                "--occurrent.event-store.capabilities=" + capabilities,
                 "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE);
     }
 
@@ -347,6 +378,71 @@ class WriteDuringStartupMongoTest {
         @Bean
         WriterWithItsOwnHandler writerWithItsOwnHandler(ApplicationService<TestEvent> applicationService) {
             return new WriterWithItsOwnHandler(applicationService);
+        }
+    }
+
+    // Both lazy, so neither exists when the startup scan begins. The scan builds the receiver while it registers the
+    // synchronous handlers, since its declared type shows one, and the receiver pulls the writer in.
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrent
+    @Import(EventConverters.class)
+    static class LazyWriterPulledInApplication {
+
+        @Bean
+        @Lazy
+        StartupWriter startupWriter(ApplicationService<TestEvent> applicationService) {
+            return new StartupWriter(applicationService);
+        }
+
+        @Bean
+        @Lazy
+        ReceiverWithAWriter receiverWithAWriter(StartupWriter startupWriter) {
+            return new ReceiverWithAWriter(startupWriter);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrent
+    @Import(EventConverters.class)
+    static class DcbStartupWriterApplication {
+
+        @Bean
+        TagGenerator<TestEvent> testEventTagGenerator() {
+            return event -> Set.of(DCB_TAG);
+        }
+
+        @Bean
+        DcbStartupWriter dcbStartupWriter(DcbApplicationService<TestEvent> dcbApplicationService) {
+            return new DcbStartupWriter(dcbApplicationService);
+        }
+
+        @Bean
+        SynchronousReceiver synchronousReceiver() {
+            return new SynchronousReceiver();
+        }
+    }
+
+    static class DcbStartupWriter {
+        private final DcbApplicationService<TestEvent> dcbApplicationService;
+
+        DcbStartupWriter(DcbApplicationService<TestEvent> dcbApplicationService) {
+            this.dcbApplicationService = dcbApplicationService;
+        }
+
+        @PostConstruct
+        void write() {
+            dcbApplicationService.execute(DcbCriteria.tags(DCB_TAG), __ -> List.of(new Written("written-at-startup")));
+        }
+    }
+
+    static class ReceiverWithAWriter {
+        ReceiverWithAWriter(StartupWriter startupWriter) {
+        }
+
+        @SynchronousSubscription(id = "receiverWithAWriter")
+        void on(Written event) {
         }
     }
 

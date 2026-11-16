@@ -62,7 +62,8 @@ public interface SynchronousEventDispatcher {
      * {@link #hasSubscriptions()}. It throws a {@link org.occurrent.application.service.WriteRefusedException} when no
      * write may go through now. The {@link WriteCheck} it returns is asked with the events the command decided on,
      * before they are written, and throws one when a handler that would never see them matches them. Nothing is
-     * written when either throws.
+     * written when either throws. The application service closes it once the write and its dispatch are done or have
+     * failed, and a pause or a stop that came after this call waits for that.
      * <p>
      * The default refuses nothing.
      *
@@ -76,7 +77,7 @@ public interface SynchronousEventDispatcher {
      * The check {@link #beforeWrite()} returns for the events of one write.
      */
     @FunctionalInterface
-    interface WriteCheck {
+    interface WriteCheck extends AutoCloseable {
         /**
          * Refuses nothing.
          */
@@ -87,5 +88,12 @@ public interface SynchronousEventDispatcher {
          * @param newEvents The cloud events the command decided on, before the event store has written them
          */
         void check(List<CloudEvent> newEvents);
+
+        /**
+         * Called once the write and its dispatch are done or have failed. The default does nothing.
+         */
+        @Override
+        default void close() {
+        }
     }
 }

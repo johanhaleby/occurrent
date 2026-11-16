@@ -136,20 +136,16 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
         @Nullable Function<List<E>, Mono<Void>> sideEffect = options.sideEffect();
-        ReactiveSynchronousEventDispatcher.WriteCheck writeCheck;
-        try {
-            // On the caller's thread and before anything is read, see beforeWrite()
-            writeCheck = synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
-        } catch (RuntimeException refused) {
-            return Mono.error(refused);
-        }
-        boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
         @Nullable DcbReadOptions readOptions = readOptions(options);
         boolean versionsRequested = options.versionsRequested();
 
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
         return Mono.defer(() -> {
+            // Asked per subscription and before anything is read, see beforeWrite(), so a Mono built before a stop or
+            // before the first synchronous handler registered answers for the moment it runs
+            ReactiveSynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
+            boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
             FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
             // Given what the executor set up for the attempt the read runs in
             Function<ExecutorScope, Mono<Decision<E>>> readAndDecide = scope -> Mono.defer(() -> readOptions == null
@@ -206,7 +202,9 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                             return Mono.just(result.appendResult());
                         }
                         return Mono.defer(() -> sideEffect.apply(result.newDomainEvents())).thenReturn(result.appendResult());
-                    });
+                    })
+                    // A pause or a stop meanwhile waits for this, or applies now when it couldn't block
+                    .doFinally(__ -> writeCheck.close());
         });
     }
 

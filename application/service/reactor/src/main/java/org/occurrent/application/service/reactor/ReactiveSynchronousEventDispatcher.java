@@ -56,12 +56,14 @@ public interface ReactiveSynchronousEventDispatcher {
     boolean hasSubscriptions();
 
     /**
-     * Asked once when {@code execute} is called, on the caller's thread, before the reactive chain is assembled and
-     * before {@link #hasSubscriptions()}. It throws a {@link org.occurrent.application.service.WriteRefusedException}
-     * when no write may go through now, and {@code execute} returns a {@link Mono} that fails with it. The
-     * {@link WriteCheck} it returns is asked inside the chain with the events the command decided on, before they are
-     * written, and throws one when a handler that would never see them matches them. Nothing is written when either
-     * throws.
+     * Asked each time the {@link Mono} that {@code execute} returns is subscribed, before anything is read and before
+     * {@link #hasSubscriptions()}. It throws a {@link org.occurrent.application.service.WriteRefusedException} when no
+     * write may go through now, and the {@link Mono} fails with it. The {@link WriteCheck} it returns is asked inside
+     * the chain with the events the command decided on, before they are written, and throws one when a handler that
+     * would never see them matches them. Nothing is written when either throws. A refusal is an error signal, so a
+     * caller that subscribes without an error consumer stores nothing and gets no exception. The application service
+     * closes the check when the {@link Mono} terminates or is cancelled, and a pause or a stop that came after this
+     * call waits for that, or applies then when it can't block.
      * <p>
      * The default refuses nothing.
      *
@@ -76,7 +78,7 @@ public interface ReactiveSynchronousEventDispatcher {
      * the reactive chain.
      */
     @FunctionalInterface
-    interface WriteCheck {
+    interface WriteCheck extends AutoCloseable {
         /**
          * Refuses nothing.
          */
@@ -87,5 +89,13 @@ public interface ReactiveSynchronousEventDispatcher {
          * @param newEvents The cloud events the command decided on, before the event store has written them
          */
         void check(List<CloudEvent> newEvents);
+
+        /**
+         * Called once the write and its dispatch are done, have failed or were cancelled, on whatever thread that
+         * happened. It must not block. The default does nothing.
+         */
+        @Override
+        default void close() {
+        }
     }
 }

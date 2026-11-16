@@ -22,6 +22,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtensionContext;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
@@ -43,6 +46,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 class OccurrentSubscriptionsExtensionTest {
 
@@ -241,6 +245,27 @@ class OccurrentSubscriptionsExtensionTest {
         assertThat(extension.startAll()).containsExactly("order-projection");
         synchronousModel.dispatch(List.of(event()));
         assertThat(received).hasSize(1);
+    }
+
+    @Test
+    void a_write_through_the_application_service_goes_through_while_a_synchronous_subscription_is_stopped_and_the_subscription_misses_it() {
+        SynchronousSubscriptionModel synchronousModel = new SynchronousSubscriptionModel();
+        List<String> received = new CopyOnWriteArrayList<>();
+        synchronousModel.subscribe("order-projection", cloudEvent -> received.add(cloudEvent.getId()));
+        InMemoryEventStore store = new InMemoryEventStore();
+        ApplicationService<CloudEvent> applicationService = GenericApplicationService.builder(store, new PassThroughConverter())
+                .synchronousSubscriptions(synchronousModel)
+                .build();
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(synchronousModel);
+        runBeforeEach(extension);
+
+        CloudEvent written = event();
+        Throwable thrown = catchThrowable(() -> applicationService.execute("stream1", events -> List.of(written)));
+
+        assertThat(thrown).as("what the write threw").isNull();
+        assertThat(store.read("stream1").events().map(CloudEvent::getId)).as("events stored").containsExactly(written.getId());
+        assertThat(received).as("events the stopped subscription got").isEmpty();
     }
 
     @Test
@@ -568,5 +593,22 @@ class OccurrentSubscriptionsExtensionTest {
                 .withTime(OffsetDateTime.now())
                 .withData("test".getBytes(UTF_8))
                 .build();
+    }
+
+    private static final class PassThroughConverter implements CloudEventConverter<CloudEvent> {
+        @Override
+        public CloudEvent toCloudEvent(CloudEvent domainEvent) {
+            return domainEvent;
+        }
+
+        @Override
+        public CloudEvent toDomainEvent(CloudEvent cloudEvent) {
+            return cloudEvent;
+        }
+
+        @Override
+        public String getCloudEventType(Class<? extends CloudEvent> type) {
+            throw new UnsupportedOperationException();
+        }
     }
 }

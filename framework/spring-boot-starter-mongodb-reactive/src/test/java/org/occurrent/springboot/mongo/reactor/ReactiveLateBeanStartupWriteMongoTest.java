@@ -33,7 +33,9 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.reactor.ApplicationService;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.FactoryBean;
+import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -41,6 +43,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.context.annotation.Scope;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -55,6 +58,11 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.time.Duration.ofMillis;
@@ -70,6 +78,8 @@ import static org.awaitility.Awaitility.await;
  * Every bean here is {@code @Lazy} and declared as {@code Object}, so the startup scan cannot see its annotations and
  * the first {@code getBean} after {@code SpringApplication.run} returns builds it. Each test first proves that, by
  * checking that the bean did not exist when the context refreshed and that its constructor ran after the run returned.
+ * The exceptions are a {@code FactoryBean} built as the context starts, whose product is still built after the run
+ * returned, and a prototype, of which every {@code getBean} builds a new instance.
  */
 @DisplayName("A bean built after the context has refreshed, with a start-up write of its own")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -79,6 +89,7 @@ class ReactiveLateBeanStartupWriteMongoTest {
 
     private static final URI SOURCE = URI.create("urn:occurrent:reactive-late-bean-startup-write");
     private static final AtomicBoolean RUN_RETURNED = new AtomicBoolean();
+    private static final long WAIT_SECONDS = 15;
 
     @Container
     static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
@@ -123,31 +134,81 @@ class ReactiveLateBeanStartupWriteMongoTest {
     }
 
     @Test
-    void an_event_written_by_the_post_construct_method_of_a_late_factory_bean_is_delivered_to_its_products_now_subscription() {
-        try (ConfigurableApplicationContext context = boot(FactoryApplication.class, "factory-post-construct")) {
+    void the_events_written_by_a_late_factory_beans_post_construct_method_and_while_it_builds_its_product_are_delivered_to_the_products_now_subscription() {
+        try (ConfigurableApplicationContext context = boot(FactoryApplication.class, "late-factory")) {
             assertThat(context.getBeanFactory().containsSingleton("lateProductFactory")).as("factory exists after refresh").isFalse();
 
             FactoryProduct product = (FactoryProduct) context.getBean("lateProductFactory");
 
             assertThat(context.getBean("&lateProductFactory", ProductFactory.class).builtAfterRunReturned).as("factory was built after SpringApplication.run returned").isTrue();
             assertThat(product.builtAfterRunReturned).as("product was built after SpringApplication.run returned").isTrue();
-            awaitDelivery(product.received, 1);
-            assertThat(product.received).extracting(TestEvent::name).contains("written-by-the-factorys-post-construct");
+            awaitDelivery(product.received, 2);
+            assertThat(product.received).extracting(TestEvent::name).containsExactly("written-by-the-factorys-post-construct", "written-by-get-object");
         }
     }
 
     @Test
-    void an_event_written_while_a_late_factory_bean_builds_its_product_is_delivered_to_the_products_now_subscription() {
-        try (ConfigurableApplicationContext context = boot(FactoryApplication.class, "factory-get-object")) {
-            assertThat(context.getBeanFactory().containsSingleton("lateProductFactory")).as("factory exists after refresh").isFalse();
+    void the_product_of_a_factory_bean_built_at_startup_misses_what_its_get_object_method_wrote_and_gets_what_is_written_once_it_exists() {
+        try (ConfigurableApplicationContext context = boot(EagerFactoryApplication.class, "eager-factory-get-object")) {
+            EagerProductFactory factory = context.getBean("&eagerProductFactory", EagerProductFactory.class);
+            assertThat(factory.builtAfterRunReturned).as("factory was built after SpringApplication.run returned").isFalse();
+            assertThat(context.getBeanFactory().getSingleton("eagerProductFactory")).as("factory exists after refresh").isSameAs(factory);
+            factory.writeInGetObject = "written-by-get-object";
 
-            FactoryProduct product = (FactoryProduct) context.getBean("lateProductFactory");
-
-            assertThat(context.getBean("&lateProductFactory", ProductFactory.class).builtAfterRunReturned).as("factory was built after SpringApplication.run returned").isTrue();
+            EagerFactoryProduct product = (EagerFactoryProduct) context.getBean("eagerProductFactory");
             assertThat(product.builtAfterRunReturned).as("product was built after SpringApplication.run returned").isTrue();
+            writeEvent(context, "written-once-the-product-exists");
+
             awaitDelivery(product.received, 1);
-            assertThat(product.received).extracting(TestEvent::name).contains("written-by-get-object");
+            assertThat(product.received).extracting(TestEvent::name).containsExactly("written-once-the-product-exists");
         }
+    }
+
+    @Test
+    void the_product_of_a_factory_bean_built_at_startup_misses_what_was_written_before_it_was_built_and_gets_what_is_written_once_it_exists() {
+        try (ConfigurableApplicationContext context = boot(EagerFactoryApplication.class, "eager-factory-write-before")) {
+            EagerProductFactory factory = context.getBean("&eagerProductFactory", EagerProductFactory.class);
+            assertThat(factory.builtAfterRunReturned).as("factory was built after SpringApplication.run returned").isFalse();
+            writeEvent(context, "written-before-the-product-is-built");
+
+            EagerFactoryProduct product = (EagerFactoryProduct) context.getBean("eagerProductFactory");
+            assertThat(product.builtAfterRunReturned).as("product was built after SpringApplication.run returned").isTrue();
+            writeEvent(context, "written-once-the-product-exists");
+
+            awaitDelivery(product.received, 1);
+            assertThat(product.received).extracting(TestEvent::name).containsExactly("written-once-the-product-exists");
+        }
+    }
+
+    @Test
+    void two_first_creations_of_one_prototype_at_the_same_moment_each_keep_their_own_start_and_the_first_gets_what_its_post_construct_method_wrote() throws Exception {
+        try (ConfigurableApplicationContext context = boot(PrototypeApplication.class, "prototype-at-the-same-moment")) {
+            PrototypeRace race = context.getBean(PrototypeRace.class);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                Future<Object> first = pool.submit(() -> context.getBean("racingPrototype"));
+                assertThat(race.firstHasWritten.await(WAIT_SECONDS, TimeUnit.SECONDS)).as("the first creation wrote from its post construct method").isTrue();
+                Future<Object> second = pool.submit(() -> context.getBean("racingPrototype"));
+
+                RacingPrototype firstInstance = (RacingPrototype) first.get(WAIT_SECONDS, TimeUnit.SECONDS);
+                race.firstHasFinished.countDown();
+                RacingPrototype secondInstance = (RacingPrototype) second.get(WAIT_SECONDS, TimeUnit.SECONDS);
+
+                assertThat(firstInstance.first).as("the instance the first creation returned wrote the event").isTrue();
+                assertThat(secondInstance.first).as("the instance the second creation returned wrote the event").isFalse();
+                awaitDelivery(firstInstance.received, 1);
+                assertThat(firstInstance.received).extracting(TestEvent::name).containsExactly("written-by-the-first-creation");
+            } finally {
+                race.firstHasFinished.countDown();
+                pool.shutdownNow();
+            }
+        }
+    }
+
+    private static void writeEvent(ConfigurableApplicationContext context, String name) {
+        @SuppressWarnings("unchecked")
+        CloudEventConverter<TestEvent> converter = context.getBean(CloudEventConverter.class);
+        context.getBean(EventStore.class).write(UUID.randomUUID().toString(), Flux.fromIterable(converter.toCloudEvents(List.of(new Written(name))))).block();
     }
 
     @Test
@@ -317,6 +378,79 @@ class ReactiveLateBeanStartupWriteMongoTest {
         }
     }
 
+    static class EagerFactoryProduct extends BuiltAfterRunReturnedProbe implements Product {
+        @Subscription(id = "eagerFactoryProduct", startAt = StartPosition.NOW)
+        void on(Written event) {
+            received.add(event);
+        }
+    }
+
+    // Built while the context starts, and builds its product only when something first asks for it
+    static class EagerProductFactory extends BuiltAfterRunReturnedProbe implements FactoryBean<Product> {
+        private final EventStore eventStore;
+        private final CloudEventConverter<TestEvent> converter;
+        volatile @Nullable String writeInGetObject;
+
+        EagerProductFactory(EventStore eventStore, CloudEventConverter<TestEvent> converter) {
+            this.eventStore = eventStore;
+            this.converter = converter;
+        }
+
+        @Override
+        public Product getObject() {
+            String name = writeInGetObject;
+            if (name != null) {
+                eventStore.write(UUID.randomUUID().toString(), Flux.fromIterable(converter.toCloudEvents(List.of(new Written(name))))).block();
+            }
+            return new EagerFactoryProduct();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return Product.class;
+        }
+    }
+
+    static class PrototypeRace {
+        final AtomicBoolean firstClaimed = new AtomicBoolean();
+        final CountDownLatch firstHasWritten = new CountDownLatch(1);
+        final CountDownLatch secondInPostConstruct = new CountDownLatch(1);
+        final CountDownLatch firstHasFinished = new CountDownLatch(1);
+    }
+
+    // The first creation writes from its @PostConstruct method and finishes only once the second creation has read
+    // its own start boundary and reached its @PostConstruct method, which then waits for the first to finish
+    static class RacingPrototype extends BuiltAfterRunReturnedProbe {
+        private final PrototypeRace race;
+        private final EventStore eventStore;
+        private final CloudEventConverter<TestEvent> converter;
+        boolean first;
+
+        RacingPrototype(PrototypeRace race, EventStore eventStore, CloudEventConverter<TestEvent> converter) {
+            this.race = race;
+            this.eventStore = eventStore;
+            this.converter = converter;
+        }
+
+        @PostConstruct
+        void write() throws InterruptedException {
+            first = race.firstClaimed.compareAndSet(false, true);
+            if (first) {
+                eventStore.write(UUID.randomUUID().toString(), Flux.fromIterable(converter.toCloudEvents(List.of(new Written("written-by-the-first-creation"))))).block();
+                race.firstHasWritten.countDown();
+                race.secondInPostConstruct.await(WAIT_SECONDS, TimeUnit.SECONDS);
+            } else {
+                race.secondInPostConstruct.countDown();
+                race.firstHasFinished.await(WAIT_SECONDS, TimeUnit.SECONDS);
+            }
+        }
+
+        @Subscription(id = "racingPrototype", startAt = StartPosition.NOW)
+        void on(Written event) {
+            received.add(event);
+        }
+    }
+
     @Configuration(proxyBeanMethods = false)
     static class EventConverters {
 
@@ -392,6 +526,34 @@ class ReactiveLateBeanStartupWriteMongoTest {
         @Lazy
         ProductFactory lateProductFactory(EventStore eventStore, CloudEventConverter<TestEvent> converter) {
             return new ProductFactory(eventStore, converter);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrentReactive
+    @Import(EventConverters.class)
+    static class EagerFactoryApplication {
+        @Bean
+        EagerProductFactory eagerProductFactory(EventStore eventStore, CloudEventConverter<TestEvent> converter) {
+            return new EagerProductFactory(eventStore, converter);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrentReactive
+    @Import(EventConverters.class)
+    static class PrototypeApplication {
+        @Bean
+        PrototypeRace prototypeRace() {
+            return new PrototypeRace();
+        }
+
+        @Bean
+        @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
+        Object racingPrototype(PrototypeRace race, EventStore eventStore, CloudEventConverter<TestEvent> converter) {
+            return new RacingPrototype(race, eventStore, converter);
         }
     }
 

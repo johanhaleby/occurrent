@@ -47,7 +47,9 @@ import org.springframework.util.ClassUtils;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -57,6 +59,7 @@ import java.util.Set;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -80,6 +83,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // the only source that cannot fall short of the real class, see resolveScanType below for why the prediction
     // this replaces can.
     private final Map<String, Class<?>> userClassByBeanName = new ConcurrentHashMap<>();
+    // Counts the recordings above, so the startup scan can tell whether a bean was built since it last registered the
+    // synchronous handlers. Only the startup thread reads recordingsAtLastSynchronousScan.
+    private final AtomicInteger recordings = new AtomicInteger();
+    private int recordingsAtLastSynchronousScan;
     private static final List<Class<? extends Annotation>> HANDLER_ANNOTATIONS = List.of(StreamSubscription.class, Subscription.class,
             DcbSubscription.class, SynchronousSubscription.class, org.occurrent.annotation.Projection.class,
             org.occurrent.annotation.Snapshot.class, org.occurrent.annotation.Saga.class);
@@ -119,8 +126,13 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private volatile boolean startupScanComplete;
     // Set once the synchronous pass of the startup scan has registered every synchronous handler it can see
     private volatile boolean startupGapClosed;
-    // The start boundary each bean built after startup read when it was created, by bean name, until it registers
-    private final Map<String, String> lateLiveStarts = new ConcurrentHashMap<>();
+    // The start boundary each bean built after startup read when it was created, by the instance being created, until
+    // it registers. Keyed by identity, so two creations of one prototype at the same moment each keep their own. An
+    // entry for a creation that failed stays until the post-processor goes.
+    private final Map<Object, String> lateLiveStarts = Collections.synchronizedMap(new IdentityHashMap<>());
+    // The boundary a FactoryBean built after startup read for its product, by bean name, since the product that
+    // reaches postProcessAfterInitialization is not the instance the factory's callback saw
+    private final Map<String, String> lateFactoryLiveStarts = new ConcurrentHashMap<>();
     private StartPositionSupport startPositionSupport;
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
     private ProjectionAnnotationRegistrar projectionRegistrar;
@@ -161,7 +173,12 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
         if (bean instanceof FactoryBean<?>) {
             if (startupScanComplete) {
-                readLateLiveStartFor(beanName);
+                @Nullable String liveStart = startPositionSupport.readLateLiveStart();
+                if (liveStart == null) {
+                    lateFactoryLiveStarts.remove(beanName);
+                } else {
+                    lateFactoryLiveStarts.put(beanName, liveStart);
+                }
             }
         } else {
             // put rather than putIfAbsent, because a creation that failed is retried and the retry can produce a
@@ -169,27 +186,22 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             // container is building now, not the first one it tried.
             Class<?> userClass = userClassOf(bean);
             userClassByBeanName.put(beanName, userClass);
-            if (startupScanComplete) {
-                recordLateLiveStart(beanName, userClass);
+            recordings.incrementAndGet();
+            if (startupScanComplete && declaresAnyOccurrentAnnotation(userClass)) {
+                @Nullable String liveStart = startPositionSupport.readLateLiveStart();
+                if (liveStart != null) {
+                    lateLiveStarts.put(bean, liveStart);
+                }
             }
         }
         return bean;
     }
 
-    private void recordLateLiveStart(String beanName, Class<?> userClass) {
-        if (!declaresAnyOccurrentAnnotation(userClass)) {
-            return;
-        }
-        readLateLiveStartFor(beanName);
-    }
-
-    private void readLateLiveStartFor(String beanName) {
-        @Nullable String liveStart = startPositionSupport.readLateLiveStart();
-        if (liveStart == null) {
-            lateLiveStarts.remove(beanName);
-        } else {
-            lateLiveStarts.put(beanName, liveStart);
-        }
+    // The instance the callback above saw, which a proxy created since wraps
+    private @Nullable String takeLateLiveStart(Object bean) {
+        @Nullable String liveStart = lateLiveStarts.remove(bean);
+        Object target = SubscriptionAnnotations.ultimateTarget(bean);
+        return liveStart != null || target == bean ? liveStart : lateLiveStarts.remove(target);
     }
 
     // Where a bean created after the startup scan registers. A @Lazy bean, or a FactoryBean product nothing has
@@ -230,6 +242,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // NoSuchBeanDefinitionException for a name with no definition behind it.
         if (beanFactory.containsBeanDefinition(beanName) && beanFactory.isFactoryBean(beanName)) {
             userClassByBeanName.put(beanName, userClassOf(bean));
+            recordings.incrementAndGet();
         }
         Thread scanning = scanningThread;
         if (!startupScanComplete && scanning != null && scanning != Thread.currentThread()) {
@@ -237,15 +250,19 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         // Read again rather than reused, so a bean finishing as the scan ends is registered by whichever of the two
         // sees the flag set. Registering it twice is not possible, since both check the same RegisteredHandlers.
-        if (startupScanComplete && beanFactory.containsBeanDefinition(beanName)) {
-            boolean singleton = beanFactory.isSingleton(beanName);
+        if (startupScanComplete) {
+            boolean defined = beanFactory.containsBeanDefinition(beanName);
             // A FactoryBean's product takes the boundary its factory read in the callback above. A later product of
-            // the same factory, or one whose factory was built before the startup scan ended, reads it now
-            @Nullable String lateLiveStart = lateLiveStarts.remove(beanName);
-            if (lateLiveStart == null && beanFactory.isFactoryBean(beanName) && declaresAnyOccurrentAnnotation(userClassOf(bean))) {
-                lateLiveStart = startPositionSupport.readLateLiveStart();
+            // the same factory, or one whose factory was built before the startup scan ended, reads it now. Taken
+            // also for an instance with no bean definition, so its entry does not stay in the map
+            boolean product = defined && beanFactory.isFactoryBean(beanName);
+            @Nullable String lateLiveStart = product ? lateFactoryLiveStarts.remove(beanName) : takeLateLiveStart(bean);
+            if (defined) {
+                if (lateLiveStart == null && product && declaresAnyOccurrentAnnotation(userClassOf(bean))) {
+                    lateLiveStart = startPositionSupport.readLateLiveStart();
+                }
+                scanBuiltAfterStartup(beanFactory, beanName, bean, beanFactory.isSingleton(beanName), false, lateLiveStart);
             }
-            scanBuiltAfterStartup(beanFactory, beanName, bean, singleton, false, lateLiveStart);
         }
         return bean;
     }
@@ -311,23 +328,45 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // Every synchronous handler registers in a scan of its own, before the scan that registers the rest. A
     // WAIT_UNTIL_STARTED replay and a saga reaction can write while they register, and a synchronous handler
     // registered after such a write never sees it, since the application service runs synchronous handlers only on
-    // the writer's thread. One the synchronous scan can't see, on a bean only the second scan builds, registers late.
+    // the writer's thread. The startup gap closes after the synchronous scan rather than after the second one, since
+    // the gate would refuse those writes. The second scan builds beans of its own, so before each registration it
+    // registers the synchronous handlers on every bean built since, see registerSynchronousHandlersBuiltSince.
     @Override
     public void afterSingletonsInstantiated() {
         synchronized (registrationLock) {
             scanningThread = Thread.currentThread();
-            for (boolean synchronousOnly : new boolean[]{true, false}) {
-                String[] beanNames = applicationContext.getBeanDefinitionNames();
-                while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true, null, synchronousOnly)) {
-                    beanNames = applicationContext.getBeanDefinitionNames();
-                }
-                if (synchronousOnly) {
-                    startupGapClosed = true;
-                }
+            registerEverySynchronousHandler();
+            startupGapClosed = true;
+            String[] beanNames = applicationContext.getBeanDefinitionNames();
+            while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true, null, false)) {
+                beanNames = applicationContext.getBeanDefinitionNames();
             }
             startupScanComplete = true;
             drainBeansBuiltWhileScanning();
             scanningThread = null;
+        }
+    }
+
+    // Scans for synchronous handlers until a pass registers nothing, and remembers how many beans were recorded by then
+    private void registerEverySynchronousHandler() {
+        int recorded;
+        do {
+            recorded = recordings.get();
+            String[] beanNames = applicationContext.getBeanDefinitionNames();
+            while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true, null, true)) {
+                beanNames = applicationContext.getBeanDefinitionNames();
+            }
+        } while (recorded != recordings.get());
+        recordingsAtLastSynchronousScan = recorded;
+    }
+
+    // Runs before each registration of the startup scan's second scan, since a registration can write, and a bean
+    // built since the synchronous handlers last registered, by the previous registration or at the end of the last
+    // pass, can declare one. A write that builds a bean, or a delivery on another thread that writes while a bean is
+    // being built, still reaches the handlers of that bean only once they register.
+    private void registerSynchronousHandlersBuiltSince() {
+        if (recordings.get() != recordingsAtLastSynchronousScan) {
+            registerEverySynchronousHandler();
         }
     }
 
@@ -529,7 +568,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (!mayBlockForReplay) {
             CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
         }
+        Runnable beforeRegistration = !synchronousOnly && !startupScanComplete && scanningThread == Thread.currentThread() ? this::registerSynchronousHandlersBuiltSince : () -> {
+        };
         for (Map.Entry<String, List<HandlerMethod>> staged : subscriptionMethods.entrySet()) {
+            beforeRegistration.run();
             String beanName = staged.getKey();
             List<HandlerMethod> handlers = staged.getValue();
             // A handler the scoped proxy's class doesn't have, one declared only below the @Bean method's declared type
@@ -549,6 +591,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
             }
             Object bean = beanResolver.apply(beanName);
+            beforeRegistration.run();
             registerSubscriptions(beanName, bean, handlers, handlerTargets.apply(beanName, bean), mayBlockForReplay, lateLiveStart);
         }
         if (mayBlockForReplay) {
@@ -562,6 +605,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             HandlerMethod handler = (HandlerMethod) pm[1];
             Method method = handler.method();
             org.occurrent.annotation.Projection projection = (org.occurrent.annotation.Projection) pm[2];
+            beforeRegistration.run();
             if (registeredHandlers.markRegistered(beanName, handler)) {
                 registerDescriptor(beanName, handler, lateLiveStart, projection.id(),
                         "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(projection.id(), method.getDeclaringClass().getName(), method.getName()),
@@ -569,12 +613,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
         }
         // Catch up each domain-push feed once, after all its projections are registered.
+        beforeRegistration.run();
         projectionRegistrar.catchUpCollectedFeeds();
         for (Object[] sm : snapshotMethods) {
             String beanName = (String) sm[0];
             HandlerMethod handler = (HandlerMethod) sm[1];
             Method method = handler.method();
             org.occurrent.annotation.Snapshot snapshot = (org.occurrent.annotation.Snapshot) sm[2];
+            beforeRegistration.run();
             if (registeredHandlers.markRegistered(beanName, handler)) {
                 registerDescriptor(beanName, handler, lateLiveStart, snapshot.id(),
                         "Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(snapshot.id(), method.getDeclaringClass().getName(), method.getName()),
@@ -586,6 +632,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             HandlerMethod handler = (HandlerMethod) gm[1];
             Method method = handler.method();
             org.occurrent.annotation.Saga saga = (org.occurrent.annotation.Saga) gm[2];
+            beforeRegistration.run();
             if (registeredHandlers.markRegistered(beanName, handler)) {
                 registerDescriptor(beanName, handler, lateLiveStart, saga.id(),
                         "Duplicate subscription/projection/snapshot/saga id '%s' (used by @Saga on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(saga.id(), method.getDeclaringClass().getName(), method.getName()),

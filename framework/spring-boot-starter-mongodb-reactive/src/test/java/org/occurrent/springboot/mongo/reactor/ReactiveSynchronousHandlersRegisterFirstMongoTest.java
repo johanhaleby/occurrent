@@ -95,6 +95,18 @@ class ReactiveSynchronousHandlersRegisterFirstMongoTest {
     }
 
     @Test
+    void a_write_made_by_a_replay_at_startup_reaches_the_synchronous_handler_of_a_lazy_collaborator_that_the_replaying_bean_pulled_in() {
+        String database = "lazy-collaborator";
+        seed(database, new Seeded("seeded"));
+
+        try (ConfigurableApplicationContext context = boot(LazyCollaboratorApplication.class, database)) {
+            LazyCollaborator collaborator = (LazyCollaborator) context.getBean("lazyCollaborator");
+
+            assertThat(collaborator.received()).extracting(TestEvent::name).containsExactly("written-by-the-replay");
+        }
+    }
+
+    @Test
     void a_lazy_bean_with_a_synchronous_handler_registers_when_it_is_built_and_its_handler_runs_on_the_next_write() {
         try (ConfigurableApplicationContext context = boot(LazyReceiverApplication.class, "lazy-receiver")) {
             ApplicationService<TestEvent> applicationService = applicationServiceOf(context);
@@ -290,6 +302,59 @@ class ReactiveSynchronousHandlersRegisterFirstMongoTest {
         @Lazy
         Object lazyReplayWriter(ApplicationService<TestEvent> applicationService) {
             return new LazyReplayWriter(applicationService);
+        }
+    }
+
+    // Both lazy. The writer's declared type shows a stream subscription and no synchronous handler, so the scan of the
+    // synchronous handlers leaves it alone, and the collaborator's declared type shows nothing at all. The scan of
+    // every handler builds the writer, which pulls the collaborator in, and then registers the writer, whose replay
+    // writes before the scan reaches the collaborator.
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrentReactive
+    @Import(EventConverters.class)
+    static class LazyCollaboratorApplication {
+
+        @Bean
+        @Lazy
+        ReplayWriterWithACollaborator replayWriterWithACollaborator(ApplicationService<TestEvent> applicationService, Collaborator collaborator) {
+            return new ReplayWriterWithACollaborator(applicationService);
+        }
+
+        @Bean
+        @Lazy
+        Collaborator lazyCollaborator() {
+            return new LazyCollaborator();
+        }
+    }
+
+    interface Collaborator {
+    }
+
+    static class LazyCollaborator implements Collaborator {
+        private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        @SynchronousSubscription(id = "reactiveLazyCollaborator")
+        Mono<Void> on(Written event) {
+            received.add(event);
+            return Mono.empty();
+        }
+
+        List<TestEvent> received() {
+            return received;
+        }
+    }
+
+    static class ReplayWriterWithACollaborator {
+        private final ApplicationService<TestEvent> applicationService;
+
+        ReplayWriterWithACollaborator(ApplicationService<TestEvent> applicationService) {
+            this.applicationService = applicationService;
+        }
+
+        @StreamSubscription(id = "reactiveReplayWriterWithACollaborator", startAt = StreamSubscription.StartPosition.BEGINNING_OF_TIME, startupMode = StartupMode.WAIT_UNTIL_STARTED)
+        Mono<Void> on(Seeded event) {
+            return applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new Written("written-by-the-replay"))).then();
         }
     }
 

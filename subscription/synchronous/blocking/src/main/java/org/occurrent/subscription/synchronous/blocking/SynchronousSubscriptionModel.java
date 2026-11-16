@@ -129,7 +129,9 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
 
     /**
      * Refuses a write while this model is stopped and has handlers registered, and returns a check that refuses one
-     * whose events a paused subscription matches. A handler skipped either way would never see those events.
+     * whose events a paused subscription matches. A handler skipped either way would never see those events. A
+     * {@link #stop()} or {@link #pauseSubscription(String)} that comes after this call waits until the check is closed,
+     * so the subscriptions it let the write through for still get its events.
      *
      * @throws WriteRefusedException when this model is stopped and has handlers registered
      */
@@ -138,13 +140,25 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
         if (dropsEventsWhileStopped) {
             return WriteCheck.NONE;
         }
-        if (!isRunning() && hasSubscriptions()) {
-            throw WriteRefusedException.synchronousSubscriptionsStopped();
+        Runnable closeWindow = openWriteWindow();
+        if (closeWindow == null) {
+            if (hasSubscriptions()) {
+                throw WriteRefusedException.synchronousSubscriptionsStopped();
+            }
+            return WriteCheck.NONE;
         }
-        return newEvents -> {
-            Set<String> paused = pausedSubscriptionsMatching(newEvents);
-            if (!paused.isEmpty()) {
-                throw WriteRefusedException.synchronousSubscriptionsPaused(paused);
+        return new WriteCheck() {
+            @Override
+            public void check(List<CloudEvent> newEvents) {
+                Set<String> paused = pausedSubscriptionsMatching(newEvents);
+                if (!paused.isEmpty()) {
+                    throw WriteRefusedException.synchronousSubscriptionsPaused(paused);
+                }
+            }
+
+            @Override
+            public void close() {
+                closeWindow.run();
             }
         };
     }
