@@ -17,7 +17,11 @@ package org.occurrent.dsl.projection.blocking;
 
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.Test;
+import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.blocking.ResumePositionFixtures.Counted;
 import org.occurrent.dsl.projection.blocking.ResumePositionFixtures.RecordingReplayAwareView;
@@ -31,6 +35,9 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.dsl.projection.blocking.ResumePositionFixtures.bufferedLiveDelivery;
@@ -112,6 +119,50 @@ class CatchupProjectionFeedResumePositionTest {
         List<String> folded = new CopyOnWriteArrayList<>();
         catchUp(folded);
         assertThat(folded).as("the event written during the replay is replayed by the next catch-up").containsExactly("during");
+    }
+
+    @Test
+    void an_event_that_commits_after_the_head_was_read_at_a_position_before_it_is_folded_once_when_the_broker_delivers_it_again() {
+        write("1", "2");
+        long head = store.currentPosition();
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feed = new AtomicReference<>();
+        AtomicBoolean offered = new AtomicBoolean();
+        AtomicReference<RoutingOutcome> firstAnswer = new AtomicReference<>();
+        // X holds a position at or before the head and commits after the head was read, so the replay does not return
+        // it. Its broker message reaches the listener while the catch-up runs.
+        PositionOrderedReader reservedBeforeTheHeadCommittedAfter = new PositionOrderedReader() {
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return store.readInPositionOrder(filter, range);
+            }
+
+            @Override
+            public long currentPosition() {
+                long read = store.currentPosition();
+                if (offered.compareAndSet(false, true)) {
+                    firstAnswer.set(feed.get().acceptOrDefer(new Counted("X")));
+                }
+                return read;
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return store.writesPosition();
+            }
+        };
+        feed.set(CatchupProjectionFeed.create("counter", (MaterializedView<Counted>) event -> folded.add(event.eventId()), Filter.all(),
+                reservedBeforeTheHeadCommittedAfter, converter, Counted::eventId, marker));
+
+        feed.get().catchUp();
+
+        // A broker whose message was not acknowledged delivers it again, here after the feed went live.
+        RoutingOutcome answer = firstAnswer.get();
+        while (answer == RoutingOutcome.DEFERRED) {
+            answer = feed.get().acceptOrDefer(new Counted("X"));
+        }
+        assertThat(folded).as("X folded once, through the listener path").containsExactlyInAnyOrder("1", "2", "X");
+        assertThat(GlobalCheckpoint.positionOf(marker.read("counter"))).isEqualTo(head);
     }
 
     @Test
