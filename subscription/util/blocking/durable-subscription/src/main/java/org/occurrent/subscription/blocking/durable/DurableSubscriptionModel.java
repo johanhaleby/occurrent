@@ -161,6 +161,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private static final Logger log = LoggerFactory.getLogger(DurableSubscriptionModel.class);
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
+    // The stillWanted of a two-argument globalCheckpoint or canResumeFrom running on this thread, for the one-argument
+    // method it calls
+    private final ThreadLocal<BooleanSupplier> stillWantedOfTheCall = new ThreadLocal<>();
     private final CheckpointStorage storage;
     private final DurableSubscriptionModelConfig config;
     private final @Nullable CheckpointWriteVersionSource writeVersionSource;
@@ -1146,12 +1149,57 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     @Nullable
     @Override
     public Checkpoint globalCheckpoint() {
-        return subscriptionModel.globalCheckpoint();
+        BooleanSupplier stillWanted = stillWantedOfTheCall.get();
+        return stillWanted == null ? subscriptionModel.globalCheckpoint() : subscriptionModel.globalCheckpoint(stillWanted);
+    }
+
+    /**
+     * Forwards to the wrapped model, with {@code stillWanted}. A catch-up calls this overload from its replay thread. It
+     * calls {@link #globalCheckpoint()}, so a subclass that overrides only that method is still called, and
+     * {@code stillWanted} reaches the wrapped model when the override calls {@code super.globalCheckpoint()} on the same
+     * thread.
+     */
+    @Nullable
+    @Override
+    public Checkpoint globalCheckpoint(BooleanSupplier stillWanted) {
+        BooleanSupplier outer = stillWantedOfTheCall.get();
+        stillWantedOfTheCall.set(stillWanted);
+        try {
+            return globalCheckpoint();
+        } finally {
+            if (outer == null) {
+                stillWantedOfTheCall.remove();
+            } else {
+                stillWantedOfTheCall.set(outer);
+            }
+        }
     }
 
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint) {
-        return subscriptionModel.canResumeFrom(checkpoint);
+        BooleanSupplier stillWanted = stillWantedOfTheCall.get();
+        return stillWanted == null ? subscriptionModel.canResumeFrom(checkpoint) : subscriptionModel.canResumeFrom(checkpoint, stillWanted);
+    }
+
+    /**
+     * Forwards to the wrapped model, with {@code stillWanted}. A catch-up calls this overload from its replay thread. It
+     * calls {@link #canResumeFrom(Checkpoint)}, so a subclass that overrides only that method is still called, and
+     * {@code stillWanted} reaches the wrapped model when the override calls {@code super.canResumeFrom(checkpoint)} on
+     * the same thread.
+     */
+    @Override
+    public boolean canResumeFrom(Checkpoint checkpoint, BooleanSupplier stillWanted) {
+        BooleanSupplier outer = stillWantedOfTheCall.get();
+        stillWantedOfTheCall.set(stillWanted);
+        try {
+            return canResumeFrom(checkpoint);
+        } finally {
+            if (outer == null) {
+                stillWantedOfTheCall.remove();
+            } else {
+                stillWantedOfTheCall.set(outer);
+            }
+        }
     }
 
     @Override
