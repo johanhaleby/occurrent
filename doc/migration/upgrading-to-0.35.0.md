@@ -1767,8 +1767,12 @@ on any id, on MongoDB and on Redis, since a 0.34.0 cancel doesn't change the gen
 node brings it back on MongoDB only for an id that no 0.35.0 node has forgotten yet, and on Redis unless the last
 marker call a 0.35.0 node made on the id was a forget.
 
-So don't cancel catch-up subscriptions on 0.34.0 nodes during the rollout. If you did, cancel those subscriptions once
-more after the last 0.34.0 node is gone, so a 0.35.0 node forgets their markers.
+So on the blocking stack, don't cancel catch-up subscriptions on 0.34.0 nodes during the rollout. If you did, cancel
+those subscriptions once more after the last 0.34.0 node is gone, so a 0.35.0 node forgets their markers.
+
+On the reactor stack a catch-up that fails on a 0.34.0 node forgets its marker too, without a cancel from you. A 0.34.0
+forget only deletes the checkpoint, so the store can't tell you which subscriptions to cancel once more. If you run
+catch-up subscriptions on the reactor stack, stop every 0.34.0 node before you start any 0.35.0 node.
 
 In a mixed cluster:
 
