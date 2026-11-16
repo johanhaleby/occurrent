@@ -37,6 +37,7 @@ import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -51,10 +52,12 @@ import org.occurrent.time.TimeConversion;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.RedisSystemException;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.serializer.RedisSerializer;
 import org.testcontainers.containers.GenericContainer;
@@ -69,6 +72,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.time.ZoneOffset.UTC;
@@ -336,6 +340,42 @@ class SpringRedisCheckpointStorageTest {
         assertAll(
                 () -> assertThat(refusal).isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
                 () -> assertThat(((CheckpointWriteConditionNotFulfilledException) refusal).storedVersion).as("stored version in the refusal").hasValue(ABOVE_2_POW_53)
+        );
+    }
+
+    @Test
+    void an_if_absent_save_whose_first_reply_is_lost_returns_the_checkpoint_when_the_retry_finds_its_own() {
+        // Given, a first attempt that runs the save script on Redis and then fails, so the call retries
+        List<Integer> saveAttempts = new CopyOnWriteArrayList<>();
+        AtomicBoolean failNext = new AtomicBoolean(true);
+        StringRedisTemplate failingAfterTheFirstAttempt = new StringRedisTemplate(lettuceConnectionFactory) {
+            @Override
+            public <T> T execute(RedisScript<T> script, RedisSerializer<?> argsSerializer, RedisSerializer<T> resultSerializer, List<String> keys, Object... args) {
+                // The ifAbsent save script is the only one called with two keys and one argument
+                boolean save = keys.size() == 2 && args.length == 1;
+                T result = super.execute(script, argsSerializer, resultSerializer, keys, args);
+                if (save) {
+                    saveAttempts.add(saveAttempts.size() + 1);
+                    if (failNext.getAndSet(false)) {
+                        throw new RedisConnectionFailureException("Connection lost after the script ran");
+                    }
+                }
+                return result;
+            }
+        };
+        failingAfterTheFirstAttempt.afterPropertiesSet();
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(failingAfterTheFirstAttempt, RetryStrategy.fixed(1L).maxAttempts(3));
+        String subscriptionId = UUID.randomUUID().toString();
+        Checkpoint checkpoint = new StringBasedCheckpoint("first");
+
+        // When
+        Throwable failure = catchThrowable(() -> storage.save(subscriptionId, checkpoint, CheckpointWriteCondition.ifAbsent()));
+
+        // Then
+        assertAll(
+                () -> assertThat(saveAttempts).as("attempts that reached Redis").hasSize(2),
+                () -> assertThat(failure).as("failure").isNull(),
+                () -> assertThat(storage.read(subscriptionId)).as("checkpoint").isEqualTo(checkpoint)
         );
     }
 
