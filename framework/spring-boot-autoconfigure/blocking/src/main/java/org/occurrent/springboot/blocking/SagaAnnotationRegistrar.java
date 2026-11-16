@@ -60,6 +60,7 @@ import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Queue;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -149,7 +150,8 @@ class SagaAnnotationRegistrar {
         // A push model ignores StartAt, and a replay in front of it always starts at the beginning, so there is no
         // start position to compute. rejectStartPositionAttributes has already refused the four that would imply one.
         StartAt startAt = push ? null : startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
-        SagaRunnerConfig config = withQuarantine(SagaRunnerConfig.defaults(), occurrentProperties().getSaga())
+        SagaRunnerConfig config = withQuarantine(SagaRunnerConfig.defaults(), occurrentProperties().getSaga(),
+                        applicationContext.getEnvironment().getProperty(QUARANTINE_AFTER_PROPERTY))
                 .withTimerPollInterval(sagaTimerPollInterval())
                 .withRedeliveryDetection(redeliveryDetectionOf(annotation));
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
@@ -675,17 +677,29 @@ class SagaAnnotationRegistrar {
         return occurrentProperties().getSaga().getTimerPollInterval();
     }
 
+    static final String QUARANTINE_AFTER_PROPERTY = "occurrent.saga.quarantine-after";
+
     static SagaRunnerConfig withQuarantine(SagaRunnerConfig config, OccurrentProperties.SagaProperties properties) {
+        return withQuarantine(config, properties, null);
+    }
+
+    // rawQuarantineAfter is the property as written, since Spring binds a blank value to null, the same as one left out
+    static SagaRunnerConfig withQuarantine(SagaRunnerConfig config, OccurrentProperties.SagaProperties properties, @Nullable String rawQuarantineAfter) {
         if (!properties.isQuarantineEnabled()) {
             return config.disableQuarantine();
+        }
+        if (rawQuarantineAfter != null && rawQuarantineAfter.isBlank()) {
+            throw new IllegalArgumentException(QUARANTINE_AFTER_PROPERTY + " is blank. A blank value kept quarantine off in 0.34.0, and 0.35.0 refuses it instead of quarantining after the default of 5m. Set occurrent.saga.quarantine-enabled=false to keep quarantine off, or leave " + QUARANTINE_AFTER_PROPERTY + " out for the default.");
         }
         return withQuarantineBudget(config, properties.getQuarantineAfter());
     }
 
-    // Zero is refused because a reader can take it to mean "never" or "immediately"
+    // Zero is refused because a reader can take it to mean "never" or "immediately". A budget left out is the default,
+    // marked as one nothing configured, so SagaRunner turns it off at DEBUG and not at WARN
     static SagaRunnerConfig withQuarantineBudget(SagaRunnerConfig config, @Nullable Duration configured) {
         if (configured == null) {
-            return config.withQuarantineAfter(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER);
+            return new SagaRunnerConfig(config.timerPollInterval(), config.timerBatchLimit(), config.maxCasAttempts(), config.redeliveryDetection(),
+                    Optional.of(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER), config.reorderWindow(), true);
         }
         if (configured.isZero() || configured.isNegative()) {
             throw new IllegalArgumentException("occurrent.saga.quarantine-after must be a positive duration, such as 5m, but was " + configured + ". Leave the property out for the default of 5m, or set occurrent.saga.quarantine-enabled=false to turn quarantine off.");

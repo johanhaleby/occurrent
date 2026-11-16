@@ -751,8 +751,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (!readsWithoutState) {
                 rethrowAsIs(readFailure);
             }
-            throw new IllegalStateException("Saga '" + subscriptionId + "' cannot release instance '" + sagaId + "', because decoding its state failed with " + readFailure + ". "
-                                            + "Fix how the state decodes and release the instance again, or delete the instance with SagaStateStore.delete(\"" + sagaId + "\"), which throws its state away.", readFailure);
+            throw new IllegalStateException("Saga '" + subscriptionId + "' cannot release instance '" + sagaId + "', because reading its state failed with " + readFailure + ", while reading it without its state worked. "
+                                            + "Release the instance again if that error doesn't last. If its state no longer decodes, fix how it decodes and release the instance again, or delete the instance with SagaStateStore.delete(\"" + sagaId + "\"), which throws its state away.", readFailure);
         }
     }
 

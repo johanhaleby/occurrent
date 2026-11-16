@@ -111,12 +111,15 @@ the stream first got marks, and every version at or below it stays skipped whate
 by 0.34.0 or by the 0.35.0 build of ADR 150 has no `streamMarks`, and it reads as a floor equal to each stream's
 watermark and no marks. `streamWatermarks` is still written with the highest version of the stream across types.
 
-**An instance with marks is stored with a status 0.34.0 can't read.** 0.34.0 saves the whole document and knows
-nothing of `streamMarks`, so a save from a 0.34.0 node during a rolling upgrade would drop the marks, and the next
+**An instance with marks is stored with a status 0.34.0 can't read.** 0.34.0 knows
+nothing of `streamMarks`, and a 0.34.0 save that applies an event replaces the whole document, so such a save during a
+rolling upgrade would drop the marks, and the next
 0.35.0 node would skip a pending or late version as applied already. `SpringMongoSagaStateStore` therefore stores an
 `ACTIVE` instance whose `streamMarks` are not empty with the status `ACTIVE_MARKED`, and reads it back as `ACTIVE`. Its
 queries for `ACTIVE`, `findByStatus` and the timer poll, match both strings. 0.34.0 decodes the status with
-`SagaStatus.valueOf`, so it throws on such an instance and retries instead of saving it. Its timer poll asks for
+`SagaStatus.valueOf`, so it throws on such an instance instead of saving it. The subscription, or
+the source's delivery failure policy, decides what then happens to the event. A broker source that parks it doesn't
+deliver it again, and the upgrade guide says how to publish it again. Its timer poll asks for
 `ACTIVE` only, so the instance's timers wait for a 0.35.0 node. It is the mechanism ADR 178 uses for
 `QUARANTINED_RECORDING`, and a quarantined instance with a quarantine id stays `QUARANTINED_RECORDING` whatever its
 marks hold. The status depends on any marks rather than on the ones a drop would lose. Every event with a stream
@@ -152,11 +155,11 @@ without a long canary. A query written by hand for `status: "ACTIVE"` misses the
 
 Going back to 0.34.0 is an explicit step. Once every 0.35.0 node has stopped, a query lists the `ACTIVE_MARKED`
 instances whose marks hold a version in `pending` or `legacyFailed`, which 0.34.0 never applies once a later version of
-its stream was applied. Then
-an `updateMany` sets `ACTIVE_MARKED` back to `ACTIVE`, and the 0.34.0 nodes start after it. 0.34.0 ignores the marks
-and drops them on its first save of each instance. A pending version below a later applied version is then skipped,
-and so is a late version below the watermark, as before this decision. The next 0.35.0 node reads such an instance as a pre-0.35.0 one, so
-nothing is applied twice. The upgrade guide gives both commands.
+its stream was applied. Then an `updateMany` sets `ACTIVE_MARKED` back to `ACTIVE`, and the 0.34.0 nodes start after it.
+0.34.0 ignores the marks, and a 0.34.0 save that applies an event replaces the whole document and drops them. A pending
+version below a later applied version is then skipped, and so is a late version below the watermark, as before this
+decision. The next 0.35.0 node reads such an instance as a pre-0.35.0 one, so nothing is applied twice. The upgrade
+guide gives both commands.
 
 An instance stores up to 256 extra numbers per stream and event type, and it does so even when the feed delivers in
 order, because the saga cannot know the next event will not be a late one. Each number is stored as a 64-bit integer, so

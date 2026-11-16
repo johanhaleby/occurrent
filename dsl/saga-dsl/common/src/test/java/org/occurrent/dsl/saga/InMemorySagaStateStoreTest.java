@@ -530,7 +530,7 @@ class InMemorySagaStateStoreTest {
         }
 
         @Test
-        void keep_one_record_of_a_key_recorded_at_the_head_by_two_concurrent_callers() throws Exception {
+        void keep_the_head_record_of_a_key_that_another_caller_records_at_a_later_seq_at_once() throws Exception {
             ExecutorService executor = Executors.newFixedThreadPool(2);
             try {
                 for (int round = 0; round < 50; round++) {
@@ -544,7 +544,7 @@ class InMemorySagaStateStoreTest {
                             }),
                             executor.submit(() -> {
                                 go.await();
-                                store.recordSkippedInputAtHead(sagaId, "q1", new SkippedInput(7, "a@1"));
+                                store.recordSkippedInput(sagaId, "q1", new SkippedInput(7, "a@1"));
                                 return null;
                             }));
                     go.countDown();
@@ -553,7 +553,7 @@ class InMemorySagaStateStoreTest {
                     }
 
                     assertThat(store.findSkippedInputs(sagaId, "q1", 10)).hasSize(1).singleElement()
-                            .isIn(new SkippedInput(-1, "a@1"), new SkippedInput(7, "a@1"));
+                            .isEqualTo(new SkippedInput(-1, "a@1"));
                 }
             } finally {
                 executor.shutdownNow();

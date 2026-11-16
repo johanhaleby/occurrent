@@ -67,7 +67,7 @@ import static java.util.Objects.requireNonNull;
  *                          for an instance stored before 0.35.0, which reads as every type of a stream being applied up to
  *                          that stream's watermark
  * @param quarantineSkipCount the {@link SkippedInput#seq()} the next input this quarantined instance skips is recorded
- *                          under, raised by one in the write that follows each record. Written as 0 by the write that
+ *                          under, raised by one in the write before each record. Written as 0 by the write that
  *                          quarantines the instance, and {@code null} once it is active again, and on an instance
  *                          quarantined by 0.34.0
  * @param <S>               the user state type

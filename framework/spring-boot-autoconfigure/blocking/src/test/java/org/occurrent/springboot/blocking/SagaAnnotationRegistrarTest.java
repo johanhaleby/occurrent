@@ -38,6 +38,7 @@ import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.core.env.StandardEnvironment;
 
 import java.lang.reflect.Method;
 import java.net.URI;
@@ -115,6 +116,8 @@ class SagaAnnotationRegistrarTest {
         ObjectProvider<EventStoreQueries> eventStoreQueriesProvider = mock(ObjectProvider.class);
         when(applicationContext.getBeanProvider(EventStoreQueries.class)).thenReturn(eventStoreQueriesProvider);
         when(applicationContext.getBeanNamesForType(EventStoreQueries.class)).thenReturn(new String[0]);
+        // Empty, so the quarantine budget is the default
+        when(applicationContext.getEnvironment()).thenReturn(new StandardEnvironment());
 
         StartPositionSupport startPositionSupport = new StartPositionSupport(applicationContext);
         SagaAnnotationRegistrar registrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport);
