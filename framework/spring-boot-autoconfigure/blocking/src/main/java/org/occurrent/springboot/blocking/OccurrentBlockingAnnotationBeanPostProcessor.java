@@ -263,9 +263,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (scopedTarget && declaresAnyOccurrentAnnotation(userClass.type())) {
             HandlerScan.refuseRequestOrSessionScopedTarget(beanFactory, scanName, beanName);
         }
-        scan(new String[]{scanName}, typeResolver, beanResolver,
-                (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved,
-                mayBlockForReplay && !scopedTarget, lateLiveStart);
+        BiFunction<String, Object, Supplier<Object>> handlerTargets = (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved;
+        // The bean's synchronous handlers first, so a write its own replay makes reaches them
+        for (boolean synchronousOnly : new boolean[]{true, false}) {
+            scan(new String[]{scanName}, typeResolver, beanResolver, handlerTargets, mayBlockForReplay && !scopedTarget, lateLiveStart, synchronousOnly);
+        }
     }
 
     private static Class<?> userClassOf(Object bean) {
@@ -286,13 +288,20 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // handler key, so each pass registers only what the ones before it could not see. It terminates because a pass
     // that registers nothing has built nothing, so nothing new was recorded for the next pass to find, and the
     // handlers a context declares are finite.
+    //
+    // Every synchronous handler registers in a scan of its own, before the scan that registers the rest. A
+    // WAIT_UNTIL_STARTED replay and a saga reaction can write while they register, and a synchronous handler
+    // registered after such a write never sees it, since the application service runs synchronous handlers only on
+    // the writer's thread. One the synchronous scan can't see, on a bean only the second scan builds, registers late.
     @Override
     public void afterSingletonsInstantiated() {
         synchronized (registrationLock) {
             scanningThread = Thread.currentThread();
-            String[] beanNames = applicationContext.getBeanDefinitionNames();
-            while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true, null)) {
-                beanNames = applicationContext.getBeanDefinitionNames();
+            for (boolean synchronousOnly : new boolean[]{true, false}) {
+                String[] beanNames = applicationContext.getBeanDefinitionNames();
+                while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true, null, synchronousOnly)) {
+                    beanNames = applicationContext.getBeanDefinitionNames();
+                }
             }
             startupScanComplete = true;
             drainBeansBuiltWhileScanning();
@@ -361,8 +370,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     //
     // lateLiveStart is the start boundary of a bean built after startup, and null for a scan under the startup policy,
     // which starts at the boundary of the application context. Each id this scan claims is held to it.
+    //
+    // synchronousOnly limits the scan to synchronous handlers, and builds a bean whose class is only predicted only
+    // when the prediction shows one, so a bean with no synchronous handler is first built after they all register.
     private boolean scan(String[] beanNames, Function<String, ScanType> typeResolver, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets, boolean mayBlockForReplay,
-                         @Nullable String lateLiveStart) {
+                         @Nullable String lateLiveStart, boolean synchronousOnly) {
         // Reflects over method signatures only, no store access or checkpoint write, so running it before any
         // registration is safe. Spring creates this bean before CheckpointFencingConfigurationCheck's own bean, so
         // a check that instead waited for its own SmartInitializingSingleton callback would run after a catch-up
@@ -404,12 +416,12 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 } catch (RuntimeException e) {
                     targetType = null;
                 }
-                if (targetType != null && !declaresAnyOccurrentAnnotation(targetType.type())) {
+                if (targetType != null && !declaresHandlerToScan(targetType.type(), synchronousOnly)) {
                     continue;
                 }
                 // Asked again, a scope that hands out a new target per request, such as prototype, would build one
                 // more target per pass and per late callback for handlers that are already registered
-                if (targetType != null && targetType.concrete() && registersNothingNew(beanName, targetType.type())) {
+                if (targetType != null && targetType.concrete() && registersNothingNew(beanName, targetType.type(), synchronousOnly)) {
                     continue;
                 }
                 // The class comes from the target, since a proxy of ScopedProxyMode.INTERFACES has only the
@@ -433,7 +445,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             // registered from it. Building the bean is what makes its class knowable, so a bean whose prediction
             // shows any annotation at all is built by this pass and collected by the next one, from its own class.
             if (!scanType.concrete()) {
-                if (declaresAnyOccurrentAnnotation(type) && !alreadyBuiltToBeScanned.contains(beanName)) {
+                if (declaresHandlerToScan(type, synchronousOnly) && !alreadyBuiltToBeScanned.contains(beanName)) {
                     beansToBuild.add(beanName);
                 }
                 continue;
@@ -441,7 +453,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             Set<Method> handlerMethods = HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS);
             for (Method method : handlerMethods) {
                 HandlerMethod handler = new HandlerMethod(method, type);
-                if (registeredHandlers.isRegistered(beanName, handler)) {
+                if (registeredHandlers.isRegistered(beanName, handler) || (synchronousOnly && !HandlerScan.isSynchronousHandler(method))) {
                     continue;
                 }
                 collectSubscriptionMethod(beanName, handler, idsToCheck, subscriptionMethods);
@@ -574,14 +586,27 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     // Whether every handler type declares is already registered under beanName, so scanning it again would register
-    // nothing
-    private boolean registersNothingNew(String beanName, Class<?> type) {
+    // nothing. Under synchronousOnly, every synchronous handler.
+    private boolean registersNothingNew(String beanName, Class<?> type, boolean synchronousOnly) {
         for (Method method : HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS)) {
-            if (!registeredHandlers.isRegistered(beanName, new HandlerMethod(method, type))) {
+            if ((!synchronousOnly || HandlerScan.isSynchronousHandler(method)) && !registeredHandlers.isRegistered(beanName, new HandlerMethod(method, type))) {
                 return false;
             }
         }
         return true;
+    }
+
+    // declaresAnyOccurrentAnnotation, or under synchronousOnly whether type declares a synchronous handler. A refusal
+    // counts as one for the same reason.
+    private static boolean declaresHandlerToScan(Class<?> type, boolean synchronousOnly) {
+        if (!synchronousOnly) {
+            return declaresAnyOccurrentAnnotation(type);
+        }
+        try {
+            return HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS).stream().anyMatch(HandlerScan::isSynchronousHandler);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return true;
+        }
     }
 
     // A refusal read from a predicted type counts as an annotation, so the bean is built and its own class decides,

@@ -1045,4 +1045,25 @@ public final class HandlerScan {
         return method.getDeclaringClass().getName() + '#' + method.getName()
                 + Arrays.stream(method.getParameterTypes()).map(Class::getSimpleName).collect(Collectors.joining(", ", "(", ")"));
     }
+
+    /**
+     * Whether {@code method} is a handler the application service runs on the writer's thread: a
+     * {@code @SynchronousSubscription}, or a {@code @Projection} or {@code @Snapshot} with {@code mode = SYNCHRONOUS}.
+     * The annotation post-processors register these before any handler that can write, so a write made during
+     * startup, by a replay or a saga, reaches every one of them.
+     *
+     * @param method a method {@link #handlerMethods(Class, List)} returned
+     * @return {@code true} if the handler runs synchronously
+     */
+    public static boolean isSynchronousHandler(Method method) {
+        if (AnnotationUtils.findAnnotation(method, org.occurrent.annotation.SynchronousSubscription.class) != null) {
+            return true;
+        }
+        org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
+        if (projection != null && projection.mode() == org.occurrent.annotation.Mode.SYNCHRONOUS) {
+            return true;
+        }
+        org.occurrent.annotation.Snapshot snapshot = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Snapshot.class);
+        return snapshot != null && snapshot.mode() == org.occurrent.annotation.Mode.SYNCHRONOUS;
+    }
 }
