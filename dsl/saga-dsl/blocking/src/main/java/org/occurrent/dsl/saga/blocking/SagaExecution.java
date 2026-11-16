@@ -599,9 +599,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * within the last {@code timerPollInterval} has a release still running, on this node or another, and the poll
      * skips it. Polls are a {@code timerPollInterval} apart from the end of one to the start of the next, so a
      * release this poller went on with is older than that by the next poll. A release that stopped, after a crash or a
-     * failed input, is gone on with by the first poll a {@code timerPollInterval} after its last write. A release that
-     * takes longer than that over one record, or a node whose clock is that far ahead of the writer's, can still have
-     * the poll replay the record it is on, and both dispatch its commands, which delivery at least once allows. A store that does not implement
+     * failed input, is gone on with by the first poll a {@code timerPollInterval} after its last write. The poll and a
+     * release can still replay the same record, and both dispatch its commands, which delivery at least once allows,
+     * in four cases. A release takes longer than that over one record. A node's clock is that far ahead of the
+     * writer's. A {@code release} call comes while a poll replays the instance, which is releasing already, so the
+     * call goes on beside the poll without the check. A release works through records the stream marks show as
+     * applied, which it deletes without writing the instance, for longer than that. It dispatches nothing for those
+     * records, so only the first record that isn't applied can be dispatched twice. A store that does not implement
      * {@link SagaStateStoreSkippedInputs} has no releasing instances to list, and a runner without an
      * {@link EventStoreQueries} has nothing to replay from, so neither asks.
      * <p>

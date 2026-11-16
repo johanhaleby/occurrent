@@ -136,7 +136,7 @@ public final class SagaCodec<S extends @Nullable Object> {
      * {@link #QUARANTINED_RECORDING}, so a 0.34.0 node that meets such an instance during a rolling upgrade fails on it
      * instead of saving it. The subscription, or the source's delivery failure policy, decides what then happens to the
      * input.
-     * Its timer poller matches only {@code ACTIVE}, so the timers of such an instance wait for a 0.35.0 node.
+     * A 0.34.0 node's timer poller matches only {@code ACTIVE}, so the timers of such an instance wait for a 0.35.0 node.
      */
     public static final String ACTIVE_MARKED = "ACTIVE_MARKED";
 

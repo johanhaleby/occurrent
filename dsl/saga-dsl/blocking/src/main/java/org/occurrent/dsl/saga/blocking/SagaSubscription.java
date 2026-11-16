@@ -136,12 +136,17 @@ public final class SagaSubscription implements AutoCloseable {
      * the timer lease when there is a competing-consumer strategy, but only once the instance has gone a whole
      * {@code timerPollInterval} without a write. A running release writes the instance for every input it applies, so
      * the poller skips it, on this node or another, and goes on with one that failed on an input or was
-     * interrupted. A release that takes longer than {@code timerPollInterval} over one input can still have the poller
-     * replay that input too, and its commands are then dispatched twice.
+     * interrupted. The poller can still replay the input a release is on, and its commands are then dispatched twice,
+     * when the release takes longer than {@code timerPollInterval} over one input, and when this call comes while the
+     * poller replays the instance, since it then goes on beside the poller. A release that spends longer than
+     * {@code timerPollInterval} on inputs the stream marks show as applied writes nothing, so the poller goes on
+     * beside it too. Neither dispatches anything for those inputs, so only the first input that isn't applied can be
+     * dispatched twice.
      * <p>
      * The input the instance was quarantined on gets a full quarantine budget again, measured from the start of the
      * release. A replayed input whose event the store no longer has quarantines the instance again on that input at
-     * once. A read of the store that throws propagates, and the instance stays releasing.
+     * once. A read of the store that throws propagates, and the instance stays releasing. Exceptions that the
+     * {@code EventStoreQueries} or the state store throw propagate unwrapped.
      *
      * @return what the release did, see {@link ReleaseResult}
      * @throws IllegalStateException when the instance was quarantined by 0.34.0, which recorded none of the inputs it
@@ -150,6 +155,8 @@ public final class SagaSubscription implements AutoCloseable {
      *                               {@link org.occurrent.eventstore.api.blocking.EventStoreQueries}, when the state store
      *                               does not implement {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs}, and
      *                               when it does not persist what a release writes
+     * @throws SagaConcurrencyException when the release loses its compare-and-set {@code maxCasAttempts} times in a row,
+     *                                  to start the release or to write a replayed input
      */
     public ReleaseResult release(String sagaId) {
         return release.apply(requireNonNull(sagaId, "sagaId cannot be null"));

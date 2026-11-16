@@ -313,6 +313,17 @@ restart interrupted. It does either only once the instance has gone a whole `tim
 default, without a write, so it skips a release that is still running. You can call `release` again too, and it goes
 on where the release stands.
 
+The poller and a release can still replay the same input, and both dispatch its commands, in four cases:
+
+- The release takes longer than `timerPollInterval` over one input.
+- The poller's clock is `timerPollInterval` or more ahead of the clock of the node that wrote.
+- You call `release` while the poller is replaying the instance. Your call goes on beside the poller.
+- The release spends longer than `timerPollInterval` on inputs the stream marks show as applied. It deletes their
+  records without writing the instance, so the poller goes on beside it. Neither dispatches anything for those inputs,
+  so only the first input that isn't applied can have its commands dispatched twice.
+
+A receiver handles such a repeat the way it handles a live input delivered twice.
+
 The poller polls only while the saga's `timersEnabled` returns `true`, so a release that is under way waits with the
 timers while that gate is closed, only because the poller is what goes on with it. The gate exists for timers, which
 fire on the clock and can decide against state the subscription hasn't caught up to. A release applies only inputs the
@@ -530,8 +541,8 @@ A 0.34.0 node throws on every event addressed to an instance that 0.35.0 stored 
 so no input is lost. On a live subscription it retries the event in place and keeps the saga's competing-consumer
 lease while it does, so the saga's subscription stalls. The stall holds up every later event of that saga
 subscription, not only the events of the quarantined instance. It ends when a 0.35.0 node takes the lease, or when a
-0.35.0 node deletes the instance. A release doesn't end it, because a released instance is stored as `ACTIVE_MARKED`,
-which 0.34.0 can't decode either. A node whose catch-up replay failed on the event also has to restart before its
+0.35.0 node deletes the instance. A release doesn't end it, because a released instance is stored as `ACTIVE_MARKED`
+when it holds stream marks, which 0.34.0 can't decode either. A node whose catch-up replay failed on the event also has to restart before its
 subscription goes live. After a downgrade no 0.35.0 node is left to take the lease. A stall on a
 `QUARANTINED_RECORDING` instance then lasts until the instance is deleted. A stall on an `ACTIVE_MARKED` instance also
 ends once the `updateMany` in
@@ -570,4 +581,6 @@ released, so no step deletes it. The
 [0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#rolling-upgrades-from-0340-and-rolling-back-to-it) also
 covers a rolling upgrade from 0.34.0.
 
-Deleting an instance is not reversible from inside Occurrent. Take a backup of the collection first if you want one.
+Deleting an instance is not reversible from inside Occurrent. Take a backup first if you want one, of both the saga
+collection and `<sagaCollection>_skipped_inputs`. The delete removes the instance's skipped-input records too, and an
+instance restored without them releases as if it skipped nothing, so every input it skipped stays unapplied.

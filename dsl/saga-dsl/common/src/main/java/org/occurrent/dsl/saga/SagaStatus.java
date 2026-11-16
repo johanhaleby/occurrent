@@ -57,7 +57,8 @@ public enum SagaStatus {
      * first failed, and what the saga threw. While quarantined, the instance records the key of every input it skips,
      * and {@code SagaSubscription.release(sagaId)} brings it back by replaying the input it stopped on and then those
      * inputs, in order. The instance stays quarantined while that runs, with {@link SagaFailure#releasedAt()} set, and
-     * becomes {@link #ACTIVE} in the write that applies the last of them. An instance quarantined by 0.34.0 recorded
+     * becomes {@link #ACTIVE} in a write after the last of them, once a read finds none left. A crash between the two
+     * leaves it quarantined and releasing with nothing to replay, and the next release finishes it. An instance quarantined by 0.34.0 recorded
      * nothing and cannot be released that way.
      * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided not to recover it.
      * <p>

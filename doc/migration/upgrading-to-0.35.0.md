@@ -62,7 +62,8 @@ other sections compile fine and behave differently, so read them first.
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
   A saga keeps the highest applied version per stream and event type, and applies a late version instead of skipping
   it. Saga instances store a new `streamMarks` field, and an `ACTIVE` instance that holds it is stored as
-  `ACTIVE_MARKED`, which 0.34.0 can't read. Roll every saga node in one rollout, and run one update before going back
+  `ACTIVE_MARKED`, which 0.34.0 can't read and a query of your own for `status: "ACTIVE"` doesn't find. Roll every
+  saga node in one rollout, and run one update before going back
   to 0.34.0. Breaks the build only for a record pattern over `SagaEnvelope` or `SagaRunnerConfig`.
 - [A saga's quarantine budget runs per failing event](#a-sagas-quarantine-budget-runs-per-failing-event). Each failing
   event keeps its own clock. Compiles unchanged.
@@ -70,8 +71,9 @@ other sections compile fine and behave differently, so read them first.
   A saga quarantines an instance after 5 minutes unless you turn quarantine off, and `SagaSubscription.release(sagaId)`
   brings a quarantined instance back. A `SagaRunner` with quarantine on and no `EventStoreQueries` fails at startup
   until you pass it one or call `disableQuarantine()`. During a rolling upgrade from 0.34.0, or after a rollback to it, a
-  0.34.0 node stalls a saga's subscription on an event for an instance that 0.35.0 quarantined. Breaks the build only
-  for a record pattern over `SagaFailure` or `SagaEnvelope`.
+  0.34.0 node stalls a saga's subscription on an event for an instance that 0.35.0 quarantined. On MongoDB such an
+  instance is stored as `QUARANTINED_RECORDING`, so a query of your own for `status: "QUARANTINED"`, such as the
+  0.34.0 runbook's, no longer finds it. Breaks the build only for a record pattern over `SagaFailure` or `SagaEnvelope`.
 - [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due). A failed
   timer is tried again after every instance that was already due. Compiles unchanged unless you use a record pattern
   over `TimerEntry`.
@@ -232,8 +234,8 @@ other sections compile fine and behave differently, so read them first.
   the references. Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly
   sees the changes the starters make to find inherited handlers. **Breaks the build** if you refer to one of the five.
 - [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
-  `occurrent.saga.quarantine-after` defaults to 5 minutes, also when it is blank, so a `@Saga` quarantines unless you
-  set `occurrent.saga.quarantine-enabled=false`. With quarantine on, no `EventStoreQueries` bean, or several and none
+  `occurrent.saga.quarantine-after` defaults to 5 minutes, so a `@Saga` quarantines unless you set
+  `occurrent.saga.quarantine-enabled=false`. A blank value fails startup and names `quarantine-enabled=false`. With quarantine on, no `EventStoreQueries` bean, or several and none
   of them `@Primary`, fails at startup. The `sagaSubscription-<id>` bean releases an instance. Compiles unchanged.
 
 ### Brokers
@@ -701,7 +703,9 @@ the saga:
 - An Occurrent subscription, or a Kafka or RabbitMQ source with `REDELIVER`, delivers the event again and again, so the
   saga's subscription, or the partition or queue, stalls on it, the same way it stalls on a quarantined instance, as
   [Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it) describes.
-  The stall ends once a 0.35.0 node gets the event, so finishing the rollout ends it.
+  With a competing-consumer strategy, or a partition or queue that a 0.35.0 consumer takes over, the stall ends once a
+  0.35.0 node gets the event. Without competing consumers every node gets every event, so the 0.34.0 node's own
+  subscription stalls until that node is upgraded. Finishing the rollout ends it either way.
 - A Kafka or RabbitMQ source with `PARK` parks the event and acknowledges it, as the previous paragraph says. It parks
   every event it gets for such an instance, which is every instance a 0.35.0 node has handled an event with a stream
   version for. In a Kafka rollout each restart rebalances the partitions, so a partition a 0.35.0 node consumed can
@@ -767,9 +771,10 @@ case SagaRunnerConfig(var pollInterval, var batchLimit, var maxCas, var detectio
                       var quarantineAfterDefaulted) -> ...
 ```
 
-The same applies to `SagaEnvelope`, which needs a `var streamMarks` after its `failure` binding, and to an
-`instanceof` pattern as much as a `switch` case. `SagaCodec` stores `SagaEnvelope.StreamMarks` and
-`SagaEnvelope.TypeMark` with the rest of the instance, so a `SagaStateStore` needs nothing for them.
+The same applies to `SagaEnvelope`, which needs a `var streamMarks` after its `failure` binding and a
+`var quarantineSkipCount` after that, and to an `instanceof` pattern as much as a `switch` case. `SagaCodec` stores
+`SagaEnvelope.StreamMarks` and `SagaEnvelope.TypeMark` with the rest of the instance, so a `SagaStateStore` needs
+nothing for them.
 
 The five-argument `SagaRunnerConfig` constructor stays and fills in a window of 256. The 13-argument `SagaEnvelope`
 constructor is removed, as
@@ -891,7 +896,11 @@ The timer poller goes on with a release that failed on an input or was interrupt
 `timerBatchLimit` records, 100 by default, shared evenly among the releasing instances it lists, at least one each, and
 the next poll goes on where the last one stopped. A `release` call has no such bound. The poller goes on with an
 instance only once it has gone a whole `timerPollInterval` without a write, so it skips a release that is still
-running on any node, as long as that release takes less than `timerPollInterval` over each input.
+running on any node, as long as that release takes less than `timerPollInterval` over each input. Two more cases let
+the poller and a release replay the same input and dispatch its commands twice. A `release` call made while the poller
+replays the instance goes on beside the poller. A release that spends longer than `timerPollInterval` on inputs the
+stream marks show as applied writes nothing, so the poller goes on beside it, though neither dispatches anything until
+the first input that isn't applied.
 
 A timer that came due while the instance was quarantined fires after every recorded input has been replayed, because a
 saga's timers run on processing time. For a saga that uses a timer as a deadline, a replayed input from after the
@@ -1032,7 +1041,8 @@ the nodes run 0.35.0:
    quarantine id with `SagaStateStore.delete(sagaId)`, from a process that runs no `SagaRunner`. With no `SagaRunner`
    running, nothing releases an instance or delivers it an input, so each one is still quarantined when you delete it.
 7. Set every `ACTIVE_MARKED` instance back to `ACTIVE` with the `updateMany` in
-   [the stored saga state for late versions](#stored-saga-state-1). A released instance is one of them. That section
+   [the stored saga state for late versions](#stored-saga-state-1). A released instance is one of them when it holds
+   stream marks. That section
    first lists the instances that hold a version 0.34.0 may never apply, and says what else 0.34.0 loses.
 8. Start the 0.34.0 nodes.
 

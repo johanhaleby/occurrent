@@ -807,6 +807,10 @@ public class OccurrentProperties {
             this.timerPollInterval = timerPollInterval;
         }
 
+        /**
+         * @return the budget you set, or {@code null} when you set none, which means the five minute default and not,
+         * as in 0.34.0, that quarantine is off. {@link #isQuarantineEnabled()} says whether it is off
+         */
         public @Nullable Duration getQuarantineAfter() {
             return quarantineAfter;
         }

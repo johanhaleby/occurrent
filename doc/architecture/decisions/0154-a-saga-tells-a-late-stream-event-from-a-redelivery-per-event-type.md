@@ -123,7 +123,7 @@ rolling upgrade would drop the marks, and the next
 queries for `ACTIVE`, `findByStatus` and the timer poll, match both strings. 0.34.0 decodes the status with
 `SagaStatus.valueOf`, so it throws on such an instance instead of saving it. The subscription, or
 the source's delivery failure policy, decides what then happens to the event. A broker source that parks it doesn't
-deliver it again, and the upgrade guide says how to publish it again. Its timer poll asks for
+deliver it again, and the upgrade guide says how to publish it again. A 0.34.0 node's timer poll asks for
 `ACTIVE` only, so the instance's timers wait for a 0.35.0 node. It is the mechanism ADR 178 uses for
 `QUARANTINED_RECORDING`, and a quarantined instance with a quarantine id stays `QUARANTINED_RECORDING` whatever its
 marks hold. The status depends on any marks rather than on the ones a drop would lose. Every event with a stream
@@ -156,7 +156,8 @@ window.
 During a rolling upgrade a 0.34.0 node throws on every event for an `ACTIVE` instance that holds stream marks, which a
 0.35.0 node adds for every event with a stream version it handles, a failed one included. What then happens to the
 event depends on what feeds the saga. An Occurrent subscription, or a Kafka or RabbitMQ source with `REDELIVER`,
-delivers it again, so the subscription, partition or queue stalls until a 0.35.0 node gets the event. A source with
+delivers it again, so the subscription, partition or queue stalls until a 0.35.0 node gets the event, which
+without competing consumers means until the 0.34.0 node is upgraded. A source with
 `PARK` parks and acknowledges it, and once a Kafka rebalance hands a partition to a 0.34.0 consumer, that consumer
 parks every event of such an instance. The parked messages have to be published again after the rollout, and one
 `reorderWindow` or more behind the instance is skipped with a warning, so the upgrade guide advises `REDELIVER` on the
