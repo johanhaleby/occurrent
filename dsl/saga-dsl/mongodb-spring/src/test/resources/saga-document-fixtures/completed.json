@@ -1,0 +1,29 @@
+{
+  "_id": "saga-completed",
+  "status": "COMPLETED",
+  "version": {
+    "$numberLong": "10"
+  },
+  "timers": [],
+  "streamWatermarks": {
+    "stream-a": {
+      "$numberLong": "30"
+    }
+  },
+  "createdAt": {
+    "$numberLong": "1772600767123"
+  },
+  "updatedAt": {
+    "$numberLong": "1772601377456"
+  },
+  "completedAt": {
+    "$numberLong": "1772604000789"
+  },
+  "state": {
+    "orderId": "order-4",
+    "customer": "dave",
+    "quantity": {
+      "$numberInt": "5"
+    }
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "_id": "saga-active-marked",
+  "status": "ACTIVE_MARKED",
+  "version": {
+    "$numberLong": "6"
+  },
+  "timers": [],
+  "streamWatermarks": {
+    "stream-a": {
+      "$numberLong": "11"
+    }
+  },
+  "streamMarks": [
+    {
+      "streamId": "stream-a",
+      "floor": {
+        "$numberLong": "5"
+      },
+      "types": [
+        {
+          "type": "OrderPlaced",
+          "mark": {
+            "$numberLong": "7"
+          },
+          "applied": [
+            {
+              "$numberLong": "9"
+            },
+            {
+              "$numberLong": "11"
+            }
+          ],
+          "horizon": {
+            "$numberLong": "4"
+          }
+        }
+      ],
+      "pending": [
+        {
+          "type": "OrderPlaced",
+          "versions": [
+            {
+              "$numberLong": "8"
+            }
+          ]
+        }
+      ],
+      "legacyFailed": [
+        {
+          "$numberLong": "6"
+        }
+      ],
+      "pendingSince": [
+        {
+          "version": {
+            "$numberLong": "8"
+          },
+          "since": {
+            "$date": {
+              "$numberLong": "1772601072345"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "createdAt": {
+    "$numberLong": "1772600767123"
+  },
+  "updatedAt": {
+    "$numberLong": "1772601377456"
+  },
+  "state": {
+    "orderId": "order-2",
+    "customer": "bob",
+    "quantity": {
+      "$numberInt": "1"
+    }
+  }
+}

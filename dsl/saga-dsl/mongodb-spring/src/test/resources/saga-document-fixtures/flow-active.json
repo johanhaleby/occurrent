@@ -1,0 +1,53 @@
+{
+  "_id": "saga-flow-active",
+  "status": "ACTIVE",
+  "version": {
+    "$numberLong": "2"
+  },
+  "timers": [],
+  "currentStep": "awaiting-decision",
+  "streamWatermarks": {
+    "review-1": {
+      "$numberLong": "1"
+    }
+  },
+  "createdAt": {
+    "$numberLong": "1772600767123"
+  },
+  "updatedAt": {
+    "$numberLong": "1772601377456"
+  },
+  "state": {
+    "currentStep": "awaiting-decision",
+    "windowStart": {
+      "$numberInt": "1"
+    },
+    "stepEntryIndex": {
+      "$numberInt": "1"
+    },
+    "completed": false,
+    "previousStep": "submitted",
+    "previousStepEntryIndex": {
+      "$numberInt": "0"
+    },
+    "lastAction": "BRANCH",
+    "matchedBranchIndex": {
+      "$numberInt": "1"
+    },
+    "stepConditionProgress": {
+      "leafFingerprint": "fingerprint-1",
+      "matchCounts": [
+        {
+          "$numberInt": "1"
+        },
+        {
+          "$numberInt": "0"
+        }
+      ]
+    },
+    "received": [
+      "{\"specversion\":\"1.0\",\"id\":\"e1\",\"source\":\"urn:test\",\"type\":\"org.occurrent.dsl.saga.mongodb.spring.SagaDocumentFixtures$ReviewRequested\",\"datacontenttype\":\"application/json\",\"time\":\"2026-03-04T05:06:07Z\",\"data\":{\"eventId\":\"e1\",\"reviewId\":\"review-1\"}}",
+      "{\"specversion\":\"1.0\",\"id\":\"e2\",\"source\":\"urn:test\",\"type\":\"org.occurrent.dsl.saga.mongodb.spring.SagaDocumentFixtures$Approved\",\"datacontenttype\":\"application/json\",\"time\":\"2026-03-04T05:06:07Z\",\"data\":{\"eventId\":\"e2\",\"reviewId\":\"review-1\",\"score\":90}}"
+    ]
+  }
+}
