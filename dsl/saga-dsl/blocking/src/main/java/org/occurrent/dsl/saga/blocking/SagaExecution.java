@@ -779,8 +779,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * without being applied again. The instance turns active in a write that expects the version read before the read
      * that found no record, so a skip that raises the skip count after that version was read makes that write lose and
      * the loop go round again. A skip that raised it before, and records its input after the read that found none, loses
-     * its own last write instead, deletes that record again and applies its input to the active instance, see
-     * {@link #recordedSkip}.
+     * its own last write instead and applies its input to the active instance. Its record is deleted again, or left
+     * where nothing reads it, see {@link #recordedSkip}.
      * <p>
      * A release dispatches a record's commands before the write that applies it, so like a live input it dispatches them
      * at least once. A write that loses only to skipped inputs recorded in between is written again without
@@ -1191,10 +1191,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // raises the skip count, which takes toRecord's seq for it alone, the second records toRecord under the quarantine
     // id, and the third raises the version again. A key recorded already keeps its first record, so its new seq goes
     // unused. The third is what makes a release that read the instance before the first lose its write that turns the
-    // instance active. A release that read it between the first and the second finds no record and wins that write, so
-    // the third loses. When the third loses and the instance is no longer quarantined under this quarantine id, nothing
-    // reads the record any more, and its input was never acknowledged, so the record goes again, by its seq so a record
-    // of the same key written by another skip stays. False when the first or the third write lost, and the caller
+    // instance active. A release that read it between the first and the second finds no record and can win that write,
+    // so the third loses. When the third loses and the instance is no longer quarantined under this quarantine id,
+    // nothing reads the record any more, and its input was never acknowledged, so the record goes again, by its seq so a
+    // record of the same key written by another skip stays. A read that still finds the instance quarantined keeps the
+    // record. When a release then turns the instance active before the caller counts again, the caller applies the input
+    // live and the record stays where nothing reads it. False when the first or the third write lost, and the caller
     // decides again on what it reads
     private boolean recordedSkip(SagaEnvelope<S> current, SkippedInput toRecord) {
         String sagaId = current.sagaId();
