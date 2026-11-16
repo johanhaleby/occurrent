@@ -710,6 +710,34 @@ public class NativeMongoSubscriptionModelResilienceTest {
         }
 
         @Test
+        void a_history_loss_after_a_later_resumed_run_started_makes_the_next_wait_of_a_handle_an_earlier_resume_returned_throw() {
+            // Given a subscription that was paused and resumed twice, whose earlier resume handle answered that it started, and whose later resumed run answered that it started
+            AtomicBoolean losing = new AtomicBoolean();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatLosesItsHistoryWhenReadWhile(losing, changeStreamHistoryLostException()), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(exponentialBackoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS), 2)));
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.pauseSubscription(subscriptionId);
+            Subscription earlier = subscriptionModel.resumeSubscription(subscriptionId);
+            boolean earlierStarted = earlier.waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.pauseSubscription(subscriptionId);
+            boolean laterStarted = subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+
+            // When its history is lost on a later read
+            losing.set(true);
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId));
+
+            // Then
+            assertThat(earlierStarted).as("answer of the earlier resume while its change stream was open").isTrue();
+            assertThat(laterStarted).as("answer of the later resume while its change stream was open").isTrue();
+            assertRefusedBecauseTheHistoryWasLost(catchThrowable(() -> earlier.waitUntilStarted(Duration.ofSeconds(1))), subscriptionId);
+            assertRefusedBecauseTheHistoryWasLost(catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+                earlier.waitUntilStarted();
+            })), subscriptionId);
+        }
+
+        @Test
         void a_pause_does_not_wait_for_a_subscription_whose_history_was_lost_just_before_it() throws InterruptedException {
             // Given a subscription the model is about to forget because its history was lost
             CountDownLatch checkingErrorCode = new CountDownLatch(1);
@@ -784,7 +812,7 @@ public class NativeMongoSubscriptionModelResilienceTest {
         }
 
         @Test
-        void start_returns_when_a_subscription_it_resumes_loses_its_history_before_start_waits_for_it() {
+        void start_throws_the_refusal_when_a_subscription_it_resumes_loses_its_history_before_start_waits_for_it() {
             // Given a dispatcher that runs a subscription on the thread that starts it, so the model has forgotten the
             // subscription whose history was lost by the time the resume inside start() returns
             subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsOnce(changeStreamHistoryLostException()), TimeRepresentation.RFC_3339_STRING, new CallerRunsExecutorService(),
@@ -1562,7 +1590,7 @@ public class NativeMongoSubscriptionModelResilienceTest {
         }
 
         @Test
-        void start_returns_when_change_stream_history_is_lost_and_not_configured_to_restart() {
+        void start_throws_the_refusal_when_change_stream_history_is_lost_and_not_configured_to_restart() {
             // Given
             AtomicBoolean historyLost = new AtomicBoolean();
             AtomicInteger refused = new AtomicInteger();

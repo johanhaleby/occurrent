@@ -87,6 +87,7 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -96,6 +97,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
@@ -1972,6 +1974,47 @@ public class SpringMongoSubscriptionModelTest {
             assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId);
         }
 
+        @Test
+        void a_handle_that_answered_it_started_throws_the_refusal_of_a_later_run_only_once_the_refusal_has_freed_the_id() throws Exception {
+            // Given a subscription that started, and a map of the running subscriptions that holds the thread removing a refused run
+            String subscriptionId = UUID.randomUUID().toString();
+            Subscription started = subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
+            });
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).as("answer while the change stream was open").isTrue();
+            HoldsTheRemovalOfARefusedRun refusedRunsRemoval = new HoldsTheRemovalOfARefusedRun();
+            replaceRunningSubscriptionsOf(subscriptionModel, refusedRunsRemoval);
+            ExecutorService waiterExecutor = Executors.newSingleThreadExecutor();
+            try {
+                // And a refusal of a resume that is recorded and held inside the update that frees the id
+                subscriptionModel.pauseSubscription(subscriptionId);
+                subscriptionModel.resumeSubscription(subscriptionId, StartAt.dynamic(ctx -> {
+                    throw new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown as the check does");
+                }));
+                assertThat(refusedRunsRemoval.held.await(10, SECONDS)).as("the refused run was recorded and held").isTrue();
+
+                // When the handle that answered it started is waited on, and the id is subscribed to again as soon as it throws
+                record WhatTheWaiterSaw(Throwable thrown, Throwable subscribedAgain) {
+                }
+                CompletableFuture<WhatTheWaiterSaw> waiter = CompletableFuture.supplyAsync(() -> {
+                    Throwable thrown = catchThrowable(() -> started.waitUntilStarted(Duration.ofSeconds(60)));
+                    Throwable subscribedAgain = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
+                    }));
+                    return new WhatTheWaiterSaw(thrown, subscribedAgain);
+                }, waiterExecutor);
+                // A waiter that is let go while the id is taken is let go within a second, so it is only given that long
+                catchThrowable(() -> waiter.get(1, SECONDS));
+                refusedRunsRemoval.release.countDown();
+
+                // Then it throws the refusal, and the id is free when it does
+                WhatTheWaiterSaw saw = waiter.get(10, SECONDS);
+                assertThat(saw.thrown()).isExactlyInstanceOf(UnsupportedStartAtException.class);
+                assertThat(saw.subscribedAgain()).as("thrown by subscribing again when the handle threw").isNull();
+            } finally {
+                refusedRunsRemoval.release.countDown();
+                waiterExecutor.shutdownNow();
+            }
+        }
+
         private void assertSubscribeIsRefusedAndLeavesTheIdFree(Checkpoint checkpoint, boolean paused) {
             // Given
             LocalDateTime now = LocalDateTime.now();
@@ -2116,6 +2159,22 @@ public class SpringMongoSubscriptionModelTest {
                 return true;
             } catch (ConditionTimeoutException bound) {
                 return false;
+            }
+        }
+
+        // The map of the running subscriptions can't be reached from a public method, so it is replaced through the private fields
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        private static void replaceRunningSubscriptionsOf(SpringMongoSubscriptionModel model, ConcurrentHashMap replacement) {
+            try {
+                Field subscriptionsField = SpringMongoSubscriptionModel.class.getDeclaredField("subscriptions");
+                subscriptionsField.setAccessible(true);
+                Object subscriptions = subscriptionsField.get(model);
+                Field runningField = subscriptions.getClass().getDeclaredField("runningSubscriptions");
+                runningField.setAccessible(true);
+                replacement.putAll((Map) runningField.get(subscriptions));
+                runningField.set(subscriptions, replacement);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
             }
         }
 
@@ -2714,7 +2773,7 @@ public class SpringMongoSubscriptionModelTest {
         @SuppressWarnings("unchecked")
         @Timeout(value = 20, unit = SECONDS)
         @Test
-        void start_returns_when_change_stream_history_is_lost_and_not_configured_to_restart() {
+        void start_throws_the_refusal_when_change_stream_history_is_lost_and_not_configured_to_restart() {
             // Given
             MongoTemplate mongoTemplateSpy = spy(mongoTemplate);
             MongoDatabase mongoDatabase = mock(MongoDatabase.class);
@@ -2860,6 +2919,42 @@ public class SpringMongoSubscriptionModelTest {
             assertRefusedBecauseTheHistoryWasLost(catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(1))), subscriptionId);
             assertRefusedBecauseTheHistoryWasLost(catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
                 resumed.waitUntilStarted();
+            })), subscriptionId);
+        }
+        @Timeout(value = 20, unit = SECONDS)
+        @Test
+        void a_history_loss_after_a_later_resumed_run_started_makes_the_next_wait_of_a_handle_an_earlier_resume_returned_throw() {
+            // Given a subscription that was paused and resumed twice, whose earlier resume handle answered that it started, and whose later resumed run answered that it started
+            AtomicBoolean losing = new AtomicBoolean();
+            MongoCommandException historyLost = new MongoCommandException(new BsonDocument("ok", new BsonInt32(0)).append("code", new BsonInt32(286))
+                    .append("codeName", new BsonString("ChangeStreamHistoryLost")), new ServerAddress());
+            MongoTemplate template = new MongoTemplate(mongoTemplate.getMongoDatabaseFactory()) {
+                @Override
+                public MongoDatabase getDb() {
+                    return historyLostWhenRead(super.getDb(), losing, historyLost);
+                }
+            };
+            subscriptionModel = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING)
+                    .restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.pauseSubscription(subscriptionId);
+            Subscription earlier = subscriptionModel.resumeSubscription(subscriptionId);
+            boolean earlierStarted = earlier.waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.pauseSubscription(subscriptionId);
+            boolean laterStarted = subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+
+            // When its history is lost on a later read
+            losing.set(true);
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId));
+
+            // Then
+            assertThat(earlierStarted).as("answer of the earlier resume while its change stream was open").isTrue();
+            assertThat(laterStarted).as("answer of the later resume while its change stream was open").isTrue();
+            assertRefusedBecauseTheHistoryWasLost(catchThrowable(() -> earlier.waitUntilStarted(Duration.ofSeconds(1))), subscriptionId);
+            assertRefusedBecauseTheHistoryWasLost(catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+                earlier.waitUntilStarted();
             })), subscriptionId);
         }
     }
@@ -3198,6 +3293,26 @@ public class SpringMongoSubscriptionModelTest {
         @Override
         public long getCount() {
             return own.getCount();
+        }
+    }
+
+    // Replaces the map of the running subscriptions. The thread that removes the run of a refused subscription is held
+    // inside the update, once the failure is recorded and before the run is gone from the map
+    private static final class HoldsTheRemovalOfARefusedRun extends ConcurrentHashMap<String, Object> {
+        final CountDownLatch held = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        private final AtomicBoolean first = new AtomicBoolean(true);
+
+        @Override
+        public Object computeIfPresent(String key, BiFunction<? super String, ? super Object, ?> remappingFunction) {
+            return super.computeIfPresent(key, (id, current) -> {
+                Object remapped = remappingFunction.apply(id, current);
+                if (remapped == null && first.getAndSet(false)) {
+                    held.countDown();
+                    awaitUpToTenSeconds(release);
+                }
+                return remapped;
+            });
         }
     }
 

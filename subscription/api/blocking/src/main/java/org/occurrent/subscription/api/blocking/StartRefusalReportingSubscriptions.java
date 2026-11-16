@@ -151,10 +151,10 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
          * Called once the model holds {@code subscriptionId} paused because it got no position to open its change
          * stream at the present, after a loss of history or at a resume. Unlike {@link #handleStartRefusal}, the model
          * keeps the subscription and its id, a {@link SubscriptionModelLifeCycle#resumeSubscription(String)} asks for
-         * the present again, and every handle of the subscription throws {@code refusal} until a resume starts it. A
-         * resume or a cancel may already have run by the time the listener runs, and once the model no longer has the
-         * subscription a {@code subscribe} with the same id may have made a new one. A listener that acts on the hold
-         * later than the call can ask
+         * the present again, and every handle returned up to the held run throws {@code refusal} until a resume starts
+         * it. A resume or a cancel may already have run by the time the listener runs, and once the model no longer has
+         * the subscription a {@code subscribe} with the same id may have made a new one. A listener that acts on the
+         * hold later than the call can ask
          * {@link StartRefusalReportingSubscriptions#isHeldPausedFor(String, UnsupportedStartAtException)} first.
          * <p>
          * Called the same way as {@link #handleStartRefusal}, on the thread that would have read the subscription,
@@ -162,7 +162,7 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
          * {@link RuntimeException} is logged.
          *
          * @param subscriptionId The subscription the model holds paused.
-         * @param refusal        What every handle of the subscription throws until a resume starts it.
+         * @param refusal        What every handle returned up to the held run throws until a resume starts it.
          */
         void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal);
 

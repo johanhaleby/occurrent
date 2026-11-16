@@ -56,8 +56,10 @@ public record NativeMongoSubscription(String subscriptionId, CountDownLatch subs
      * subscription, at its start position or after a loss of its change stream's history. A refusal that comes after
      * this answered {@code true} is thrown from the next call on, since the model no longer runs the subscription. A
      * subscription held paused, because its restart from the present after a loss of history got no position, throws
-     * its refusal the same way. Every handle of the subscription answers so, the one {@code subscribe(..)} returned
-     * and each one a resume returned, and each stops throwing a hold once a resume starts the subscription again.
+     * its refusal the same way. A refusal reaches every handle of the subscription, the one {@code subscribe(..)}
+     * returned and each one a resume returned. A hold reaches the handles returned up to the held run, so a handle a
+     * later resume returned answers for that later run, and each stops throwing a hold once a resume starts the
+     * subscription again.
      * <p>
      * It answers {@code true} also for a resumed subscription that waits for an action call from before its pause to
      * return, so a caller isn't held back by a call that doesn't return. A refusal of that subscription is thrown from

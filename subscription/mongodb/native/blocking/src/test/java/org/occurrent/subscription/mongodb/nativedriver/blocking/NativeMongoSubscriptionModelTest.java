@@ -1835,7 +1835,7 @@ public class NativeMongoSubscriptionModelTest {
 
                 // And the first run then reports that it started
                 holdsTheFirstRun.release.countDown();
-                assertThat(startedLatchOfTheFirstRun.get().await(10, SECONDS)).as("the first run reported that it started").isTrue();
+                assertThat(startedLatchOfTheFirstRun.get().await(1, SECONDS)).as("the first run, closed by the pause, reported that it started").isFalse();
 
                 // Then a waiter that is let go while the id is taken is let go within a second, so it is only given that long
                 catchThrowable(() -> waiter.get(1, SECONDS));
@@ -1849,6 +1849,47 @@ public class NativeMongoSubscriptionModelTest {
             } finally {
                 positionMayAnswer.countDown();
                 holdsTheFirstRun.release.countDown();
+                refusedRunsRemoval.release.countDown();
+                waiterExecutor.shutdownNow();
+            }
+        }
+
+        @Test
+        void a_handle_that_answered_it_started_throws_the_refusal_of_a_later_run_only_once_the_refusal_has_freed_the_id() throws Exception {
+            // Given a subscription that started, and a map of the running subscriptions that holds the thread removing a refused run
+            String subscriptionId = UUID.randomUUID().toString();
+            Subscription started = subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
+            });
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).as("answer while the change stream was open").isTrue();
+            HoldsTheRemovalOfARefusedRun refusedRunsRemoval = new HoldsTheRemovalOfARefusedRun();
+            replaceRunningSubscriptionsOf(subscriptionModel, refusedRunsRemoval);
+            ExecutorService waiterExecutor = Executors.newSingleThreadExecutor();
+            try {
+                // And a refusal of a resume that is recorded and held inside the update that frees the id
+                subscriptionModel.pauseSubscription(subscriptionId);
+                subscriptionModel.resumeSubscription(subscriptionId, StartAt.dynamic(ctx -> {
+                    throw new UnsupportedStartAtException(StartAt.checkpoint(GlobalCheckpoint.of(0)), "thrown as the check does");
+                }));
+                assertThat(refusedRunsRemoval.held.await(10, SECONDS)).as("the refused run was recorded and held").isTrue();
+
+                // When the handle that answered it started is waited on, and the id is subscribed to again as soon as it throws
+                record WhatTheWaiterSaw(Throwable thrown, Throwable subscribedAgain) {
+                }
+                CompletableFuture<WhatTheWaiterSaw> waiter = CompletableFuture.supplyAsync(() -> {
+                    Throwable thrown = catchThrowable(() -> started.waitUntilStarted(Duration.ofSeconds(60)));
+                    Throwable subscribedAgain = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
+                    }));
+                    return new WhatTheWaiterSaw(thrown, subscribedAgain);
+                }, waiterExecutor);
+                // A waiter that is let go while the id is taken is let go within a second, so it is only given that long
+                catchThrowable(() -> waiter.get(1, SECONDS));
+                refusedRunsRemoval.release.countDown();
+
+                // Then it throws the refusal, and the id is free when it does
+                WhatTheWaiterSaw saw = waiter.get(10, SECONDS);
+                assertThat(saw.thrown()).isExactlyInstanceOf(UnsupportedStartAtException.class);
+                assertThat(saw.subscribedAgain()).as("thrown by subscribing again when the handle threw").isNull();
+            } finally {
                 refusedRunsRemoval.release.countDown();
                 waiterExecutor.shutdownNow();
             }

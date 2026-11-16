@@ -112,7 +112,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * when its change stream opens. A {@code StartAt.dynamic(..)} start does that read at the subscribe too, and when
      * the read returns neither, the start is refused the same way if its function resolves to the present as the change
      * stream opens. A resume at the present, or a restart from the present after the history was lost, that gets
-     * neither holds the subscription paused instead, every handle of the subscription throws the
+     * neither holds the subscription paused instead, every handle returned up to the held run throws the
      * {@code UnsupportedStartAtException} from {@code waitUntilStarted(..)}, and a later resume asks again. A
      * subscription made while this model is stopped opens at the position recorded at the subscribe, so earlier events
      * count from the subscribe.

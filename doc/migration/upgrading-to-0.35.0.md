@@ -2923,8 +2923,8 @@ When that read returns neither an event nor a resume token, the subscription can
   position. The subscription is removed from the model, and the listeners added through
   `StartRefusalReportingSubscriptions` are told, as for a catch-up's checkpoint.
 * A `resumeSubscription(id, StartAt.now())` does the read when the resumed change stream opens. When it gets neither,
-  the subscription is held paused and stays in the model, `waitUntilStarted(..)` on every handle of the subscription
-  throws the `UnsupportedStartAtException` until a resume starts it, and the listeners added through
+  the subscription is held paused and stays in the model, `waitUntilStarted(..)` on every handle returned up to the held
+  run throws the `UnsupportedStartAtException` until a resume starts it, and the listeners added through
   `StartRefusalReportingSubscriptions` are told through `handleHeldPaused(..)`, not `handleStartRefusal(..)`.
   `resumeSubscription(id)` reads the change stream again. A `StartAt.dynamic(..)` resume that resolves to the present as
   its change stream opens is held the same way.
@@ -3035,8 +3035,13 @@ also after a pause, a stop or a lost lock race. That still holds for those three
 * With `restartSubscriptionsOnChangeStreamHistoryLost` on, a restart from the present that gets no position holds the
   subscription paused. Each `waitUntilStarted(..)` throws the reason until a resume starts the subscription again.
 
-Every handle of the subscription answers so, the one `subscribe(..)` returned and each one a resume returned. A handle a
-`CompetingConsumerSubscriptionModel` returned over one of them asks the handle it wraps, so it throws too.
+A cancel or a shutdown ends a hold and frees the id. A handle of a subscription that had started answers `true` again,
+and one of a subscription that never started throws an `UnsupportedStartAtException` saying that the subscription was
+cancelled while it was held paused and can be subscribed again with the same id.
+
+A refusal reaches every handle of the subscription, the one `subscribe(..)` returned and each one a resume returned. A
+hold reaches the handles returned up to the held run, so a handle a later resume returned answers for that later run. A
+handle a `CompetingConsumerSubscriptionModel` returned over one of them asks the handle it wraps, so it throws too.
 [ADR 181](../architecture/decisions/0181-a-subscription-handle-throws-once-the-model-gives-the-subscription-up.md) has
 the reasons.
 

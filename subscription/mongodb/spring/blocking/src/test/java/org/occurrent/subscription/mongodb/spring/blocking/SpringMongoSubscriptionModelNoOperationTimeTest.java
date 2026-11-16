@@ -23,6 +23,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoTimeoutException;
 import com.mongodb.ServerAddress;
 import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoChangeStreamCursor;
@@ -61,6 +62,8 @@ import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -146,6 +149,8 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
     // Loses the history on the next read of a change stream the model opened with its subscription's pipeline
     private final AtomicBoolean historyLost = new AtomicBoolean();
     private final List<CountDownLatch> heldReads = new CopyOnWriteArrayList<>();
+    // Holds the run of the first change stream that is read, right after the read returns, when it is set
+    private final AtomicReference<HoldsTheFirstReply> holdsTheFirstReply = new AtomicReference<>();
     private final Logger modelLog = (Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
     private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
     private MongoClient mongoClient;
@@ -173,6 +178,10 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         modelLog.detachAppender(logged);
         logged.stop();
         heldReads.forEach(CountDownLatch::countDown);
+        HoldsTheFirstReply held = holdsTheFirstReply.get();
+        if (held != null) {
+            held.release.countDown();
+        }
         if (subscriptionModel != null) {
             subscriptionModel.shutdown();
         }
@@ -818,6 +827,232 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         waitAtMostFor(TEN_SECONDS, () -> holds.size() == expectedHolds);
     }
 
+    @Test
+    void a_run_that_a_pause_closed_before_its_first_reply_counted_does_not_clear_the_hold_of_the_run_a_resume_made_in_its_place() throws InterruptedException {
+        // Given: a subscription at a position of the past, which counts as started once the first reply of its change
+        // stream came since MongoDB cannot say whether it is a mongos, and whose run is held right after that reply
+        HoldsTheFirstReply firstReply = new HoldsTheFirstReply();
+        holdsTheFirstReply.set(firstReply);
+        subscriptionModel = new SpringMongoSubscriptionModel(templateThatSendsNoOperationTimeAndCannotSayWhetherItIsAMongos(), withConfig(eventCollectionName, timeRepresentation)
+                .retryStrategy(RetryStrategy.fixed(100)).maxAwaitTime(Duration.ofSeconds(1)));
+        String subscriptionId = UUID.randomUUID().toString();
+        Subscription subscribed = subscriptionModel.subscribe(subscriptionId, filter(), StartAt.checkpoint(new MongoResumeTokenCheckpoint(realResumeToken())), cloudEvent -> {
+        });
+        assertThat(firstReply.replied.await(10, TimeUnit.SECONDS)).as("the first reply came").isTrue();
+
+        // And a pause and a resume at the present while the server gives no position, which hold the subscription paused
+        subscriptionModel.pauseSubscription(subscriptionId);
+        presentRead.set(() -> cursorReading(null, null));
+        Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId, StartAt.now());
+        assertThat(catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(10)))).as("thrown by the resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("held paused").isTrue();
+
+        // When: the first run goes on after the first reply, and ends
+        firstReply.release.countDown();
+        assertThat(firstReply.ended.await(10, TimeUnit.SECONDS)).as("the first run ended").isTrue();
+
+        // Then: the handle subscribe returned still throws the hold
+        assertThat(catchThrowable(() -> subscribed.waitUntilStarted(Duration.ofSeconds(1)))).as("thrown by the handle subscribe returned").isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+    }
+
+    @Test
+    void a_hold_of_a_later_run_makes_the_next_wait_of_a_handle_an_earlier_resume_returned_throw() {
+        // Given: a subscription that was resumed, whose resumed run answered that it started, and that was paused again
+        subscriptionModel = modelOver(RetryStrategy.fixed(100));
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
+        }).waitUntilStarted(Duration.ofSeconds(10));
+        subscriptionModel.pauseSubscription(subscriptionId);
+        Subscription earlier = subscriptionModel.resumeSubscription(subscriptionId);
+        assertThat(earlier.waitUntilStarted(Duration.ofSeconds(10))).as("answer of the earlier resume").isTrue();
+        subscriptionModel.pauseSubscription(subscriptionId);
+
+        // When: a later resume is held paused, since the server gives no position
+        presentRead.set(() -> cursorReading(null, null));
+        Subscription later = subscriptionModel.resumeSubscription(subscriptionId, StartAt.now());
+        assertThat(catchThrowable(() -> later.waitUntilStarted(Duration.ofSeconds(10)))).as("thrown by the later resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class);
+
+        // Then
+        assertThat(catchThrowable(() -> earlier.waitUntilStarted(Duration.ofSeconds(1)))).as("thrown by the earlier resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .hasMessageContaining("MongoDB gave neither an operation time nor a change stream position").hasMessageContaining(subscriptionId);
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+    }
+
+    @Test
+    void a_later_run_that_starts_makes_every_handle_of_a_held_subscription_answer_started_again() {
+        // Given: a subscription held paused by a resume, with the handles subscribe, an earlier resume and the held resume returned
+        subscriptionModel = modelOver(RetryStrategy.fixed(100));
+        String subscriptionId = UUID.randomUUID().toString();
+        Subscription subscribed = subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
+        });
+        subscribed.waitUntilStarted(Duration.ofSeconds(10));
+        subscriptionModel.pauseSubscription(subscriptionId);
+        Subscription earlier = subscriptionModel.resumeSubscription(subscriptionId);
+        earlier.waitUntilStarted(Duration.ofSeconds(10));
+        subscriptionModel.pauseSubscription(subscriptionId);
+        presentRead.set(() -> cursorReading(null, null));
+        Subscription held = subscriptionModel.resumeSubscription(subscriptionId, StartAt.now());
+        assertThat(catchThrowable(() -> held.waitUntilStarted(Duration.ofSeconds(10)))).as("thrown by the held resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class);
+
+        // When: a later resume starts the subscription once the server gives a position again
+        presentRead.set(null);
+        assertThat(subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10))).as("answer of the later resume").isTrue();
+
+        // Then
+        assertThat(answerOf(subscribed)).as("answer of the handle subscribe returned").isEqualTo(true);
+        assertThat(answerOf(earlier)).as("answer of the handle the earlier resume returned").isEqualTo(true);
+        assertThat(answerOf(held)).as("answer of the handle the held resume returned").isEqualTo(true);
+    }
+
+    @Test
+    void a_resume_of_a_run_held_paused_after_its_history_was_lost_waits_for_the_read_at_the_subscribe_still_running_and_then_reads_the_present_for_itself_and_is_not_refused() {
+        // Given: a dynamic subscription on a stopped model whose read at the subscribe is held, resumed at a checkpoint that loses its history, while the server gives no position to restart from
+        MongoOperationTimeCheckpoint checkpoint = new MongoOperationTimeCheckpoint(requireNonNull(MongoCommons.operationTimeAfter(mongoTemplate.getDb().runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND))));
+        CountDownLatch released = new CountDownLatch(1);
+        heldReads.add(released);
+        AtomicInteger reads = new AtomicInteger();
+        presentRead.set(() -> reads.getAndIncrement() == 0 ? cursorHeldUntil(released, null) : cursorReading(null, null));
+        subscriptionModel = new SpringMongoSubscriptionModel(templateThatSendsNoOperationTime(), withConfig(eventCollectionName, timeRepresentation)
+                .retryStrategy(RetryStrategy.fixed(100)).maxAwaitTime(Duration.ofSeconds(1)).restartSubscriptionsOnChangeStreamHistoryLost(true));
+        subscriptionModel.stop();
+        List<String> refused = new CopyOnWriteArrayList<>();
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
+        CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.dynamic(ctx -> StartAt.checkpoint(checkpoint)), cloudEvent -> handled.add(cloudEvent.getId()));
+        waitAtMostFor(FIVE_SECONDS, () -> presentReads.get() == 1);
+        assertThat(presentReads).as("reads of the change stream that records the present at the subscribe, held").hasValue(1);
+        subscriptionModel.resumeSubscription(subscriptionId, StartAt.checkpoint(checkpoint)).waitUntilStarted(Duration.ofSeconds(10));
+        historyLost.set(true);
+        waitAtMostFor(TEN_SECONDS, () -> presentReads.get() == 2 && subscriptionModel.isPaused(subscriptionId));
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("held paused before the resume").isTrue();
+        presentRead.set(null);
+
+        // When: it is resumed while the read at the subscribe is still held
+        Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+        Object answerWhileHeld = answerOf(resumed, Duration.ofMillis(500));
+        boolean runningWhileHeld = subscriptionModel.isRunning(subscriptionId);
+        released.countDown();
+        Throwable thrown = catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(10)));
+        NameDefined e1 = nameDefined("name1");
+        mongoEventStore.write("1", 0, serialize(e1));
+        waitAtMostFor(TEN_SECONDS, () -> handled.contains(e1.eventId()));
+
+        // Then
+        assertThat(answerWhileHeld).as("answer of the resume handle while the read at the subscribe was held").isEqualTo(false);
+        assertThat(runningWhileHeld).as("running while the read at the subscribe was held").isTrue();
+        assertThat(thrown).as("thrown by the resume handle").isNull();
+        assertThat(refused).as("start refusals told").isEmpty();
+        assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isTrue();
+        assertThat(handled).as("events delivered").containsExactly(e1.eventId());
+    }
+
+    @Test
+    void a_cancel_of_a_subscription_held_paused_before_it_started_makes_its_handles_throw_that_it_was_cancelled_and_frees_the_id() throws InterruptedException {
+        // Given: a subscription that never started, held paused by a resume
+        String subscriptionId = UUID.randomUUID().toString();
+        HeldBeforeItStarted held = aSubscriptionHeldPausedBeforeItStarted(subscriptionId);
+
+        // When
+        subscriptionModel.cancelSubscription(subscriptionId);
+
+        // Then
+        assertIsTheCancelOfAHeldSubscription("thrown by the handle subscribe returned", subscriptionId, catchThrowable(() -> held.subscribed.waitUntilStarted(Duration.ofSeconds(1))));
+        assertIsTheCancelOfAHeldSubscription("thrown by the handle the resume returned", subscriptionId, catchThrowable(() -> held.resumed.waitUntilStarted(Duration.ofSeconds(1))));
+        assertThat(subscriptionModel.subscriptionIds()).as("known subscriptions").doesNotContain(subscriptionId);
+        presentRead.set(null);
+        assertThat(subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
+        }).waitUntilStarted(Duration.ofSeconds(10))).as("the id is free to subscribe with again").isTrue();
+    }
+
+    @Test
+    void a_shutdown_of_a_model_with_a_subscription_held_paused_before_it_started_makes_its_handles_throw_that_it_was_cancelled_and_frees_the_id() throws InterruptedException {
+        // Given: a subscription that never started, held paused by a resume
+        String subscriptionId = UUID.randomUUID().toString();
+        HeldBeforeItStarted held = aSubscriptionHeldPausedBeforeItStarted(subscriptionId);
+
+        // When
+        subscriptionModel.shutdown();
+
+        // Then: the model no longer knows the id, so it is free
+        assertIsTheCancelOfAHeldSubscription("thrown by the handle subscribe returned", subscriptionId, catchThrowable(() -> held.subscribed.waitUntilStarted(Duration.ofSeconds(1))));
+        assertIsTheCancelOfAHeldSubscription("thrown by the handle the resume returned", subscriptionId, catchThrowable(() -> held.resumed.waitUntilStarted(Duration.ofSeconds(1))));
+        assertThat(subscriptionModel.subscriptionIds()).as("known subscriptions").doesNotContain(subscriptionId);
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isFalse();
+    }
+
+    @Test
+    void a_cancel_of_a_subscription_that_started_and_is_held_paused_by_a_resume_makes_its_handles_answer_started_and_frees_the_id() {
+        // Given: a subscription that started, with a handle from the subscribe and one from a resume held paused
+        subscriptionModel = modelOver(RetryStrategy.fixed(100));
+        String subscriptionId = UUID.randomUUID().toString();
+        Subscription subscribed = subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
+        });
+        subscribed.waitUntilStarted(Duration.ofSeconds(10));
+        subscriptionModel.pauseSubscription(subscriptionId);
+        presentRead.set(() -> cursorReading(null, null));
+        Subscription held = subscriptionModel.resumeSubscription(subscriptionId, StartAt.now());
+        assertThat(catchThrowable(() -> held.waitUntilStarted(Duration.ofSeconds(10)))).as("thrown by the held resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class);
+
+        // When
+        subscriptionModel.cancelSubscription(subscriptionId);
+
+        // Then
+        assertThat(answerOf(subscribed)).as("answer of the handle subscribe returned").isEqualTo(true);
+        assertThat(answerOf(held)).as("answer of the handle the held resume returned").isEqualTo(true);
+        assertThat(subscriptionModel.subscriptionIds()).as("known subscriptions").doesNotContain(subscriptionId);
+        presentRead.set(null);
+        assertThat(subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), cloudEvent -> {
+        }).waitUntilStarted(Duration.ofSeconds(10))).as("the id is free to subscribe with again").isTrue();
+    }
+
+    private record HeldBeforeItStarted(Subscription subscribed, Subscription resumed) {
+    }
+
+    // A subscription at a position of the past, which counts as started only once the first reply of its change stream
+    // came, paused before that reply and then resumed at the present while the server gives no position. Its first run
+    // is let go once the hold is in place, so no run is left that could report that the subscription started
+    private HeldBeforeItStarted aSubscriptionHeldPausedBeforeItStarted(String subscriptionId) throws InterruptedException {
+        HoldsTheFirstReply firstReply = new HoldsTheFirstReply();
+        holdsTheFirstReply.set(firstReply);
+        subscriptionModel = new SpringMongoSubscriptionModel(templateThatSendsNoOperationTimeAndCannotSayWhetherItIsAMongos(), withConfig(eventCollectionName, timeRepresentation)
+                .retryStrategy(RetryStrategy.fixed(100)).maxAwaitTime(Duration.ofSeconds(1)));
+        Subscription subscribed = subscriptionModel.subscribe(subscriptionId, filter(), StartAt.checkpoint(new MongoResumeTokenCheckpoint(realResumeToken())), cloudEvent -> {
+        });
+        assertThat(firstReply.replied.await(10, TimeUnit.SECONDS)).as("the first reply came").isTrue();
+        subscriptionModel.pauseSubscription(subscriptionId);
+        presentRead.set(() -> cursorReading(null, null));
+        Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId, StartAt.now());
+        assertThat(catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(10)))).as("thrown by the resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
+        firstReply.release.countDown();
+        assertThat(firstReply.ended.await(10, TimeUnit.SECONDS)).as("the first run ended").isTrue();
+        return new HeldBeforeItStarted(subscribed, resumed);
+    }
+
+    private static void assertIsTheCancelOfAHeldSubscription(String description, String subscriptionId, Throwable thrown) {
+        assertThat(thrown).as(description).isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .hasMessageStartingWith("Subscription \"" + subscriptionId + "\" was cancelled while it was held paused, before it started.")
+                .cause().isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageStartingWith("Subscription \"" + subscriptionId + "\" was cancelled while it was held paused, before it started.")
+                .cause().isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
+    }
+
+    // What a wait of the handle gives, the answer or what it throws, so that an assertion on it reports either
+    private static Object answerOf(Subscription subscription) {
+        return answerOf(subscription, Duration.ofSeconds(1));
+    }
+
+    private static Object answerOf(Subscription subscription, Duration wait) {
+        try {
+            return subscription.waitUntilStarted(wait);
+        } catch (RuntimeException e) {
+            return e;
+        }
+    }
+
     // A read of the present whose cursor blocks in tryNext() until it is closed, for far longer than any wait of the test
     private final class BlockingRead {
         final CountDownLatch entered = new CountDownLatch(1);
@@ -840,6 +1075,32 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
                 return null;
             }).when(mock).close();
             return mock;
+        }
+    }
+
+    // Holds the thread that reads the first change stream right after the read returned, so a test can act before that
+    // thread reports that the subscription started. Counts down ended when that thread closes its cursor the second time,
+    // which it does last when it stops, after a pause closed it first
+    private static final class HoldsTheFirstReply {
+        final CountDownLatch replied = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        final CountDownLatch ended = new CountDownLatch(1);
+        private final AtomicBoolean first = new AtomicBoolean(true);
+        private final AtomicInteger closes = new AtomicInteger();
+        private volatile Object heldCursor;
+
+        void holdAfterTheRead(Object cursor) {
+            if (first.getAndSet(false)) {
+                heldCursor = cursor;
+                replied.countDown();
+                awaitUnlessInterrupted(release, Duration.ofSeconds(20));
+            }
+        }
+
+        void closed(Object cursor) {
+            if (cursor == heldCursor && closes.incrementAndGet() == 2) {
+                ended.countDown();
+            }
         }
     }
 
@@ -887,9 +1148,24 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
      * an answer. Every other command gets its real reply.
      */
     private MongoTemplate templateThatSendsNoOperationTime() {
+        return templateThatSendsNoOperationTime(false);
+    }
+
+    /**
+     * As {@link #templateThatSendsNoOperationTime()}, and the question whether MongoDB is a mongos fails, so a run at a
+     * position of the past counts as started only once the first reply of its change stream came.
+     */
+    private MongoTemplate templateThatSendsNoOperationTimeAndCannotSayWhetherItIsAMongos() {
+        return templateThatSendsNoOperationTime(true);
+    }
+
+    private MongoTemplate templateThatSendsNoOperationTime(boolean cannotSayWhetherItIsAMongos) {
         return new MongoTemplate(mongoClient, requireNonNull(mongoTemplate.getDb().getName())) {
             @Override
             public Document executeCommand(Document command) {
+                if (cannotSayWhetherItIsAMongos && MongoCommons.SERVER_CLOCK_COMMAND.equals(command)) {
+                    throw new MongoTimeoutException("MongoDB cannot be reached");
+                }
                 if (MongoCommons.CURRENT_OPERATION_TIME_COMMAND.equals(command)) {
                     repliesWithoutOperationTime.incrementAndGet();
                     return new Document("ok", 1.0);
@@ -939,8 +1215,21 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
             if (historyLost.compareAndSet(true, false)) {
                 throw historyLostError();
             }
-            return real.tryNext();
+            ChangeStreamDocument<Document> read = real.tryNext();
+            HoldsTheFirstReply holding = holdsTheFirstReply.get();
+            if (holding != null) {
+                holding.holdAfterTheRead(invocation.getMock());
+            }
+            return read;
         }).when(cursor).tryNext();
+        doAnswer(invocation -> {
+            real.close();
+            HoldsTheFirstReply holding = holdsTheFirstReply.get();
+            if (holding != null) {
+                holding.closed(invocation.getMock());
+            }
+            return null;
+        }).when(cursor).close();
         return cursor;
     }
 

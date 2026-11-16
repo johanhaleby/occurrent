@@ -18,10 +18,16 @@ package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoException;
+import com.mongodb.client.ChangeStreamIterable;
+import com.mongodb.client.MongoChangeStreamCursor;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.bson.BsonTimestamp;
+import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -40,14 +46,24 @@ import org.occurrent.testsupport.mongodb.TwoShardMongoCluster;
 
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.mockito.AdditionalAnswers.delegatesTo;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 
 /**
  * Starts subscriptions through a mongos, which reports a start position whose history is gone with the first reply of
@@ -69,6 +85,8 @@ class SpringMongoSubscriptionModelThroughMongosTest {
     private MongoTemplate mongoTemplate;
     private ExecutorService executor;
     private SpringMongoSubscriptionModel subscriptionModel;
+    // Holds the first read of the next change stream the model reads, when it is set
+    private final AtomicReference<HoldsTheNextReply> holdsTheNextReply = new AtomicReference<>();
 
     @BeforeAll
     static void start_cluster() {
@@ -90,12 +108,16 @@ class SpringMongoSubscriptionModelThroughMongosTest {
         mongoTemplate = new MongoTemplate(mongoClient, databaseName);
         mongoTemplate.getDb().createCollection("events");
         executor = Executors.newCachedThreadPool();
-        subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate,
+        subscriptionModel = new SpringMongoSubscriptionModel(templateWhoseNextReplyCanBeHeld(),
                 SpringMongoSubscriptionModelConfig.withConfig("events", TimeRepresentation.RFC_3339_STRING).executor(executor).restartSubscriptionsOnChangeStreamHistoryLost(false).maxAwaitTime(MAX_AWAIT_TIME));
     }
 
     @AfterEach
     void shutdown() {
+        HoldsTheNextReply held = holdsTheNextReply.get();
+        if (held != null) {
+            held.release.countDown();
+        }
         subscriptionModel.shutdown();
         executor.shutdownNow();
         mongoClient.close();
@@ -183,6 +205,54 @@ class SpringMongoSubscriptionModelThroughMongosTest {
         assertIsTheRefusalOfAHistoryLostFor(subscriptionId, thrownBySubscribed);
     }
 
+    @Test
+    void a_start_of_a_model_stopped_when_a_subscription_at_a_dynamic_now_was_made_throws_the_refusal_when_that_present_has_left_the_oplog() {
+        // Given a subscription at a dynamic position that resolves to the present, made while the model is stopped, and an oplog that then forgets that present
+        subscriptionModel.stop();
+        String subscriptionId = UUID.randomUUID().toString();
+        Subscription subscription = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.now()), __ -> {
+        });
+        MongoOperationTimeCheckpoint presentAfterSubscribe = (MongoOperationTimeCheckpoint) requireNonNull(subscriptionModel.globalCheckpoint());
+        dropHistoryFrom(presentAfterSubscribe.operationTime);
+
+        // When
+        Throwable thrownByStart = catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(60), () -> subscriptionModel.start(true)));
+        Throwable thrownByWait = catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(60), () -> subscription.waitUntilStarted(Duration.ofSeconds(60))));
+
+        // Then
+        assertIsTheRefusalOfAHistoryLostFor(subscriptionId, thrownByStart);
+        assertIsTheRefusalOfAHistoryLostFor(subscriptionId, thrownByWait);
+    }
+
+    @Test
+    void a_resume_of_a_subscription_at_a_dynamic_now_paused_before_its_first_reply_does_not_start_before_that_reply_and_then_throws_the_refusal_when_that_present_has_left_the_oplog() throws InterruptedException {
+        // Given a subscription at a dynamic position that resolves to the present, started and paused before its change stream's first reply, and an oplog that then forgets that present
+        String subscriptionId = UUID.randomUUID().toString();
+        Subscription subscription = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> StartAt.now()), __ -> {
+        });
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        subscriptionModel.pauseSubscription(subscriptionId);
+        MongoOperationTimeCheckpoint presentAfterPause = (MongoOperationTimeCheckpoint) requireNonNull(subscriptionModel.globalCheckpoint());
+        dropHistoryFrom(presentAfterPause.operationTime);
+
+        // And the first reply of the change stream the resume opens is held
+        HoldsTheNextReply firstReply = new HoldsTheNextReply();
+        holdsTheNextReply.set(firstReply);
+        Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+        assertThat(firstReply.asked.await(60, TimeUnit.SECONDS)).as("the first reply of the resumed change stream was asked for").isTrue();
+
+        // When
+        boolean startedWhileTheFirstReplyWasHeld = resumed.waitUntilStarted(Duration.ofMillis(500));
+        firstReply.release.countDown();
+        Throwable thrownByResumed = catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(60), () -> resumed.waitUntilStarted(Duration.ofSeconds(60))));
+        Throwable thrownBySubscribed = catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(60), () -> subscription.waitUntilStarted(Duration.ofSeconds(60))));
+
+        // Then
+        assertThat(startedWhileTheFirstReplyWasHeld).as("started while the first reply was held").isFalse();
+        assertIsTheRefusalOfAHistoryLostFor(subscriptionId, thrownByResumed);
+        assertIsTheRefusalOfAHistoryLostFor(subscriptionId, thrownBySubscribed);
+    }
+
     private static void assertIsTheRefusalOfAHistoryLostFor(String subscriptionId, Throwable thrown) {
         assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
                 .hasMessageStartingWith("There was not enough oplog to resume subscription \"" + subscriptionId + "\"")
@@ -209,6 +279,60 @@ class SpringMongoSubscriptionModelThroughMongosTest {
         assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId);
         assertThat(subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
         }).waitUntilStarted(Duration.ofSeconds(10))).as("the id is free to subscribe with again").isTrue();
+    }
+
+    // The change streams the model opens with a pipeline are the real ones, whose cursor waits before its first read while
+    // holdsTheNextReply holds the next reply
+    private MongoTemplate templateWhoseNextReplyCanBeHeld() {
+        return new MongoTemplate(mongoClient, databaseName) {
+            @Override
+            @SuppressWarnings("unchecked")
+            public MongoDatabase getDb() {
+                MongoDatabase wrapped = spy(super.getDb());
+                doAnswer(invocation -> collectionWhoseNextReplyCanBeHeld((MongoCollection<Document>) invocation.callRealMethod())).when(wrapped).getCollection(eq("events"));
+                return wrapped;
+            }
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private MongoCollection<Document> collectionWhoseNextReplyCanBeHeld(MongoCollection<Document> real) {
+        MongoCollection<Document> wrapped = spy(real);
+        doAnswer(invocation -> {
+            ChangeStreamIterable<Document> opened = spy((ChangeStreamIterable<Document>) invocation.callRealMethod());
+            doAnswer(cursorInvocation -> {
+                MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = (MongoChangeStreamCursor<ChangeStreamDocument<Document>>) cursorInvocation.callRealMethod();
+                MongoChangeStreamCursor<ChangeStreamDocument<Document>> wrappedCursor = mock(MongoChangeStreamCursor.class, delegatesTo(cursor));
+                doAnswer(readInvocation -> {
+                    HoldsTheNextReply holding = holdsTheNextReply.get();
+                    if (holding != null) {
+                        holding.holdTheRead();
+                    }
+                    return cursor.tryNext();
+                }).when(wrappedCursor).tryNext();
+                return wrappedCursor;
+            }).when(opened).cursor();
+            return opened;
+        }).when(wrapped).watch(anyList(), eq(Document.class));
+        return wrapped;
+    }
+
+    // Holds the first read that asks for a reply of a change stream, until it is released
+    private static final class HoldsTheNextReply {
+        final CountDownLatch asked = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        private final AtomicBoolean first = new AtomicBoolean(true);
+
+        void holdTheRead() {
+            if (first.getAndSet(false)) {
+                asked.countDown();
+                try {
+                    release.await(120, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
     }
 
     // Writes ten megabytes into the shard through the mongos, then a small document every hundred milliseconds, until
