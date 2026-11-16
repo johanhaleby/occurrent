@@ -121,9 +121,12 @@ instance is quarantined, it records under a quarantine id of its own, and a dele
 inputs that were acknowledged. When a replayed input completes the instance, release deletes the records under its
 quarantine id with `deleteSkippedInputs(sagaId, quarantineId)`, since a completed instance skips every input and none of
 them can be replayed. After a crash between the write that completes the instance and that delete, the records stay,
-and nothing reads or deletes them, since a completed instance has no quarantine id. The same holds for a skip's record
-after a crash between its write and the delete that follows a lost second compare-and-set. Such records take up storage
-and nothing else.
+and nothing reads or deletes them, since a completed instance has no quarantine id. Records also stay where nothing
+reads them in three other cases. The first is a skip's record after a crash between its write and the delete that
+follows a lost second compare-and-set. The second is a skip's record when the skip read the instance as still
+quarantined just before a release turned it active, see point 3. The third is every record of an instance whose delete
+`SpringMongoSagaStateStore` retried after the first attempt had removed the instance, since the retry finds no instance
+to read the quarantine id from. Such records take up storage and nothing else.
 
 ### 3. Release replays the input the instance stopped on, then the records
 
@@ -144,8 +147,11 @@ and nothing else.
    expects the version release read before it found no records left. Release reads the instance first and the records
    after it, so a skip that finishes between the two reads has changed the version, and the write loses. A skip that
    raised the skip counter before release read the instance, and writes its record after release found none, loses its
-   second compare-and-set to this write instead. It deletes its own record again, by its sequence number, and its input,
-   which was never acknowledged, is applied to the `ACTIVE` instance like any live input.
+   second compare-and-set, to this write or to another skip's. It then reads the instance again. When the instance is no
+   longer quarantined under that quarantine id, the skip deletes its own record again, by its sequence number, and its
+   input, which was never acknowledged, is applied to the `ACTIVE` instance like any live input. When the instance is
+   still quarantined, the record stays and the skip counts again. If this write turns the instance `ACTIVE` before that
+   count, the input is still applied like any live input, and its record stays where nothing reads it.
 
 Release applies the event it read back by that event's stream id and version, with the same budget, failure record and
 stream marks as any other input. A record's CloudEvent key is used only to find the event. Every event the MongoDB event
