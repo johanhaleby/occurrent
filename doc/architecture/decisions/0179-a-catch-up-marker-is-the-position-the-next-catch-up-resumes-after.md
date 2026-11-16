@@ -76,7 +76,8 @@ All of this holds for one filter and one projection per subscription id. The mar
 subscribe that reuses an id with another filter or another projection resumes after a head that the old one read,
 and skips the events at or below it that only the new filter matches. 0.34.0 skipped the whole replay in that case, so
 this is no regression, and the migration guide says to use a new subscription id when the filter or the projection
-changes.
+changes. [#1553](https://github.com/johanhaleby/occurrent/issues/1553) is about storing a fingerprint of the filter and
+the projection with the marker, so a start with a changed one replays from the beginning.
 
 The three steps in the context no longer lose events. A late write after a cancel's delete restores an H that the
 cancelled subscription's own replay had read up to, so the next subscribe resumes after it instead of replaying from
@@ -113,10 +114,20 @@ the broker would deliver them again.
 ### Markers that 0.34.0 stored
 
 A 0.34.0 marker holds the head read at mark time, which is at or above that start's H, and every event after its live
-registration reached the broker. So it is a valid resume position, and a 0.35.0 start resumes after it. That replays
-more than 0.34.0 did, since 0.34.0 skipped the replay. Stored markers need no migration, and the rolling upgrade has no
-precondition on either stack. A 0.34.0 node that reads a marker a 0.35.0 node wrote skips its replay, as 0.34.0 always
-did.
+registration reached the broker. So it is a valid resume position, and a 0.35.0 start resumes after it. Stored markers
+need no migration, and the rolling upgrade has no precondition on either stack. A 0.34.0 node that reads a marker a
+0.35.0 node wrote skips its replay, as 0.34.0 always did.
+
+The marker was written by the first catch-up of the id, since a 0.34.0 start that found it skipped its replay and
+never wrote it again. So the first 0.35.0 start replays every event written since the id first caught up, which for
+an id that has run for long is most of the history. After that, each restart replays the events written since the
+previous start, the ones handled live while it ran included, since the marker holds the head read at that start.
+
+A `@Projection` or `@Saga` with `source = PUSH` waits for its catch-up at startup unless it sets
+`startupMode = BACKGROUND`, and the marker is stored only once the replay is done. A startup probe that restarts the
+application during a replay that long keeps the marker from being written, so the next start replays the same events
+again. The migration guide says to set `startupMode = BACKGROUND` for that. Storing the marker during the replay would
+shorten the replay after such a restart, and is not part of this decision.
 
 ### Cancel
 
