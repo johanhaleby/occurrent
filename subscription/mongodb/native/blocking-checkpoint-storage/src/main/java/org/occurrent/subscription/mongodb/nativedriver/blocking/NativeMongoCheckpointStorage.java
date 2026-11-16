@@ -17,6 +17,7 @@
 package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
 import com.mongodb.ReadConcern;
+import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
@@ -33,6 +34,7 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CatchupMarkerStorage;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.internal.CatchupMarkerForgetWrites;
 import org.occurrent.subscription.mongodb.internal.CatchupMarkerGenerationReads;
 
 import java.time.Duration;
@@ -63,21 +65,24 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.*;
  * isn't a replica set member refuses {@link ReadConcern#LINEARIZABLE}, and this storage then reads the generation
  * with {@link ReadConcern#MAJORITY} for the rest of its life.
  * <p>
- * The fence needs a write that a majority acknowledged never to roll back. MongoDB guarantees that only with
- * {@code writeConcernMajorityJournalDefault} set to {@code true} in the replica set configuration, which is its
- * default. With the setting at {@code false} an acknowledged forget can roll back, and a marker that a catch-up started
- * before the rollback saves can then read as present after a later forget.
+ * Both writes of a forget ask for {@code j: true}, so a majority has them in its on-disk journal before acknowledging
+ * them, whatever {@code writeConcernMajorityJournalDefault} says, and an acknowledged forget never rolls back. A server
+ * that runs without journaling refuses {@code j: true}, and this storage then sends the forget without it for the rest
+ * of its life and logs a warning the first time. That server can't journal a forget, so a crash loses an acknowledged
+ * one, and the guarantee above holds only on a server with journaling.
  */
 @NullMarked
 public class NativeMongoCheckpointStorage implements CatchupMarkerStorage {
 
     private final MongoCollection<Document> checkpointCollection;
-    private final MongoCollection<Document> catchupMarkerForgets;
+    private final MongoCollection<Document> catchupMarkerJournaledForgets;
+    private final MongoCollection<Document> catchupMarkerForgetsWithoutJournal;
     private final MongoCollection<Document> catchupMarkerMajorityReads;
     private final MongoCollection<Document> catchupMarkerLinearizableReads;
     private final RetryStrategy retryStrategy;
 
     private final CatchupMarkerGenerationReads catchupMarkerGenerationReads = new CatchupMarkerGenerationReads();
+    private final CatchupMarkerForgetWrites catchupMarkerForgetWrites = new CatchupMarkerForgetWrites();
 
     private volatile boolean shutdown = false;
 
@@ -122,10 +127,15 @@ public class NativeMongoCheckpointStorage implements CatchupMarkerStorage {
         requireNonNull(checkpointCollection, "checkpointCollection cannot be null");
         requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.checkpointCollection = checkpointCollection;
-        this.catchupMarkerForgets = withCatchupMarkerTimeout(checkpointCollection.withWriteConcern(CATCHUP_MARKER_FORGET_WRITE_CONCERN), CATCHUP_MARKER_FORGET_WRITE_TIMEOUT);
+        this.catchupMarkerJournaledForgets = withCatchupMarkerTimeout(checkpointCollection.withWriteConcern(CATCHUP_MARKER_FORGET_WRITE_CONCERN), CATCHUP_MARKER_FORGET_WRITE_TIMEOUT);
+        this.catchupMarkerForgetsWithoutJournal = withCatchupMarkerTimeout(checkpointCollection.withWriteConcern(CATCHUP_MARKER_FORGET_WRITE_CONCERN_WITHOUT_JOURNAL), CATCHUP_MARKER_FORGET_WRITE_TIMEOUT);
         this.catchupMarkerMajorityReads = withCatchupMarkerTimeout(checkpointCollection.withReadPreference(primary()).withReadConcern(ReadConcern.MAJORITY), CATCHUP_MARKER_READ_MAX_TIME);
         this.catchupMarkerLinearizableReads = withCatchupMarkerTimeout(checkpointCollection.withReadPreference(primary()).withReadConcern(ReadConcern.LINEARIZABLE), CATCHUP_MARKER_READ_MAX_TIME);
         this.retryStrategy = retryStrategy;
+    }
+
+    private MongoCollection<Document> catchupMarkerForgets(WriteConcern writeConcern) {
+        return writeConcern == CATCHUP_MARKER_FORGET_WRITE_CONCERN ? catchupMarkerJournaledForgets : catchupMarkerForgetsWithoutJournal;
     }
 
     private static MongoCollection<Document> withCatchupMarkerTimeout(MongoCollection<Document> collection, Duration timeout) {
@@ -228,9 +238,10 @@ public class NativeMongoCheckpointStorage implements CatchupMarkerStorage {
     public void forgetCatchupMarker(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         // Retried apart, so a failed delete never raises the generation again, and a failed raise never sends the delete
-        Runnable raiseGeneration = () -> catchupMarkerForgets.updateOne(catchupMarkerGenerationFilter(subscriptionId), raiseCatchupMarkerGeneration(), new UpdateOptions().upsert(true));
+        Runnable raiseGeneration = () -> catchupMarkerForgetWrites.write(writeConcern -> catchupMarkerForgets(writeConcern)
+                .updateOne(catchupMarkerGenerationFilter(subscriptionId), raiseCatchupMarkerGeneration(), new UpdateOptions().upsert(true)));
         executeWithRetry(raiseGeneration, __ -> !shutdown, retryStrategy).run();
-        Runnable delete = () -> catchupMarkerForgets.deleteOne(eq(ID, subscriptionId));
+        Runnable delete = () -> catchupMarkerForgetWrites.write(writeConcern -> catchupMarkerForgets(writeConcern).deleteOne(eq(ID, subscriptionId)));
         executeWithRetry(delete, __ -> !shutdown, retryStrategy).run();
     }
 

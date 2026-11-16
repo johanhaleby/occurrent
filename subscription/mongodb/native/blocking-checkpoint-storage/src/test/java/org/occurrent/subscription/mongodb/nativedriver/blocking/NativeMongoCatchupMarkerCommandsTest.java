@@ -23,6 +23,7 @@ import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
+import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
 import org.bson.BsonInt64;
@@ -115,7 +116,7 @@ class NativeMongoCatchupMarkerCommandsTest {
     }
 
     @Test
-    void forget_raises_the_generation_then_deletes_the_marker_both_at_majority_with_a_write_timeout() {
+    void forget_raises_the_generation_then_deletes_the_marker_both_at_majority_with_journal_and_a_write_timeout() {
         // When
         storage.forgetCatchupMarker(subscriptionId);
 
@@ -124,12 +125,12 @@ class NativeMongoCatchupMarkerCommandsTest {
         assertThat(writes).extracting(Command::name).as("%s", writes).containsExactly("update", "delete");
         Command raise = writes.get(0);
         Command delete = writes.get(1);
-        BsonDocument majorityWithTimeout = new BsonDocument("w", new BsonString("majority")).append("wtimeout", new BsonInt64(TEN_SECONDS_IN_MILLIS));
+        BsonDocument majorityWithJournalAndTimeout = new BsonDocument("w", new BsonString("majority")).append("j", BsonBoolean.TRUE).append("wtimeout", new BsonInt64(TEN_SECONDS_IN_MILLIS));
         assertAll(
                 () -> assertThat(raise.document().getArray("updates").get(0).asDocument().getDocument("q").get("_id")).as("%s", raise).isEqualTo(generationId()),
-                () -> assertThat(normalized(raise.document().getDocument("writeConcern", new BsonDocument()))).as("%s", raise).isEqualTo(majorityWithTimeout),
+                () -> assertThat(normalized(raise.document().getDocument("writeConcern", new BsonDocument()))).as("%s", raise).isEqualTo(majorityWithJournalAndTimeout),
                 () -> assertThat(delete.document().getArray("deletes").get(0).asDocument().getDocument("q").get("_id")).as("%s", delete).isEqualTo(new BsonString(subscriptionId)),
-                () -> assertThat(normalized(delete.document().getDocument("writeConcern", new BsonDocument()))).as("%s", delete).isEqualTo(majorityWithTimeout)
+                () -> assertThat(normalized(delete.document().getDocument("writeConcern", new BsonDocument()))).as("%s", delete).isEqualTo(majorityWithJournalAndTimeout)
         );
     }
 

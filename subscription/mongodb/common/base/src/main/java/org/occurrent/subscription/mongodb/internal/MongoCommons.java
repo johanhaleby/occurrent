@@ -56,6 +56,7 @@ import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import static com.mongodb.client.model.Filters.eq;
@@ -511,9 +512,18 @@ public class MongoCommons {
     public static final Duration CATCHUP_MARKER_READ_MAX_TIME = Duration.ofSeconds(10);
 
     /**
-     * The write concern of both writes of a forget, whatever write concern the application set on its collection.
+     * {@link #CATCHUP_MARKER_FORGET_WRITE_CONCERN} without {@code j}, for a server that runs without journaling and
+     * refuses {@code j: true}, such as a standalone server started with {@code --nojournal}. Such a server has no
+     * journal to wait for.
      */
-    public static final WriteConcern CATCHUP_MARKER_FORGET_WRITE_CONCERN = WriteConcern.MAJORITY.withWTimeout(CATCHUP_MARKER_FORGET_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    public static final WriteConcern CATCHUP_MARKER_FORGET_WRITE_CONCERN_WITHOUT_JOURNAL = WriteConcern.MAJORITY.withWTimeout(CATCHUP_MARKER_FORGET_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+    /**
+     * The write concern of both writes of a forget, whatever write concern the application set on its collection. With
+     * {@code j: true} a majority has the write in its on-disk journal before it acknowledges, whatever
+     * {@code writeConcernMajorityJournalDefault} says, so an acknowledged forget never rolls back.
+     */
+    public static final WriteConcern CATCHUP_MARKER_FORGET_WRITE_CONCERN = CATCHUP_MARKER_FORGET_WRITE_CONCERN_WITHOUT_JOURNAL.withJournal(true);
 
     /**
      * The operation timeout a forget write or a find of a marker read needs on a collection whose timeout is
@@ -532,6 +542,17 @@ public class MongoCommons {
      * ({@code NotAReplicaSet}).
      */
     public static final int LINEARIZABLE_READ_NOT_SUPPORTED_ERROR_CODE = 123;
+
+    /**
+     * The error code a server running without journaling refuses a {@code j: true} write with ({@code BadValue}). Other
+     * refusals share the code, so {@link #isJournalNotSupported(Throwable)} also matches the message.
+     */
+    public static final int JOURNAL_NOT_SUPPORTED_ERROR_CODE = 2;
+
+    /**
+     * The text of the refusal of {@link #JOURNAL_NOT_SUPPORTED_ERROR_CODE} (checked on 4.4.5).
+     */
+    public static final String JOURNAL_NOT_SUPPORTED_ERROR_MESSAGE = "cannot use 'j' option when a host does not have journaling enabled";
 
     /**
      * Builds the document a catch-up marker is stored as, the checkpoint document of
@@ -584,9 +605,21 @@ public class MongoCommons {
      * Whether {@code throwable} is a server that is not a replica set member refusing a {@code LINEARIZABLE} read.
      */
     public static boolean isLinearizableReadNotSupported(Throwable throwable) {
+        return hasServerError(throwable, serverException -> serverException.getCode() == LINEARIZABLE_READ_NOT_SUPPORTED_ERROR_CODE);
+    }
+
+    /**
+     * Whether {@code throwable} is a server running without journaling refusing a {@code j: true} write.
+     */
+    public static boolean isJournalNotSupported(Throwable throwable) {
+        return hasServerError(throwable, serverException -> serverException.getCode() == JOURNAL_NOT_SUPPORTED_ERROR_CODE
+                && serverException.getMessage() != null && serverException.getMessage().contains(JOURNAL_NOT_SUPPORTED_ERROR_MESSAGE));
+    }
+
+    private static boolean hasServerError(Throwable throwable, Predicate<MongoServerException> matches) {
         // Spring translates the driver's exception into one of its own and keeps the driver's as the cause
         for (Throwable cause = throwable; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
-            if (cause instanceof MongoServerException serverException && serverException.getCode() == LINEARIZABLE_READ_NOT_SUPPORTED_ERROR_CODE) {
+            if (cause instanceof MongoServerException serverException && matches.test(serverException)) {
                 return true;
             }
         }

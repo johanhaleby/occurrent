@@ -17,6 +17,7 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.mongodb.ReadConcern;
+import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.ReturnDocument;
@@ -32,6 +33,7 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CatchupMarkerStorage;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.internal.CatchupMarkerForgetWrites;
 import org.occurrent.subscription.mongodb.internal.CatchupMarkerGenerationReads;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -65,10 +67,11 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * A server that isn't a replica set member refuses {@link ReadConcern#LINEARIZABLE}, and this storage then reads the
  * generation with {@link ReadConcern#MAJORITY} for the rest of its life.
  * <p>
- * The fence needs a write that a majority acknowledged never to roll back. MongoDB guarantees that only with
- * {@code writeConcernMajorityJournalDefault} set to {@code true} in the replica set configuration, which is its
- * default. With the setting at {@code false} an acknowledged forget can roll back, and a marker that a catch-up started
- * before the rollback saves can then read as present after a later forget.
+ * Both writes of a forget ask for {@code j: true}, so a majority has them in its on-disk journal before acknowledging
+ * them, whatever {@code writeConcernMajorityJournalDefault} says, and an acknowledged forget never rolls back. A server
+ * that runs without journaling refuses {@code j: true}, and this storage then sends the forget without it for the rest
+ * of its life and logs a warning the first time. That server can't journal a forget, so a crash loses an acknowledged
+ * one, and the guarantee above holds only on a server with journaling.
  */
 @NullMarked
 public class SpringMongoCheckpointStorage implements CatchupMarkerStorage {
@@ -78,6 +81,7 @@ public class SpringMongoCheckpointStorage implements CatchupMarkerStorage {
     private final RetryStrategy retryStrategy;
 
     private final CatchupMarkerGenerationReads catchupMarkerGenerationReads = new CatchupMarkerGenerationReads();
+    private final CatchupMarkerForgetWrites catchupMarkerForgetWrites = new CatchupMarkerForgetWrites();
 
     private volatile boolean shutdown = false;
 
@@ -202,12 +206,12 @@ public class SpringMongoCheckpointStorage implements CatchupMarkerStorage {
     public void forgetCatchupMarker(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         // Retried apart, so a failed delete never raises the generation again, and a failed raise never sends the delete
-        Runnable raiseGeneration = () -> mongoOperations.execute(checkpointCollection, collection ->
-                catchupMarkerForgets(collection)
-                        .updateOne(MongoCommons.catchupMarkerGenerationFilter(subscriptionId), MongoCommons.raiseCatchupMarkerGeneration(), new UpdateOptions().upsert(true)));
+        Runnable raiseGeneration = () -> catchupMarkerForgetWrites.write(writeConcern -> mongoOperations.execute(checkpointCollection, collection ->
+                catchupMarkerForgets(collection, writeConcern)
+                        .updateOne(MongoCommons.catchupMarkerGenerationFilter(subscriptionId), MongoCommons.raiseCatchupMarkerGeneration(), new UpdateOptions().upsert(true))));
         executeWithRetry(raiseGeneration, __ -> !shutdown, retryStrategy).run();
-        Runnable delete = () -> mongoOperations.execute(checkpointCollection, collection ->
-                catchupMarkerForgets(collection).deleteOne(eq(ID, subscriptionId)));
+        Runnable delete = () -> catchupMarkerForgetWrites.write(writeConcern -> mongoOperations.execute(checkpointCollection, collection ->
+                catchupMarkerForgets(collection, writeConcern).deleteOne(eq(ID, subscriptionId))));
         executeWithRetry(delete, __ -> !shutdown, retryStrategy).run();
     }
 
@@ -215,8 +219,8 @@ public class SpringMongoCheckpointStorage implements CatchupMarkerStorage {
         return withCatchupMarkerTimeout(collection.withReadPreference(primary()).withReadConcern(ReadConcern.MAJORITY), MongoCommons.CATCHUP_MARKER_READ_MAX_TIME);
     }
 
-    private static MongoCollection<Document> catchupMarkerForgets(MongoCollection<Document> collection) {
-        return withCatchupMarkerTimeout(collection.withWriteConcern(MongoCommons.CATCHUP_MARKER_FORGET_WRITE_CONCERN), MongoCommons.CATCHUP_MARKER_FORGET_WRITE_TIMEOUT);
+    private static MongoCollection<Document> catchupMarkerForgets(MongoCollection<Document> collection, WriteConcern writeConcern) {
+        return withCatchupMarkerTimeout(collection.withWriteConcern(writeConcern), MongoCommons.CATCHUP_MARKER_FORGET_WRITE_TIMEOUT);
     }
 
     private static MongoCollection<Document> withCatchupMarkerTimeout(MongoCollection<Document> collection, Duration timeout) {
