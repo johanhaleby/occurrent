@@ -562,8 +562,8 @@ A 0.34.0 node throws on every event addressed to an instance that 0.35.0 stored 
 so no input is lost. On a live subscription it retries the event in place and keeps the saga's competing-consumer
 lease while it does, so the saga's subscription stalls. The stall holds up every later event of that saga
 subscription, not only the events of the quarantined instance. It ends when a 0.35.0 node takes the lease, or when a
-0.35.0 node deletes the instance. A release doesn't end it, because a released instance is stored as `ACTIVE_MARKED`,
-which 0.34.0 can't decode either. A node whose catch-up replay failed on the event also has to restart before its
+0.35.0 node deletes the instance. A release doesn't end it, because a released instance is stored as `ACTIVE_MARKED`
+when it holds stream marks, which 0.34.0 can't decode either. A node whose catch-up replay failed on the event also has to restart before its
 subscription goes live. After a downgrade no 0.35.0 node is left to take the lease. A stall on a
 `QUARANTINED_RECORDING` instance then lasts until the instance is deleted. A stall on an `ACTIVE_MARKED` instance also
 ends once the `updateMany` in

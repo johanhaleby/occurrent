@@ -56,7 +56,8 @@ other sections compile fine and behave differently, so read them first.
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
   A saga keeps the highest applied version per stream and event type, and applies a late version instead of skipping
   it. Saga instances store a new `streamMarks` field, and an `ACTIVE` instance that holds it is stored as
-  `ACTIVE_MARKED`, which 0.34.0 can't read. Roll every saga node in one rollout, and run one update before going back
+  `ACTIVE_MARKED`, which 0.34.0 can't read and a query of your own for `status: "ACTIVE"` doesn't find. Roll every
+  saga node in one rollout, and run one update before going back
   to 0.34.0. Breaks the build only for a record pattern over `SagaEnvelope` or `SagaRunnerConfig`.
 - [A saga's quarantine budget runs per failing event](#a-sagas-quarantine-budget-runs-per-failing-event). Each failing
   event keeps its own clock. Compiles unchanged.
@@ -686,7 +687,9 @@ the saga:
 - An Occurrent subscription, or a Kafka or RabbitMQ source with `REDELIVER`, delivers the event again and again, so the
   saga's subscription, or the partition or queue, stalls on it, the same way it stalls on a quarantined instance, as
   [Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it) describes.
-  The stall ends once a 0.35.0 node gets the event, so finishing the rollout ends it.
+  With a competing-consumer strategy, or a partition or queue that a 0.35.0 consumer takes over, the stall ends once a
+  0.35.0 node gets the event. Without competing consumers every node gets every event, so the 0.34.0 node's own
+  subscription stalls until that node is upgraded. Finishing the rollout ends it either way.
 - A Kafka or RabbitMQ source with `PARK` parks the event and acknowledges it, as the previous paragraph says. It parks
   every event it gets for such an instance, which is every instance a 0.35.0 node has handled an event with a stream
   version for. In a Kafka rollout each restart rebalances the partitions, so a partition a 0.35.0 node consumed can
@@ -1034,7 +1037,8 @@ the nodes run 0.35.0:
    quarantine id with `SagaStateStore.delete(sagaId)`, from a process that runs no `SagaRunner`. With no `SagaRunner`
    running, nothing releases an instance or delivers it an input, so each one is still quarantined when you delete it.
 7. Set every `ACTIVE_MARKED` instance back to `ACTIVE` with the `updateMany` in
-   [the stored saga state for late versions](#stored-saga-state-1). A released instance is one of them. That section
+   [the stored saga state for late versions](#stored-saga-state-1). A released instance is one of them when it holds
+   stream marks. That section
    first lists the instances that hold a version 0.34.0 may never apply, and says what else 0.34.0 loses.
 8. Start the 0.34.0 nodes.
 

@@ -528,8 +528,9 @@ The upgrade guide has the procedure for operators, in
 - A 0.34.0 node, in a mixed cluster or after a downgrade, stalls the subscription of a saga with an instance that
   0.35.0 quarantined, for every later event of that subscription. It loses no input. In a mixed cluster the stall ends
   once a 0.35.0 node holds the saga's competing-consumer lease, or once a 0.35.0 node deletes the instance. A release
-  doesn't end it, since a released instance is stored as `ACTIVE_MARKED` (ADR 154). Without competing consumers it
-  ends when the 0.34.0 node is upgraded. After a downgrade only a delete ends it.
+  doesn't end it, since a released instance is stored as `ACTIVE_MARKED` when it holds stream marks (ADR 154).
+  Without competing consumers it ends when the 0.34.0 node is upgraded. After a downgrade only a delete ends it, or,
+  for a released instance, the `updateMany` of ADR 154 that sets `ACTIVE_MARKED` back to `ACTIVE`.
   A downgrade that first turns quarantine off on every node and releases those instances, then stops every 0.35.0
   node, deletes the ones that stay quarantined and sets `ACTIVE_MARKED` back to `ACTIVE`, stalls nothing.
 - An application that never configured quarantine starts quarantining on upgrade. One that set
