@@ -140,6 +140,12 @@ to read the quarantine id from. The fourth is K's record when a release that los
 after the winning release had replayed K, deleted its record and turned the instance active. Such records take up
 storage and nothing else.
 
+`SpringMongoSagaStateStore` reads the instance and its records from the primary, whatever read preference the
+`MongoOperations` it is given has. A release turns the instance `ACTIVE` once its read of the records finds none, and
+the compare-and-set of that write checks only the version of the instance's document. A read from a secondary that lags can find no
+record while one is written, so the release would turn the instance `ACTIVE` with an input that was acknowledged when
+it was skipped and is never applied.
+
 ### 3. Release replays the input the instance stopped on, then the records
 
 `SagaSubscription.release(String sagaId)` releases one instance. K is the input the instance was quarantined on.
@@ -244,6 +250,17 @@ setup, and without one every node does. The query is `findReleasingSagaIds` on `
 last paragraph of this point says how a poll pages through it. The poller is what
 retries the failed input until it succeeds or its budget runs out, and it also resumes a release that a crash
 interrupted.
+
+The poller goes on with an instance only when its `updatedAt` is at least `timerPollInterval` old. A release writes
+the instance for every input it applies and for every input that fails, and a skip doesn't change `updatedAt`, so an
+instance whose release is still running was written within that time, and the poller skips it, whichever node runs
+the release. Without that, a release that runs longer than one poll interval has the poller replay the same
+records beside it, and both dispatch each record's commands. The poller starts each poll a `timerPollInterval` after
+the last one ended, so a release it went on with itself is old enough by the next poll. A release that takes longer
+than `timerPollInterval` over one input, or a poller whose clock is that much ahead of the clock of the node that
+wrote, can still replay the input that release is on, and its commands are dispatched twice, which delivery at least
+once allows. A claim stored on the instance would rule that out, at the cost of a write to take and give back for
+every release and a way to take over the claim of a node that crashed.
 
 The poller polls only while the `timersEnabled` that `SagaRunner.run` takes returns `true`, so that gate holds back the
 continuation of a release as well as the saga's timers. On a subscription model that reports whether it runs, the

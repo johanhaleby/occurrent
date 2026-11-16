@@ -763,8 +763,9 @@ public class OccurrentProperties {
 
         /**
          * How long one event may keep failing before its saga instance can be quarantined on it. Defaults to five
-         * minutes, matching {@code SagaRunnerConfig.defaults()}. Leave it out, or leave it blank, for the default, and
-         * set {@code occurrent.saga.quarantine-enabled=false} to turn quarantine off. A quarantined instance records the
+         * minutes, matching {@code SagaRunnerConfig.defaults()}. Leave it out for the default. A blank value stops the
+         * application from starting, since it kept quarantine off in 0.34.0. Set
+         * {@code occurrent.saga.quarantine-enabled=false} to turn quarantine off. A quarantined instance records the
          * inputs it skips, and {@code SagaSubscription.release(sagaId)} brings it back by replaying them.
          * <p>
          * Each failing event keeps its own clock, so a second event that starts failing is measured from its own first
@@ -777,13 +778,13 @@ public class OccurrentProperties {
          * lose it. It is refused on every redelivery, and this only sets how often that is logged.
          * <p>
          * Zero and negative values stop the application from starting when it has at least one {@code @Saga} and
-         * quarantine is enabled,
-         * because a reader can take zero to mean "never" or "immediately". Even when quarantine is on, it is switched
-         * off on its own,
-         * with a warning at startup, unless the subscription model guarantees that it holds every event it delivers,
-         * because a quarantined instance skips everything addressed to it afterwards and skipping acknowledges. A
-         * model that can answer for one event but cannot make that guarantee gets no quarantine either. The event an
-         * instance stops on is checked as well, so a guarantee made wrongly is caught before that event is dropped.
+         * quarantine is enabled, because a reader can take zero to mean "never" or "immediately". Even when quarantine
+         * is on, it is switched off on its own unless the subscription model guarantees that it holds every event it
+         * delivers, because a quarantined instance skips everything addressed to it afterwards and skipping
+         * acknowledges. The startup line that says so is a {@code WARN} when you set this property and a
+         * {@code DEBUG} when it has the default. A model that can answer for one event but cannot make that guarantee
+         * gets no quarantine either. The event an instance stops on is checked as well, so a guarantee made wrongly is
+         * caught before that event is dropped.
          */
         private @Nullable Duration quarantineAfter;
 

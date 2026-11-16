@@ -798,7 +798,9 @@ means and what to do next. In Spring Boot the saga's `SagaSubscription` is the `
 
 The timer poller goes on with a release that failed on an input or was interrupted. One poll replays at most
 `timerBatchLimit` records, 100 by default, shared evenly among the releasing instances it lists, at least one each, and
-the next poll goes on where the last one stopped. A `release` call has no such bound.
+the next poll goes on where the last one stopped. A `release` call has no such bound. The poller goes on with an
+instance only once it has gone a whole `timerPollInterval` without a write, so it skips a release that is still
+running on any node, as long as that release takes less than `timerPollInterval` over each input.
 
 A timer that came due while the instance was quarantined fires after every recorded input has been replayed, because a
 saga's timers run on processing time. For a saga that uses a timer as a deadline, a replayed input from after the

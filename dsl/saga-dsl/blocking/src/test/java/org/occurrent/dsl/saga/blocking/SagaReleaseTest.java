@@ -192,6 +192,17 @@ class SagaReleaseTest {
         return event.getExtension(OccurrentCloudEventExtension.STREAM_ID) + "@" + event.getExtension(OccurrentCloudEventExtension.STREAM_VERSION);
     }
 
+    // The poller leaves a releasing instance written within the last timerPollInterval to the release that wrote it, so a
+    // poll that goes on with a release comes a poll interval after that release's last write
+    private void pollAfter(SagaRunnerConfig config) {
+        now.set(now.get().plus(config.timerPollInterval()).plusMillis(1));
+        execution.pollTimers();
+    }
+
+    private void pollAfterTheInterval() {
+        pollAfter(CONFIG);
+    }
+
     private void deliver(CloudEvent event) {
         execution.onCloudEvent(event);
     }
@@ -332,12 +343,12 @@ class SagaReleaseTest {
             failing.add("a");
             assertThat(execution.release(ORDER)).isEqualTo(ReleaseResult.STILL_RELEASING);
 
-            execution.pollTimers();
+            pollAfterTheInterval();
             boolean remindedWhileReleasing = dispatched.contains(new Remind(ORDER));
             failing.clear();
             // This poll goes on with the release, and the next fires what came due
-            execution.pollTimers();
-            execution.pollTimers();
+            pollAfterTheInterval();
+            pollAfterTheInterval();
 
             assertAll(
                     () -> assertThat(remindedWhileReleasing).isFalse(),
@@ -412,7 +423,7 @@ class SagaReleaseTest {
             assertThat(execution.release(ORDER)).isEqualTo(ReleaseResult.STILL_RELEASING);
             failing.clear();
 
-            execution.pollTimers();
+            pollAfterTheInterval();
 
             assertAll(
                     () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
@@ -548,7 +559,7 @@ class SagaReleaseTest {
             SagaEnvelope<Order> afterTheFailedRead = instance();
             List<String> recordsAfterTheFailedRead = recordedKeys();
             queries.failReadsWith(null);
-            execution.pollTimers();
+            pollAfterTheInterval();
 
             assertAll(
                     () -> assertThat(thrown).isSameAs(storeDown),
@@ -666,7 +677,7 @@ class SagaReleaseTest {
             failing.clear();
             store.findFailsFor = "o1";
 
-            execution.pollTimers();
+            pollAfterTheInterval();
 
             assertAll(
                     () -> assertThat(warnings()).anyMatch(m -> m.contains("could not go on with the release of instance 'o1'")),
@@ -684,7 +695,7 @@ class SagaReleaseTest {
             failing.clear();
             store.findRunsOutOfMemoryFor = "o1";
 
-            execution.pollTimers();
+            pollAfterTheInterval();
 
             assertAll(
                     () -> assertThat(warnings()).anyMatch(m -> m.contains("could not go on with the release of instance 'o1'")),
@@ -1498,7 +1509,7 @@ class SagaReleaseTest {
             failing.clear();
             dispatched.clear();
 
-            execution.pollTimers();
+            pollAfter(limited);
 
             assertAll(
                     () -> assertThat(itemsOf("o1")).containsExactly("poison", "a1"),
@@ -1514,12 +1525,12 @@ class SagaReleaseTest {
             releasingOnPoison("o1", "a1", "a2", "a3", "a4", "a5", "a6");
             releasingOnPoison("o2", "b1");
             failing.clear();
-            execution.pollTimers();
+            pollAfter(limited);
 
-            execution.pollTimers();
+            pollAfter(limited);
             List<String> afterTheSecondPoll = itemsOf("o1");
             boolean releasingAfterTheSecondPoll = instanceOf("o1").isReleasing();
-            execution.pollTimers();
+            pollAfter(limited);
 
             assertAll(
                     () -> assertThat(afterTheSecondPoll).containsExactly("poison", "a1", "a2", "a3", "a4", "a5"),
@@ -1537,7 +1548,7 @@ class SagaReleaseTest {
             failing.clear();
             dispatched.clear();
 
-            execution.pollTimers();
+            pollAfter(limited);
 
             assertAll(
                     () -> assertThat(itemsOf("o1")).containsExactly("poison"),
@@ -1558,7 +1569,7 @@ class SagaReleaseTest {
             failing.clear();
             store.listsEveryReleasingInstanceWhateverTheLimit = true;
 
-            execution.pollTimers();
+            pollAfter(limited);
 
             assertAll(
                     () -> assertThat(itemsOf("o1")).containsExactly("poison"),
@@ -1571,7 +1582,7 @@ class SagaReleaseTest {
             releasingOnPoison("o1", "a1", "a2", "a3");
             failing.clear();
 
-            execution.pollTimers();
+            pollAfter(limited);
 
             assertAll(
                     () -> assertThat(itemsOf("o1")).containsExactly("poison", "a1", "a2", "a3"),
@@ -1589,7 +1600,7 @@ class SagaReleaseTest {
 
             int polls = (instances + BATCH_LIMIT - 1) / BATCH_LIMIT + 1;
             for (int poll = 0; poll < polls; poll++) {
-                execution.pollTimers();
+                pollAfter(limited);
             }
 
             for (int i = 1; i <= instances; i++) {
@@ -1603,10 +1614,10 @@ class SagaReleaseTest {
                 releasingOnPoison("o" + i, "x", "y", "z");
             }
             failing.clear();
-            execution.pollTimers();
-            execution.pollTimers();
+            pollAfter(limited);
+            pollAfter(limited);
 
-            execution.pollTimers();
+            pollAfter(limited);
 
             assertAll(
                     () -> assertThat(itemsOf("o1")).containsExactly("poison", "x"),
@@ -1921,7 +1932,7 @@ class SagaReleaseTest {
             List<String> keysAfterTheCrash = recordedKeys();
             List<String> itemsAfterTheCrash = items();
 
-            execution.pollTimers();
+            pollAfterTheInterval();
 
             assertAll(
                     () -> assertThat(itemsAfterTheCrash).containsExactly("poison"),
@@ -1966,7 +1977,7 @@ class SagaReleaseTest {
                 join(skipper);
             });
 
-            execution.pollTimers();
+            pollAfterTheInterval();
 
             assertAll(
                     () -> assertThat(skipFailure.get()).isNull(),
@@ -1985,7 +1996,7 @@ class SagaReleaseTest {
             failing.clear();
             CloudEvent live = added("live");
             // The release finishes between the skip's count and its record
-            store.beforeNextRecord(execution::pollTimers);
+            store.beforeNextRecord(SagaReleaseTest.this::pollAfterTheInterval);
 
             deliver(live);
 
