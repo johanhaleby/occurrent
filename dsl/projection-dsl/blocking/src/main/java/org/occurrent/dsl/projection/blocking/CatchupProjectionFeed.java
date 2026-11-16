@@ -43,7 +43,7 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 
 /**
- * Feeds a projection with <strong>domain events</strong> and gives it a one-time <strong>catch-up</strong>,
+ * Feeds a projection with <strong>domain events</strong> and gives it a <strong>catch-up</strong> from the event store,
  * without the double encode/decode of routing domain events through the CloudEvent push feed.
  * <p>
  * The live path is conversion-free: {@link #acceptAndWait(Object)} folds a domain event straight into the view. Only the
@@ -310,7 +310,7 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
-     * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), then drain
+     * Run the catch-up: replay the projection's history from the store (decoding each event once), then drain
      * the buffered live events and go live. Call this once, after wiring the live feed, so the feed buffers the events
      * that arrive during the replay.
      * <p>
