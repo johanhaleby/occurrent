@@ -188,7 +188,8 @@ class UpgradeToOccurrent_0_35Test implements RewriteTest {
         assertThat(recipe.getRecipeList()).extracting(Recipe::getName)
                 .containsExactly("org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType",
                         "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType",
-                        "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType");
+                        "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType", "org.openrewrite.java.ChangeType",
+                        "org.occurrent.rewrite.RemoveUnusedSubscriptionAnnotationsNestedTypeImports_0_35");
     }
 
     @Test
@@ -222,6 +223,110 @@ class UpgradeToOccurrent_0_35Test implements RewriteTest {
 
                         class Foo {
                             SubscriptionAnnotations.StreamSubscriptionDefinition definition = new SubscriptionAnnotations.StreamSubscriptionDefinition("stream");
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void movesAnImportOfOnlyTheNestedSubscriptionAnnotationsHandlerParameterKindEnumToTheInternalPackage() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class SubscriptionAnnotations {
+                            public enum HandlerParameterKind {
+                                EVENT
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameterKind;
+
+                        class Foo {
+                            HandlerParameterKind kind = HandlerParameterKind.EVENT;
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
+
+                        class Foo {
+                            SubscriptionAnnotations.HandlerParameterKind kind = SubscriptionAnnotations.HandlerParameterKind.EVENT;
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void movesAnImportOfOnlyTheNestedSubscriptionAnnotationsResolvedTypeFilterRecordToTheInternalPackage() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common;
+
+                        public class SubscriptionAnnotations {
+                            public record ResolvedTypeFilter(String name) {
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.SubscriptionAnnotations.ResolvedTypeFilter;
+
+                        class Foo {
+                            ResolvedTypeFilter filter = new ResolvedTypeFilter("filter");
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
+
+                        class Foo {
+                            SubscriptionAnnotations.ResolvedTypeFilter filter = new SubscriptionAnnotations.ResolvedTypeFilter("filter");
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void keepsAnImportOfAnInternalNestedSubscriptionAnnotationsTypeThatIsUsedBySimpleName() {
+        rewriteRun(
+                spec -> spec.recipe(activate("org.occurrent.UpgradeToOccurrent_0_35")),
+                java(
+                        """
+                        package org.occurrent.springboot.common.internal;
+
+                        public class SubscriptionAnnotations {
+                            public enum HandlerParameterKind {
+                                EVENT
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.internal.SubscriptionAnnotations.HandlerParameterKind;
+
+                        class Foo {
+                            HandlerParameterKind kind = HandlerParameterKind.EVENT;
                         }
                         """
                 )

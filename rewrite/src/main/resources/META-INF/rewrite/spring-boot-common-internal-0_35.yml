@@ -60,3 +60,6 @@ recipeList:
       oldFullyQualifiedTypeName: org.occurrent.springboot.common.PolledCatchupSignals
       newFullyQualifiedTypeName: org.occurrent.springboot.common.internal.PolledCatchupSignals
       ignoreDefinition: true
+  # Runs after the ChangeType entries, which add an unused import of a nested type when they qualify an enum
+  # constant access such as HandlerParameterKind.EVENT
+  - org.occurrent.rewrite.RemoveUnusedSubscriptionAnnotationsNestedTypeImports_0_35
