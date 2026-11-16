@@ -44,6 +44,12 @@ other sections compile fine and behave differently, so read them first.
 - [A held event is withdrawn instead of delivered without the lease](#a-held-event-is-withdrawn-instead-of-delivered-without-the-lease).
   `AttemptNotMade` moves from the nested `org.occurrent.retry.internal.RetryExecution.AttemptNotMade` to
   `org.occurrent.retry.AttemptNotMade`. **Breaks the build** if you name the nested class.
+- [A `SagaStateStore` stores an encoded saga](#a-sagastatestore-stores-an-encoded-saga). `SagaStateStore` and
+  `SagaStateStoreQueries` take and return `StoredSaga` instead of `SagaEnvelope`, and `SagaStateStore` gains
+  `stateCodec()`. **Breaks the build** if you implement a `SagaStateStore`, or call one of its reads directly.
+- [The shorter `SagaEnvelope` and `SagaFailure` constructors are removed](#the-shorter-sagaenvelope-and-sagafailure-constructors-are-removed).
+  **Breaks the build** if you call the 13- or 11-argument `SagaEnvelope` constructor, or the 5-argument `SagaFailure`
+  one.
 
 ### Sagas
 
@@ -66,6 +72,12 @@ other sections compile fine and behave differently, so read them first.
 - [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due). A failed
   timer is tried again after every instance that was already due. Compiles unchanged unless you use a record pattern
   over `TimerEntry`.
+- [A `SagaStateStore` stores an encoded saga](#a-sagastatestore-stores-an-encoded-saga). Occurrent encodes and decodes
+  a saga instance with `SagaCodec`, and a store persists the `StoredSaga` it's given. `SpringMongoSagaStateStore` keeps
+  its document layout, so nothing needs migrating. Breaks the build for a `SagaStateStore` of your own and for code that
+  reads an instance from a store directly.
+- [The shorter `SagaEnvelope` and `SagaFailure` constructors are removed](#the-shorter-sagaenvelope-and-sagafailure-constructors-are-removed).
+  Only the canonical constructors remain.
 
 ### DCB
 
@@ -261,6 +273,10 @@ other sections compile fine and behave differently, so read them first.
 - No recipe rewrites a record pattern over `SagaFailure` or `SagaEnvelope`, and none changes how
   quarantine is configured. See
   [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
+- No recipe ports a `SagaStateStore` of your own, or adds the components the removed `SagaEnvelope` and `SagaFailure`
+  constructors filled in. See [A `SagaStateStore` stores an encoded saga](#a-sagastatestore-stores-an-encoded-saga)
+  and
+  [The shorter `SagaEnvelope` and `SagaFailure` constructors are removed](#the-shorter-sagaenvelope-and-sagafailure-constructors-are-removed).
 
 ## A global position is no longer a saga redelivery key
 
@@ -700,14 +716,13 @@ case SagaRunnerConfig(var pollInterval, var batchLimit, var maxCas, var detectio
 ```
 
 The same applies to `SagaEnvelope`, which needs a `var streamMarks` after its `failure` binding, and to an
-`instanceof` pattern as much as a `switch` case. `SagaEnvelope.StreamMarks` and `SagaEnvelope.TypeMark` are new types
-and only matter to a `SagaStateStore` implemented outside this repository, which has to persist `streamMarks`. A store
-that ignores it keeps working, and every instance then reads as it did before 0.35.0, so late versions are not
-recognised.
+`instanceof` pattern as much as a `switch` case. `SagaCodec` stores `SagaEnvelope.StreamMarks` and
+`SagaEnvelope.TypeMark` with the rest of the instance, so a `SagaStateStore` needs nothing for them.
 
-Constructor calls are not affected. The 13-argument `SagaEnvelope` constructor and the five-argument
-`SagaRunnerConfig` constructor stay, and fill in no marks and a window of 256. `SagaExecutionSupport.EventMeta` gains an
-`eventType` component too, and it lives in an `internal` package.
+The five-argument `SagaRunnerConfig` constructor stays and fills in a window of 256. The 13-argument `SagaEnvelope`
+constructor is removed, as
+[The shorter `SagaEnvelope` and `SagaFailure` constructors are removed](#the-shorter-sagaenvelope-and-sagafailure-constructors-are-removed)
+describes. `SagaExecutionSupport.EventMeta` gains an `eventType` component too, and it lives in an `internal` package.
 
 ### Why there is no recipe
 
@@ -750,12 +765,6 @@ events.
 Each pending version records when it first failed, in a `pendingSince` list beside `pending` in `streamMarks`. A
 document without it falls back to the failure record's `firstFailedAt` for the event the record names, and any other
 event starts its clock on its next failure.
-
-A `SagaStateStore` implemented outside this repository has to save `StreamMarks.pendingSince()` and read it back in
-`compareAndSave` and `find`, and in `compareAndSaveWithoutState` and `findWithoutState` too when it overrides them. A store that saves only the
-other marks, or rebuilds them with the four-argument `StreamMarks` constructor, loses the instants. An instance whose
-failures alternate between two events, such as versions 7, 8, 7, 8 of one stream, then starts each event's clock again
-on every failure and never reaches its budget.
 
 ## A quarantined saga instance can be released, and quarantine is on by default
 
@@ -839,8 +848,8 @@ instances, each poll logs a `WARN` and tries again. The runbook covers what is l
 
 ### Stored saga state for a release
 
-`SpringMongoSagaStateStore` stores a release in three top-level fields of the instance's document,
-`failureReleasedAt`, `failureQuarantineId` and `quarantineSkipCount`. The skipped inputs are documents in a collection
+`SagaCodec` stores a release in three fields, `failureReleasedAt`, `failureQuarantineId` and `quarantineSkipCount`,
+which `SpringMongoSagaStateStore` writes as top-level fields of the instance's document. The skipped inputs are documents in a collection
 of their own, named after the saga collection with `_skipped_inputs` appended, one per skipped input, each with
 `sagaId`, `quarantineId`, `seq` and `key`. A document 0.34.0 wrote has none of these fields, and reads as an instance
 that is not releasing, with no quarantine id. The constructor now throws an `IllegalArgumentException` for a saga
@@ -861,17 +870,7 @@ The in-memory store and `SpringMongoSagaStateStore` implement it. On a subscript
 `SagaRunner.run` throws an `IllegalStateException` when quarantine is on and the saga's store doesn't implement it.
 The message names the interface and `SagaRunnerConfig.disableQuarantine()`.
 
-A store that implements it has to save `SagaFailure.releasedAt()`, `SagaFailure.quarantineId()` and
-`SagaEnvelope.quarantineSkipCount()`, and read them back. The saga reads the instance back after the write that
-quarantines it. When the quarantine id or the skip count didn't persist, it writes the instance back as it was before
-the quarantine, logs an `ERROR` and fails the event instead of acknowledging it, since an instance without them skips
-every later input without recording it. Every delivery of the event fails the same way until the store persists both.
-When something outside the saga writes the instance before each of `maxCasAttempts` undo attempts, the instance stays
-`QUARANTINED` without them and skips later inputs unrecorded, and a second `ERROR` says so. A release
-reads the instance back after it sets `releasedAt`, and throws an `IllegalStateException` when one of the three didn't
-persist.
-
-The store also keeps the skipped inputs, with `recordSkippedInput`, `findSkippedInputs`, `deleteSkippedInput`,
+A store that implements it keeps the skipped inputs, with `recordSkippedInput`, `findSkippedInputs`, `deleteSkippedInput`,
 `deleteSkippedInputByKey` and `deleteSkippedInputs(sagaId, quarantineId)`. In `delete(sagaId)` it deletes the records
 under the quarantine id of the instance it removes, after the instance, and leaves the records under any other
 quarantine id alone, since a new instance with the same saga id can be started and quarantined in between. It implements
@@ -893,7 +892,8 @@ mark the one the saga reads from `@Primary`. Otherwise the application fails at 
 
 When you have a `SagaStateStore` of your own and quarantine on, implement `SagaStateStoreSkippedInputs` on it, as
 [Stored saga state for a release](#stored-saga-state-for-a-release) describes, or turn quarantine off with
-`SagaRunnerConfig.disableQuarantine()`. Otherwise the runner refuses to start.
+`SagaRunnerConfig.disableQuarantine()`. Otherwise the runner refuses to start. The quarantine id and the skip count
+need nothing of the store, since it keeps them with the other fields of the `StoredSaga` it's given.
 
 An instance that 0.34.0 quarantined can't be released. Delete it as
 [the quarantined saga runbook](../runbooks/quarantined-saga-instance.md#6-you-delete-the-instance-once-you-have-decided-not-to-recover-it)
@@ -982,17 +982,16 @@ report is [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
   time across the instance's timers. For a timer that keeps failing that is its last failed attempt, not its `firesAt`.
 - `SagaInstance.nextTimerAt()` still returns the earliest `firesAt`, so an instance stuck on a failing timer still
   shows a time in the past.
-- The write that records a failed timer keeps the instance's version. It reaches `compareAndSaveWithoutState`, or
-  `compareAndSave` through its default, with an envelope whose version equals `expectedVersion`. Every other save
-  still raises the version by one.
+- The write that records a failed timer keeps the instance's version. It reaches `compareAndSaveWithoutState` with a
+  `StoredSaga` whose version equals `expectedVersion`. Every other save still raises the version by one.
 
 ### What to do
 
 - Add the third component to a record pattern over `TimerEntry`. The two-argument constructor still compiles and
   sets it to null.
-- In a store of your own, persist the new component and return `findWithDueTimers` ordered by
-  `SagaEnvelope.earliestDueAtEpochMilli()`. A store that does neither keeps working, with the 0.34.0 order.
-- In a store of your own, store the version in the envelope as it comes, even when it equals `expectedVersion`. A
+- In a store of your own, return `findWithDueTimers` ordered by `SagaIndex.nextTimerDueAtEpochMilli()`. A store that
+  ignores the order keeps working, with the 0.34.0 order.
+- In a store of your own, store the version of the `StoredSaga` as it comes, even when it equals `expectedVersion`. A
   store that refuses that save refuses every record of a failed timer, so the poller logs a `WARN` for each failed fire
   and the instance keeps the 0.34.0 order. A store that sets the version itself, for example with a JPA `@Version`
   column, raises it on the record too, and an event that takes longer than the poll interval between its read and its
@@ -1007,6 +1006,153 @@ and its `nextTimerFiresAt` is already the earliest due time. During a rolling de
 `firesAtEpochMilli` from a timer subdocument, so it ignores the new field, and a 0.34.0 write drops it, which gives
 that instance the 0.34.0 order again. A 0.34.0 node never saves an instance stored as `ACTIVE_MARKED`, see
 [the stored saga state for late versions](#stored-saga-state-1).
+
+## A `SagaStateStore` stores an encoded saga
+
+Up to 0.34.0 a `SagaStateStore` took a `SagaEnvelope` and decided how to write each of its fields. Every field a
+release added, such as the stream marks and the quarantine id of 0.35.0, was then one more field a store of your own
+had to save and read back. In 0.35.0 `SagaCodec` turns the instance into a `StoredSaga`, and the store persists that
+as it is. The design is in
+[ADR 180](../architecture/decisions/0180-occurrent-owns-the-stored-form-of-a-saga-instance.md).
+
+### Who is affected
+
+- A `SagaStateStore` of your own. Its methods take and return `StoredSaga` instead of `SagaEnvelope`, and it has to
+  implement the new `stateCodec()`, so it stops compiling.
+- Code that calls `find`, `findWithoutState`, `findWithDueTimers` or `SagaStateStoreQueries.findByStatus` on a store
+  directly, for example a test that reads an instance back from `SagaStateStore.inMemory()`. These return `StoredSaga`.
+- A flow saga on `SagaStateStore.inMemory()`.
+
+An application that only hands `SpringMongoSagaStateStore` or `SagaStateStore.inMemory()` to the runner compiles
+unchanged.
+
+### What changes
+
+`SagaCodec` is in the `org.occurrent.dsl.saga.codec` package of `occurrent-saga-dsl-common`. Occurrent encodes every
+instance with it before a save and decodes it after a read, on every store. A `StoredSaga` has four components:
+
+| Component | What it holds |
+| --- | --- |
+| `sagaId` | The saga instance id |
+| `version` | The compare-and-set version |
+| `encoded` | An `EncodedSaga`, the fields of the instance by name, in the order a store should write them |
+| `index` | A `SagaIndex`, the values a store queries on, `storedStatus`, `nextTimerDueAtEpochMilli`, `updatedAtEpochMilli`, `releasing` and `quarantineId` |
+
+A store decides only how the state of a core saga is represented, and returns that as a `SagaStateCodec` from
+`stateCodec()`. `SagaCodec` writes the state of a flow saga itself, with its received events as `CloudEvent` values
+that the runner's `CloudEventConverter` makes.
+
+The methods change like this:
+
+| 0.34.0 | 0.35.0 |
+| --- | --- |
+| No such method | `SagaStateCodec<S> stateCodec()` |
+| `Optional<SagaEnvelope<S>> find(String sagaId)` | `Optional<StoredSaga> find(String sagaId)` |
+| `default Optional<SagaEnvelope<S>> findWithoutState(String sagaId)` | `Optional<StoredSaga> findWithoutState(String sagaId)`, with no default |
+| `boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion)` | `boolean compareAndSave(StoredSaga saga, long expectedVersion)` |
+| `default boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<S> envelope, long expectedVersion)` | `boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion)`, with no default |
+| `List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit)` | `List<StoredSaga> findWithDueTimers(Instant now, int limit)` |
+| `List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit)` on `SagaStateStoreQueries` | `List<StoredSaga> findByStatus(SagaStatus status, Instant updatedBefore, int limit)` |
+
+`delete(String sagaId)` is unchanged.
+
+`SagaStateStore.inMemory()` keeps the state object as it is and every other field in the form `SagaCodec` gives it. A
+flow saga on it converts every received event to a `CloudEvent` on each save and back on each read, so a step that
+keeps many events costs more per save than in 0.34.0.
+
+A saga whose state is a `FlowState` other than the one the flow executor creates fails its first save with an
+`IllegalArgumentException`, on `SagaStateStore.inMemory()` too.
+
+The `CloudEventConverter` you pass to the `SpringMongoSagaStateStore` constructor only marks the store as a flow
+saga's store. The runner's converter writes and reads the received events. A `null` converter with `FlowState.class`
+as the state type still throws an `IllegalArgumentException`.
+
+`SagaCodec` logs the warning for a flow saga instance that retains 1,000 received events, so you get it on every store.
+A logger setting for that warning goes on `org.occurrent.dsl.saga.codec.SagaCodec`, not on `SpringMongoSagaStateStore`.
+
+### What to do
+
+Port a store of your own in these steps. `InMemorySagaStateStore` and `SpringMongoSagaStateStore` implement each of
+them.
+
+1. Implement `stateCodec()`. Return `SagaStateCodec.identity()` when the store keeps the state object as it is, or a
+   codec that turns the state into a value your database can write and back, the way `SpringMongoSagaStateStore` does
+   with the application's `MongoConverter`.
+2. In `compareAndSave`, keep the compare-and-set rule, where an `expectedVersion` of 0 inserts. Store `saga.sagaId()`,
+   `saga.version()` and every field of `saga.encoded().fields()`. Store the version as it comes, also when it equals
+   `expectedVersion`.
+3. Store each value so it reads back as the same type. A value is a `String`, `Integer`, `Long`, `Boolean`, `Instant`
+   or `CloudEvent`, or a `List` or `Map` of those, and the `state` field holds whatever your `SagaStateCodec` returned.
+4. In `compareAndSaveWithoutState`, under the same compare-and-set rule, set each field of
+   `SagaCodec.fieldsExceptState()` that `saga` has a value for, remove the ones it has none for, and touch no other
+   field. The stored state and `currentStep` stay as they are. Throw an `IllegalArgumentException` for an
+   `expectedVersion` of 0, since the runner inserts with `compareAndSave`.
+5. Build what you read as `new StoredSaga(sagaId, version, encoded, SagaCodec.indexOf(encoded))`. `find` reads every
+   field. `findWithoutState` needs only `SagaCodec.fieldsWithoutState()`, and `findWithDueTimers` and `findByStatus`
+   need only `SagaCodec.instanceFields()`, so those three can leave the state unread.
+6. Query on the index. `findWithDueTimers` returns the instances whose `storedStatus` is in
+   `SagaCodec.storedStatuses(SagaStatus.ACTIVE)` and whose `nextTimerDueAtEpochMilli` is at or before `now`, earliest
+   first. `findByStatus` matches `SagaCodec.storedStatuses(status)`, with the same `updatedBefore` filter and order as
+   before. `findReleasingSagaIds` returns the instances whose `releasing` is `true`, and `delete` removes the skipped
+   inputs under the deleted instance's `quarantineId`.
+
+Each index value comes from one or two of the encoded fields, so a store can index and query those fields instead.
+`SagaCodec.indexOf` shows which ones, and `SagaCodec` has a constant for each field name, such as `SagaCodec.STATUS`
+and `SagaCodec.NEXT_TIMER_FIRES_AT`.
+
+Code that read an instance from a store directly can read its lifecycle through `SagaInstances` instead. When it needs
+the `SagaEnvelope`, decode the `StoredSaga` with a codec built from the store:
+
+```java
+SagaCodec<OrderFulfilment> codec = SagaCodec.of(stateStore.stateCodec(), null);
+Optional<SagaEnvelope<OrderFulfilment>> envelope = stateStore.find("order-4711").map(codec::decode);
+```
+
+For a flow saga, pass the application's `CloudEventConverter` instead of `null`.
+
+### Stored saga state
+
+`SpringMongoSagaStateStore` writes the same document as before, with the same field names, value types and field
+order, so there's nothing to migrate. A store of your own that holds data in a layout of its own has to read that data
+into the fields `SagaCodec` expects, or migrate it.
+
+### Why there is no recipe
+
+`UpgradeToOccurrent_0_35` doesn't port a store, since how a store keeps the fields and queries the index depends on its
+database.
+
+## The shorter `SagaEnvelope` and `SagaFailure` constructors are removed
+
+`SagaEnvelope` and `SagaFailure` keep only their canonical constructors.
+
+### Who is affected
+
+Code that builds a `SagaEnvelope` or a `SagaFailure`, which is usually a test. Three calls written against 0.34.0 stop
+compiling:
+
+- the 13-argument `SagaEnvelope` constructor, which was the canonical one in 0.34.0
+- the deprecated 11-argument `SagaEnvelope` constructor
+- the 5-argument `SagaFailure` constructor, which was the canonical one in 0.34.0
+
+### What to do
+
+Pass the components the removed constructor filled in:
+
+| Call | Add | For an instance with nothing in them |
+| --- | --- | --- |
+| `SagaEnvelope` with 13 arguments | `streamMarks` and `quarantineSkipCount`, after `failure` | `Map.of()` and `null` |
+| `SagaEnvelope` with 11 arguments | `started`, `failure`, `streamMarks` and `quarantineSkipCount`, after `currentStep` | `true`, `null`, `Map.of()` and `null` |
+| `SagaFailure` with 5 arguments | `releasedAt` and `quarantineId`, after `failureMessage` | `null` and `null` |
+
+```java
+// Before, stops compiling
+new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, createdAt, updatedAt, null, null, true, null);
+
+// After
+new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, createdAt, updatedAt, null, null, true, null, Map.of(), null);
+```
+
+No recipe adds them.
 
 ## The deprecated `accept(..)` on the projection feeds is removed
 
