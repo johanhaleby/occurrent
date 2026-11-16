@@ -129,6 +129,11 @@ On MongoDB:
   `RetryStrategy` that gives up, or once the store shuts down, which ends every retry, the forget throws to its caller
   without sending the delete, as `delete` throws today.
   An `$inc` that passed its `wtimeout` may still have raised the generation, and the next attempt raises it once more.
+* A client with a `timeoutMS` makes the driver send no `wtimeout` and no `maxTimeMS`. A `timeoutMS` above 0 then
+  bounds each forget write and the generation read. A `timeoutMS` of 0 waits forever, so the store gives those
+  commands an operation timeout of 10 seconds, the way ADR 149 bounds the position reservation of an append. Without
+  it, a forget or a read on such a client blocked past 45 seconds while no majority answered (checked on 4.4.5 with
+  driver 5.8.0).
 * On a standalone server, MongoDB refuses `LINEARIZABLE` with error code 123 (checked on 4.4.5). The store then reads
   the generation with `MAJORITY` and keeps doing so for its lifetime, without trying `LINEARIZABLE` again. A standalone
   server has no failover and no rollback, so the two read concerns return the same generation there. The store learns
@@ -354,7 +359,8 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   and one script on Redis.
 * On a replica set or a sharded cluster, a forget waits until a majority has its two writes, and a `readCatchupMarker`
   waits for the round trip a `LINEARIZABLE` read makes to a majority. A standalone server answers as before. When no
-  majority is reachable, each forget attempt fails after its `wtimeout` and each read attempt after its `maxTimeMS`.
+  majority is reachable, each forget attempt fails after its `wtimeout` and each read attempt after its `maxTimeMS`,
+  or after the client's `timeoutMS` when that is above 0.
   The default `RetryStrategy` then keeps trying, so the call returns once a majority is back, and only a
   `RetryStrategy` that gives up, or the store shutting down, makes it throw. The changelog
   says the forget ignores a weaker write concern on the application's collection.
@@ -362,11 +368,17 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   its lease condition lets it. The id then reads absent and the next catch-up replays once.
 * A retried forget whose first attempt was applied changes the generation twice. Every attempt that read the
   generation in between has its marker fenced, and each of them costs one more replay.
-* A rolling upgrade needs no migration, and the fence covers every forget a 0.35.0 node makes. A forget made on a
-  0.34.0 node, and a read on a 0.34.0 node, behave as in 0.34.0 until every node runs 0.35.0. A 0.34.0 forget does not
-  change the generation, so a late write after it brings the marker back as it does today, and that marker stays
-  present after the upgrade until a 0.35.0 node forgets the id. A 0.34.0 node's late write after a 0.35.0 forget
-  still brings the marker back for the 0.34.0 nodes. No mixed order makes a node read a marker as present where an
+* During a rolling upgrade a forgotten marker can come back. The fence covers every forget a 0.35.0 node makes,
+  but a forget made on a 0.34.0 node, and a read on a 0.34.0 node, behave as in 0.34.0 until every
+  node runs 0.35.0. A 0.34.0 forget does not change the generation, so a late write after it brings the marker back
+  as it does today, and the 0.35.0 nodes read that marker as present too. It affects an application that cancels a
+  catch-up subscription on a 0.34.0 node during the rollout, while a marker write for the same id is still on its way
+  to the store. The next subscribe of that id then skips the replay it needed. No new case starts once the last
+  0.34.0 node is gone, but a marker that came back stays present until a 0.35.0 node forgets the id. On MongoDB this
+  happens only for an id no 0.35.0 node has forgotten, since a 0.34.0 save drops the stamp and any generation above
+  0 then fences the marker. On Redis it happens unless the last marker call a 0.35.0 node made on the id was a
+  forget, because the stamp sits in the generation hash, which a 0.34.0 save and a 0.34.0 delete leave alone. A
+  0.34.0 node's late write after a 0.35.0 forget still brings the marker back for the 0.34.0 nodes. No mixed order makes a node read a marker as present where an
   all-0.34.0 deployment would read it absent. A 0.35.0 node saves and deletes the plain checkpoint under the same
   conditions as 0.34.0, and on read it only adds the stamp check, which can turn present into absent and never the other
   way. The one difference is a forget whose `$inc` has no majority yet. It sends no delete until a retried `$inc` gets
