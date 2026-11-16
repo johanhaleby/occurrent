@@ -18,6 +18,7 @@ package org.occurrent.dsl.projection.blocking;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.blocking.ResumePositionFixtures.Counted;
 import org.occurrent.dsl.projection.blocking.ResumePositionFixtures.RecordingReplayAwareView;
@@ -25,6 +26,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.util.Arrays;
@@ -39,6 +41,7 @@ import static org.occurrent.dsl.projection.blocking.ResumePositionFixtures.conve
  * projection's replay, which its next catch-up resumes after.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
+@Timeout(60)
 class DomainEventFeedResumePositionTest {
 
     private final CloudEventConverter<Counted> converter = converter();
@@ -92,6 +95,18 @@ class DomainEventFeedResumePositionTest {
     void a_marker_stored_by_0_34_0_is_read_as_a_resume_position() {
         write("1", "2", "3");
         marker.save("counter", GlobalCheckpoint.of(store.currentPosition() - 1));
+
+        List<String> folded = new CopyOnWriteArrayList<>();
+        catchUpAll(folded);
+
+        assertThat(folded).containsExactly("3");
+    }
+
+    @Test
+    void a_durable_catch_up_checkpoint_stored_in_the_four_part_form_is_read_as_a_marker_and_the_catch_up_resumes_after_its_position() {
+        write("1", "2", "3");
+        long head = store.currentPosition();
+        marker.save("counter", GlobalCheckpoint.of(head - 1, new StringBasedCheckpoint("live-feed-token"), 0, head));
 
         List<String> folded = new CopyOnWriteArrayList<>();
         catchUpAll(folded);

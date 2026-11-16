@@ -26,8 +26,11 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
+import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
@@ -48,6 +51,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -94,12 +99,39 @@ class CatchupThenPushResumePositionMongoTest {
         start(new CopyOnWriteArrayList<>());
         assertThat(GlobalCheckpoint.positionOf(marker.read("proj"))).isEqualTo(head);
         write("3");
+        long headBeforeTheReplay = eventStore.currentPosition();
 
+        // An event is written while the replay reads, so the head has moved by the time the marker is written.
+        AtomicBoolean written = new AtomicBoolean();
+        PositionOrderedReader writingWhileReading = new PositionOrderedReader() {
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return eventStore.readInPositionOrder(filter, range).peek(e -> {
+                    if (written.compareAndSet(false, true)) {
+                        write("during");
+                    }
+                });
+            }
+
+            @Override
+            public long currentPosition() {
+                return eventStore.currentPosition();
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return eventStore.writesPosition();
+            }
+        };
         List<String> delivered = new CopyOnWriteArrayList<>();
-        start(delivered);
+        start(writingWhileReading, delivered);
 
-        assertThat(delivered).containsExactly("3");
-        assertThat(GlobalCheckpoint.positionOf(marker.read("proj"))).isEqualTo(eventStore.currentPosition());
+        assertThat(delivered).as("replayed after the stored marker, nothing before it").startsWith("3").doesNotContain("1", "2");
+        assertThat(eventStore.currentPosition()).as("the head moved during the replay").isGreaterThan(headBeforeTheReplay);
+        assertThat(GlobalCheckpoint.positionOf(marker.read("proj"))).isEqualTo(headBeforeTheReplay);
+        List<String> afterRestart = new CopyOnWriteArrayList<>();
+        start(afterRestart);
+        assertThat(afterRestart).as("the event written during the replay is replayed by the next start").containsExactly("during");
     }
 
     @Test
@@ -146,7 +178,11 @@ class CatchupThenPushResumePositionMongoTest {
     }
 
     private CatchupThenPushSubscriptionModel start(List<String> delivered) throws InterruptedException {
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(eventStore, new PushSubscriptionModel(), marker);
+        return start(eventStore, delivered);
+    }
+
+    private CatchupThenPushSubscriptionModel start(PositionOrderedReader reader, List<String> delivered) throws InterruptedException {
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, new PushSubscriptionModel(), marker);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
         // The marker is written before the replay entry is removed, so a finished catch-up means the marker is stored.
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
