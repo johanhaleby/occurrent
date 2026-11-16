@@ -149,6 +149,13 @@ the compare-and-set of that write checks only the version of the instance's docu
 record while one is written, so the release would turn the instance `ACTIVE` with an input that was acknowledged when
 it was skipped and is never applied.
 
+Every write and delete of a record uses `WriteConcern.MAJORITY` with `j: true`, whatever write concern the
+`MongoOperations` or its collection has. A skip acknowledges its input once the record is written, so a record
+written with `w: 1` that a failover rolled back would leave an input that no release replays. With `j: true` a majority
+has the record in its on-disk journal before it acknowledges, whatever `writeConcernMajorityJournalDefault` says. A server that runs without journaling
+refuses `j: true`, and the write then fails with an `IllegalStateException` that says the store needs journaling. The
+writes to the instance's own document keep the caller's write concern.
+
 ### 3. Release replays the input the instance stopped on, then the records
 
 `SagaSubscription.release(String sagaId)` releases one instance. K is the input the instance was quarantined on.
@@ -267,11 +274,22 @@ the instance for every input it applies and for every input that fails, and a sk
 instance whose release is still running was written within that time, and the poller skips it, whichever node runs
 the release. Without that, a release that runs longer than one poll interval has the poller replay the same
 records beside it, and both dispatch each record's commands. The poller starts each poll a `timerPollInterval` after
-the last one ended, so a release it went on with itself is old enough by the next poll. A release that takes longer
-than `timerPollInterval` over one input, or a poller whose clock is that much ahead of the clock of the node that
-wrote, can still replay the input that release is on, and its commands are dispatched twice, which delivery at least
-once allows. A claim stored on the instance would rule that out, at the cost of a write to take and give back for
-every release and a way to take over the claim of a node that crashed.
+the last one ended, so a release it went on with itself is old enough by the next poll.
+
+In four cases a release and the poller, or two releases, can still replay the same record and both dispatch its
+commands, which delivery at least once allows:
+
+- A release that takes longer than `timerPollInterval` over one input.
+- A poller whose clock is `timerPollInterval` or more ahead of the clock of the node that wrote.
+- A `release` call on an instance that the poller or another call is replaying. The instance is releasing already, so
+  the call goes on with the replay without the check, beside the other one.
+- A release working through records whose inputs the stream marks show as applied. It deletes them without writing the
+  instance, so after `timerPollInterval` of that the poller goes on beside it. Neither dispatches anything for those
+  records, so only the first record that isn't applied can have its commands dispatched by both, the same at-least-once
+  dispatch a live input has.
+
+A claim stored on the instance would rule all four out, at the cost of a write to take and give back for every release
+and a way to take over the claim of a node that crashed.
 
 The poller polls only while the `timersEnabled` that `SagaRunner.run` takes returns `true`, so that gate holds back the
 continuation of a release as well as the saga's timers. On a subscription model that reports whether it runs, the
@@ -301,12 +319,6 @@ inputs arrive faster than the poller replays its share doesn't finish on the pol
 bound and replays on the calling thread until it reaches one of the outcomes point 3 lists, so it finishes such an
 instance. A live input skipped while it runs only makes it write its result again on top of the skip, without
 dispatching it again, as point 3 says.
-
-The poller doesn't leave out an instance that a `release` call is replaying. A direct release that is still running
-at the next poll, which starts a poll interval after the last one ended, 15 seconds by default, competes with the poller for the same records, and both
-read the first record each time. Both dispatch its reaction before their compare-and-set, so any record of such a
-release can have its reaction dispatched twice, up to every record. Duplicate dispatch is the expected case for a long
-direct release, and a receiver has to handle it the way it handles a redelivered live input.
 
 When the budget runs out, the instance is quarantined again under the same quarantine id. The input that failed becomes
 the failure record's input, `releasedAt` is cleared, and the records after it stay in order. A later release replays the
@@ -501,6 +513,9 @@ The upgrade guide has the procedure for operators, in
   continues a release, the saga's timers wait for at most one batch of records per poll.
 - A skip by a quarantined instance is now three writes, two compare-and-sets on the instance and the record between
   them.
+- On MongoDB every write and delete of a skipped-input record waits for a majority of the replica set to journal it,
+  up to 10 seconds an attempt. That slows a skip, the start of a release and every record a release deletes by the
+  time a majority takes, and a replica set without a majority available fails them where `w: 1` would have succeeded.
 - A quarantined instance keeps a record of every input it skips, with no limit. The records take space in the store
   until a release replays them, a replayed input completes the instance, or the 0.35.0 store deletes the instance.
   Records left under an earlier quarantine id, see points 2 and 3, stay in the store, and nothing reads or deletes

@@ -63,8 +63,9 @@ other sections compile fine and behave differently, so read them first.
   A saga quarantines an instance after 5 minutes unless you turn quarantine off, and `SagaSubscription.release(sagaId)`
   brings a quarantined instance back. A `SagaRunner` with quarantine on and no `EventStoreQueries` fails at startup
   until you pass it one or call `disableQuarantine()`. During a rolling upgrade from 0.34.0, or after a rollback to it, a
-  0.34.0 node stalls a saga's subscription on an event for an instance that 0.35.0 quarantined. Breaks the build only
-  for a record pattern over `SagaFailure` or `SagaEnvelope`.
+  0.34.0 node stalls a saga's subscription on an event for an instance that 0.35.0 quarantined. On MongoDB such an
+  instance is stored as `QUARANTINED_RECORDING`, so a query of your own for `status: "QUARANTINED"`, such as the
+  0.34.0 runbook's, no longer finds it. Breaks the build only for a record pattern over `SagaFailure` or `SagaEnvelope`.
 - [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due). A failed
   timer is tried again after every instance that was already due. Compiles unchanged unless you use a record pattern
   over `TimerEntry`.
@@ -219,8 +220,8 @@ other sections compile fine and behave differently, so read them first.
   the references. Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly
   sees the changes the starters make to find inherited handlers. **Breaks the build** if you refer to one of the five.
 - [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
-  `occurrent.saga.quarantine-after` defaults to 5 minutes, also when it is blank, so a `@Saga` quarantines unless you
-  set `occurrent.saga.quarantine-enabled=false`. With quarantine on, no `EventStoreQueries` bean, or several and none
+  `occurrent.saga.quarantine-after` defaults to 5 minutes, so a `@Saga` quarantines unless you set
+  `occurrent.saga.quarantine-enabled=false`. A blank value fails startup and names `quarantine-enabled=false`. With quarantine on, no `EventStoreQueries` bean, or several and none
   of them `@Primary`, fails at startup. The `sagaSubscription-<id>` bean releases an instance. Compiles unchanged.
 
 ### Brokers
@@ -671,7 +672,8 @@ case SagaRunnerConfig(var pollInterval, var batchLimit, var maxCas, var detectio
                       var quarantineAfterDefaulted) -> ...
 ```
 
-The same applies to `SagaEnvelope`, which needs a `var streamMarks` after its `failure` binding, and to an
+The same applies to `SagaEnvelope`, which needs a `var streamMarks` after its `failure` binding and a
+`var quarantineSkipCount` after that, and to an
 `instanceof` pattern as much as a `switch` case. `SagaEnvelope.StreamMarks` and `SagaEnvelope.TypeMark` are new types
 and only matter to a `SagaStateStore` implemented outside this repository, which has to persist `streamMarks`. A store
 that ignores it keeps working, and every instance then reads as it did before 0.35.0, so late versions are not
@@ -800,7 +802,11 @@ The timer poller goes on with a release that failed on an input or was interrupt
 `timerBatchLimit` records, 100 by default, shared evenly among the releasing instances it lists, at least one each, and
 the next poll goes on where the last one stopped. A `release` call has no such bound. The poller goes on with an
 instance only once it has gone a whole `timerPollInterval` without a write, so it skips a release that is still
-running on any node, as long as that release takes less than `timerPollInterval` over each input.
+running on any node, as long as that release takes less than `timerPollInterval` over each input. Two more cases let
+the poller and a release replay the same input and dispatch its commands twice. A `release` call made while the poller
+replays the instance goes on beside the poller. A release that spends longer than `timerPollInterval` on inputs the
+stream marks show as applied writes nothing, so the poller goes on beside it, though neither dispatches anything until
+the first input that isn't applied.
 
 A timer that came due while the instance was quarantined fires after every recorded input has been replayed, because a
 saga's timers run on processing time. For a saga that uses a timer as a deadline, a replayed input from after the
