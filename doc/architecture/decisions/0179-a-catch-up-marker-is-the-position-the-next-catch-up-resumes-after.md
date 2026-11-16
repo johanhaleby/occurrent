@@ -149,12 +149,13 @@ back, at a position at or below H, whose write committed after A's replay read p
 read X, X waits in the live feed behind A's hold, and it is delivered only after A writes H. If that delivery fails, H
 is stored, the next start resumes after it, and nothing delivers X again.
 
-So `ReactiveHandover` does not write H while an event its own code fed, that nobody waits for and that A's replay did
-not deliver, waits in the live feed. P stays stored and the next start replays after P. X lies after P, because an X
-written before the catch-up that stored P read its head would have been replayed by that catch-up or kept it from
-storing P. An event A's replay did read is delivered before H is written, and its live copy is skipped as a repeat. A
-handler that feeds back an event whenever it handles one, under steady live traffic, can keep the marker at P on every
-start, and each start then replays everything after P.
+So `ReactiveHandover` does not write H while an event its own code fed, and that A's replay did not deliver, waits in
+the live feed. That holds whether or not W's caller still waits for W, since W's answer can have gone out before X is
+delivered. P stays stored and the next start replays after P. X lies after P, because an X written before the catch-up
+that stored P read its head would have been replayed by that catch-up or kept it from storing P. An event A's replay did
+read is delivered before H is written, and its live copy is skipped as a repeat. A handler that feeds back an event
+whenever it handles one, under steady live traffic, can keep the marker at P on every start, and each start then replays
+everything after P.
 
 `ReactiveHandover` also keeps deleting the marker through `Source.forgetCaughtUp()` when a delivery or a catch-up
 fails, as in 0.34.0, as a backstop behind that rule. It tries the delete four times and then logs. Only the reactor
