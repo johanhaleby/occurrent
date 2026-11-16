@@ -1748,6 +1748,40 @@ class SagaReleaseTest {
                     () -> assertThat(instance().status()).isNotEqualTo(SagaStatus.QUARANTINED)
             );
         }
+
+        @Test
+        void the_quarantine_is_undone_when_another_write_lands_before_the_undo() {
+            deliver(placed());
+            failing.add("poison");
+            CloudEvent poison = added("poison");
+            assertThatThrownBy(() -> deliver(poison)).isInstanceOf(IllegalStateException.class);
+            store.dropsTheQuarantineId = true;
+            now.set(now.get().plus(BUDGET));
+            // The first write quarantines the instance. The write after it is the undo, which loses to a write from outside
+            // the saga that leaves the instance quarantined without an id at the next version.
+            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(this::anotherWriteLeavesTheInstanceQuarantinedWithoutAnId));
+
+            Throwable deliveryThatHitTheBudget = catchThrowable(() -> deliver(poison));
+            Throwable redelivery = catchThrowable(() -> deliver(poison));
+
+            assertAll(
+                    () -> assertThat(deliveryThatHitTheBudget)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessage("cannot pack poison"),
+                    () -> assertThat(redelivery)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessage("cannot pack poison"),
+                    () -> assertThat(instance().status()).isNotEqualTo(SagaStatus.QUARANTINED)
+            );
+        }
+
+        private void anotherWriteLeavesTheInstanceQuarantinedWithoutAnId() {
+            SagaEnvelope<Order> stored = instance();
+            SagaEnvelope<Order> next = new SagaEnvelope<>(stored.sagaId(), stored.state(), stored.status(), stored.version() + 1, stored.timers(),
+                    stored.streamWatermarks(), stored.positionWatermark(), stored.createdAt(), stored.updatedAt(), stored.completedAt(),
+                    stored.currentStep(), stored.started(), stored.failure(), stored.streamMarks(), stored.quarantineSkipCount());
+            assertThat(store.delegate.compareAndSave(ORDER, next, stored.version())).isTrue();
+        }
     }
 
     @Nested

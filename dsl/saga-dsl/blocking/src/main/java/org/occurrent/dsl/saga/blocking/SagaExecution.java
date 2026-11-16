@@ -468,15 +468,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     // Undone, because left QUARANTINED without an id the instance would skip this event's redelivery and
                     // every later input with nothing recorded
                     SagaStatus before = current == null ? SagaStatus.ACTIVE : current.status();
-                    boolean undone = stateStore.compareAndSaveWithoutState(sagaId, SagaExecutionSupport.withQuarantineUndone(withoutId, before), withoutId.version());
-                    if (undone) {
-                        log.error("Saga '{}' instance '{}' was quarantined on the event '{}', but its state store {} did not persist SagaFailure.quarantineId or SagaEnvelope.quarantineSkipCount, so the quarantine was undone. "
+                    if (undoneQuarantine(sagaId, withoutId, before)) {
+                        log.error("Saga '{}' instance '{}' was quarantined on the event '{}', but its state store {} did not persist SagaFailure.quarantineId or SagaEnvelope.quarantineSkipCount, so the quarantine was undone, unless another write had already taken the instance out of it. "
                                         + "The event goes back to whatever feeds this subscription instead of being acknowledged, and every delivery of it fails the same way until the store persists both.",
                                 subscriptionId, sagaId, meta.redeliveryKey(), stateStore.getClass().getName(), failure);
                     } else {
-                        log.error("Saga '{}' instance '{}' was quarantined on the event '{}', but its state store {} did not persist SagaFailure.quarantineId or SagaEnvelope.quarantineSkipCount, and the quarantine could not be undone because the instance changed again. "
+                        log.error("Saga '{}' instance '{}' was quarantined on the event '{}', but its state store {} did not persist SagaFailure.quarantineId or SagaEnvelope.quarantineSkipCount, and the quarantine could not be undone because the instance was written by something else on each of {} attempts. "
                                         + "The event goes back to whatever feeds this subscription instead of being acknowledged. While the instance stays QUARANTINED without them, it skips every input without recording it.",
-                                subscriptionId, sagaId, meta.redeliveryKey(), stateStore.getClass().getName(), failure);
+                                subscriptionId, sagaId, meta.redeliveryKey(), stateStore.getClass().getName(), config.maxCasAttempts(), failure);
                     }
                     return false;
                 }
@@ -525,6 +524,24 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return null;
         }
         return readBack;
+    }
+
+    // Write the quarantined instance back with the status it had before, reading it again after each lost write, and
+    // false when every attempt lost. True also when the instance read again is gone, out of quarantine or quarantined
+    // with both its id and its skip count, since nothing is left to undo then. No path of this saga writes an instance
+    // that is quarantined without an id, so a lost write is a delete or a write from outside the saga
+    private boolean undoneQuarantine(String sagaId, SagaEnvelope<S> withoutId, SagaStatus before) {
+        SagaEnvelope<S> stored = withoutId;
+        for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
+            if (stateStore.compareAndSaveWithoutState(sagaId, SagaExecutionSupport.withQuarantineUndone(stored, before), stored.version())) {
+                return true;
+            }
+            stored = stateStore.findWithoutState(sagaId).orElse(null);
+            if (stored == null || !stored.isQuarantined() || (stored.quarantineId() != null && stored.quarantineSkipCount() != null)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -641,7 +658,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         int share = releasing.isEmpty() ? 0 : Math.max(1, config.timerBatchLimit() / releasing.size());
         for (String sagaId : releasing) {
             try {
-                continueRelease(sagaId, queries, share);
+                continueRelease(sagaId, queries, records, share);
             } catch (Throwable t) {
                 log.warn("Saga '{}' could not go on with the release of instance '{}'. The next poll tries again.", subscriptionId, sagaId, t);
                 if (!SagaExecutionSupport.isAttributableToTheInstance(t)) {
@@ -676,7 +693,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             SagaEnvelope<S> releasing = SagaExecutionSupport.startRelease(current, clock.get());
             if (releasing == null) {
                 // Released already, by another call or another node, so this one goes on with it
-                return continueReleaseToTheEnd(sagaId, queries);
+                return continueReleaseToTheEnd(sagaId, queries, records);
             }
             String quarantineId = Objects.requireNonNull(current.quarantineId());
             SkippedInput head = SagaExecutionSupport.releaseHead(current);
@@ -699,7 +716,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             log.info("Saga '{}' instance '{}' is releasing. It replays the event '{}' it was quarantined on and then the inputs it skipped.",
                     subscriptionId, sagaId, head.key());
-            return continueReleaseToTheEnd(sagaId, queries);
+            return continueReleaseToTheEnd(sagaId, queries, records);
         }
         throw new SagaConcurrencyException("Failed to start the release of saga '" + sagaId + "' after " + config.maxCasAttempts() + " attempts due to concurrent modification");
     }
@@ -736,8 +753,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         throw new IllegalStateException(failure);
     }
 
-    private SagaSubscription.ReleaseResult continueReleaseToTheEnd(String sagaId, EventStoreQueries queries) {
-        return Objects.requireNonNull(continueRelease(sagaId, queries, Integer.MAX_VALUE));
+    private SagaSubscription.ReleaseResult continueReleaseToTheEnd(String sagaId, EventStoreQueries queries, SagaStateStoreSkippedInputs records) {
+        return Objects.requireNonNull(continueRelease(sagaId, queries, records, Integer.MAX_VALUE));
     }
 
     /**
@@ -756,7 +773,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * At most {@code maxRecords} records are replayed. When a further record is there after that, this returns
      * {@code null} with the instance still releasing, and the next call goes on from that record.
      */
-    private SagaSubscription.@Nullable ReleaseResult continueRelease(String sagaId, EventStoreQueries queries, int maxRecords) {
+    private SagaSubscription.@Nullable ReleaseResult continueRelease(String sagaId, EventStoreQueries queries, SagaStateStoreSkippedInputs records, int maxRecords) {
         int lostInARow = 0;
         int replayed = 0;
         while (true) {
@@ -771,7 +788,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 throw new IllegalStateException("Saga '" + subscriptionId + "' instance '" + sagaId + "' is releasing with no quarantine id, which only a state store that does not persist SagaFailure.quarantineId leaves.");
             }
             // Read after the instance, so the write that turns it active expects a version from before this read
-            List<SkippedInput> first = skippedInputs(sagaId).findSkippedInputs(sagaId, quarantineId, 1);
+            List<SkippedInput> first = records.findSkippedInputs(sagaId, quarantineId, 1);
             Instant now = clock.get();
             if (first.isEmpty()) {
                 if (stateStore.compareAndSaveWithoutState(sagaId, SagaExecutionSupport.withReleased(current, now), current.version())) {
@@ -824,7 +841,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 Outcome<S, C> outcome = SagaExecutionSupport.replay(saga, sagaId, current, record, input, meta, now, config.reorderWindow());
                 if (outcome.processed()) {
                     dispatcher.dispatchAll(outcome.commands());
-                    saved = saveReplayed(sagaId, quarantineId, record, current, outcome);
+                    saved = saveReplayed(records, sagaId, quarantineId, record, current, outcome);
                     completed = Objects.requireNonNull(outcome.envelope()).isCompleted();
                 } else {
                     // Applied already, or not a start event for an instance that never started, so it is only deleted
@@ -832,14 +849,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 }
             } catch (Throwable failure) {
                 rethrowIfNotTheInstances(failure);
-                return recordReleaseFailure(sagaId, record, meta, failure, now);
+                return recordReleaseFailure(records, sagaId, record, meta, failure, now);
             }
             if (saved && completed) {
-                deleteRecordsOfCompleted(sagaId);
+                deleteRecordsOfCompleted(records, sagaId);
                 lostInARow = 0;
                 replayed++;
             } else if (saved) {
-                skippedInputs(sagaId).deleteSkippedInput(sagaId, quarantineId, record);
+                records.deleteSkippedInput(sagaId, quarantineId, record);
                 lostInARow = 0;
                 replayed++;
             } else {
@@ -876,7 +893,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // recorded in between with the same record first, the loss was to those records, and the same result is written again
     // on top of them without dispatching the commands a second time. Anything else returns false, and the caller reads
     // the instance again and recomputes
-    private boolean saveReplayed(String sagaId, String quarantineId, SkippedInput record, SagaEnvelope<S> read, Outcome<S, C> outcome) {
+    private boolean saveReplayed(SagaStateStoreSkippedInputs records, String sagaId, String quarantineId, SkippedInput record, SagaEnvelope<S> read, Outcome<S, C> outcome) {
         SagaEnvelope<S> envelope = Objects.requireNonNull(outcome.envelope());
         long expectedVersion = outcome.expectedVersion();
         SagaEnvelope<S> basis = read;
@@ -886,7 +903,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             SagaEnvelope<S> after = stateStore.find(sagaId).orElse(null);
             if (after == null || !SagaExecutionSupport.differsOnlyByRecordedSkips(basis, after)
-                || !skippedInputs(sagaId).findSkippedInputs(sagaId, quarantineId, 1).equals(List.of(record))) {
+                || !records.findSkippedInputs(sagaId, quarantineId, 1).equals(List.of(record))) {
                 return false;
             }
             envelope = SagaExecutionSupport.rebased(envelope, after);
@@ -898,13 +915,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     // A replay that completed the instance leaves records no release reads again, so all of them go. A crash before this
     // leaves them until SagaStateStore.delete
-    private void deleteRecordsOfCompleted(String sagaId) {
-        skippedInputs(sagaId).deleteSkippedInputs(sagaId);
+    private static void deleteRecordsOfCompleted(SagaStateStoreSkippedInputs records, String sagaId) {
+        records.deleteSkippedInputs(sagaId);
     }
 
-    // The store's skip records. Release and the poller reach this only on a store that implements
-    // SagaStateStoreSkippedInputs, and so does a skip, because only quarantine gives an instance a quarantine id and
-    // the runner turns quarantine on only for such a store
+    // The store's skip records, looked up once per release and once per skip. A release on a store that does not
+    // implement SagaStateStoreSkippedInputs throws here, even for an instance the store does not hold. A skip throws here
+    // only for an instance quarantined while the store had the capability, such as a store now wrapped by a decorator
+    // that implements SagaStateStore alone
     private SagaStateStoreSkippedInputs skippedInputs(String sagaId) {
         SagaStateStoreSkippedInputs records = skippedInputs;
         if (records == null) {
@@ -928,7 +946,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // Record that the record a release was applying failed, the way any failure is recorded, and say what that left. The
     // instance stays releasing until the input's budget runs out, and is quarantined on it again then. With quarantine
     // off there is no budget, so the release stays on the input until it succeeds.
-    private SagaSubscription.ReleaseResult recordReleaseFailure(String sagaId, SkippedInput record, EventMeta meta, Throwable failure, Instant now) {
+    private SagaSubscription.ReleaseResult recordReleaseFailure(SagaStateStoreSkippedInputs records, String sagaId, SkippedInput record, EventMeta meta, Throwable failure, Instant now) {
         Duration quarantineAfter = config.quarantineAfter().orElse(ChronoUnit.FOREVER.getDuration());
         try {
             for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
@@ -937,7 +955,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     return SagaSubscription.ReleaseResult.NOT_FOUND;
                 }
                 String quarantineId = current.quarantineId();
-                if (quarantineId == null || !skippedInputs(sagaId).findSkippedInputs(sagaId, quarantineId, 1).equals(List.of(record))) {
+                if (quarantineId == null || !records.findSkippedInputs(sagaId, quarantineId, 1).equals(List.of(record))) {
                     SagaSubscription.ReleaseResult moved = resultUnlessReleasing(stateStore.findWithoutState(sagaId).orElse(null));
                     if (moved != null) {
                         logMovedOn(sagaId, record, moved, failure);

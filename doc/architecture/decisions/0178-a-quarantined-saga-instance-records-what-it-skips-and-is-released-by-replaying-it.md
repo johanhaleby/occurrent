@@ -83,8 +83,11 @@ to 0. The saga reads the instance back after that write. When the quarantine id 
 writes the instance back as it was before the quarantine, logs an `ERROR` and fails the input instead of acknowledging
 it. A skip records nothing for an instance without them, so an instance left `QUARANTINED` would have the redelivery of
 that input and every later one acknowledged with nothing recorded and no `WARN`. Undone, it is quarantined again on the
-next failure of the input, so every delivery fails the same way until the store persists both. The id names the whole
-quarantine until the instance is `ACTIVE` again, so a release that quarantines the instance again keeps the id, and
+next failure of the input, so every delivery fails the same way until the store persists both. When another write
+changes the instance before the undo, the saga reads it again and writes it back again, up to `maxCasAttempts` times.
+No path of the saga writes an instance that is quarantined without an id, so only a write from outside the saga can
+make every attempt lose. The instance then stays `QUARANTINED` without them, and the saga logs a second `ERROR` that
+says so. The id names the whole quarantine until the instance is `ACTIVE` again, so a release that quarantines the instance again keeps the id, and
 keeps the counter for the records that stay. Records are stored under the saga id and the
 quarantine id, and a release reads only those under the current id. A record left over from an earlier quarantine of the
 same instance is never replayed.
