@@ -53,6 +53,13 @@ public interface Subscription {
      * consumer lock, and this keeps answering {@code true}. Ask the subscription model's {@code isRunning(id)} and
      * {@code isPaused(id)} about the present.
      * <p>
+     * That changes when the model gives up on a subscription after it started. When the model refuses it for good, the
+     * next call throws that refusal, also after an earlier call answered {@code true}, and so does every call after it.
+     * When the model holds it paused until you resume it, each call throws the reason until a resume starts it again.
+     * The MongoDB change stream models refuse a subscription that ran when its change stream's history is lost and
+     * restarts after such a loss are off, and hold it paused when a restart after such a loss gets no position to open
+     * at.
+     * <p>
      * A subscription you still have to start yourself has not started, so it answers {@code false}. That covers one
      * registered while its model was stopped, one withheld under {@code occurrent.subscription.mode=manual}, and a
      * catch-up replay that {@code stop()} interrupted. A start that failed and will not be retried throws rather than

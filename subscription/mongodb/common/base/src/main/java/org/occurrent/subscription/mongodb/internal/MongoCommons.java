@@ -551,8 +551,9 @@ public class MongoCommons {
      * {@code startAt} itself when it isn't dynamic. A dynamic one is wrapped, so that a position its function answers
      * before a change stream of the subscription has opened is refused when it is a position a catch-up subscription
      * model stores, as {@link #refuseCatchupPosition(StartAt)} refuses a fixed one. What counts as opened is up to the
-     * subscription model. A blocking one counts a run that reported its cursor open, so an answer whose opening a pause
-     * or a failure stopped doesn't end the check. The reactor one counts a driver cursor that opened for a subscription
+     * subscription model. A blocking one counts a subscription that has started, so an answer whose opening a pause or
+     * a failure stopped doesn't end the check. Through a mongos a subscription can start only once its change stream's
+     * first reply came. The reactor one counts a driver cursor that opened for a subscription
      * that reads through one. Where it has no such cursor to wait for it counts the first document the change stream
      * reads, since a subscribe doesn't say the server accepted the position, so an answer the server rejects doesn't end
      * it. The {@link UnsupportedStartAtException} is thrown where the subscription model resolves the position, as the

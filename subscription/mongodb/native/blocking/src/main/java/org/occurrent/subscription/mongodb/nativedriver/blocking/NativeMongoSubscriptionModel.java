@@ -500,7 +500,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * neither an operation time nor a change stream position, and for a subscription whose change stream history was
      * lost as it opened, or with its first reply through a mongos, while
      * {@code restartSubscriptionsOnChangeStreamHistoryLost} is off. Through a mongos, a subscription that starts at a
-     * stored position counts as started once its change stream's first reply came, so the wait can take up to
+     * stored position, or at the present that {@code subscribe(..)} read for it before this call, counts as started
+     * once its change stream's first reply came, so the wait can take up to
      * {@code maxAwaitTime} longer, or the server's default wait when none is configured. When a resume or a wait
      * throws, every other subscription
      * is still resumed and waited for, and then this method throws the first exception with the others added as
