@@ -102,13 +102,8 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
         return queries.findByStatus(status, updatedBefore, limit).stream().map(codec::decodeWithoutState).toList();
     }
 
-    public void delete(String sagaId) {
-        store.delete(sagaId);
-        codec.forget(sagaId);
-    }
-
-    // An instance a TTL index removed never reaches delete, so a new instance under its id would otherwise inherit its
-    // warning and never warn about its own retained events
+    // The codec's warning latch keeps the entry of an instance a delete or a TTL index removed, so a new instance under its
+    // id would otherwise inherit that warning and never warn about its own retained events
     private void forgetOnInsert(String sagaId, long expectedVersion) {
         if (expectedVersion == 0) {
             codec.forget(sagaId);

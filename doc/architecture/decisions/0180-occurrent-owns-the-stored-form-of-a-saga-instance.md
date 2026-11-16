@@ -60,7 +60,10 @@ A `StoredSaga` has four components, and a store persists all four and nothing el
 `SagaCodec.indexOf(EncodedSaga)` derives each of them from the encoded fields, so a store never computes one itself.
 
 A value in `EncodedSaga` is a `String`, an `Integer`, a `Long`, a `Boolean`, an `Instant`, a `CloudEvent`, or a `List`
-or `Map` of those. The `state` field has whatever the store's `SagaStateCodec` returned.
+or `Map` of those. The `state` field has whatever the store's `SagaStateCodec` returned. `EncodedSaga` copies every
+`List` and `Map` in the other fields, at any depth, into copies that cannot be changed, so a caller holding a stored
+`EncodedSaga` cannot change the instance outside a compare-and-set. A `SagaStateCodec` must not encode a state as
+`null`, because a stored `null` reads back as an instance with no state, so `SagaCodec` throws before the save instead.
 
 ### The user state
 
@@ -155,8 +158,8 @@ Axon and NServiceBus also keep the values a lookup needs next to the serialized 
 - `SagaEnvelope` is no longer the `SagaStateStore` type, so the reason ADR 70 gave for why it can't move no longer
   applies. `SagaCodec`'s public methods still take and return it, and this decision doesn't move it.
 - No store reads or builds `FlowStateImpl` any more, so ADR 63's reason for making it `public` no longer applies.
-  It stays `public`, since `SagaCodec`, in another package of `saga-dsl-common`, and `SagaExecution`, in
-  `saga-dsl-blocking`, still use it. Making it non-public is left for a later change.
+  It stays `public`, since `SagaCodec` and `FlowSagaImpl`, each in another package of `saga-dsl-common`, still use
+  it. Making it non-public is left for a later change.
 - `SagaExecution` no longer reads an instance back after a quarantine or after the start of a release, so each of
   them takes one store read fewer.
 

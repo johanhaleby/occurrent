@@ -157,7 +157,8 @@ public final class SagaCodec<S extends @Nullable Object> {
             STARTED, FAILURE_INPUT, FAILURE_POSITION, FAILURE_FIRST_FAILED_AT, FAILURE_TYPE, FAILURE_MESSAGE,
             FAILURE_RELEASED_AT, FAILURE_QUARANTINE_ID, QUARANTINE_SKIP_COUNT);
 
-    // A round number one to two orders of magnitude below MongoDB's 16 MB document limit for typical CloudEvent sizes. It
+    // A round number one to two orders of magnitude below the 16 MB document limit of the MongoDB store for typical
+    // CloudEvent sizes. Other stores have limits of their own. It
     // is a warning and not a cap, and the remedy, a stepWindow on the flow, is configurable per saga.
     static final int RETAINED_EVENT_WARNING_THRESHOLD = 1_000;
 
@@ -451,9 +452,10 @@ public final class SagaCodec<S extends @Nullable Object> {
         return streamMarks;
     }
 
-    private @Nullable Object encodeState(String sagaId, S state) {
+    private Object encodeState(String sagaId, S state) {
         if (flowEvents != null && state instanceof FlowStateImpl<?> flowState) {
-            return encodeFlowState(sagaId, flowState, flowEvents);
+            // Frozen here, since EncodedSaga keeps the state field as it is
+            return requireNonNull(EncodedSaga.frozen(encodeFlowState(sagaId, flowState, flowEvents)));
         }
         if (flowEvents != null && state instanceof FlowState<?>) {
             // The flow executor's state is read back field by field, so another FlowState implementation would be
@@ -461,7 +463,9 @@ public final class SagaCodec<S extends @Nullable Object> {
             throw new IllegalArgumentException("a flow saga store can only persist the flow executor's FlowState (FlowStateImpl), got "
                                                + state.getClass().getName());
         }
-        return stateCodec.encode(state);
+        // Refused rather than stored, since a stored null reads back as an instance with no state
+        return requireNonNull(stateCodec.encode(state), () -> "The SagaStateCodec " + stateCodec.getClass().getName() + " encoded the state of saga '"
+                                                              + sagaId + "' as null. SagaStateCodec.encode must return a value for a state that is not null.");
     }
 
     @SuppressWarnings("unchecked")
@@ -562,8 +566,8 @@ public final class SagaCodec<S extends @Nullable Object> {
         }
         if (shouldWarn) {
             log.warn("Flow saga instance '{}' has retained {} received events, at or above the warning threshold of {}. " +
-                     "Consider capping the flow's step with stepWindow(...) to trim what it retains, or the document " +
-                     "risks growing toward MongoDB's 16 MB document limit.",
+                     "Consider capping the flow's step with stepWindow(...) to trim what it retains, or the stored " +
+                     "instance keeps growing, toward the 16 MB document limit on MongoDB.",
                     sagaId, retainedEventCount, RETAINED_EVENT_WARNING_THRESHOLD);
         }
     }

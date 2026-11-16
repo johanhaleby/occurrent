@@ -26,7 +26,6 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.*;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.flow.FlowState;
-import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;

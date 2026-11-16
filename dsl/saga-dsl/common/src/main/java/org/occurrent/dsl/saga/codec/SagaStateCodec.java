@@ -18,6 +18,8 @@ package org.occurrent.dsl.saga.codec;
 
 import org.jspecify.annotations.Nullable;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Turns the user state of a saga into a value a store can persist, and back. The store supplies it, because how a user
  * state is represented depends on the store. The state of a flow saga never reaches it, since {@link SagaCodec} encodes
@@ -27,8 +29,12 @@ import org.jspecify.annotations.Nullable;
  */
 public interface SagaStateCodec<S extends @Nullable Object> {
 
-    /** The stored form of {@code state}, which is never {@code null}. */
-    @Nullable Object encode(S state);
+    /**
+     * The stored form of {@code state}. It is called only with a state that is not {@code null}, and must not return
+     * {@code null}, since a stored {@code null} reads back as an instance with no state. A save whose codec returns
+     * {@code null} throws a {@link NullPointerException} before anything is stored.
+     */
+    Object encode(S state);
 
     /** The state that {@code encoded} stands for, where {@code encoded} is a value {@link #encode(Object)} returned or a store read back. */
     S decode(Object encoded);
@@ -37,8 +43,8 @@ public interface SagaStateCodec<S extends @Nullable Object> {
     static <S extends @Nullable Object> SagaStateCodec<S> identity() {
         return new SagaStateCodec<>() {
             @Override
-            public @Nullable Object encode(S state) {
-                return state;
+            public Object encode(S state) {
+                return requireNonNull(state, "state cannot be null");
             }
 
             @SuppressWarnings("unchecked")

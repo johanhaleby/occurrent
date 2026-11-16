@@ -25,7 +25,7 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
 import org.occurrent.command.CommandDispatcher
 import org.occurrent.dsl.saga.SagaStateStore
-import org.occurrent.dsl.saga.internal.SagaEnvelopes
+import org.occurrent.dsl.saga.codec.SagaCodec
 import org.occurrent.dsl.saga.blocking.SagaRunner
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig
 import org.occurrent.dsl.saga.blocking.SagaSubscription
@@ -100,7 +100,7 @@ class OrderFulfillmentFlowSagaTest {
             write(orderId, PaymentReserved(orderId))
 
             await.untilAsserted { assertThat(issued).containsExactly(ReservePayment(orderId, 42.0), ShipOrder(orderId)) }
-            val envelope = SagaEnvelopes.of(stateStore, converter).find(orderId).orElseThrow()
+            val envelope = stateStore.find(orderId).map(SagaCodec.of(stateStore.stateCodec(), converter)::decode).orElseThrow()
             assertThat(envelope.state().completed()).isTrue()
         }
     }
@@ -122,7 +122,7 @@ class OrderFulfillmentFlowSagaTest {
             await.atMost(5, TimeUnit.SECONDS).untilAsserted {
                 assertThat(issued).containsExactly(ReservePayment(orderId, 42.0), CancelOrder(orderId, "payment timeout"))
             }
-            val envelope = SagaEnvelopes.of(stateStore, converter).find(orderId).orElseThrow()
+            val envelope = stateStore.find(orderId).map(SagaCodec.of(stateStore.stateCodec(), converter)::decode).orElseThrow()
             assertThat(envelope.state().completed()).isTrue()
         }
     }

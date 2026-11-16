@@ -36,6 +36,7 @@ import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.StepConditionProgress;
 
 import java.net.URI;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -366,11 +367,13 @@ class SagaCodecTest {
         }
 
         @Test
-        void indexOf_derives_the_same_index_from_the_stored_fields_as_the_encoding_returns() {
+        void indexOf_the_stored_fields_of_a_releasing_quarantine_gives_its_stored_status_due_timer_update_time_and_quarantine_id() {
             StoredSaga stored = codec.encode(withFailure(withTimers(withUpdatedAt(quarantined("q-1"), UPDATED), new TimerEntry("t", 10L, null)),
                     new SagaFailure("i", null, FAILED_AT, "t", null, RELEASED_AT, "q-1")));
 
-            assertThat(SagaCodec.indexOf(stored.encoded())).isEqualTo(stored.index());
+            SagaIndex index = SagaCodec.indexOf(stored.encoded());
+
+            assertThat(index).isEqualTo(new SagaIndex("QUARANTINED_RECORDING", 10L, 1_700_000_001_000L, true, "q-1"));
         }
     }
 
@@ -468,6 +471,39 @@ class SagaCodecTest {
 
             assertThat(SagaCodec.fieldsExceptState()).containsAll(codec.encodeWithoutState(notStarted).encoded().fields().keySet());
         }
+
+        @Test
+        void the_instance_fields_and_the_watermarks_marks_and_state_cover_every_field_of_a_fully_populated_encoding() {
+            Set<String> covered = new java.util.HashSet<>(SagaCodec.instanceFields());
+            covered.addAll(Set.of(SagaCodec.STATE, SagaCodec.STREAM_WATERMARKS, SagaCodec.POSITION_WATERMARK, SagaCodec.STREAM_MARKS));
+
+            assertThat(covered).containsAll(codec.encode(everythingSet()).encoded().fields().keySet());
+        }
+
+        @Test
+        void the_fields_to_read_without_the_state_and_the_state_cover_every_field_of_a_fully_populated_encoding() {
+            Set<String> covered = new java.util.HashSet<>(SagaCodec.fieldsWithoutState());
+            covered.add(SagaCodec.STATE);
+
+            assertThat(covered).containsAll(codec.encode(everythingSet()).encoded().fields().keySet());
+        }
+
+        @Test
+        void the_field_lists_cover_every_field_of_a_not_started_flow_saga_encoding() {
+            SagaEnvelope<FlowState<Tick>> flow = flowEnvelope(flowState());
+            SagaEnvelope<FlowState<Tick>> notStarted = new SagaEnvelope<>(flow.sagaId(), flow.state(), SagaStatus.QUARANTINED, 3, List.of(new TimerEntry("t", 10L, 15L)),
+                    Map.of("stream-1", 5L), 77L, CREATED, UPDATED, COMPLETED, null, false, new SagaFailure("i", 42L, FAILED_AT, "t", "m", RELEASED_AT, "q-1"),
+                    Map.of("stream-1", new StreamMarks(1, Map.of())), 4L);
+            SagaCodec<FlowState<Tick>> flowCodec = SagaCodec.of(SagaStateCodec.identity(), new TickConverter());
+            Set<String> keys = flowCodec.encode(notStarted).encoded().fields().keySet();
+            Set<String> fromInstanceFields = new java.util.HashSet<>(SagaCodec.instanceFields());
+            fromInstanceFields.addAll(Set.of(SagaCodec.STATE, SagaCodec.STREAM_WATERMARKS, SagaCodec.POSITION_WATERMARK, SagaCodec.STREAM_MARKS));
+            Set<String> fromFieldsWithoutState = new java.util.HashSet<>(SagaCodec.fieldsWithoutState());
+            fromFieldsWithoutState.add(SagaCodec.STATE);
+
+            assertThat(fromInstanceFields).containsAll(keys);
+            assertThat(fromFieldsWithoutState).containsAll(keys);
+        }
     }
 
     @Nested
@@ -541,6 +577,17 @@ class SagaCodecTest {
             Map<?, ?> state = (Map<?, ?>) stored.encoded().fields().get(SagaCodec.STATE);
             assertThat((List<?>) state.get(SagaCodec.FLOW_RECEIVED)).allSatisfy(event -> assertThat(event).isInstanceOf(CloudEvent.class));
             assertThat(((List<?>) state.get(SagaCodec.FLOW_RECEIVED)).stream().map(event -> ((CloudEvent) event).getId())).containsExactly("e1", "e2");
+        }
+
+        @Test
+        void the_encoded_flow_state_cannot_be_changed_at_any_depth() {
+            StoredSaga stored = flowCodec.encode(flowEnvelope(flowState()));
+
+            Map<?, ?> state = (Map<?, ?>) stored.encoded().fields().get(SagaCodec.STATE);
+            @SuppressWarnings("unchecked") Map<String, Object> mutableView = (Map<String, Object>) state;
+            @SuppressWarnings("unchecked") List<Object> received = (List<Object>) state.get(SagaCodec.FLOW_RECEIVED);
+            assertThatThrownBy(() -> mutableView.put("other", 1)).isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> received.clear()).isInstanceOf(UnsupportedOperationException.class);
         }
 
         @Test
@@ -618,6 +665,71 @@ class SagaCodecTest {
 
     @Nested
     @DisplayNameGeneration(ReplaceUnderscores.class)
+    class EncodedSagaCopies {
+
+        @Test
+        void a_list_or_map_the_caller_changes_after_creating_it_leaves_the_encoded_saga_as_it_was() {
+            List<Object> timers = new ArrayList<>(List.of(new LinkedHashMap<>(Map.of("name", "a", "firesAtEpochMilli", 10L))));
+            Map<String, Object> watermarks = new LinkedHashMap<>(Map.of("stream-1", 3L));
+            Map<String, Object> fields = new LinkedHashMap<>();
+            fields.put(SagaCodec.TIMERS, timers);
+            fields.put(SagaCodec.STREAM_WATERMARKS, watermarks);
+            EncodedSaga encoded = new EncodedSaga(fields);
+
+            ((Map<String, Object>) timers.getFirst()).put("name", "changed");
+            timers.clear();
+            watermarks.clear();
+            fields.clear();
+
+            assertThat(encoded.fields()).containsOnlyKeys(SagaCodec.TIMERS, SagaCodec.STREAM_WATERMARKS);
+            assertThat(encoded.fields().get(SagaCodec.TIMERS)).isEqualTo(List.of(Map.of("name", "a", "firesAtEpochMilli", 10L)));
+            assertThat(encoded.fields().get(SagaCodec.STREAM_WATERMARKS)).isEqualTo(Map.of("stream-1", 3L));
+        }
+
+        @Test
+        void the_lists_and_maps_of_the_encoded_saga_cannot_be_changed_at_any_depth() {
+            Map<String, Object> inner = new LinkedHashMap<>(Map.of("type", "t"));
+            EncodedSaga encoded = new EncodedSaga(Map.of(SagaCodec.STREAM_MARKS, new ArrayList<>(List.of(new LinkedHashMap<>(Map.of("types", new ArrayList<>(List.of(inner))))))));
+
+            List<?> marks = (List<?>) encoded.fields().get(SagaCodec.STREAM_MARKS);
+            Map<?, ?> stream = (Map<?, ?>) marks.getFirst();
+            List<?> types = (List<?>) stream.get("types");
+            Map<?, ?> type = (Map<?, ?>) types.getFirst();
+
+            assertThatThrownBy(() -> ((List<Object>) marks).add("x")).isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> ((Map<Object, Object>) stream).put("x", 1)).isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> ((List<Object>) types).clear()).isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> ((Map<Object, Object>) type).remove("type")).isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void null_entries_in_a_list_or_map_are_kept() {
+            List<Object> list = new ArrayList<>();
+            list.add(null);
+            list.add("x");
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("absent", null);
+
+            EncodedSaga encoded = new EncodedSaga(Map.of("list", list, "map", map));
+
+            @SuppressWarnings("unchecked") List<Object> keptList = (List<Object>) encoded.fields().get("list");
+            @SuppressWarnings("unchecked") Map<Object, Object> keptMap = (Map<Object, Object>) encoded.fields().get("map");
+            assertThat(keptList).containsExactly(null, "x");
+            assertThat(keptMap).containsOnlyKeys("absent").containsEntry("absent", null);
+        }
+
+        @Test
+        void the_state_field_is_kept_as_the_state_codec_returned_it() {
+            List<String> state = new ArrayList<>(List.of("a"));
+
+            EncodedSaga encoded = new EncodedSaga(Map.of(SagaCodec.STATE, state));
+
+            assertThat(encoded.fields().get(SagaCodec.STATE)).isSameAs(state);
+        }
+    }
+
+    @Nested
+    @DisplayNameGeneration(ReplaceUnderscores.class)
     class Nulls {
 
         @Test
@@ -642,6 +754,24 @@ class SagaCodecTest {
             assertThatNullPointerException().isThrownBy(() -> codec.forget(null)).withMessageContaining("sagaId");
             assertThatNullPointerException().isThrownBy(() -> SagaCodec.storedStatuses(null)).withMessageContaining("status");
             assertThatNullPointerException().isThrownBy(() -> SagaCodec.indexOf(null)).withMessageContaining("encoded");
+        }
+
+        @Test
+        void a_state_codec_that_encodes_a_state_as_null_is_refused_naming_the_saga_and_the_codec() {
+            SagaCodec<String> nullEncoding = SagaCodec.of(new NullEncodingStateCodec(), null);
+
+            assertThatNullPointerException().isThrownBy(() -> nullEncoding.encode(bare("order-7", "state")))
+                    .withMessageContaining("order-7")
+                    .withMessageContaining(NullEncodingStateCodec.class.getName());
+        }
+
+        @Test
+        void a_state_codec_that_encodes_a_state_as_null_is_not_asked_by_the_encoding_without_state() {
+            SagaCodec<String> nullEncoding = SagaCodec.of(new NullEncodingStateCodec(), null);
+
+            StoredSaga stored = nullEncoding.encodeWithoutState(bare("order-7", "state"));
+
+            assertThat(stored.encoded().fields()).doesNotContainKey(SagaCodec.STATE);
         }
 
         @Test
@@ -737,6 +867,19 @@ class SagaCodecTest {
         @Override
         public String getCloudEventType(Class<? extends Tick> type) {
             return "tick";
+        }
+    }
+
+    private static final class NullEncodingStateCodec implements SagaStateCodec<String> {
+        @Override
+        @SuppressWarnings("NullAway")
+        public Object encode(String state) {
+            return null;
+        }
+
+        @Override
+        public String decode(Object encoded) {
+            throw new UnsupportedOperationException();
         }
     }
 

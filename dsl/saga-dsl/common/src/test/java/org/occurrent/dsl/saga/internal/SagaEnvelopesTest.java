@@ -155,15 +155,6 @@ class SagaEnvelopesTest {
     }
 
     @Test
-    void a_delete_removes_the_instance() {
-        envelopes.compareAndSave("s1", active("s1", "state", 1), 0);
-
-        envelopes.delete("s1");
-
-        assertThat(envelopes.find("s1")).isEmpty();
-    }
-
-    @Test
     void an_insert_forgets_a_retained_size_warning_given_for_an_instance_the_store_lost_without_a_delete() {
         InMemorySagaStateStore<FlowState<Tick>> flowStore = new InMemorySagaStateStore<>();
         SagaEnvelopes<FlowState<Tick>> flowEnvelopes = SagaEnvelopes.of(flowStore, new TickConverter());
@@ -195,18 +186,6 @@ class SagaEnvelopesTest {
         flowStore.delete("s1");
 
         flowEnvelopes.compareAndSaveWithoutState("s1", flowEnvelope("s1", 1), 0);
-
-        assertThat(warnings()).hasSize(2);
-    }
-
-    @Test
-    void a_delete_through_the_envelopes_forgets_the_warning() {
-        InMemorySagaStateStore<FlowState<Tick>> flowStore = new InMemorySagaStateStore<>();
-        SagaEnvelopes<FlowState<Tick>> flowEnvelopes = SagaEnvelopes.of(flowStore, new TickConverter());
-        flowEnvelopes.compareAndSave("s1", flowEnvelope("s1", 1), 0);
-        flowEnvelopes.delete("s1");
-
-        flowEnvelopes.compareAndSave("s1", flowEnvelope("s1", 1), 0);
 
         assertThat(warnings()).hasSize(2);
     }

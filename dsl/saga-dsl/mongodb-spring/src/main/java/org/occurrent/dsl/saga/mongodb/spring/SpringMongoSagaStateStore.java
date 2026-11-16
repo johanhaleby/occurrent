@@ -133,7 +133,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private final RetryStrategy retryStrategy;
     private final SagaStateCodec<S> stateCodec = new SagaStateCodec<>() {
         @Override
-        public @Nullable Object encode(S state) {
+        public Object encode(S state) {
+            // SagaCodec refuses a null here, with the saga id named
             return mongoOperations.getConverter().convertToMongoType(state);
         }
 

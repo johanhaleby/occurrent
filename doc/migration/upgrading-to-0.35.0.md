@@ -1034,6 +1034,8 @@ as it is. The design is in
   implement the new `stateCodec()`, so it stops compiling.
 - Code that calls `find`, `findWithoutState`, `findWithDueTimers` or `SagaStateStoreQueries.findByStatus` on a store
   directly, for example a test that reads an instance back from `SagaStateStore.inMemory()`. These return `StoredSaga`.
+- Code that calls `compareAndSave` or `compareAndSaveWithoutState` on a store directly, for example a test that seeds
+  an instance. These take a `StoredSaga`.
 - A flow saga on `SagaStateStore.inMemory()`.
 
 An application that only hands `SpringMongoSagaStateStore` or `SagaStateStore.inMemory()` to the runner compiles
@@ -1090,7 +1092,8 @@ them.
 
 1. Implement `stateCodec()`. Return `SagaStateCodec.identity()` when the store keeps the state object as it is, or a
    codec that turns the state into a value your database can write and back, the way `SpringMongoSagaStateStore` does
-   with the application's `MongoConverter`.
+   with the application's `MongoConverter`. The codec must not return `null` for a state, because a save whose codec
+   does throws a `NullPointerException` before anything is stored.
 2. In `compareAndSave`, keep the compare-and-set rule, where an `expectedVersion` of 0 inserts. Store `saga.sagaId()`,
    `saga.version()` and every field of `saga.encoded().fields()`. Store the version as it comes, also when it equals
    `expectedVersion`.
@@ -1119,6 +1122,12 @@ the `SagaEnvelope`, decode the `StoredSaga` with a codec built from the store:
 ```java
 SagaCodec<OrderFulfilment> codec = SagaCodec.of(stateStore.stateCodec(), null);
 Optional<SagaEnvelope<OrderFulfilment>> envelope = stateStore.find("order-4711").map(codec::decode);
+```
+
+Code that wrote an envelope to a store directly encodes it with the same codec first:
+
+```java
+stateStore.compareAndSave(codec.encode(envelope), 0);
 ```
 
 For a flow saga, pass the application's `CloudEventConverter` instead of `null`.

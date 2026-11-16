@@ -23,9 +23,11 @@ import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.codec.EncodedSaga;
 import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaIndex;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -164,6 +166,63 @@ class InMemorySagaStateStoreSpiTest {
     }
 
     @Test
+    void changing_the_nested_lists_and_maps_handed_to_a_save_afterwards_leaves_the_stored_saga_and_its_index_unchanged() {
+        Map<String, Object> fields = mutableCopyOf(codec.encode(withNestedData("s1")).encoded().fields());
+        EncodedSaga handed = new EncodedSaga(fields);
+        store.compareAndSave(new StoredSaga("s1", 1, handed, SagaCodec.indexOf(handed)), 0);
+        StoredSaga before = store.find("s1").orElseThrow();
+
+        ((List<?>) fields.get(SagaCodec.TIMERS)).clear();
+        ((Map<?, ?>) fields.get(SagaCodec.STREAM_WATERMARKS)).clear();
+        ((Map<?, ?>) ((List<?>) fields.get(SagaCodec.STREAM_MARKS)).getFirst()).clear();
+        fields.clear();
+
+        StoredSaga after = store.find("s1").orElseThrow();
+        assertThat(after).isEqualTo(before);
+        assertThat(codec.decode(after)).isEqualTo(withNestedData("s1"));
+        assertThat(store.findWithDueTimers(Instant.ofEpochMilli(10L), 10)).extracting(StoredSaga::sagaId).containsExactly("s1");
+    }
+
+    @Test
+    void changing_the_nested_lists_and_maps_of_what_a_find_returned_leaves_the_stored_saga_unchanged() {
+        store.compareAndSave(codec.encode(withNestedData("s1")), 0);
+
+        Map<String, Object> read = store.find("s1").orElseThrow().encoded().fields();
+        List<?> timers = (List<?>) read.get(SagaCodec.TIMERS);
+        Map<?, ?> watermarks = (Map<?, ?>) read.get(SagaCodec.STREAM_WATERMARKS);
+        List<?> marks = (List<?>) read.get(SagaCodec.STREAM_MARKS);
+        Map<?, ?> firstStream = (Map<?, ?>) marks.getFirst();
+        List<?> types = (List<?>) firstStream.get("types");
+
+        assertThatThrownBy(() -> ((List<Object>) timers).clear()).isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> ((Map<Object, Object>) ((Map<?, ?>) timers.getFirst())).put("name", "x")).isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> ((Map<Object, Object>) watermarks).clear()).isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> ((List<Object>) marks).clear()).isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> ((Map<Object, Object>) firstStream).clear()).isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> ((List<Object>) types).clear()).isInstanceOf(UnsupportedOperationException.class);
+        assertThat(codec.decode(store.find("s1").orElseThrow())).isEqualTo(withNestedData("s1"));
+    }
+
+    @Test
+    void a_state_codec_that_encodes_a_state_as_null_fails_the_save_naming_the_instance_and_stores_nothing() {
+        SagaCodec<String> nullEncoding = SagaCodec.of(new NullEncodingStateCodec(), null);
+
+        assertThatNullPointerException().isThrownBy(() -> store.compareAndSave(nullEncoding.encode(active("s1", "state", 1)), 0))
+                .withMessageContaining("s1");
+        assertThat(store.find("s1")).isEmpty();
+    }
+
+    @Test
+    void a_state_codec_that_encodes_a_state_as_null_fails_an_update_and_leaves_the_previous_version() {
+        store.compareAndSave(codec.encode(active("s1", "original", 1)), 0);
+        SagaCodec<String> nullEncoding = SagaCodec.of(new NullEncodingStateCodec(), null);
+
+        assertThatNullPointerException().isThrownBy(() -> store.compareAndSave(nullEncoding.encode(active("s1", "next", 2)), 1))
+                .withMessageContaining("s1");
+        assertThat(codec.decode(store.find("s1").orElseThrow())).isEqualTo(active("s1", "original", 1));
+    }
+
+    @Test
     void reads_and_writes_refuse_null() {
         assertThatNullPointerException().isThrownBy(() -> store.find(null));
         assertThatNullPointerException().isThrownBy(() -> store.findWithoutState(null));
@@ -173,6 +232,45 @@ class InMemorySagaStateStoreSpiTest {
         assertThatNullPointerException().isThrownBy(() -> store.findByStatus(null, NOW, 1));
         assertThatNullPointerException().isThrownBy(() -> store.findByStatus(SagaStatus.ACTIVE, null, 1));
         assertThatNullPointerException().isThrownBy(() -> store.delete(null));
+    }
+
+    // Every list and map copied into a mutable one, so a test can change what it handed a save
+    private static Map<String, Object> mutableCopyOf(Map<String, Object> fields) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        fields.forEach((name, value) -> copy.put(name, mutable(value)));
+        return copy;
+    }
+
+    private static Object mutable(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<Object, Object> copy = new LinkedHashMap<>();
+            map.forEach((key, entry) -> copy.put(key, mutable(entry)));
+            return copy;
+        }
+        if (value instanceof List<?> list) {
+            return new ArrayList<>(list.stream().map(InMemorySagaStateStoreSpiTest::mutable).toList());
+        }
+        return value;
+    }
+
+    private static SagaEnvelope<String> withNestedData(String sagaId) {
+        Map<String, SagaEnvelope.StreamMarks> marks = Map.of("stream-1", new SagaEnvelope.StreamMarks(2,
+                Map.of("t", new SagaEnvelope.TypeMark(5, List.of(3L), 1)), Map.of("t", List.of(6L)), List.of(7L), Map.of(6L, NOW)));
+        return new SagaEnvelope<>(sagaId, "state", SagaStatus.ACTIVE, 1, List.of(new TimerEntry("t", 10L, null)), Map.of("stream-1", 3L), null, NOW, NOW, null, null, true, null,
+                marks, null);
+    }
+
+    private static final class NullEncodingStateCodec implements SagaStateCodec<String> {
+        @Override
+        @SuppressWarnings("NullAway")
+        public Object encode(String state) {
+            return null;
+        }
+
+        @Override
+        public String decode(Object encoded) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static StoredSaga withCurrentStep(StoredSaga stored, String step) {

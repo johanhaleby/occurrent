@@ -217,5 +217,5 @@ every step" wildcard matching. A process that needs any of those drops down to t
 > `saga-dsl-common` encodes and decodes `FlowStateImpl`, so no `SagaStateStore` constructs or reads it any more. A store
 > has no `instanceof FlowStateImpl` serialization branch, and the bookkeeping fields above stop being a store concern.
 > Their meaning can still change between versions, and the codec is what has to read the data an earlier version wrote.
-> The codec casts `FlowState` to `FlowStateImpl` where the store did. `FlowStateImpl` stays `public`, since `SagaCodec`,
-> in another package, and the executor in `saga-dsl-blocking` still use it.
+> The codec casts `FlowState` to `FlowStateImpl` where the store did. `FlowStateImpl` stays `public`, since `SagaCodec`
+> and `FlowSagaImpl`, each in another package, still use it.
