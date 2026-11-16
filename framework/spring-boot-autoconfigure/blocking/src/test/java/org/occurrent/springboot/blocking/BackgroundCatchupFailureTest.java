@@ -30,7 +30,7 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.PushCatchupStatus;
-import org.occurrent.springboot.common.PushCatchupStatusImpl;
+import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;

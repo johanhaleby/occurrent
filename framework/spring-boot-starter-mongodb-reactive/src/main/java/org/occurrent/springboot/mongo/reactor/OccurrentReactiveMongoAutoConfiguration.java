@@ -50,6 +50,7 @@ import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.retry.Backoff;
 import org.occurrent.springboot.common.*;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
+import org.occurrent.springboot.common.internal.AsynchronousSubscribables;
 import org.occurrent.springboot.reactor.ComposedCatchupModel;
 import org.occurrent.springboot.reactor.DefaultReactiveSnapshotStoreProvider;
 import org.occurrent.springboot.reactor.OccurrentReactiveAnnotationConfiguration;
