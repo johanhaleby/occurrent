@@ -134,7 +134,9 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * lost. Don't delete these hashes. Deleting one puts the generation of that id back at {@code 0}, and a marker
  * saved earlier can then read as present again. The marker calls throw {@link IllegalArgumentException} for every
  * subscription id a conditional {@link #save(String, Checkpoint, CheckpointWriteCondition) save} refuses in the same
- * mode, and for ids that start with {@code occurrent:catchup-marker:}.
+ * mode, and for ids that start with {@code occurrent:catchup-marker:}. Plain {@link #read(String)}, {@code save} and
+ * {@link #delete(String)} accept those ids, so a plain {@code save} or {@code delete} on an id equal to one of these
+ * hash keys can replace or remove that hash.
  */
 @NullMarked
 public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
