@@ -62,6 +62,11 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.*;
  * confirmation within 10 seconds fails, and the {@link RetryStrategy} decides whether to try again. A server that
  * isn't a replica set member refuses {@link ReadConcern#LINEARIZABLE}, and this storage then reads the generation
  * with {@link ReadConcern#MAJORITY} for the rest of its life.
+ * <p>
+ * The fence needs a write that a majority acknowledged never to roll back. MongoDB guarantees that only with
+ * {@code writeConcernMajorityJournalDefault} set to {@code true} in the replica set configuration, which is its
+ * default. With the setting at {@code false} an acknowledged forget can roll back, and a marker that a catch-up started
+ * before the rollback saves can then read as present after a later forget.
  */
 @NullMarked
 public class NativeMongoCheckpointStorage implements CatchupMarkerStorage {
