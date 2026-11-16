@@ -124,8 +124,10 @@ On MongoDB:
   use `WriteConcern.MAJORITY` with a `wtimeout`, whatever write concern the application set on its collection. Without
   the `wtimeout`, a forget would wait forever while no majority is reachable. The delete is there for 0.34.0 nodes.
   When it fails after the `$inc`, a 0.35.0 node still reads the marker as absent. When the `$inc` fails, or its
-  `wtimeout` passes, the forget throws to its caller, as `delete` does today. A forget that throws after a `wtimeout`
-  may still have raised the generation, and a retry raises it once more.
+  `wtimeout` passes, the store's `RetryStrategy` sends it again, and the delete waits until an `$inc` succeeds. The
+  default `RetryStrategy` has no attempt limit, so the forget returns only once a majority has the raise. Under a
+  `RetryStrategy` that gives up, the forget throws to its caller without sending the delete, as `delete` throws today.
+  An `$inc` that passed its `wtimeout` may still have raised the generation, and the next attempt raises it once more.
 * On a standalone server, MongoDB refuses `LINEARIZABLE` with error code 123 (checked on 4.4.5). The store then reads
   the generation with `MAJORITY` and keeps doing so for its lifetime, without trying `LINEARIZABLE` again. A standalone
   server has no failover and no rollback, so the two read concerns return the same generation there. The store learns
@@ -351,7 +353,9 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   and one script on Redis.
 * On a replica set or a sharded cluster, a forget waits until a majority has its two writes, and a `readCatchupMarker`
   waits for the round trip a `LINEARIZABLE` read makes to a majority. A standalone server answers as before. When no
-  majority is reachable, a forget throws after its `wtimeout` and a read throws after its `maxTimeMS`. The changelog
+  majority is reachable, each forget attempt fails after its `wtimeout` and each read attempt after its `maxTimeMS`.
+  The default `RetryStrategy` then keeps trying, so the call returns once a majority is back, and only a
+  `RetryStrategy` that gives up makes it throw. The changelog
   says the forget ignores a weaker write concern on the application's collection.
 * A late save whose stamp is not the current generation can replace a marker written under the current one, when
   its lease condition lets it. The id then reads absent and the next catch-up replays once.
@@ -364,8 +368,9 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   still brings the marker back for the 0.34.0 nodes. No mixed order makes a node read a marker as present where an
   all-0.34.0 deployment would read it absent. A 0.35.0 node saves and deletes the plain checkpoint under the same
   conditions as 0.34.0, and on read it only adds the stamp check, which can turn present into absent and never the other
-  way. The one difference is a forget whose `$inc` passes its `wtimeout`. It throws before its delete, so 0.34.0 nodes
-  keep reading the marker, and the caller gets the exception. The list under "In a mixed cluster" gives each case.
+  way. The one difference is a forget whose `$inc` has no majority yet. It sends no delete until a retried `$inc` gets
+  one, so the 0.34.0 nodes keep reading the marker until then, and after the forget throws under a `RetryStrategy`
+  that gives up. The list under "In a mixed cluster" gives each case.
 * A downgrade keeps every marker where 0.34.0 reads it. A marker the generation fenced stays too, and a 0.34.0 node
   reads it as present, the exposure 0.34.0 has to any late write. The generation documents and hashes stay behind
   unread, and the migration guide says to leave them in place. Removing one puts that id's generation back at 0. On
