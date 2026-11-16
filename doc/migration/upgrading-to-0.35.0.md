@@ -870,8 +870,8 @@ The in-memory store and `SpringMongoSagaStateStore` implement it. On a subscript
 `SagaRunner.run` throws an `IllegalStateException` when quarantine is on and the saga's store doesn't implement it.
 The message names the interface and `SagaRunnerConfig.disableQuarantine()`.
 
-A store that implements it keeps the skipped inputs, with `recordSkippedInput`, `findSkippedInputs`, `deleteSkippedInput`,
-`deleteSkippedInputByKey` and `deleteSkippedInputs(sagaId, quarantineId)`. In `delete(sagaId)` it deletes the records
+A store that implements it keeps the skipped inputs, with `recordSkippedInput`, `findSkippedInputs`,
+`deleteSkippedInput`, `deleteSkippedInputByKey` and `deleteSkippedInputs(sagaId, quarantineId)`. In `delete(sagaId)` it deletes the records
 under the quarantine id of the instance it removes, after the instance, and leaves the records under any other
 quarantine id alone, since a new instance with the same saga id can be started and quarantined in between. It implements
 `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`

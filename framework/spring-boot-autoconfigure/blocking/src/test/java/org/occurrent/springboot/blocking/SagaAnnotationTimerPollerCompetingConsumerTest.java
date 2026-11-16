@@ -25,6 +25,7 @@ import org.occurrent.annotation.Saga;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
@@ -133,7 +134,9 @@ class SagaAnnotationTimerPollerCompetingConsumerTest {
         @SuppressWarnings("unchecked")
         @Bean
         SagaStateStore<TestState> sagaStateStore() {
-            return mock(SagaStateStore.class);
+            SagaStateStore<TestState> store = mock(SagaStateStore.class);
+            when(store.stateCodec()).thenReturn(SagaStateCodec.identity());
+            return store;
         }
 
         @Bean

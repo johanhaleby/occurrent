@@ -85,17 +85,6 @@ instance's status with step 1 rather than reading the quiet either way.
 When an instance is quarantined, the same logger logs an `ERROR` saying it is now `QUARANTINED`. That line is the one
 to alert on. It names two durations, how long the event had been failing and then the budget, in that order.
 
-Alert on an `ERROR` saying the instance was quarantined but its state store did not persist
-`SagaFailure.quarantineId` or `SagaEnvelope.quarantineSkipCount` too. The saga reads the instance back after the
-write that quarantines it, and logs this line when the store lost either field. It writes the instance back as it was
-before the quarantine, and the event goes back to whatever feeds the subscription instead of being acknowledged. Every
-delivery of the event fails the same way until the store persists both fields, so fix the store. When another write
-changes the instance before that, the saga reads it again and writes it back again, up to
-`SagaRunnerConfig.maxCasAttempts` times. When the line says the quarantine could not be undone, something outside the saga wrote the instance on every
-attempt. The instance is then stored as `QUARANTINED` without them and skips every later input without recording it,
-so it can't be released with them. When the line says undoing the quarantine failed, the store threw during the undo,
-and the instance may still be `QUARANTINED` without them. Read its status to find out.
-
 A release in step 5 logs lines of its own from the same logger. The one to alert on is an `ERROR` saying the instance
 is `QUARANTINED` again, and step 5 lists the others.
 
@@ -220,37 +209,32 @@ enumeration is the optional capability and a by-id lookup is not.
 Optional<SagaInstance> one = instances.find("order-4711");
 ```
 
-It reads through `SagaStateStore.findWithoutState`, so on a store that overrides that member it answers for an
-instance whose state no longer decodes as well. On a store that does not override it, that member inherits to `find`,
-which decodes, so this throws for such an instance and `findByStatus` in step 1 is the read that still answers.
+It reads through `SagaStateStore.findWithoutState`, so it answers for an instance whose state no longer decodes as
+well.
 
 ### 3. [you] Read the state, if you need it and it still decodes
 
 Nothing `SagaInstance` answers comes from the saga's own state, which is why step 1 works on the instance you are most
 likely to be looking at. `findByStatus` reads no state on any store, since that is what the `SagaStateStoreQueries`
-contract requires of it. Step 2's by-id read is state-free only on a store that overrides `findWithoutState`, as above.
+contract requires of it. Step 2's by-id read reads no state either.
 
 An instance whose state can no longer be decoded, after an event class was renamed or a converter changed, is
 quarantined like any other. Its state is still stored, untouched, so repairing the converter and reading it again
 gets the state back. The instance stays quarantined.
 
-`SagaStateStore.find(sagaId)` is the read that does decode the state, and it is the one that throws on such an
-instance. Use it when the state itself is what you need:
+`SagaStateStore.find(sagaId)` returns the instance as the store keeps it, and decoding that with `SagaCodec` throws on
+such an instance. Use the two when the state itself is what you need:
 
 ```java
-Optional<SagaEnvelope<OrderFulfilment>> envelope = stateStore.find("order-4711");
+SagaCodec<OrderFulfilment> codec = SagaCodec.of(stateStore.stateCodec(), null);
+Optional<SagaEnvelope<OrderFulfilment>> envelope = stateStore.find("order-4711").map(codec::decode);
 ```
 
-Two members make the state-free reads work, `SagaStateStore.findWithoutState` and
-`SagaStateStore.compareAndSaveWithoutState`. Both are `default` methods that inherit to `find` and `compareAndSave`,
-so a store written against 0.33.0 keeps working without them. `SpringMongoSagaStateStore` overrides both.
-`SagaStateStore.inMemory()` does not and does not need to, since it holds each envelope as an object rather than a
-document, so nothing there can fail to decode.
+For a flow saga, pass the application's `CloudEventConverter` instead of `null`.
 
-A store of your own that overrides neither cannot quarantine an instance whose state does not decode, because the
-executor's own read throws for the same reason yours does, so that instance never reaches its budget. It keeps
-failing for as long as the subscription model offers the failing event again, the way it did in 0.33.0. The contract for an override is in
-[section 8 of the upgrade guide](../migration/upgrading-to-0.34.0.md#the-five-breaks).
+Every store implements the two members that read and write an instance without its state,
+`SagaStateStore.findWithoutState` and `SagaStateStore.compareAndSaveWithoutState`. The executor quarantines an
+instance whose state does not decode with them, so that works on any store.
 
 ### 4. [you] Fix the cause, or decide there is nothing to fix
 
@@ -263,7 +247,7 @@ runner. On 0.34.0 nothing replays it, and step 6 is what ends it.
 
 **The state cannot be decoded.** That shows up as a store or converter class in `failureType()` rather than
 anything of your saga's. Repair the converter or restore the event class, deploy, and read the instance again with
-`SagaStateStore.find`. If it decodes now, you know what the instance held, and step 5 can release it. A release reads
+`SagaStateStore.find` and `SagaCodec`, as in step 3. If it decodes now, you know what the instance held, and step 5 can release it. A release reads
 the instance with its state, so while the state still doesn't decode, `release` throws an `IllegalStateException`
 that names the decoding failure.
 
@@ -366,11 +350,6 @@ For the second, fix how the state decodes, as in step 4, and release the instanc
 
 An instance whose state stops decoding while it is releasing stays releasing. On a store that can list the releasing
 instances, each poll logs the failure at `WARN` and tries again, so the release goes on once the state decodes.
-
-`release` also throws an `IllegalStateException` when the state store didn't persist `SagaFailure.releasedAt`,
-`SagaFailure.quarantineId` or `SagaEnvelope.quarantineSkipCount` as the release started. The message names the store.
-A `SagaStateStore` of your own has to save all three, as
-[the 0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#stored-saga-state-for-a-release) describes.
 
 **Checking on a release.** `SagaInstance.failure().isReleasing()` is `true` while a release is under way, and
 `failure().releasedAt()` says when it started. Against MongoDB:

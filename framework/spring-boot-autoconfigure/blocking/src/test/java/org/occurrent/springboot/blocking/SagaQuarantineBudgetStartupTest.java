@@ -37,6 +37,7 @@ import org.occurrent.annotation.Saga;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
@@ -268,7 +269,9 @@ class SagaQuarantineBudgetStartupTest {
         @SuppressWarnings("unchecked")
         @Bean
         SagaStateStore<TestState> sagaStateStore() {
-            return mock(SagaStateStore.class);
+            SagaStateStore<TestState> store = mock(SagaStateStore.class);
+            when(store.stateCodec()).thenReturn(SagaStateCodec.identity());
+            return store;
         }
 
         @Bean
