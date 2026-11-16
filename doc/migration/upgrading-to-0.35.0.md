@@ -154,8 +154,8 @@ other sections compile fine and behave differently, so read them first.
   on to the live model and the MongoDB models threw `UnknownSubscriptionException` while the `subscribe(..)` replay ran.
   Compiles unchanged.
 - [A catch-up marker is the position the next catch-up resumes after](#a-catch-up-marker-is-the-position-the-next-catch-up-resumes-after).
-  A restart of the blocking `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` replays
-  the events since the previous start, and a cancel no longer promises a rebuild. Compiles unchanged.
+  A restart of `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed`, blocking or reactor,
+  replays the events since the previous start, and a cancel no longer promises a rebuild. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
@@ -2989,8 +2989,8 @@ over, so a resume at a position before then still throws `UnknownSubscriptionExc
 
 ## A catch-up marker is the position the next catch-up resumes after
 
-This applies to the blocking `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` and `DomainEventFeed` when
-you give them a `CheckpointStorage` for the catch-up marker.
+This applies to `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` and `DomainEventFeed`, blocking and
+reactor, when you give them a `CheckpointStorage` for the catch-up marker.
 
 In 0.34.0 a stored marker meant that the history had been read in full, and a catch-up that found it went live without
 a replay. In 0.35.0 every start reads the stored marker, reads the head of the event store with `currentPosition()`,
@@ -3004,20 +3004,23 @@ What you see:
   restart, and the cache that removes duplicates is in memory, so it applies them again. Delivery was already at least
   once, so a projection that applies an event twice with the same result as once needs no change.
 - `catchUp()` on a feed with a stored marker replays the events after it, where 0.34.0 went straight to live.
-- `cancelSubscription(id)` still deletes the marker before it cancels, and the next subscribe of the id replays from the
-  beginning when that delete holds. A delete that a Redis failover loses, or a marker write that the store applies
-  after the delete, makes that subscribe resume after the old marker instead. Subscribe under a new subscription id
-  when you need a rebuild.
+- `cancelSubscription(id)` still deletes the marker, and the next subscribe of the id replays from the beginning when
+  that delete holds. The blocking push model deletes it before it cancels, and the reactor one after, and the `Mono`
+  that the reactor `cancelSubscription(id)` returns completes once the delete is done. A delete that a Redis failover
+  loses, or a marker write that the store applies after the delete, makes that subscribe resume after the old marker
+  instead. So does a reactor delete that fails, where 0.34.0 replayed from the beginning in the same process until a
+  later delete succeeded. Subscribe under a new subscription id when you need a rebuild.
 - The marker is stored under the subscription id alone. When you change the filter or the projection, subscribe under
   a new id. A start under the old id resumes after a position its earlier filter stored, and skips the events at or
   below it that the new filter matches. 0.34.0 skipped the whole replay in that case.
-- `ReplayAware` hears `replayStarted()`, `replayCompleted()` and `replayAbandoned()` only for a replay from the
-  beginning, as in 0.34.0. A replay after a marker delivers its events the way the live feed does, without those
-  calls. A `CatchupListener` on the push model still hears `catchupStarted` and `historyRead` on every start.
+- `ReplayAware` and `ReactiveReplayAware` hear `replayStarted()`, `replayCompleted()` and `replayAbandoned()` only for
+  a replay from the beginning, as in 0.34.0. A replay after a marker delivers its events the way the live feed does,
+  without those calls. A `CatchupListener` on the push model still hears `catchupStarted` and `historyRead` on every
+  start.
 
 A marker that 0.34.0 stored holds the head read when it was written, after that start's live feed was registered, so a
-0.35.0 start resumes after it. A 0.34.0 node that reads a marker 0.35.0 stored skips its replay, as it always did. A rolling upgrade needs nothing on either
-side.
+0.35.0 start resumes after it. A 0.34.0 node that reads a marker 0.35.0 stored skips its replay, as it always did. A
+rolling upgrade needs nothing on either side.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
