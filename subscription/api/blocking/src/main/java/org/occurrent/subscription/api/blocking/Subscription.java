@@ -56,8 +56,10 @@ public interface Subscription {
      * That changes when the model gives up on a subscription after it started. When the model refuses it for good, the
      * next call throws that refusal, also after an earlier call answered {@code true}, and so does every call after it.
      * When the model holds it paused until you resume it, each call throws the reason until a resume starts it again.
-     * A cancel or a shutdown ends the hold. The handle of a subscription that had started then answers {@code true}
-     * again, and the handle of one that never started throws an exception saying it was cancelled while held paused.
+     * That holds for the handle {@code subscribe(..)} returned and for a handle a resume returned up to the held run. A
+     * handle a later resume returned answers for that later run, so it answers {@code false} while that run opens. A
+     * cancel or a shutdown ends the hold. A handle that threw the hold then answers {@code true} again when the
+     * subscription had started, and otherwise throws an exception saying it was cancelled while held paused.
      * The MongoDB change stream models refuse a subscription that ran when its change stream's history is lost and
      * restarts after such a loss are off, and hold it paused when a restart after such a loss gets no position to open
      * at.
