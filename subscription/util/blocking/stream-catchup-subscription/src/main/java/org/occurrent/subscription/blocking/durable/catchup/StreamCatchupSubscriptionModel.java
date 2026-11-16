@@ -595,39 +595,6 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         return returnIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).map(EveryN::forOneSubscription).orElse(__ -> false);
     }
 
-    /**
-     * Delivers catch-up events to {@code action}, optionally deduping against {@code cache}, and persists the
-     * subscription position for events matching the catch-up persist predicate. The checkpoint is derived once per
-     * event by {@code checkpointAfter}, which differs between the time-based path (time based) and the position path
-     * (global position). The event is delivered with it as a {@link CheckpointAwareCloudEvent}, and it is the one
-     * persisted for the event. {@code persistDuringCatchup} is the attempt's own, so its count runs on across windows.
-     */
-    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache, Predicate<CloudEvent> persistDuringCatchup, Function<CloudEvent, Checkpoint> checkpointAfter) {
-        // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
-        // resource-backed read (the Spring Mongo bulk replay wraps a server cursor) does not leak its cursor.
-        try (cloudEvents) {
-            Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> shouldKeepReplaying(subscriptionId));
-            if (cache != null) {
-                // Skip events already delivered in an earlier reconciliation pass (the delta is re-read until it
-                // stabilises, so passes overlap) and record the rest so the live subscription can skip them at the
-                // handover seam. Without the filter the overlapping re-reads would deliver duplicates.
-                takeWhile = takeWhile.filter(e -> !cache.contains(CatchupEventKey.of(e))).peek(e -> cache.add(CatchupEventKey.of(e)));
-            }
-            takeWhile
-                    .map(e -> new CheckpointAwareCloudEvent(e, checkpointAfter.apply(e)))
-                    .peek(action)
-                    // Rechecked here, not just by takeWhile before action ran: action is caller code and can take
-                    // long enough for this attempt to be superseded while it runs, and persisting a stale attempt's
-                    // position after that would regress a newer attempt's already-more-advanced one, since the
-                    // default write condition is any(). Not shouldKeepReplaying, since the action has completed and a stop or
-                    // a shutdown, also one this same event's action triggered, does not keep its position from being
-                    // stored, and a replay that runs again after a stop starts from there.
-                    .filter(e -> isSafeToPersistFor(subscriptionId))
-                    .filter(e -> persistDuringCatchup.test(e.getOriginalCloudEvent()))
-                    .forEach(e -> doIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, cfg -> saveCatchupCheckpoint(subscriptionId, cfg, e.getCheckpoint())));
-        }
-    }
-
     @Override
     public void shutdown() {
         markShuttingDown();

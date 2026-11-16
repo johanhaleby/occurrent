@@ -135,6 +135,8 @@ other sections compile fine and behave differently, so read them first.
 - [A blocking cancel no longer promises a rebuild](#a-blocking-cancel-no-longer-promises-a-rebuild).
   `cancelSubscription(id)` on the blocking `CatchupThenPushSubscriptionModel` still deletes the catch-up marker, but a
   rebuild takes a new subscription id. Compiles unchanged.
+- [A blocking catch-up's cancel and stop wait for a replayed event in the action](#a-blocking-catch-ups-cancel-and-stop-wait-for-a-replayed-event-in-the-action).
+  The call waits up to a second for an action the replay already started, and logs a `WARN` past that. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
   `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached. Over
   `ReactorMongoSubscriptionModel` it fails only when MongoDB's reply to `hello` has no `localTime`, where 0.34.0 didn't
@@ -2814,6 +2816,37 @@ while the function runs.
   returns, and the subscribe still goes ahead.
 
 The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
+
+## A blocking catch-up's cancel and stop wait for a replayed event in the action
+
+In 0.34.0 `cancelSubscription(id)` and `stop()` on the blocking `StreamCatchupSubscriptionModel`,
+`DcbCatchupSubscriptionModel` and `CatchupSubscriptionModel` returned without waiting for a replay that was in the
+subscriber's action, and the replay could hand the action one more event after the call returned. Now no replayed event
+reaches the action once the call has taken effect, and the call waits up to a second for the action to return. See
+[ADR 177](../architecture/decisions/0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md).
+
+### Who is affected
+
+Code that cancels or stops a blocking catch-up while it replays history, and whose action waits for something that
+only happens once that cancel or stop has returned. An example is an action that waits on a latch, a lock or a future
+that the thread calling `cancelSubscription(id)` or `stop()` releases afterwards. An action that returns on its own
+only makes the call wait until it has returned.
+
+### What changes
+
+* `cancelSubscription(id)` waits up to a second for a call to the action that the replay of `id` already started,
+  before it cancels the subscription in the live delegate and deletes the stored position.
+* `stop()` waits up to a second in all for the replays it parks, before the live delegate stops.
+* Past the second, the call returns all the same and logs a `WARN` naming the subscription, and the replay hands the
+  action no further event.
+* A cancel or a stop made from inside a replay's action doesn't wait for that action. `shutdown()` doesn't wait.
+* A subscribe of an id right after a cancel of it returns at once, as in 0.34.0. Its replay waits on its own thread
+  until the cancelled replay's call to the action has returned.
+
+### What to do
+
+Nothing, unless the action waits for the cancel or the stop to return. Then the call takes a second longer and logs
+the `WARN`. Release what the action waits for before you cancel or stop, or don't make the action wait for the call.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 

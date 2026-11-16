@@ -315,13 +315,16 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 .filter(Objects::nonNull);
     }
 
-    // stopReplay() rather than a child's own stop(), which would reach the shared live delegate once per child. The
-    // children have to be told so a replay already in flight stops delivering and is parked. A child that fails to park
-    // a replay doesn't keep the others or the live delegate from stopping.
+    // stopReplayLeavingTheActions() rather than a child's own stop(), which would reach the shared live delegate once
+    // per child. The children have to be told so a replay already in flight stops delivering and is parked. A child
+    // that fails to park a replay doesn't keep the others or the live delegate from stopping. The stop then waits once,
+    // up to a second in all, for the actions the children's replays let through, before the live delegate stops.
     @Override
     public void stop() {
+        List<AbstractCatchupSubscriptionModel.ActionInFlight> admitted = new ArrayList<>();
         List<Runnable> steps = new ArrayList<>();
-        presentCatchupModels().forEach(model -> steps.add(model::stopReplay));
+        presentCatchupModels().forEach(model -> steps.add(() -> model.stopReplayLeavingTheActions(admitted)));
+        steps.add(() -> AbstractCatchupSubscriptionModel.awaitTheAdmittedActions(admitted, "stop"));
         steps.add(getWrappedSubscriptionModel()::stop);
         AbstractCatchupSubscriptionModel.runEach(steps, Runnable::run);
     }
@@ -578,7 +581,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         // the live delegate has the subscription or the handover has failed. A replay a subscribe started stops
         // counting as one this model runs before the live delegate has the subscription.
         try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId);
-             AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = anyCatchupModel().tryLockHandover(subscriptionId)) {
+             AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = anyCatchupModel().lockHandover(subscriptionId)) {
             AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.runsReplayHere(subscriptionId)).findFirst().orElse(null);
             if (replaying != null) {
                 replaying.pauseSubscription(subscriptionId);
@@ -591,7 +594,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @Override
     public void cancelSubscription(String subscriptionId) {
         // Neither mode is known ahead of time for a bare subscriptionId, so tell both inner models to drop their own
-        // bookkeeping for it (a no-op on whichever one wasn't running it) and cancel the shared live delegate once.
+        // bookkeeping for it (a no-op on whichever one wasn't running it) and cancel the shared live delegate once. The
+        // child that runs the replay waits up to a second for an action it let through before the delegate's cancel.
         try (AbstractCatchupSubscriptionModel.Claim ignored = anyCatchupModel().claimWithoutWaitingForAsks(subscriptionId)) {
             Runnable cancelAskedSubscribes = anyCatchupModel().askedSubscribesToCancel(subscriptionId);
             boolean nothingKept = anyCatchupModel().cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {

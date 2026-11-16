@@ -24,6 +24,7 @@ import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpoint;
@@ -50,7 +51,9 @@ import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
+import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
+import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.internal.LongestReplay;
@@ -61,6 +64,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -76,7 +80,9 @@ import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
@@ -143,6 +149,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // pause, on the thread that delivered the loss. With the MongoDB lease strategy the next lease change for that
     // subscription waits behind it.
     static final Duration LIFECYCLE_WAIT = Duration.ofSeconds(10);
+    // How long a cancel or a stop waits for a call to the subscriber's action that a replay let through before the call
+    // took effect, as the live MongoDB models wait a second for a running action. The call has taken effect already,
+    // so it returns once this has passed, with a WARN, and the replay lets no further event through.
+    static final Duration ACTION_WAIT = Duration.ofSeconds(1);
     // Who to tell about each id's catch-up boundaries, registered before the subscription that produces them.
     // Kept until this model shuts down, since the registration outlives any one catch-up: a stop and start, a
     // resume, or a cancel and re-subscribe all run another catch-up for the same id, and a recorder that stopped
@@ -150,16 +160,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private final ConcurrentMap<String, CatchupListener> catchupListeners = new ConcurrentHashMap<>();
     // Told when this model holds a subscription paused because the live delegate lost the live start of its replay
     private final List<StartRefusalListener> heldPausedListeners = new CopyOnWriteArrayList<>();
-    // One lock per subscriptionId, guarding a fresh attempt's registration (startCatchupAsync), a finishing
-    // attempt's checkpoint cleanup and delegate subscribe (or its cancelled-cleanup branch), and
-    // cancelRunningCatchup. The identity check above only made the ownership decision itself atomic, not what
-    // followed it, so a cancellation or a fresh registration could land in the gap after an attempt decided it was
+    // One lock per subscriptionId, taken for a fresh attempt's registration (startCatchupAsync), each event a replay
+    // lets through to the subscriber's action (deliverIfStillWanted), each catch-up checkpoint it checks and stores
+    // (saveIfStillSafe), a finishing attempt's checkpoint cleanup and delegate subscribe (or its cancelled-cleanup
+    // branch), and cancelRunningCatchup. The identity check above only made the ownership decision itself atomic, not
+    // what followed it, so a cancellation or a fresh registration could land in the gap after an attempt decided it was
     // still current but before it finished acting on that. Held only across those short transitions, never across
-    // an in-flight replay, so a long catch-up is never serialized by this lock. Entries are never removed for an id
-    // this instance has run a catch-up for, so an application that subscribes and cancels ever new ids keeps one lock
-    // for each of them until this model is gone. cancelRunningCatchup and a pause never create one for an id that has
-    // none, so cancelSubscription or pauseSubscription for an unknown id adds no lock.
-    private final ConcurrentMap<String, ReentrantLock> handoverLocks;
+    // the subscriber's action, so a long catch-up is never serialized by this lock. Counted like lifecycleClaims, so an
+    // entry is kept only while a thread holds the lock or waits for it.
+    private final ConcurrentMap<String, CountedLock> handoverLocks;
     // One claim per subscriptionId, held by a lifecycle call for as long as it runs, see claim(..). An entry exists
     // while a thread holds the claim or waits for it, and is removed once none does, so the map holds nothing for an id
     // whose calls have all returned.
@@ -186,7 +195,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // cases in which it lets the event through. Over any other model it lets the event through while it calls this
     // model for the subscription. A cycle through it has to pass through a wait for an action, which LIFECYCLE_WAIT
     // bounds, and so does one through any other caller.
-    private final ConcurrentMap<String, ClaimLock> lifecycleClaims;
+    private final ConcurrentMap<String, CountedLock> lifecycleClaims;
     // The subscribes whose function is asked with no claim held, shared by every child of the same dispatcher
     private final Set<AskedFirst> askedFirst;
     // The ids a resume at a given position runs for that read as running when it took their claim, so they keep reading
@@ -203,6 +212,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // it returns, and then moved to what is kept for the subscription when the cancel threw, so start(true) and every
     // resume find them all through the cancel, also when the subscription wasn't made through this model.
     private final ConcurrentMap<String, CancelUnderWay> cancelsUnderWay;
+    // Done once every attempt of a parked replay that a cancel or a resume dropped for the id has returned, kept only
+    // until then, so the next replay of the id doesn't run the action alongside one of them
+    private final ConcurrentMap<String, CompletableFuture<Void>> droppedReplaysReturned;
     // How many cancels have started, each counted once it is in cancelsUnderWay and before it changes anything else
     private final AtomicLong cancelsStarted;
     // The replays a resume started on this model, from before the replay is registered until its handle completes.
@@ -255,6 +267,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.lifecycleClaims = sharedState.lifecycleClaims;
         this.repositioning = sharedState.repositioning;
         this.cancelsUnderWay = sharedState.cancelsUnderWay;
+        this.droppedReplaysReturned = sharedState.droppedReplaysReturned;
         this.cancelsStarted = sharedState.cancelsStarted;
         this.handedOver = sharedState.handedOver;
         this.askedFirst = sharedState.askedFirst;
@@ -271,13 +284,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * let two children's calls for the same id run at once.
      */
     static final class SharedCatchupState {
-        private final ConcurrentMap<String, ReentrantLock> handoverLocks = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, CountedLock> handoverLocks = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, CatchupAttempt> currentAttempt = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, Subscribed> subscribed = new ConcurrentHashMap<>();
-        private final ConcurrentMap<String, ClaimLock> lifecycleClaims = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, CountedLock> lifecycleClaims = new ConcurrentHashMap<>();
         private final Set<String> repositioning = ConcurrentHashMap.newKeySet();
         private final ConcurrentMap<String, CancelUnderWay> cancelsUnderWay = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, CompletableFuture<Void>> droppedReplaysReturned = new ConcurrentHashMap<>();
         private final AtomicLong cancelsStarted = new AtomicLong();
         private final ConcurrentMap<String, HandedOver> handedOver = new ConcurrentHashMap<>();
         private final Set<AskedFirst> askedFirst = ConcurrentHashMap.newKeySet();
@@ -335,10 +349,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
-    // The lock behind a claim, and how many threads hold it or wait for it
-    private static final class ClaimLock {
+    // The lock behind a claim or a handover lock, and how many threads hold it or wait for it
+    static final class CountedLock {
         private final ReentrantLock lock = new ReentrantLock();
-        // Changed only inside compute and computeIfPresent of lifecycleClaims, which run one at a time for an id
+        // Changed only inside compute and computeIfPresent of the map that holds it, which run one at a time for an id
         private int users = 1;
     }
 
@@ -549,7 +563,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * Stops the live delegate and parks every replay in flight, as {@link #stopReplay()} describes, also when parking
-     * one throws.
+     * one throws. It waits up to a second for an event a replay already handed to the subscriber's action, before the
+     * live delegate stops, and logs a {@code WARN} past that.
      */
     @Override
     public void stop() {
@@ -1802,8 +1817,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     private void pauseHoldingTheClaim(String subscriptionId) {
-        HandoverLock lock = tryLockHandover(subscriptionId);
-        try {
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
             CatchupAttempt running = currentAttempt.get(subscriptionId);
             if (running != null && running.backingOff && !running.abandoned()) {
                 hold(subscriptionId, running);
@@ -1822,10 +1836,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 pauseRequestedDuringCatchup.put(subscriptionId, true);
             } else {
                 getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
-            }
-        } finally {
-            if (lock != null) {
-                lock.close();
             }
         }
     }
@@ -1883,6 +1893,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final CompletableFuture<Void> earlierAttemptsDone;
         // Done once this attempt's thread and every earlier attempt's thread have returned
         private final CompletableFuture<Void> done = new CompletableFuture<>();
+        // Done once the subscriber's action has returned from the last event this attempt let through, which a cancel
+        // or a stop waits for. Written under the handover lock on this attempt's own thread.
+        private volatile CompletableFuture<Void> actionReturned = CompletableFuture.completedFuture(null);
 
         private CatchupAttempt(String subscriptionId, AbstractCatchupSubscriptionModel owner, ReplayState replay, CompletableFuture<Void> earlierAttemptsDone) {
             this.subscriptionId = subscriptionId;
@@ -2121,6 +2134,105 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     protected void saveCatchupCheckpoint(String subscriptionId, UseCheckpointInStorage cfg, Checkpoint checkpoint) {
         cfg.storage().save(subscriptionId, checkpoint, writeConditionFor(cfg, subscriptionId));
         CURRENT_ATTEMPT.get().replay.lastStored.set(checkpoint);
+    }
+
+    /**
+     * Runs {@code delivery}, which hands one replayed event to the subscriber's action, when the calling attempt should
+     * keep replaying as {@link #shouldKeepReplaying} answers, and returns whether it ran. The answer and letting the
+     * event through are one step under the handover lock, and the action runs after the lock is released. A cancel or a
+     * stop that takes effect before that step lets no event through, and one that takes effect after it waits up to a
+     * second for the action to return. Only meaningful on the virtual thread {@link #startCatchupAsync} started for
+     * this attempt.
+     */
+    private boolean deliverIfStillWanted(String subscriptionId, Runnable delivery) {
+        CatchupAttempt attempt = CURRENT_ATTEMPT.get();
+        CompletableFuture<Void> actionReturned = new CompletableFuture<>();
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            if (!shouldKeepReplaying(subscriptionId)) {
+                return false;
+            }
+            attempt.actionReturned = actionReturned;
+        }
+        try {
+            delivery.run();
+        } finally {
+            actionReturned.complete(null);
+        }
+        return true;
+    }
+
+    /**
+     * Stores {@code checkpoint} as {@link #saveCatchupCheckpoint} does, with {@link PersistCheckpointDuringCatchupPhase}
+     * configured, when {@link #isSafeToPersistFor} allows it and then {@code persist} answers {@code true}. Checked and
+     * stored under the handover lock. A cancel marks the attempt under the same lock before it deletes the stored
+     * position, so it either comes before the check and nothing is stored, or after the write and deletes what was
+     * stored. Only meaningful on the virtual thread {@link #startCatchupAsync} started for this attempt.
+     */
+    private void saveIfStillSafe(String subscriptionId, BooleanSupplier persist, Checkpoint checkpoint) {
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            if (isSafeToPersistFor(subscriptionId) && persist.getAsBoolean()) {
+                doIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, cfg -> saveCatchupCheckpoint(subscriptionId, cfg, checkpoint));
+            }
+        }
+    }
+
+    /**
+     * Delivers the replayed {@code cloudEvents} to {@code action} in order until the calling attempt should no longer
+     * replay, and stores the position after each event {@code persistDuringCatchup} matches. {@code persistDuringCatchup}
+     * is the attempt's own, so its count runs on across windows. With a {@code cache}, an event an earlier
+     * reconciliation pass delivered is skipped, since the delta is read again until it stops changing and the passes
+     * overlap, and each delivered event is recorded so the live subscription skips it at the handover. Each event is
+     * delivered as a {@link CheckpointAwareCloudEvent} with the checkpoint {@code checkpointAfter} derives, once, so
+     * the delivered and the stored checkpoint are the same. The source stream is closed also when the replay ends
+     * early, so a read backed by a server cursor doesn't leak it. Only meaningful on the virtual thread
+     * {@link #startCatchupAsync} started for this attempt.
+     */
+    void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache,
+                              Predicate<CloudEvent> persistDuringCatchup, Function<CloudEvent, Checkpoint> checkpointAfter) {
+        try (cloudEvents) {
+            Iterator<CloudEvent> events = cloudEvents.iterator();
+            while (events.hasNext()) {
+                CloudEvent event = events.next();
+                @Nullable CatchupEventKey key = cache == null ? null : CatchupEventKey.of(event);
+                if (key != null && cache.contains(key)) {
+                    continue;
+                }
+                Checkpoint checkpoint = checkpointAfter.apply(event);
+                boolean delivered = deliverIfStillWanted(subscriptionId, () -> {
+                    if (key != null) {
+                        cache.add(key);
+                    }
+                    action.accept(new CheckpointAwareCloudEvent(event, checkpoint));
+                });
+                if (!delivered) {
+                    return;
+                }
+                // Not shouldKeepReplaying, since the action has returned, and a stop or a shutdown, also one this
+                // event's action asked for, doesn't keep its position from being stored. A replay that runs again
+                // after a stop starts from there.
+                saveIfStillSafe(subscriptionId, () -> persistDuringCatchup.test(event), checkpoint);
+            }
+        }
+    }
+
+    // A call to the subscriber's action that a replay of subscriptionId let through, and that a cancel or a stop waits for
+    record ActionInFlight(String subscriptionId, CompletableFuture<Void> returned) {
+    }
+
+    // Waits up to ACTION_WAIT, in all, for every call in admitted to return. call names the cancel or the stop for the WARN
+    // logged when one hasn't.
+    static void awaitTheAdmittedActions(List<ActionInFlight> admitted, String call) {
+        CompletableFuture<Void> returned = CompletableFuture.allOf(admitted.stream().map(ActionInFlight::returned).toArray(CompletableFuture[]::new));
+        if (returned.isDone() || completesWithin(returned, ACTION_WAIT)) {
+            return;
+        }
+        List<String> stillInTheAction = admitted.stream().filter(action -> !action.returned().isDone()).map(ActionInFlight::subscriptionId).distinct().toList();
+        // Each action may have returned since the wait ended
+        if (stillInTheAction.isEmpty()) {
+            return;
+        }
+        log.warn("A {} returned while the action of {} still ran for an event its catch-up replay delivered, {} ms after the {} took effect. The replay delivers no further event.",
+                call, stillInTheAction.size() == 1 ? "subscription " + stillInTheAction.getFirst() : "subscriptions " + String.join(", ", stillInTheAction), ACTION_WAIT.toMillis(), call);
     }
 
     /**
@@ -2404,17 +2516,24 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * Acquires {@code subscriptionId}'s handover lock for the duration of a try-with-resources block, held by
-     * {@link #startCatchupAsync}'s registration, a subclass's replay-completion code from
-     * {@link #endReplayIfStillCurrent} through its checkpoint cleanup and delegate {@code subscribe} call (or the
-     * cancelled-cleanup branch), and {@link #cancelRunningCatchup}. A {@link ReentrantLock}, not
+     * {@link #startCatchupAsync}'s registration, {@link #deliverIfStillWanted} and {@link #saveIfStillSafe} for each
+     * replayed event, a subclass's replay-completion code from {@link #endReplayIfStillCurrent} through its checkpoint
+     * cleanup and delegate {@code subscribe} call (or the cancelled-cleanup branch), and {@link #cancelRunningCatchup}.
+     * The lock is kept for the id only while a thread holds it or waits for it. A {@link ReentrantLock}, not
      * {@code synchronized}, because every caller here runs on a {@link #startCatchupAsync virtual thread} and a
      * handover span can block on storage or delegate I/O. Blocking inside a {@code synchronized} block would pin
      * the carrier thread for that whole span, a plain lock does not.
      */
     protected HandoverLock lockHandover(String subscriptionId) {
-        ReentrantLock lock = handoverLocks.computeIfAbsent(subscriptionId, id -> new ReentrantLock());
+        ReentrantLock lock = useLock(handoverLocks, subscriptionId);
         lock.lock();
-        return lock::unlock;
+        return () -> {
+            try {
+                lock.unlock();
+            } finally {
+                releaseLock(handoverLocks, subscriptionId);
+            }
+        };
     }
 
     /**
@@ -2496,18 +2615,29 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // The lock behind the claim of subscriptionId, counting the caller as one that holds it or waits for it until it calls
     // releaseClaimLock
     private ReentrantLock useClaimLock(String subscriptionId) {
-        return lifecycleClaims.compute(subscriptionId, (id, used) -> {
+        return useLock(lifecycleClaims, subscriptionId);
+    }
+
+    // Removes the claim's entry once no thread holds it or waits for it
+    private void releaseClaimLock(String subscriptionId) {
+        releaseLock(lifecycleClaims, subscriptionId);
+    }
+
+    // The lock in locks for subscriptionId, counting the caller as one that holds it or waits for it until it calls
+    // releaseLock
+    private static ReentrantLock useLock(ConcurrentMap<String, CountedLock> locks, String subscriptionId) {
+        return locks.compute(subscriptionId, (id, used) -> {
             if (used == null) {
-                return new ClaimLock();
+                return new CountedLock();
             }
             used.users++;
             return used;
         }).lock;
     }
 
-    // Removes the claim's entry once no thread holds it or waits for it
-    private void releaseClaimLock(String subscriptionId) {
-        lifecycleClaims.computeIfPresent(subscriptionId, (id, used) -> --used.users == 0 ? null : used);
+    // Removes the entry for subscriptionId from locks once no thread holds it or waits for it
+    private static void releaseLock(ConcurrentMap<String, CountedLock> locks, String subscriptionId) {
+        locks.computeIfPresent(subscriptionId, (id, used) -> --used.users == 0 ? null : used);
     }
 
     // Whether every subscribe for the id whose function another thread asks with no claim held returns within timeout.
@@ -2541,21 +2671,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Acquires {@code subscriptionId}'s handover lock only if one already exists, {@code null} otherwise, without
-     * creating one. Registration ({@link #startCatchupAsync}) is the only place a lock is created for an id, and it
-     * creates the lock before it creates that id's {@link #currentAttempt} entry, so a missing lock here means no
-     * attempt has ever been registered for this id and there is nothing for {@link #cancelRunningCatchup} to
-     * coordinate with. Lets a cancellation for an id this instance has never run a catch-up for, including an
-     * arbitrary or unknown one a caller passes to {@code cancelSubscription} defensively, stay free of the registry
-     * instead of permanently reserving a lock for it.
+     * Acquires {@code subscriptionId}'s handover lock as {@link #lockHandover} does. It never returns {@code null}.
+     * It once skipped an id with no lock, but a lock is now kept only while a thread uses it, so a missing one no
+     * longer means that no attempt runs for the id, and skipping it would let a cancel mark the replay between its check
+     * and the event it lets through. The lock it takes for an unknown id is removed once it is released.
      */
-    protected @Nullable HandoverLock tryLockHandover(String subscriptionId) {
-        ReentrantLock lock = handoverLocks.get(subscriptionId);
-        if (lock == null) {
-            return null;
-        }
-        lock.lock();
-        return lock::unlock;
+    protected HandoverLock tryLockHandover(String subscriptionId) {
+        return lockHandover(subscriptionId);
     }
 
     /**
@@ -3089,8 +3211,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * Cancels the catch-up of {@code subscriptionId} and the subscription in the live delegate, and deletes its stored
-     * position. Returns without waiting for a replay that is in the subscriber's action, which stores nothing more once
-     * it returns. It doesn't wait either for a subscribe of the id on another thread whose start-position function is
+     * position. When the replay has already let an event through to the subscriber's action, this waits up to a second
+     * for the action to return before it cancels the subscription in the live delegate. When the action hasn't returned
+     * by then, it logs a {@code WARN} and goes on. The replay lets no further event through and stores nothing more once
+     * the action returns. It doesn't wait either for a subscribe of the id on another thread whose start-position function is
      * asked for this model with no claim held. That subscribe subscribes nothing, and the subscription it returns never
      * starts. A cancel the function makes on the subscribing thread doesn't stop that subscribe, and neither does a
      * cancel that throws. While this runs, {@link #start(boolean) start(true)} doesn't let the live delegate resume the
@@ -3183,16 +3307,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * delegate or position storage, which the dispatcher owns since both paths share the same delegate. What was kept
      * for the subscription as it was made stays too, and {@link #cancelSubscription(String)} forgets it once the live
      * delegate has cancelled the subscription.
+     * <p>
+     * When the replay has already let an event through to the subscriber's action, this waits up to a second for the
+     * action to return, and logs a {@code WARN} and returns when it hasn't by then. It doesn't wait when called from that
+     * action. The replay lets no further event through either way.
      */
     public void cancelRunningCatchup(String subscriptionId) {
-        // Locked, when a lock already exists for this id, so this call lands either strictly before or strictly
-        // after a handover attempt's own lockHandover span for the same id, never inside it. Unlocked, it could run
-        // in the gap after that attempt decided it was still current but before it acted on that, finding nothing
-        // left to flag and losing the cancellation. tryLockHandover deliberately does not create a lock for an id
-        // that has none yet, since that means no attempt has ever been registered for it and the operations below
-        // are then no-ops with or without a lock, including for an arbitrary or unknown id a caller passes here.
-        HandoverLock lock = tryLockHandover(subscriptionId);
-        try {
+        // Locked, so this call lands either strictly before or strictly after a handover attempt's own lockHandover
+        // span for the same id, never inside it. Unlocked, it could run in the gap after that attempt decided it was
+        // still current but before it acted on that, finding nothing left to flag and losing the cancellation. The
+        // lock it takes for an id no attempt was ever registered for is removed once it is released.
+        @Nullable ActionInFlight admitted = null;
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
             // Read under the lock that a replay run again registers under, so an attempt that runs the replay again
             // just before this is waited for too
             CancelUnderWay underWay = cancelsUnderWay.get(subscriptionId);
@@ -3206,10 +3332,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             // rather than start tracking an id that is not its concern. The entry itself is left for the flagged
             // attempt's own endReplayIfStillCurrent to remove, so this call can never race a newer attempt's map
             // removal.
-            currentAttempt.computeIfPresent(subscriptionId, (id, attempt) -> {
+            CatchupAttempt cancelled = currentAttempt.computeIfPresent(subscriptionId, (id, attempt) -> {
                 attempt.replay.cancelled = true;
                 return attempt;
             });
+            // Waited for only by the child that runs the attempt, since the children share currentAttempt and a
+            // dispatcher cancels on each of them
+            if (cancelled != null && cancelled.owner == this && cancelled != CURRENT_ATTEMPT.get()) {
+                admitted = new ActionInFlight(subscriptionId, cancelled.actionReturned);
+            }
             pauseRequestedDuringCatchup.remove(subscriptionId);
             // So a loss of the live start it handed over is left to the live delegate, which cancels the subscription
             // next, and a takeover asked for already starts no replay
@@ -3221,11 +3352,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (parked != null) {
                 parked.replay().cancelled = true;
                 parked.replay().result.cancel(false);
+                waitForTheDroppedReplay(subscriptionId, parked);
             }
-        } finally {
-            if (lock != null) {
-                lock.close();
-            }
+        }
+        if (admitted != null) {
+            awaitTheAdmittedActions(List.of(admitted), "cancel");
         }
     }
 
@@ -3357,6 +3488,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 if (held != null && parkedReplays.remove(subscriptionId, held)) {
                     held.replay().cancelled = true;
                     held.replay().result.cancel(false);
+                    waitForTheDroppedReplay(subscriptionId, held);
                 }
                 if (heldByTheResume) {
                     pauseRequestedDuringCatchup.remove(subscriptionId);
@@ -3497,25 +3629,52 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * <p>
      * Each replay is parked under its {@link #claim}. A failure to claim one is thrown once the others are parked, and
      * that replay parks itself once it next asks whether to go on.
+     * <p>
+     * No replayed event reaches the subscriber's action once a replay is parked. An event a replay handed to the action
+     * before that is waited for, up to a second for all of them together, so this usually returns only once the action
+     * has returned. Past the second it returns all the same and logs a {@code WARN} naming the subscriptions whose
+     * action still runs. Called from inside an action, it doesn't wait for that action. Each cancel and each stop waits
+     * on its own, so a stop after a cancel whose action still runs waits for that action again.
      */
     public void stopReplay() {
+        List<ActionInFlight> admitted = new ArrayList<>();
+        try {
+            stopReplayLeavingTheActions(admitted);
+        } finally {
+            awaitTheAdmittedActions(admitted, "stop");
+        }
+    }
+
+    /**
+     * Parks every replay in flight as {@link #stopReplay()} does, without waiting for the actions, and adds to
+     * {@code admitted} each call to the subscriber's action that one of them let through. A dispatcher stops each child
+     * through this and then waits once for all of them, so a stop waits up to a second in all, not a second per child.
+     */
+    void stopReplayLeavingTheActions(List<ActionInFlight> admitted) {
         synchronized (lifecycleLock) {
             stopped = true;
             stoppedByFailedStart = false;
             lifecycleGeneration++;
             stops++;
         }
-        parkReplaysInFlight();
+        parkReplaysInFlight(admitted);
     }
 
-    private void parkReplaysInFlight() {
+    // Adds to admitted each call to the subscriber's action that a parked replay let through, apart from one on the
+    // calling thread, also when parking another one throws
+    private void parkReplaysInFlight(List<ActionInFlight> admitted) {
         if (shuttingDown) {
             return;
         }
+        CatchupAttempt calling = CURRENT_ATTEMPT.get();
         runEach(List.copyOf(currentAttempt.entrySet()), entry -> {
-            if (entry.getValue().owner == this) {
+            CatchupAttempt attempt = entry.getValue();
+            if (attempt.owner == this) {
                 try (Claim ignored = claim(entry.getKey(), STOPPED_ALL_THE_SAME); HandoverLock alsoIgnored = lockHandover(entry.getKey())) {
-                    parkIfStillCurrent(entry.getKey(), entry.getValue());
+                    parkIfStillCurrent(entry.getKey(), attempt);
+                    if (attempt != calling) {
+                        admitted.add(new ActionInFlight(entry.getKey(), attempt.actionReturned));
+                    }
                 }
             }
         });
@@ -3592,7 +3751,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             stops++;
         }
         try {
-            parkReplaysInFlight();
+            // A start that failed takes nothing back that a caller asked for, so it doesn't wait for the actions
+            parkReplaysInFlight(new ArrayList<>());
         } catch (RuntimeException | Error e) {
             addSuppressed(startFailure, e);
         }
@@ -3735,17 +3895,40 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
+    // Keeps the earlier attempts of a parked replay that was dropped for subscriptionId until they have returned, so
+    // registerOrPark makes the next replay of the id wait for them. Called with the handover lock held.
+    private void waitForTheDroppedReplay(String subscriptionId, ParkedReplay dropped) {
+        CompletableFuture<Void> returned = dropped.earlierAttemptsDone();
+        if (returned.isDone()) {
+            return;
+        }
+        CompletableFuture<Void> waited = droppedReplaysReturned.merge(subscriptionId, returned, CompletableFuture::allOf);
+        waited.whenComplete((ignored, alsoIgnored) -> droppedReplaysReturned.remove(subscriptionId, waited));
+    }
+
     /**
      * Registers a fresh attempt for {@code catchup} as the running catch-up for {@code subscriptionId}, or parks
      * {@code catchup} and returns {@code null} while this model is stopped or {@code holdPaused} is set, or when the
      * {@link CatchupListener} throws as the replay starts, which is logged at {@code ERROR}. Called with the
      * handover lock held. A replay still parked for the id is dropped, and waitUntilStarted on its handle returns false.
+     * The new replay waits for the attempt that a cancel ended and that is still registered for the id, for the
+     * earlier attempts of a replay it drops, and for those of a parked replay a cancel or a resume dropped, so an
+     * action that runs past the cancel's or the stop's wait never runs alongside the new replay's first call to it.
      */
     private @Nullable CatchupAttempt registerOrPark(String subscriptionId, ReplayState replay, CompletableFuture<Void> earlierAttemptsDone, boolean holdPaused) {
+        CatchupAttempt ended = currentAttempt.get(subscriptionId);
+        if (ended != null && ended.replay != replay && ended.abandoned()) {
+            earlierAttemptsDone = CompletableFuture.allOf(earlierAttemptsDone, ended.done);
+        }
+        CompletableFuture<Void> dropped = droppedReplaysReturned.get(subscriptionId);
+        if (dropped != null) {
+            earlierAttemptsDone = CompletableFuture.allOf(earlierAttemptsDone, dropped);
+        }
         ParkedReplay superseded = parkedReplays.remove(subscriptionId);
         if (superseded != null && superseded.replay() != replay) {
             superseded.replay().cancelled = true;
             superseded.replay().result.cancel(false);
+            earlierAttemptsDone = CompletableFuture.allOf(earlierAttemptsDone, superseded.earlierAttemptsDone());
         }
         if ((stopped || holdPaused) && !shuttingDown) {
             parkedReplays.put(subscriptionId, new ParkedReplay(replay, earlierAttemptsDone));

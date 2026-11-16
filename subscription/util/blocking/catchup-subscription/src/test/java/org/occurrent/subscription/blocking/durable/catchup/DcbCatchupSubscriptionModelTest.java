@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
@@ -45,10 +49,14 @@ import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
 
+import org.slf4j.LoggerFactory;
+
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -58,6 +66,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.IntStream;
@@ -417,10 +426,11 @@ class DcbCatchupSubscriptionModelTest {
             secondReplayReached.countDown();
             awaitLatch(releaseSecondReplay);
         });
-        assertThat(secondReplayReached.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(secondReplayReached.await(500, TimeUnit.MILLISECONDS)).as("the second attempt entered the action while the cancelled call is still in it").isFalse();
 
-        // Release the stale first attempt while the second is still in flight, mid-replay, unresolved.
+        // Release the stale first attempt, which the second attempt waits for, and then the second is in flight, mid-replay, unresolved.
         releaseFirstReplay.countDown();
+        assertThat(secondReplayReached.await(5, TimeUnit.SECONDS)).as("the second attempt enters the action once the cancelled call has returned").isTrue();
         assertThat(first.waitUntilStarted(Duration.ofSeconds(5)))
                 .as("a cancelled attempt must not resurrect itself as the live subscription once its stale thread "
                         + "finally runs")
@@ -1049,6 +1059,210 @@ class DcbCatchupSubscriptionModelTest {
 
     private String nameOf(CloudEvent cloudEvent) {
         return ((NameDefined) cloudEventConverter.toDomainEvent(cloudEvent)).name();
+    }
+
+    /**
+     * Issues #1515 and #1526, on the DCB replay. A cancel waits for the action of an event its replay already let
+     * through, and the replay lets no further event through.
+     */
+    @Test
+    @Timeout(30)
+    void a_cancel_returns_only_once_the_action_of_the_event_the_replay_delivered_has_returned() throws InterruptedException {
+        appendTagged("name:1", nameDefined("e1"), nameDefined("e2"), nameDefined("e3"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
+        RecordedAction action = new RecordedAction(() -> sleepFor(200));
+
+        try {
+            subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), action);
+            assertThat(action.firstCallEntered.await(5, TimeUnit.SECONDS)).as("the first call is in the action").isTrue();
+
+            subscription.cancelSubscription("subscription");
+            List<String> whenTheCancelReturned = List.copyOf(action.calls);
+
+            assertThat(whenTheCancelReturned).as("the calls to the action when the cancel returned").containsExactly("call 1 enters", "call 1 returns");
+            sleepFor(500);
+            assertThat(action.calls).as("the calls to the action after the cancel returned").containsExactly("call 1 enters", "call 1 returns");
+        } finally {
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_stop_returns_only_once_the_action_of_the_event_the_replay_delivered_has_returned() throws InterruptedException {
+        appendTagged("name:1", nameDefined("e1"), nameDefined("e2"), nameDefined("e3"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
+        RecordedAction action = new RecordedAction(() -> sleepFor(200));
+
+        try {
+            subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), action);
+            assertThat(action.firstCallEntered.await(5, TimeUnit.SECONDS)).as("the first call is in the action").isTrue();
+
+            subscription.stop();
+            List<String> whenTheStopReturned = List.copyOf(action.calls);
+
+            assertThat(whenTheStopReturned).as("the calls to the action when the stop returned").containsExactly("call 1 enters", "call 1 returns");
+            sleepFor(500);
+            assertThat(action.calls).as("the calls to the action after the stop returned").containsExactly("call 1 enters", "call 1 returns");
+        } finally {
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_cancel_returns_after_about_a_second_and_logs_a_warning_when_the_action_runs_longer_and_the_replay_delivers_no_further_event() throws InterruptedException {
+        appendTagged("name:1", nameDefined("e1"), nameDefined("e2"), nameDefined("e3"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
+        CountDownLatch releaseTheAction = new CountDownLatch(1);
+        RecordedAction action = new RecordedAction(() -> awaitLatch(releaseTheAction));
+        Logger catchupLog = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        catchupLog.addAppender(logged);
+
+        try {
+            subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), action);
+            assertThat(action.firstCallEntered.await(5, TimeUnit.SECONDS)).as("the first call is in the action").isTrue();
+
+            long before = System.nanoTime();
+            subscription.cancelSubscription("subscription");
+            Duration took = Duration.ofNanos(System.nanoTime() - before);
+
+            assertThat(took).as("how long the cancel took with the action still running").isBetween(Duration.ofMillis(900), Duration.ofSeconds(5));
+            assertThat(action.calls).as("the calls to the action when the cancel returned").containsExactly("call 1 enters");
+            assertThat(stillRanWarnings(logged)).as("the warnings logged").singleElement()
+                    .satisfies(message -> assertThat(message).startsWith("A cancel returned while the action of subscription subscription still ran").contains("1000 ms"));
+
+            releaseTheAction.countDown();
+            sleepFor(500);
+            assertThat(action.calls).as("the calls to the action once it was released").containsExactly("call 1 enters", "call 1 returns");
+        } finally {
+            releaseTheAction.countDown();
+            catchupLog.detachAppender(logged);
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_stop_returns_after_about_a_second_and_logs_a_warning_when_the_action_runs_longer_and_the_replay_delivers_no_further_event() throws InterruptedException {
+        appendTagged("name:1", nameDefined("e1"), nameDefined("e2"), nameDefined("e3"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
+        CountDownLatch releaseTheAction = new CountDownLatch(1);
+        RecordedAction action = new RecordedAction(() -> awaitLatch(releaseTheAction));
+        Logger catchupLog = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        catchupLog.addAppender(logged);
+
+        try {
+            subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), action);
+            assertThat(action.firstCallEntered.await(5, TimeUnit.SECONDS)).as("the first call is in the action").isTrue();
+
+            long before = System.nanoTime();
+            subscription.stop();
+            Duration took = Duration.ofNanos(System.nanoTime() - before);
+
+            assertThat(took).as("how long the stop took with the action still running").isBetween(Duration.ofMillis(900), Duration.ofSeconds(5));
+            assertThat(action.calls).as("the calls to the action when the stop returned").containsExactly("call 1 enters");
+            assertThat(stillRanWarnings(logged)).as("the warnings logged").singleElement()
+                    .satisfies(message -> assertThat(message).startsWith("A stop returned while the action of subscription subscription still ran").contains("1000 ms"));
+
+            releaseTheAction.countDown();
+            sleepFor(500);
+            assertThat(action.calls).as("the calls to the action once it was released").containsExactly("call 1 enters", "call 1 returns");
+        } finally {
+            releaseTheAction.countDown();
+            catchupLog.detachAppender(logged);
+            subscription.shutdown();
+        }
+    }
+
+    /**
+     * Issue #1258, on the DCB replay. A cancel that comes while the replay stores a position has to end with no
+     * position stored, whether the write lands before or after the cancel deletes the stored one.
+     */
+    @Test
+    @Timeout(30)
+    void a_cancel_that_comes_while_the_replay_stores_a_position_leaves_no_stored_position_once_the_store_is_released() throws InterruptedException {
+        appendTagged("name:1", nameDefined("e1"), nameDefined("e2"));
+        CountDownLatch saveEntered = new CountDownLatch(1);
+        CountDownLatch releaseTheSave = new CountDownLatch(1);
+        AtomicBoolean blocked = new AtomicBoolean();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                if (blocked.compareAndSet(false, true)) {
+                    saveEntered.countDown();
+                    awaitLatch(releaseTheSave);
+                }
+                return super.save(id, checkpoint, condition);
+            }
+        };
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")),
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+
+        try {
+            subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            });
+            assertThat(saveEntered.await(5, TimeUnit.SECONDS)).as("the replay is storing a position").isTrue();
+
+            Thread cancel = new Thread(() -> subscription.cancelSubscription("subscription"));
+            cancel.start();
+            await().atMost(Duration.ofSeconds(5)).until(() -> !cancel.isAlive() || Arrays.stream(cancel.getStackTrace()).anyMatch(frame -> frame.getMethodName().equals("lockHandover")
+                    && cancel.getState() != Thread.State.RUNNABLE));
+            releaseTheSave.countDown();
+            cancel.join(5000);
+
+            assertThat(cancel.isAlive()).as("the cancel returned once the store was released").isFalse();
+            assertThat(storage.read("subscription")).as("the position stored for the cancelled subscription").isNull();
+            sleepFor(500);
+            assertThat(storage.read("subscription")).as("the position stored for the cancelled subscription later").isNull();
+        } finally {
+            releaseTheSave.countDown();
+            subscription.shutdown();
+        }
+    }
+
+    private static List<String> stillRanWarnings(ListAppender<ILoggingEvent> logged) {
+        return new ArrayList<>(logged.list).stream()
+                .filter(event -> event.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.contains("still ran for an event its catch-up replay delivered"))
+                .toList();
+    }
+
+    private static void sleepFor(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+    }
+
+    // Records when each call to it enters and returns, and runs inTheFirstCall in the first one
+    private static final class RecordedAction implements Consumer<CloudEvent> {
+        final CopyOnWriteArrayList<String> calls = new CopyOnWriteArrayList<>();
+        final CountDownLatch firstCallEntered = new CountDownLatch(1);
+        private final AtomicInteger entered = new AtomicInteger();
+        private final Runnable inTheFirstCall;
+
+        RecordedAction(Runnable inTheFirstCall) {
+            this.inTheFirstCall = inTheFirstCall;
+        }
+
+        @Override
+        public void accept(CloudEvent cloudEvent) {
+            int call = entered.incrementAndGet();
+            calls.add("call " + call + " enters");
+            if (call == 1) {
+                firstCallEntered.countDown();
+                inTheFirstCall.run();
+            }
+            calls.add("call " + call + " returns");
+        }
     }
 
     private NameDefined nameDefined(String name) {

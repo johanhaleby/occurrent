@@ -28,7 +28,6 @@ import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
 import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
-import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
@@ -263,39 +262,9 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         Long storedReplayTo = replayStart.replayTo();
         long replayTo = storedReplayTo == null ? reader.currentHead() : storedReplayTo;
         pipeline.replay(replayStart.replayFrom(), replayTo, storedReplayTo == null, () -> shouldKeepReplaying(subscriptionId),
-                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup, replayStart, replayTo), catchupPhaseCache,
+                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup,
+                        e -> replayStart.checkpointAt(OccurrentCloudEventExtension.getPosition(e), replayTo)), catchupPhaseCache,
                 () -> historyRead(subscriptionId));
-    }
-
-    /**
-     * Delivers catch-up events to {@code action}, optionally deduping against {@code cache}, and persists the DCB
-     * subscription position for events matching {@code persistDuringCatchup}, the attempt's own predicate, so its count
-     * runs on across windows. Each event is delivered as a {@link CheckpointAwareCloudEvent} with the checkpoint the
-     * replay stores after it, derived once, so the delivered and the stored checkpoint are the same.
-     */
-    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache, Predicate<CloudEvent> persistDuringCatchup, PositionReplayStart replayStart, long replayTo) {
-        // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
-        // resource-backed read does not leak its cursor.
-        try (cloudEvents) {
-            Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> shouldKeepReplaying(subscriptionId));
-            if (cache != null) {
-                // Skip events already delivered in an earlier reconciliation pass (the delta is re-read until it
-                // stabilises, so passes overlap) and record the rest so the live subscription can skip them at the
-                // handover seam. Without the filter the overlapping re-reads would deliver duplicates.
-                takeWhile = takeWhile.filter(e -> !cache.contains(CatchupEventKey.of(e))).peek(e -> cache.add(CatchupEventKey.of(e)));
-            }
-            takeWhile
-                    .map(e -> new CheckpointAwareCloudEvent(e, replayStart.checkpointAt(OccurrentCloudEventExtension.getPosition(e), replayTo)))
-                    .peek(action)
-                    // Rechecked here, not just by takeWhile before action ran: see the blocking stream catch-up's
-                    // identical reasoning, action can outlast this attempt's ownership. Not shouldKeepReplaying, for
-                    // the same reason. The action has completed, so a stop or a shutdown does not keep its position
-                    // from being stored, and a replay that runs again after a stop starts from there.
-                    .filter(e -> isSafeToPersistFor(subscriptionId))
-                    .filter(e -> persistDuringCatchup.test(e.getOriginalCloudEvent()))
-                    .forEach(e -> doIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class,
-                            cfg -> saveCatchupCheckpoint(subscriptionId, cfg, e.getCheckpoint())));
-        }
     }
 
     // One per catch-up attempt, shared by all its windows, so an EveryN configured for the whole model counts this
