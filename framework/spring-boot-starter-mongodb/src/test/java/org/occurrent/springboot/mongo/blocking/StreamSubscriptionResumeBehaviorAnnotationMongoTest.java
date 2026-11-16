@@ -73,9 +73,9 @@ import static org.awaitility.Awaitility.await;
  * written while nothing is subscribed and a marker written after the subscribers are up. The events written while
  * down go in before the context starts, since the start of a subscription at the present is read when the event store
  * bean is created. Each boot then writes, from an {@link ApplicationRunner}, the events
- * named by {@code test.after-start}. The last of those is a marker: it is written after everything else, so
- * once a subscriber has received it, whatever it was going to deliver for the events before it has arrived and the
- * whole delivered list can be asserted.
+ * named by {@code test.after-start}. The last of those is a marker written after everything else, so once a
+ * subscriber has received it, whatever it was going to deliver for the events before it has arrived and the whole
+ * delivered list can be asserted.
  */
 @DisplayName("StreamSubscription resumeBehavior across an application restart")
 @DisplayNameGeneration(ReplaceUnderscores.class)

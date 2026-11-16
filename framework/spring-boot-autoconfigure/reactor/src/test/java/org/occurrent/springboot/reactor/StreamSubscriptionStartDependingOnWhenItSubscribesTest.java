@@ -45,7 +45,7 @@ import static org.mockito.Mockito.mock;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class StreamSubscriptionStartDependingOnWhenItSubscribesTest {
 
-    private final StartPositionSupport support = new StartPositionSupport(mock(ApplicationContext.class));
+    private final StartPositionSupport support = new StartPositionSupport(ContextWithoutBoundaryStore.mocked());
 
     @ParameterizedTest
     @EnumSource(ResumeBehavior.class)

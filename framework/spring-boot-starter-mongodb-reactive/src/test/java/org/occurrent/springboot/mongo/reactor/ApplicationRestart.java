@@ -53,9 +53,9 @@ import static org.awaitility.Awaitility.await;
  * Boots an application twice against the same MongoDB data, closing the first context before the second boots, so that
  * a test sees what a restart does to a subscription and not what a pause does. Each boot writes the events named by
  * {@code test.before-subscribe} before any subscription registers and, from an {@link ApplicationRunner}, the events
- * named by {@code test.after-start}. The last of those is a marker: it is written after everything else, so once a
- * subscriber has received it, whatever it was going to deliver for the events before it has arrived and the whole
- * delivered list can be asserted.
+ * named by {@code test.after-start}. The last of those is a marker written after everything else, so once a subscriber
+ * has received it, whatever it was going to deliver for the events before it has arrived and the whole delivered list
+ * can be asserted.
  * <p>
  * The first boot writes {@code historic-1} and {@code historic-2} before the subscription registers and
  * {@code live-1} after, the second boot {@code while-down-1} before it registers and {@code live-2} after. The
@@ -192,7 +192,9 @@ final class ApplicationRestart {
                 "--occurrent.event-store.capabilities=" + capabilities,
                 "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName,
                 BEFORE_SUBSCRIBE + beforeSubscribe,
-                AFTER_START + afterStart
+                AFTER_START + afterStart,
+                // The history is written by a boot of its own, so the boot that replays it is told what to wait for
+                "--test.last-history=" + List.of(beforeSubscribe.split(",")).getLast()
         };
     }
 

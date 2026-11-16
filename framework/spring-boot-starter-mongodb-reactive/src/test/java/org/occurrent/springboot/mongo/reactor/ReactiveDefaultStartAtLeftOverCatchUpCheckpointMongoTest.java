@@ -120,7 +120,9 @@ class ReactiveDefaultStartAtLeftOverCatchUpCheckpointMongoTest {
                 "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + DATABASE,
                 "--test.before-subscribe=" + beforeSubscribe,
                 "--test.after-start=" + afterStart,
-                "--test.left-over=" + leftOver
+                "--test.left-over=" + leftOver,
+                // The history is written by a boot of its own, so the boot that replays it is told what to wait for
+                "--test.last-history=" + List.of(beforeSubscribe.split(",")).getLast()
         };
     }
 
@@ -142,6 +144,7 @@ class ReactiveDefaultStartAtLeftOverCatchUpCheckpointMongoTest {
         EventWriter eventWriter(ApplicationService<TestEvent> applicationService,
                                 @Value("${test.before-subscribe}") String beforeSubscribe,
                                 @Value("${test.after-start}") String afterStart,
+                                @Value("${test.last-history}") String lastHistory,
                                 ObjectProvider<SubscriptionBeginning> beginning,
                                 ObjectProvider<ComposedCatchupModel> composedCatchupModel,
                                 ObjectProvider<FluxSubscriptionModel> subscriptionModel) {
@@ -149,10 +152,10 @@ class ReactiveDefaultStartAtLeftOverCatchUpCheckpointMongoTest {
             // GlobalCheckpoint. live-1 is written once the replay is over so that it arrives live.
             Runnable replayIsOver = () -> {
                 SubscriptionBeginning replaying = beginning.getIfAvailable();
-                if (replaying == null) {
+                // The boot that writes the history has subscriptions off, so nothing replays and there is no model
+                if (replaying == null || subscriptionModel.getIfAvailable() == null) {
                     return;
                 }
-                String lastHistory = List.of(beforeSubscribe.split(",")).getLast();
                 ReplayAwareSubscriptions replayAware = composedCatchupModel.getObject().catchupModelFor((SubscriptionModelCapability) subscriptionModel.getObject()).orElseThrow();
                 await().atMost(ofSeconds(30)).pollInterval(ofMillis(50)).untilAsserted(() -> {
                     assertThat(replaying.names()).contains(lastHistory);

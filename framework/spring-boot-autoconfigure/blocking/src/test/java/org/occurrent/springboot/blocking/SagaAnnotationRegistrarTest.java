@@ -82,7 +82,7 @@ class SagaAnnotationRegistrarTest {
 
         // A mock of the plain ApplicationContext interface, not ConfigurableApplicationContext: this is what makes
         // registerSagaInstancesSingleton take its "cannot publish" branch instead of registering the bean.
-        ApplicationContext applicationContext = mock(ApplicationContext.class);
+        ApplicationContext applicationContext = ContextWithoutBoundaryStore.mocked();
         when(applicationContext.getBean(CloudEventConverter.class)).thenReturn(converter());
         // The non-push branch resolves through AsynchronousSubscribables rather than a bare getBean(Subscribable.class)
         // (see #563), so the mock has to answer the same by-name lookup that resolution performs.
