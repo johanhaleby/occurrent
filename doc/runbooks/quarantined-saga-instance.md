@@ -430,15 +430,20 @@ If you let the Spring Boot starter default the store, there is nothing to inject
 `SagaInstances` is the only handle you were given and it is deliberately read-only. Delete the document instead:
 
 ```javascript
-db.getCollection("saga-order-fulfilment").deleteOne({ _id: "order-4711" })
+const removed = db.getCollection("saga-order-fulfilment").findOneAndDelete({ _id: "order-4711" }, { projection: { failureQuarantineId: 1 } })
 ```
 
 That removes the same document, since the instance is one document keyed by its saga id. From 0.35.0 the Java call
-also deletes the records of the inputs the instance skipped, so delete those too:
+also deletes the records of the inputs the instance skipped, under the quarantine id the instance had. When `removed`
+has a `failureQuarantineId`, delete those records too:
 
 ```javascript
-db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({ sagaId: "order-4711" })
+db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({ sagaId: "order-4711", quarantineId: removed.failureQuarantineId })
 ```
+
+Don't delete the records by saga id alone. An event can start a new instance with the same saga id after the delete,
+and when that instance is quarantined, its records are kept under a quarantine id of its own. A delete by saga id
+alone would delete those too, and the events they stand for have already been acknowledged.
 
 The Java call also drops the saga id from the store's in-memory latch for the retained-event warning a flow saga gets
 when it crosses the size threshold, and nothing in MongoDB does that. The consequence is that if this saga id comes
