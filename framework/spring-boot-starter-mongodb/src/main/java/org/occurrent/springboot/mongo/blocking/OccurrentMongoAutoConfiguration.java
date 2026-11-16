@@ -56,6 +56,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.blocking.*;
 import org.occurrent.springboot.common.*;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
+import org.occurrent.springboot.common.internal.AsynchronousSubscribables;
 import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;

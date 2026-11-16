@@ -24,7 +24,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
-import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
+import org.occurrent.springboot.common.internal.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.springframework.context.ApplicationContext;
