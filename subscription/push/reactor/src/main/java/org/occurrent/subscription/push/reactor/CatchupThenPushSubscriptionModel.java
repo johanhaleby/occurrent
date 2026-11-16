@@ -47,6 +47,7 @@ import reactor.core.scheduler.Schedulers;
 import java.net.URI;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -198,11 +199,6 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // waits for it, so a cancel's delete comes after a write already running, and a subscribe after a cancel finds no
     // marker. Written only under this model's monitor, or removed by identity.
     private final ConcurrentMap<String, Mono<Void>> markerOperations = new ConcurrentHashMap<>();
-    // Ids whose last marker operation is a delete that has not succeeded. Nothing vouches for such a marker any more,
-    // so a catch-up replays the history instead of trusting it, and deletes it again first. Replaying costs only
-    // duplicates, and skipping loses the history. Cleared by a delete that succeeds and by a marker write, which only
-    // an attempt that read the whole history makes.
-    private final Set<String> markersNotYetDeleted = ConcurrentHashMap.newKeySet();
     // Runs at the start of a successful catch-up's completion, where the replaying entry is already released and
     // the launcher is not yet. Exists so a test can stand in that window, which nothing else can reach.
     private volatile Runnable beforeCompletingCatchup = () -> {
@@ -302,19 +298,19 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             }
         }
 
+        // Set in isAlreadyCaughtUp(), which the handover calls before replay() and markCaughtUp() (ADR 179)
+        AtomicReference<ReplayStart> attemptStart = new AtomicReference<>(ReplayStart.FROM_BEGINNING_UNMARKED);
         Mono<Boolean> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
             @Override
             public Mono<Boolean> isAlreadyCaughtUp() {
-                // A marker is only ever written by an attempt that read this id's whole history and still owned
-                // the id when the write began, so one that is there says the history has been read and this
-                // attempt does not read it again. That answer is the same for a replacement subscribing in this
-                // process as it is for the first subscription after a restart.
-                return CatchupThenPushSubscriptionModel.this.alreadyCaughtUp(subscriptionId);
+                // Reads the stored marker and the head here, so the replay resumes after the marker and the head is
+                // what markCaughtUp() stores. Every attempt replays, possibly nothing.
+                return readReplayStart(subscriptionId).doOnNext(attemptStart::set).thenReturn(false);
             }
 
             @Override
             public Flux<CloudEvent> replay() {
-                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning());
+                return reader.readInPositionOrder(replayFilter, attemptStart.get().range());
             }
 
             @Override
@@ -325,10 +321,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             @Override
             public Mono<Void> markCaughtUp() {
                 // Asked here rather than upstream, so an attempt that lost the id, or a model that was stopped,
-                // between the last replayed event and this step writes nothing at all. Only an attempt that held
-                // the id when the write began can leave a marker behind, and it had read the whole history by
-                // then, which is what makes a marker worth trusting later.
-                return Mono.defer(() -> markCaughtUpIfStillOwned(subscriptionId, replayDone));
+                // between the last replayed event and this step writes nothing at all.
+                return Mono.defer(() -> markCaughtUpIfStillOwned(subscriptionId, replayDone, attemptStart.get().head()));
             }
 
             @Override
@@ -510,8 +504,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     // The ownership check and queueing the write as one step under the monitor cancelSubscription takes, so a cancel
     // either comes first and nothing is written, or comes after and its delete runs once the write ends
-    private synchronized Mono<Void> markCaughtUpIfStillOwned(String subscriptionId, Sinks.One<Boolean> replay) {
-        return mayStillMarkCaughtUp(subscriptionId, replay) ? afterTheLastMarkerOperation(subscriptionId, markCaughtUp(subscriptionId)) : Mono.empty();
+    private synchronized Mono<Void> markCaughtUpIfStillOwned(String subscriptionId, Sinks.One<Boolean> replay, long head) {
+        return mayStillMarkCaughtUp(subscriptionId, replay) ? afterTheLastMarkerOperation(subscriptionId, markCaughtUp(subscriptionId, head)) : Mono.empty();
     }
 
     private synchronized Mono<Void> afterTheLastMarkerOperation(String subscriptionId, Mono<Void> operation) {
@@ -769,43 +763,40 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         this.betweenPauseCheckAndPause = Objects.requireNonNull(hook, "hook cannot be null");
     }
 
-    // A marker whose delete has not succeeded answers no, after the delete is tried again. One that fails once more
-    // keeps the marker untrusted, and the history is replayed anyway.
-    private Mono<Boolean> alreadyCaughtUp(String subscriptionId) {
+    // Waits for the last marker operation for the id, so a subscribe after a cancel reads the marker after the
+    // cancel's delete. The head is read after the live feed was registered, which ADR 179 relies on.
+    private Mono<ReplayStart> readReplayStart(String subscriptionId) {
         CheckpointStorage marker = catchupMarker;
         if (marker == null) {
-            return Mono.just(false);
+            return Mono.just(ReplayStart.FROM_BEGINNING_UNMARKED);
         }
         return Mono.defer(() -> markerOperations.getOrDefault(subscriptionId, Mono.empty()))
                 .onErrorResume(__ -> Mono.empty())
-                .then(Mono.defer(() -> markersNotYetDeleted.contains(subscriptionId)
-                        ? deleteMarker(subscriptionId, marker)
-                        .onErrorResume(error -> {
-                            log.warn("Could not delete the catch-up marker of subscription {} again, so its history is replayed without deleting it", subscriptionId, error);
-                            return Mono.empty();
-                        })
-                        .thenReturn(false)
-                        : marker.read(subscriptionId).hasElement()));
+                .then(Mono.defer(() -> marker.read(subscriptionId)
+                        .map(stored -> Optional.of(GlobalCheckpoint.positionOf(stored)))
+                        .defaultIfEmpty(Optional.empty())))
+                .flatMap(storedPosition -> reader.currentPosition()
+                        .map(head -> new ReplayStart(storedPosition.orElse(null), head)));
     }
 
-    // Queued behind the last marker operation for the id. The marker counts as not deleted from the moment the delete
-    // starts until it succeeds.
+    // Queued behind the last marker operation for the id
     private Mono<Void> deleteMarker(String subscriptionId, CheckpointStorage marker) {
-        return afterTheLastMarkerOperation(subscriptionId, Mono.defer(() -> {
-            markersNotYetDeleted.add(subscriptionId);
-            return marker.delete(subscriptionId).then(Mono.fromRunnable(() -> markersNotYetDeleted.remove(subscriptionId)));
-        }));
+        return afterTheLastMarkerOperation(subscriptionId, Mono.defer(() -> marker.delete(subscriptionId)));
     }
 
-    private Mono<Void> markCaughtUp(String subscriptionId) {
+    // Stores the head read before this attempt's replay, not the head now (ADR 179)
+    private Mono<Void> markCaughtUp(String subscriptionId, long head) {
         CheckpointStorage marker = catchupMarker;
-        if (marker == null) {
-            return Mono.empty();
+        return marker == null ? Mono.empty() : marker.save(subscriptionId, GlobalCheckpoint.of(head)).then();
+    }
+
+    // The stored position a catch-up resumes after, null when there is none, and the head read before its replay
+    private record ReplayStart(@Nullable Long storedPosition, long head) {
+        static final ReplayStart FROM_BEGINNING_UNMARKED = new ReplayStart(null, -1);
+
+        PositionRange range() {
+            return storedPosition == null ? PositionRange.fromBeginning() : PositionRange.afterPosition(storedPosition);
         }
-        // The stored position marks that the catch-up replay completed at this head, not a live resume watermark.
-        return reader.currentPosition()
-                .flatMap(head -> marker.save(subscriptionId, GlobalCheckpoint.of(head)))
-                .then(Mono.fromRunnable(() -> markersNotYetDeleted.remove(subscriptionId)));
     }
 
     /**

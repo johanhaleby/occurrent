@@ -37,6 +37,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -384,14 +385,18 @@ public final class CatchupProjectionFeed<E> {
         // then() drops whether the catch-up finished or was stopped. A stop here is always one this feed's own owner
         // asked for, so it already knows.
         return handover.catchUp(new ReactiveHandover.Source<>() {
+            // Set in isAlreadyCaughtUp(), which the handover calls before replayStarted() and replay(). Volatile
+            // because a live delivery's thread reads it when it reports a duplicate (ADR 179).
+            private volatile ReplayStart start = ReplayStart.FROM_BEGINNING_UNMARKED;
+
             @Override
             public Mono<Boolean> isAlreadyCaughtUp() {
-                return CatchupProjectionFeed.this.alreadyCaughtUp();
+                return readReplayStart().doOnNext(read -> start = read).thenReturn(false);
             }
 
             @Override
             public Flux<DeliveredEvent<E>> replay() {
-                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
+                return reader.readInPositionOrder(replayFilter, start.range())
                         .map(CatchupProjectionFeed.this::replayedItem);
             }
 
@@ -402,7 +407,7 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public Mono<Void> markCaughtUp() {
-                return CatchupProjectionFeed.this.markCaughtUp();
+                return CatchupProjectionFeed.this.markCaughtUp(start);
             }
 
             @Override
@@ -410,16 +415,18 @@ public final class CatchupProjectionFeed<E> {
                 return CatchupProjectionFeed.this.forgetCaughtUp();
             }
 
+            // The replay callbacks reach the view only for a replay from the beginning. A replay after a stored
+            // marker delivers its events the way the live feed does.
             @Override
             public void replayStarted() {
-                if (fold instanceof ReactiveReplayAware replayAware) {
+                if (start.fromBeginning() && fold instanceof ReactiveReplayAware replayAware) {
                     replayAware.replayStarted();
                 }
             }
 
             @Override
             public Mono<Void> replayCompleted() {
-                if (fold instanceof ReactiveReplayAware replayAware) {
+                if (start.fromBeginning() && fold instanceof ReactiveReplayAware replayAware) {
                     return replayAware.replayCompleted();
                 }
                 return Mono.empty();
@@ -427,14 +434,14 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public void replayAbandoned() {
-                if (fold instanceof ReactiveReplayAware replayAware) {
+                if (start.fromBeginning() && fold instanceof ReactiveReplayAware replayAware) {
                     replayAware.replayAbandoned();
                 }
             }
 
             @Override
             public Mono<Void> alreadyDeliveredByReplay(DeliveredEvent<E> delivered) {
-                if (fold instanceof ReactiveReplayAware replayAware) {
+                if (start.fromBeginning() && fold instanceof ReactiveReplayAware replayAware) {
                     return replayAware.alreadyDeliveredByReplay(delivered.metadata());
                 }
                 return Mono.empty();
@@ -542,17 +549,33 @@ public final class CatchupProjectionFeed<E> {
         return Objects.requireNonNull(eventId.apply(event), "The eventId function returned null; every domain event must have a stable non-null id for de-duplication.");
     }
 
-    private Mono<Boolean> alreadyCaughtUp() {
-        return catchupMarker == null ? Mono.just(false) : catchupMarker.read(id).hasElement();
+    private Mono<ReplayStart> readReplayStart() {
+        if (catchupMarker == null) {
+            return Mono.just(ReplayStart.FROM_BEGINNING_UNMARKED);
+        }
+        return catchupMarker.read(id)
+                .map(stored -> Optional.of(GlobalCheckpoint.positionOf(stored)))
+                .defaultIfEmpty(Optional.empty())
+                .flatMap(storedPosition -> reader.currentPosition()
+                        .map(head -> new ReplayStart(storedPosition.orElse(null), head)));
     }
 
-    private Mono<Void> markCaughtUp() {
-        if (catchupMarker == null) {
-            return Mono.empty();
+    // Stores the head read before the replay, not the head now (ADR 179)
+    private Mono<Void> markCaughtUp(ReplayStart start) {
+        return catchupMarker == null ? Mono.empty() : catchupMarker.save(id, GlobalCheckpoint.of(start.head())).then();
+    }
+
+    // The stored position a catch-up resumes after, null when there is none, and the head read before its replay
+    private record ReplayStart(@Nullable Long storedPosition, long head) {
+        static final ReplayStart FROM_BEGINNING_UNMARKED = new ReplayStart(null, -1);
+
+        boolean fromBeginning() {
+            return storedPosition == null;
         }
-        return reader.currentPosition()
-                .flatMap(head -> catchupMarker.save(id, GlobalCheckpoint.of(head)))
-                .then();
+
+        PositionRange range() {
+            return storedPosition == null ? PositionRange.fromBeginning() : PositionRange.afterPosition(storedPosition);
+        }
     }
 
     // Names the id, since the handover logs this when every attempt failed and an operator then deletes the marker by
