@@ -35,6 +35,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.CatchupListener;
+import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.internal.ReplayFilters;
 import org.slf4j.Logger;
@@ -790,7 +791,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // The stored marker first and the head second, so the head is never older than the marker it replays after.
     private ReplayStart readReplayStart(String subscriptionId) {
         Checkpoint stored = catchupMarker == null ? null : catchupMarker.read(subscriptionId);
-        Long storedPosition = stored == null ? null : GlobalCheckpoint.positionOf(stored);
+        Long storedPosition = stored == null ? null : CatchupMarkers.positionOf(subscriptionId, stored);
         return new ReplayStart(storedPosition, reader.currentPosition());
     }
 

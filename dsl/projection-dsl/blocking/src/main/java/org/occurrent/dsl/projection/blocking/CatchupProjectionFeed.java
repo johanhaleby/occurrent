@@ -34,6 +34,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
+import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
 
 import java.util.Objects;
@@ -515,7 +516,7 @@ public final class CatchupProjectionFeed<E> {
             return ReplayStart.FROM_BEGINNING_UNMARKED;
         }
         Checkpoint stored = catchupMarker.read(id);
-        Long storedPosition = stored == null ? null : GlobalCheckpoint.positionOf(stored);
+        Long storedPosition = stored == null ? null : CatchupMarkers.positionOf(id, stored);
         return new ReplayStart(storedPosition, reader.currentPosition());
     }
 

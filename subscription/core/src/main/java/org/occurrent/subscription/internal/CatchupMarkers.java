@@ -1,0 +1,52 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.subscription.internal;
+
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
+
+/**
+ * Reads the position a catch-up resumes after out of the marker stored under its subscription id, for the blocking
+ * and reactor projection feeds and push subscription models.
+ */
+public final class CatchupMarkers {
+
+    private CatchupMarkers() {
+    }
+
+    /**
+     * The position {@code stored} holds.
+     *
+     * @param subscriptionId The id the marker is stored under, named in the failure
+     * @param stored         The checkpoint stored under {@code subscriptionId}
+     * @throws IllegalStateException when {@code stored} is not a catch-up marker, such as a checkpoint a durable
+     *                               subscription stored under the same id
+     */
+    public static long positionOf(String subscriptionId, Checkpoint stored) {
+        try {
+            return GlobalCheckpoint.positionOf(stored);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(notACatchupMarker(subscriptionId, stored.asString()), e);
+        }
+    }
+
+    static String notACatchupMarker(String subscriptionId, String stored) {
+        return "The checkpoint stored for subscription id \"" + subscriptionId + "\" is not a catch-up marker: " + stored
+                + ". Something other than a catch-up stored it, such as a durable subscription that used this id before."
+                + " Delete the checkpoint stored for this id so the catch-up replays the whole history, or subscribe under a new id.";
+    }
+}
