@@ -6,7 +6,8 @@ Date: 2026-08-18
 
 Accepted. Decides [#412](https://github.com/johanhaleby/occurrent/issues/412), the design layer for the broker work
 tracked by [#388](https://github.com/johanhaleby/occurrent/issues/388). This ADR decides a design and writes no code.
-The modules it names are built by #413 through #417.
+The modules it names are built by #413 through #417. What a catch-up marker means, and what a subscribe after a
+cancel replays, is amended by [ADR 179](0179-a-catch-up-marker-is-the-position-the-next-catch-up-resumes-after.md).
 
 **Scope.** Blocking only. The reactor variants are [#418](https://github.com/johanhaleby/occurrent/issues/418) and are
 not decided here, beyond the requirement that nothing below prevents them. Spring Boot auto-configuration is

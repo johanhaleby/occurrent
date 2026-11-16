@@ -6,7 +6,8 @@ Date: 2026-11-16
 
 Accepted. Fixes [#1150](https://github.com/johanhaleby/occurrent/issues/1150) and
 [#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 23. Amends
-[ADR 62](0062-pluggable-projection-event-source.md), keeps the marker order of
+[ADR 62](0062-pluggable-projection-event-source.md) and
+[ADR 133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md), keeps the marker order of
 [ADR 177](0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md) and the replay callbacks of
 [ADR 110](0110-a-replay-tells-the-view-where-it-begins-and-ends.md), and keeps the lease condition of
 [ADR 116](0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md) on the blocking push model's marker
@@ -53,14 +54,27 @@ Every catch-up start does this:
 4. Write H as the marker, at the point where 0.34.0 writes it. The blocking stack writes it after the drain, and the
    reactor stack before the live drain, as ADR 110 orders them.
 
-A catch-up that fails before its marker write writes nothing, so P stays and the next start replays from P again. On
-the reactor stack the write comes before the live drain, so a catch-up whose drain fails has already stored H, and the
-handover then deletes it, as "Fed-back events on the reactor stack" below says. The events that drain did not deliver
-were handed in by calls that have not completed, so their listeners don't acknowledge them and the broker delivers them
-again. An event a handler fed back is the exception, and the same section says why the reactor stack does not write H
-while one waits in the drain. The write is a plain `save`.
-The blocking push model keeps passing `writeConditionFor(id)`, so a lease that has moved on is still refused as
-ADR 116 says. There is no other condition on it, and no fence.
+On the blocking stack a catch-up that fails before its marker write writes nothing, so P stays and the next start
+replays after P again. The reactor stack deletes the marker when a catch-up or a delivery fails, as in 0.34.0, and
+"Fed-back events on the reactor stack" below states that rule and what a delete that fails does. Its write comes before
+the live drain, so a catch-up whose drain fails has already stored H, and that delete removes it. The events that drain
+did not deliver were handed in by calls that have not completed, so their listeners don't acknowledge them and the
+broker delivers them again. An event a handler fed back is the exception, and the same section says why the reactor
+stack does not write H while one waits in the drain.
+
+The write takes no new condition. The blocking push model keeps passing `writeConditionFor(id)`, so a lease that has
+moved on is still refused as ADR 116 says, and there is no fence.
+
+ADR 62 rejected a resume watermark that the live feed moves with each delivery, since it has to decide whether a
+missing position is a hole or a gap. The marker is not that watermark. Only a catch-up reads or stores it, it is read
+before the replay, and it holds a head that was read, never a position derived from deliveries. Live resume stays the
+broker's job, and the overlap between the replay and the live feed is still de-duplicated by event id.
+
+A checkpoint stored under the id that is not a position, such as one a durable subscription stored when it used the
+id before, fails the catch-up with an `IllegalStateException` that names the id and says to delete the checkpoint or
+subscribe under a new id. 0.34.0 took any stored checkpoint as a finished catch-up and skipped the replay. Reading it as
+no marker would replay from the beginning and then write H over a checkpoint that something else owns, so the catch-up
+fails instead, and that checkpoint stays stored.
 
 `goLive()` without a catch-up still writes no marker, since it replays nothing.
 
@@ -76,9 +90,9 @@ twice must leave the projection as applying it once would.
 All of this holds for one filter and one projection per subscription id. The marker is keyed by the id alone, so a
 subscribe that reuses an id with another filter or another projection resumes after a head that the old one read,
 and skips the events at or below it that only the new filter matches. 0.34.0 skipped the whole replay in that case, so
-this is no regression, and the migration guide says to use a new subscription id when the filter or the projection
-changes. [#1553](https://github.com/johanhaleby/occurrent/issues/1553) is about storing a fingerprint of the filter and
-the projection with the marker, so a start with a changed one replays from the beginning.
+this is no regression. The 0.35.0 migration guide has to tell users to take a new subscription id when the filter or
+the projection changes. [#1553](https://github.com/johanhaleby/occurrent/issues/1553) is about storing a fingerprint
+of the filter and the projection with the marker, so a start with a changed one replays from the beginning.
 
 The three steps in the context no longer lose events. A late write after a cancel's delete restores an H that the
 cancelled subscription's own replay had read up to, so the next subscribe resumes after it instead of replaying from
@@ -131,8 +145,8 @@ previous start, the ones handled live while it ran included, since the marker ho
 A `@Projection` or `@Saga` with `source = PUSH` waits for its catch-up at startup unless it sets
 `startupMode = BACKGROUND`, and the marker is stored only once the replay is done. A startup probe that restarts the
 application during a replay that long keeps the marker from being written, so the next start replays the same events
-again. The migration guide says to set `startupMode = BACKGROUND` for that. Storing the marker during the replay would
-shorten the replay after such a restart, and is not part of this decision.
+again. The 0.35.0 migration guide has to recommend `startupMode = BACKGROUND` for that. Storing the marker during the
+replay would shorten the replay after such a restart, and is not part of this decision.
 
 ### Cancel
 
@@ -241,10 +255,11 @@ cost a longer replay, the API is unchanged, and the upgrade needs nothing.
 * Every start after the first replays the events since the previous start's H. That costs a read of those events, and
   after a restart it applies again the events the live feed delivered before the restart, since the de-duplication
   cache is in memory. The at-least-once contract already allows that, and a projection has to tolerate it.
-* `cancelSubscription(id)` no longer guarantees a full replay on the next subscribe. The changelog lists this as
-  breaking, and the 0.35.0 migration guide says to use a new subscription id for a rebuild.
-* `CheckpointStorage` is unchanged. A third-party storage keeps working as a marker store, and a store that loses or
-  reorders writes costs replays, not events.
+* `cancelSubscription(id)` no longer guarantees a full replay on the next subscribe. That is a breaking change for
+  the changelog, and the 0.35.0 migration guide has to tell users to take a new subscription id for a rebuild.
+* `CheckpointStorage` is unchanged. 0.34.0 only asked whether a marker was there, and 0.35.0 reads back the
+  `GlobalCheckpoint` it saved, so a third-party storage keeps working as a marker store as long as `read` returns what
+  `save` stored. A store that loses or reorders writes costs replays, not events.
 * MongoDB's in-memory storage engine and a Redis failover are no longer a reason a marker can lose events. They can
   still lose a delete, which makes a subscribe after a cancel resume instead of rebuild.
 * The reactor stack writes no marker while an event a handler fed back waits in the live feed and was not replayed. A
@@ -252,8 +267,9 @@ cost a longer replay, the API is unchanged, and the upgrade needs nothing.
   earlier catch-up stored it, so each start replays everything after it, until
   [#1552](https://github.com/johanhaleby/occurrent/issues/1552) delivers those events before the marker as the
   blocking stack does.
-* The reactor stack still deletes the marker when a delivery fails, as in 0.34.0, as a backstop. When that delete
-  throws, the reactor push model's next catch-up of the id in the same process replays from the beginning, as in 0.34.0.
+* The reactor stack still deletes the marker when a catch-up or a delivery fails, as in 0.34.0, as a backstop. When that
+  delete throws, the reactor push model's next catch-up of the id in the same process replays from the beginning, as in
+  0.34.0.
 * The ADR 177 order is unchanged. Step 1 reads the marker as a position, and step 4 writes H.
 * The reactor push model still takes no `CheckpointWriteVersionSource`
   ([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 29), so its marker writes pass `any()`. Nothing

@@ -376,22 +376,3 @@ it can nack (the 2026-07-28 amendment), is unchanged and still right. The fix wa
 there to be at most one consumer to loop over. `Source.PUSH` staying a single enum value whose flavour is inferred from
 the feed bean's type is unchanged. And the terminal-failure contract in the last section above still holds for the one
 projection a feed carries; what it no longer does is strand siblings, because there are none.
-
-## Amendment (2026-11-16): the catch-up marker is the head read before the replay
-
-Amended by [ADR 179](0179-a-catch-up-marker-is-the-position-the-next-catch-up-resumes-after.md). The one-shot
-catch-up-complete marker above is now a resume position. Each catch-up start reads the stored marker, reads the head
-with `currentPosition()` before its replay, replays the events after the stored marker, or the whole history when
-there is none, and stores the head it read where the completion marker used to be stored. A restart no longer skips
-the replay. It replays the events since the previous start.
-
-This is not the feed-derived resume watermark rejected above. That watermark advances with each delivery and has to
-decide whether a missing position is a hole or a gap. The marker is read from the store once per start, before the
-replay, and never moves while the subscription is live. An event that reserves a position at or below it and commits
-later commits after the live feed was registered, so the broker delivers it. Live resume stays the broker's job, and
-the overlap is still de-duplicated by event id.
-
-`ReplayAware` and `ReactiveReplayAware` hear about a replay only when it starts from the beginning, so a rebuild from
-nothing keeps its 0.34.0 callbacks and a replay after a stored marker is plain delivery. `cancelSubscription(id)`
-still deletes the marker, but no longer promises a rebuild, since a lost delete makes the next subscribe resume. A
-rebuild takes a new subscription id.
