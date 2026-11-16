@@ -268,9 +268,8 @@ The status stays `QUARANTINED` while an instance is releasing, and `findWithDueT
 A timer that came due while the instance was quarantined or releasing fires once it is `ACTIVE`.
 
 So such a timer fires only after every recorded input has been replayed, including inputs that arrived after its
-deadline. For a saga that uses a timer as a deadline, a recorded input from after the deadline that cancels or re-arms
-the timer means the timeout never fires, where live delivery would have fired it before that input. This record keeps
-that order.
+deadline, because a saga's timers run on processing time. For a saga that uses a timer as a deadline, a recorded input
+from after the deadline that cancels or re-arms the timer means the timeout never fires. This record keeps that order.
 
 ### 7. Quarantine is on by default again
 
