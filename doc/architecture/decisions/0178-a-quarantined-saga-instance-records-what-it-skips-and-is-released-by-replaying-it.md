@@ -140,7 +140,9 @@ storage and nothing else.
    instance again. An instance with `releasedAt` set is releasing.
 2. Release replays the records in order of sequence number, K's first. For each one it reads the event from the event
    store by the record's key and applies it through the executor's normal processing, with the quarantined skip
-   bypassed for that one input, and deletes the record after the write that applies its input. K is applied once, as
+   bypassed for that one input, and deletes the record after the write that applies its input. That write keeps the
+   instance `QUARANTINED`, with its failure record and `releasedAt`, while a live write that applies the input the
+   failure record names clears the record and writes `ACTIVE`. K is applied once, as
    its record. A record whose input the stream marks show as applied already, after a crash between that write and the
    delete or behind another node's release, is deleted without being applied again.
 3. The instance becomes `ACTIVE`, with the failure record and the skip counter cleared, only in a compare-and-set that
@@ -181,10 +183,19 @@ Release reads the store through an `EventStoreQueries` that `SagaRunner` is give
 own bean. A `SagaRunner` built without one refuses to start while quarantine is on, as point 7 says. When such a runner
 starts because quarantine is off, `release` throws and names `SagaRunner.eventStoreQueries(..)`.
 
-Release returns what it did. The instance is released and `ACTIVE`, or it is still releasing because an input failed
-again inside its budget, or it is quarantined again because that input's budget ran out, or it is quarantined again
-because the event of K or of a recorded input is missing from the store or has no stream id and version, or it isn't
-quarantined, or no instance has that id. The refusals in point 4 throw instead.
+Release returns a `ReleaseResult` that says what it did:
+
+- `RELEASED`: every record was replayed and the instance is `ACTIVE`, or `COMPLETED` when a replayed input completed
+  it.
+- `STILL_RELEASING`: an input failed again inside its budget, and the instance stays releasing.
+- `QUARANTINED_AGAIN`: an input's budget ran out, or the event of K or of a recorded input was read back without a
+  stream id and version.
+- `QUARANTINED_EVENT_MISSING`: the event of K or of a recorded input is missing from the store.
+- `NOT_QUARANTINED`: the instance isn't quarantined.
+- `NOT_FOUND`: no instance has that id.
+
+A `release` on an instance that is releasing already goes on with its replay and doesn't restart K's budget. The
+refusals in point 4 throw instead.
 
 ### 4. What release refuses
 
@@ -240,6 +251,12 @@ poll ends, so a long release delays the saga's timers by at most one batch of re
 inputs arrive faster than the poller replays its share doesn't finish on the poller. `release` called directly has no
 bound and replays on the calling thread until it reaches one of the outcomes point 3 lists.
 
+The poller doesn't leave out an instance that a `release` call is replaying. A direct release that is still running
+at the next poll, which starts a poll interval after the last one ended, 15 seconds by default, competes with the poller for the same records, and both
+read the first record each time. Both dispatch its reaction before their compare-and-set, so any record of such a
+release can have its reaction dispatched twice, up to every record. Duplicate dispatch is the expected case for a long
+direct release, and a receiver has to handle it the way it handles a redelivered live input.
+
 When the budget runs out, the instance is quarantined again under the same quarantine id. The input that failed becomes
 the failure record's input, `releasedAt` is cleared, and the records after it stay in order. A later release replays the
 failed input first and then those records.
@@ -288,7 +305,7 @@ from after the deadline that cancels or re-arms the timer means the timeout neve
 ### 7. Quarantine is on by default again
 
 `SagaRunnerConfig.defaults()` quarantines after 5 minutes, and so does the Spring Boot starter when
-`occurrent.saga.quarantine-after` is left out or blank. ADR 134 turned it off only because nothing brought a quarantined
+`occurrent.saga.quarantine-after` is left out. ADR 134 turned it off only because nothing brought a quarantined
 instance back. Five minutes is the budget ADR 134 Decision point 3 argues for.
 
 It still applies only to subscription models that retain every event they deliver. On any other model `SagaRunner`
@@ -315,15 +332,22 @@ there is no `EventStoreQueries` bean, or several and none of them `@Primary`. Th
 `occurrent.saga.quarantine-enabled=false`.
 
 `disableQuarantine()` turns it off. In Spring Boot, `occurrent.saga.quarantine-enabled=false` does. A blank
-`occurrent.saga.quarantine-after` kept quarantine off in 0.34.0, and it now means the default of 5 minutes.
+`occurrent.saga.quarantine-after` kept quarantine off in 0.34.0, so the starter refuses to start on one, and the
+message names `occurrent.saga.quarantine-enabled=false`. An application that turned quarantine off that way finds out
+on its first deploy, instead of quarantining without knowing it.
 
 ### 8. Persisted format
 
 - `SagaFailure` gains `releasedAt` and a quarantine id, both nullable. Its five-argument constructor goes, see ADR 180. On MongoDB
   they are the top-level `failureReleasedAt` and `failureQuarantineId` fields, next to the other flattened `failure*`
-  fields.
+  fields. Starting a release rewrites the record's `firstFailedAt` to the release instant, which is how K's budget
+  restarts.
 - `SagaEnvelope` gains the skip counter. It is delivery bookkeeping like the stream marks, not lifecycle, so
-  `SagaFailure` and `SagaInstance` don't hold it. On MongoDB it is a top-level field of the instance's document.
+  `SagaFailure` and `SagaInstance` don't hold it. On MongoDB it is the top-level `quarantineSkipCount` field of the
+  instance's document.
+- A key is stored as a string, in a record document and in the failure record's input. A stream key is
+  `<streamId>@<streamVersion>`, as in 0.34.0, and a CloudEvent key is
+  `cloudevent:<length of id>:<id>:<source>@cloudevent`. The length lets an id that contains a colon be read back.
 - On MongoDB the records are documents in a collection of their own, named after the saga collection with
   `_skipped_inputs` appended. A unique index on the
   saga id, the quarantine id and the key keeps a key from being recorded twice, and an index on the saga id, the
@@ -368,7 +392,7 @@ every instance of the saga, not only the events of the quarantined instance.
 
 After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease, so the stall lasts until the instance is
 deleted, with competing consumers or without. A node whose catch-up stopped on the event also has to restart before its
-subscription goes live. A downgrade that doesn't stall anything goes like this, with steps 1 to 4 on 0.35.0:
+subscription goes live. A downgrade that doesn't stall anything goes like this, with steps 1 to 5 on 0.35.0 nodes:
 
 1. Turn quarantine off on every node, and have that running on every node before step 2. A node that still has
    quarantine on can quarantine another instance after the instances are listed.
@@ -376,19 +400,25 @@ subscription goes live. A downgrade that doesn't stall anything goes like this, 
    `find({ status: "QUARANTINED_RECORDING" }, { _id: 1 })` on the saga's collection lists exactly those, and its cursor
    reaches every one. On another store, `findByStatus(QUARANTINED, ..)` returns at most `limit` instances and has no
    cursor, so you know a call listed them all only when it returns fewer than its `limit`. Raise the limit until it does.
-3. Delete with `SagaStateStore.delete(sagaId)` each one whose release returns `QUARANTINED_AGAIN`,
-   `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
+3. When a release returns `STILL_RELEASING`, an input failed again. With quarantine off there is no budget to run out,
+   so the instance stays releasing and the poller retries the input until it succeeds. Fix what makes the input fail
+   and call `release` again. Don't delete the instance while a 0.35.0 node runs. `SagaStateStore.delete(sagaId)`
+   takes no expected version, so a delete that reaches the store after the poller has finished the release deletes
+   the released instance.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
-   longer decodes or an event store read that failed, and release the instance again, or delete it.
-5. Repeat steps 2 to 4 until step 2 lists no instance with a quarantine id. Then stop every 0.35.0 node, and set every
-   `ACTIVE_MARKED` instance back to `ACTIVE`, released ones included, with the
-   update ADR 154 describes.
-6. Start the 0.34.0 nodes.
+   longer decodes or an event store read that failed, and release the instance again.
+5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `QUARANTINED_AGAIN` or
+   `QUARANTINED_EVENT_MISSING`, or that keeps failing for a cause you can't fix.
+6. Stop every 0.35.0 node. Then list the instances as step 2 does, and delete each one whose failure record has a
+   quarantine id with `SagaStateStore.delete(sagaId)`, from a process that runs no `SagaRunner`. With no `SagaRunner`
+   running, nothing releases an instance or delivers it an input, so each one is still quarantined when it is deleted.
+7. Set every `ACTIVE_MARKED` instance back to `ACTIVE`, released ones included, with the update ADR 154 describes.
+8. Start the 0.34.0 nodes.
 
-An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already
-released. Of what this record adds, only the `QUARANTINED_RECORDING` status is something 0.34.0 can't decode, and no
+An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `RELEASED` or `NOT_QUARANTINED` is
+released, so no step deletes it. Of what this record adds, only the `QUARANTINED_RECORDING` status is something 0.34.0 can't decode, and no
 instance has it after these steps. ADR 154 stores an instance with stream marks as `ACTIVE_MARKED` for the same reason
-this record stores `QUARANTINED_RECORDING`, and says what step 5 loses.
+this record stores `QUARANTINED_RECORDING`, and says what step 7 loses.
 
 The upgrade guide has the procedure for operators, in
 [Rolling upgrades from 0.34.0 and rolling back to it](../../migration/upgrading-to-0.35.0.md#rolling-upgrades-from-0340-and-rolling-back-to-it).
@@ -425,11 +455,11 @@ The upgrade guide has the procedure for operators, in
   once a 0.35.0 node holds the saga's competing-consumer lease, or once a 0.35.0 node deletes the instance. A release
   doesn't end it, since a released instance is stored as `ACTIVE_MARKED` (ADR 154). Without competing consumers it
   ends when the 0.34.0 node is upgraded. After a downgrade only a delete ends it.
-  A downgrade that first turns quarantine off on every node, then releases those instances and deletes the ones that
-  stay quarantined, and sets `ACTIVE_MARKED` back to `ACTIVE` once every 0.35.0 node has stopped, stalls nothing.
-- An application that never configured quarantine starts quarantining on upgrade, and so does one that set
-  `occurrent.saga.quarantine-after` blank to keep it off. A blank value meant quarantine off in 0.34.0 and means the
-  5-minute default in 0.35.0.
+  A downgrade that first turns quarantine off on every node and releases those instances, then stops every 0.35.0
+  node, deletes the ones that stay quarantined and sets `ACTIVE_MARKED` back to `ACTIVE`, stalls nothing.
+- An application that never configured quarantine starts quarantining on upgrade. One that set
+  `occurrent.saga.quarantine-after` blank to keep it off fails at startup instead, with a message that names
+  `occurrent.saga.quarantine-enabled=false`.
 - A `SagaRunner` with quarantine on, on a model that retains every event, and without an `EventStoreQueries` fails at
   startup. That includes a runner built in plain Java on the defaults, from `SagaRunnerConfig.defaults()` or from a
   `run` overload without a config, which started in 0.34.0. A
