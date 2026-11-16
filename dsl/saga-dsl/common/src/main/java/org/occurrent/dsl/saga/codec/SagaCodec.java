@@ -129,10 +129,12 @@ public final class SagaCodec<S extends @Nullable Object> {
 
     /**
      * The status an {@link SagaStatus#ACTIVE} instance is stored with while it holds stream marks, which every input
-     * with a stream version adds. It reads back as {@link SagaStatus#ACTIVE}. 0.34.0 saves the whole document and
-     * knows nothing of the marks, so a save from a 0.34.0 node drops them, and 0.35.0 then skips a pending or late input
-     * as applied already. 0.34.0 throws on this string the same way it does on {@link #QUARANTINED_RECORDING}, so a
-     * 0.34.0 node that meets such an instance during a rolling upgrade fails on it and retries it instead of saving it.
+     * with a stream version adds. It reads back as {@link SagaStatus#ACTIVE}. 0.34.0 knows nothing of the
+     * marks, and a 0.34.0 save that applies an input replaces the whole document and drops them, so 0.35.0 then skips a
+     * pending or late input as applied already. 0.34.0 throws on this string the same way it does on
+     * {@link #QUARANTINED_RECORDING}, so a 0.34.0 node that meets such an instance during a rolling upgrade fails on it
+     * instead of saving it. The subscription, or the source's delivery failure policy, decides what then happens to the
+     * input.
      * Its timer poller matches only {@code ACTIVE}, so the timers of such an instance wait for a 0.35.0 node.
      */
     public static final String ACTIVE_MARKED = "ACTIVE_MARKED";

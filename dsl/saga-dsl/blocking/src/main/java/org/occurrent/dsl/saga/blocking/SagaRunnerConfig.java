@@ -75,10 +75,16 @@ import static java.util.Objects.requireNonNull;
  *                             afterwards and skipping acknowledges. Being able to answer for one event is not enough on
  *                             its own, though the event an instance stops on is checked as well before it is
  *                             acknowledged
+ * @param quarantineAfterDefaulted whether {@code quarantineAfter} is the budget {@link #defaults()} sets and nothing
+ *                             configured it. {@link #withQuarantineAfter(Duration)} and the constructors that take
+ *                             {@code quarantineAfter} without this make it {@code false}, so the same five minutes set
+ *                             explicitly counts as configured. {@link SagaRunner} logs at {@code WARN} that it turns a configured
+ *                             budget off on a subscription model that doesn't retain every event, and at {@code DEBUG}
+ *                             for a defaulted one
  */
 public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts,
                                RedeliveryDetection redeliveryDetection, Optional<Duration> quarantineAfter,
-                               int reorderWindow) {
+                               int reorderWindow, boolean quarantineAfterDefaulted) {
 
     /** How long one event keeps failing before {@link #defaults()} quarantines its instance. */
     public static final Duration DEFAULT_QUARANTINE_AFTER = Duration.ofMinutes(5);
@@ -104,6 +110,14 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
         if (reorderWindow < 1) {
             throw new IllegalArgumentException("reorderWindow must be at least 1");
         }
+        // A configuration that never quarantines has no budget to have defaulted
+        quarantineAfterDefaulted = quarantineAfterDefaulted && quarantineAfter.isPresent();
+    }
+
+    /** A configuration whose {@code quarantineAfter}, when present, counts as configured. */
+    public SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts,
+                            RedeliveryDetection redeliveryDetection, Optional<Duration> quarantineAfter, int reorderWindow) {
+        this(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow, false);
     }
 
     /** A configuration with the default reorder window. */
@@ -136,17 +150,17 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      */
     public static SagaRunnerConfig defaults() {
         return new SagaRunnerConfig(Duration.ofSeconds(15), 100, 50, RedeliveryDetection.REQUIRED, Optional.of(DEFAULT_QUARANTINE_AFTER),
-                SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
+                SagaExecutionSupport.DEFAULT_REORDER_WINDOW, true);
     }
 
     /** A copy of this configuration with a different poll interval. */
     public SagaRunnerConfig withTimerPollInterval(Duration interval) {
-        return new SagaRunnerConfig(interval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow);
+        return new SagaRunnerConfig(interval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow, quarantineAfterDefaulted);
     }
 
     /** A copy of this configuration with a different redelivery-detection posture. */
     public SagaRunnerConfig withRedeliveryDetection(RedeliveryDetection detection) {
-        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, detection, quarantineAfter, reorderWindow);
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, detection, quarantineAfter, reorderWindow, quarantineAfterDefaulted);
     }
 
     /**
@@ -167,8 +181,10 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * moving a MongoDB subscription back by hand to before a failed event all produce such an event.
      * <p>
      * A quarantined instance skips every input addressed to it and records the key of each.
-     * {@link SagaSubscription#release(String)} brings it back by replaying the input it
-     * stopped on and then the inputs it recorded, in order, so its state ends up as if it had never stopped.
+     * {@link SagaSubscription#release(String)} brings it back by replaying the input it stopped on and then the inputs it
+     * recorded, in order. A timer that came due meanwhile fires after all of them, so a recorded input from after a
+     * deadline can cancel or re-arm the timer before it fires. "A quarantined saga instance can be released, and
+     * quarantine is on by default" in the 0.35.0 upgrade guide says more.
      * <p>
      * Use {@link #disableQuarantine()} to turn quarantine off.
      *
@@ -177,7 +193,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      */
     public SagaRunnerConfig withQuarantineAfter(Duration quarantineAfter) {
         requireNonNull(quarantineAfter, "quarantineAfter cannot be null, use disableQuarantine() to never quarantine");
-        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.of(quarantineAfter), reorderWindow);
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.of(quarantineAfter), reorderWindow, false);
     }
 
     /**
@@ -189,7 +205,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what that can be.
      */
     public SagaRunnerConfig disableQuarantine() {
-        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.empty(), reorderWindow);
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.empty(), reorderWindow, false);
     }
 
     /**
@@ -198,6 +214,6 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * @throws IllegalArgumentException if {@code reorderWindow} is less than 1
      */
     public SagaRunnerConfig withReorderWindow(int reorderWindow) {
-        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow);
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow, quarantineAfterDefaulted);
     }
 }

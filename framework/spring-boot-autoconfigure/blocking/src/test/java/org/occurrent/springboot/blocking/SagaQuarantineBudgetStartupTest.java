@@ -52,10 +52,12 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.env.MapPropertySource;
 
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -67,8 +69,8 @@ import static org.mockito.Mockito.withSettings;
 
 /**
  * {@code occurrent.saga.quarantine-after} reaches the runner of an {@code @Saga} at startup. A positive value turns
- * quarantine on with that budget, leaving it out or blank gives the default of five minutes, and
- * {@code occurrent.saga.quarantine-enabled=false} turns it off. Zero and negative values refuse startup, because a saga
+ * quarantine on with that budget, leaving it out gives the default of five minutes, and
+ * {@code occurrent.saga.quarantine-enabled=false} turns it off. Blank, zero and negative values refuse startup, because a saga
  * that quietly ran without the protection its configuration appears to ask for is worse than one that does not start.
  * <p>
  * The subscription model here cannot say whether it still holds an event, so a runner that was asked for quarantine
@@ -90,7 +92,7 @@ class SagaQuarantineBudgetStartupTest {
         runnerLog = (Logger) LoggerFactory.getLogger(SagaRunner.class);
         runnerLog.addAppender(appender);
         originalLevel = runnerLog.getLevel();
-        runnerLog.setLevel(Level.WARN);
+        runnerLog.setLevel(Level.DEBUG);
     }
 
     @AfterEach
@@ -104,23 +106,36 @@ class SagaQuarantineBudgetStartupTest {
     void asks_for_quarantine_when_the_property_is_a_positive_duration() {
         contextRunner().withPropertyValues("occurrent.saga.quarantine-after=5m").run(context -> {
             assertThat(context).hasNotFailed();
-            assertThat(quarantineSwitchedOffWarnings()).hasSize(1);
+            assertThat(quarantineSwitchedOffWarnings()).as("the lines at WARN").hasSize(1);
+            assertThat(quarantineSwitchedOffDebugLines()).as("the lines at DEBUG").isEmpty();
         });
     }
 
     @Test
-    void asks_for_quarantine_when_the_property_is_left_out() {
+    void says_at_debug_and_not_at_warn_that_quarantine_is_switched_off_when_the_property_is_left_out() {
         contextRunner().run(context -> {
             assertThat(context).hasNotFailed();
-            assertThat(quarantineSwitchedOffWarnings()).hasSize(1);
+            assertThat(quarantineSwitchedOffWarnings()).as("the lines at WARN").isEmpty();
+            assertThat(quarantineSwitchedOffDebugLines()).as("the lines at DEBUG").hasSize(1);
         });
     }
 
     @Test
-    void asks_for_quarantine_when_the_property_is_blank() {
+    void refuses_to_start_when_the_property_is_blank_and_names_how_to_turn_quarantine_off() {
         contextRunner().withPropertyValues("occurrent.saga.quarantine-after=").run(context -> {
-            assertThat(context).hasNotFailed();
-            assertThat(quarantineSwitchedOffWarnings()).hasSize(1);
+            assertThat(context).getFailure()
+                    .hasMessageContaining("occurrent.saga.quarantine-after")
+                    .hasMessageContaining("occurrent.saga.quarantine-enabled=false");
+            assertThat(quarantineSwitchedOffWarnings()).isEmpty();
+        });
+    }
+
+    @Test
+    void refuses_to_start_when_the_property_is_only_whitespace_and_names_the_property() {
+        contextRunner().withInitializer(context -> context.getEnvironment().getPropertySources()
+                .addFirst(new MapPropertySource("whitespace", Map.of("occurrent.saga.quarantine-after", "   ")))).run(context -> {
+            assertThat(context).getFailure().hasStackTraceContaining("occurrent.saga.quarantine-after");
+            assertThat(quarantineSwitchedOffWarnings()).isEmpty();
         });
     }
 
@@ -226,7 +241,7 @@ class SagaQuarantineBudgetStartupTest {
 
     @Test
     void starts_with_several_event_store_queries_beans_none_primary_on_a_model_that_cannot_hold_every_event() {
-        contextRunner().withUserConfiguration(TwoEventStoresWithNoPrimary.class).run(context -> {
+        contextRunner().withPropertyValues("occurrent.saga.quarantine-after=5m").withUserConfiguration(TwoEventStoresWithNoPrimary.class).run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(quarantineSwitchedOffWarnings()).hasSize(1);
         });
@@ -246,6 +261,14 @@ class SagaQuarantineBudgetStartupTest {
         return new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
                 .withUserConfiguration(SagaConfiguration.class, storeConfiguration, RetainingModel.class);
+    }
+
+    private List<String> quarantineSwitchedOffDebugLines() {
+        return new ArrayList<>(appender.list).stream()
+                .filter(event -> event.getLevel() == Level.DEBUG)
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.contains("quarantine is switched off for this saga"))
+                .toList();
     }
 
     private List<String> quarantineSwitchedOffWarnings() {

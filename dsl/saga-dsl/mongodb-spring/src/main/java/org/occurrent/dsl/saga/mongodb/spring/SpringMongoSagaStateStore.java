@@ -205,9 +205,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         // Retried like every other call this store makes, so a MongoDB error that a second attempt would clear does not
         // fail the saga's registration while an application is starting. Only the unique index has an option, and no
-        // setting a user configures changes it, so nothing a user configures can make MongoDB refuse one permanently, and an index an operator has already created with
-        // different options fails the constructor after the attempt limit rather than being retried forever. The unique
-        // index on the skipped inputs is what makes recording a key twice store one document.
+        // setting changes it, so nothing a user configures can make MongoDB refuse one permanently. An index an operator
+        // has already created with different options fails the constructor after the attempt limit rather than being
+        // retried forever. The unique index on the skipped inputs is what makes recording a key twice store one document.
         retryStrategy.execute(() -> {
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(UPDATED_AT)));
@@ -399,17 +399,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Objects.requireNonNull(head, "head cannot be null");
         Query query = skippedInputQuery(sagaId, quarantineId, head.key());
         Update update = new Update().set(SKIPPED_SEQ, head.seq());
-        // Two writers upserting one key at once can both miss and both insert, and the unique index refuses the second,
-        // which then sets the seq on the record the first stored
-        Supplier<@Nullable Object> upsert = () -> {
-            try {
-                mongoOperations.upsert(query, update, skippedInputsCollectionName);
-            } catch (DuplicateKeyException insertedInBetween) {
-                mongoOperations.updateFirst(query, update, skippedInputsCollectionName);
-            }
-            return null;
-        };
-        retryStrategy.execute(upsert);
+        // Two writers that upsert the same record race to insert it, and the server retries the loser's duplicate-key
+        // error itself, since the filter is an equality on exactly the fields of the unique index. This store opens no
+        // session or transaction of its own. Inside a transaction a caller opened, the server doesn't retry it, and the
+        // error ends that transaction, so catching it here couldn't save the write either.
+        retryStrategy.execute(() -> mongoOperations.upsert(query, update, skippedInputsCollectionName));
     }
 
     @Override

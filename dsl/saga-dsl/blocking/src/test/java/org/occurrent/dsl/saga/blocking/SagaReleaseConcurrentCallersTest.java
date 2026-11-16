@@ -25,6 +25,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.saga.*;
 import org.occurrent.dsl.saga.blocking.SagaSubscription.ReleaseResult;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
@@ -171,6 +172,40 @@ class SagaReleaseConcurrentCallersTest {
         assertAll(
                 () -> assertThat(after.state().items()).as("the input the instance was quarantined on is applied once. " + evidence).containsExactly("poison"),
                 () -> assertThat(dispatched).as("the commands it produced. " + evidence).containsExactly(new Pack(ORDER, "poison")),
+                () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE)).as("no record is left. " + evidence).isEmpty()
+        );
+    }
+
+    @Test
+    void a_second_release_call_moving_the_head_record_while_the_first_has_started_and_not_read_the_records_applies_the_input_once_and_before_every_later_record() throws Exception {
+        HeldReadStore store = new HeldReadStore();
+        SagaExecution<OrderEvent, Order, Object> execution = execution(store);
+        execution.onCloudEvent(append(new OrderPlaced(nextEventId(), ORDER)));
+        poisonFails = true;
+        CloudEvent poison = append(new ItemAdded(nextEventId(), ORDER, "poison"));
+        quarantineOn(execution, poison);
+        poisonFails = false;
+        execution.onCloudEvent(append(new ItemAdded(nextEventId(), ORDER, "a")));
+        execution.onCloudEvent(append(new ItemAdded(nextEventId(), ORDER, "b")));
+        String quarantineId = instance().quarantineId();
+        // The record an earlier release left for the input it was quarantined on, at a seq after the records of the inputs it skipped
+        inMemory.recordSkippedInput(ORDER, quarantineId, new SkippedInput(1_000_000, poison.getExtension(OccurrentCloudEventExtension.STREAM_ID) + "@" + poison.getExtension(OccurrentCloudEventExtension.STREAM_VERSION)));
+
+        CompletableFuture<ReleaseResult> b = CompletableFuture.supplyAsync(() -> {
+            store.b = Thread.currentThread();
+            return execution.release(ORDER);
+        });
+        await(store.bHasRead);
+        ReleaseResult aResult = execution.release(ORDER);
+        store.aFinished.countDown();
+        ReleaseResult bResult = b.get(10, TimeUnit.SECONDS);
+
+        SagaEnvelope<Order> after = instance();
+        String evidence = "A returned " + aResult + ", B returned " + bResult + ", status " + after.status() + ", items " + after.state().items()
+                          + ", dispatched " + dispatched + ", records left under the quarantine id: " + recordsLeft(quarantineId);
+        assertAll(
+                () -> assertThat(after.state().items()).as("the input the instance was quarantined on is applied once and before the inputs it skipped. " + evidence).containsExactly("poison", "a", "b"),
+                () -> assertThat(dispatched).as("the commands it produced. " + evidence).containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b")),
                 () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE)).as("no record is left. " + evidence).isEmpty()
         );
     }
@@ -329,6 +364,52 @@ class SagaReleaseConcurrentCallersTest {
             }
             super.recordSkippedInputAtHead(sagaId, quarantineId, head);
             aRecorded.countDown();
+        }
+    }
+
+    // Call order: B reads the instance, A writes the head record and starts the release and pauses before it reads the
+    // records, B writes the head record and pauses, A reads the records and finishes the release, B resumes
+    private final class HeldReadStore extends DelegatingStore {
+        volatile @Nullable Thread b;
+        final CountDownLatch bHasRead = new CountDownLatch(1);
+        final CountDownLatch aIsAboutToReadTheRecords = new CountDownLatch(1);
+        final CountDownLatch bWroteTheHead = new CountDownLatch(1);
+        final CountDownLatch aFinished = new CountDownLatch(1);
+        private final AtomicInteger bReads = new AtomicInteger();
+        private final AtomicInteger aRecordReads = new AtomicInteger();
+
+        private boolean isB() {
+            return Thread.currentThread() == b;
+        }
+
+        @Override
+        public Optional<SagaEnvelope<Order>> find(String sagaId) {
+            Optional<SagaEnvelope<Order>> found = super.find(sagaId);
+            if (isB() && bReads.incrementAndGet() == 1) {
+                bHasRead.countDown();
+            }
+            return found;
+        }
+
+        @Override
+        public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
+            if (!isB() && aRecordReads.incrementAndGet() == 1) {
+                aIsAboutToReadTheRecords.countDown();
+                await(bWroteTheHead);
+            }
+            return super.findSkippedInputs(sagaId, quarantineId, limit);
+        }
+
+        @Override
+        public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
+            if (isB()) {
+                await(aIsAboutToReadTheRecords);
+                super.recordSkippedInputAtHead(sagaId, quarantineId, head);
+                bWroteTheHead.countDown();
+                await(aFinished);
+                return;
+            }
+            super.recordSkippedInputAtHead(sagaId, quarantineId, head);
         }
     }
 

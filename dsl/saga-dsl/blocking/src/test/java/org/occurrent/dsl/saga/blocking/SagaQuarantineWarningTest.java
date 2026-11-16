@@ -170,22 +170,52 @@ class SagaQuarantineWarningTest {
     }
 
     /**
-     * The default configuration quarantines after five minutes, so a saga on it gives quarantine up on such a model and
-     * is told why, the same as a saga that asked for a budget.
+     * The default configuration quarantines after five minutes, so a saga on it gives quarantine up on such a model. It
+     * never asked for quarantine, so this is a debug line and not a warning.
      */
     @ParameterizedTest
     @MethodSource("modelsThatCannotSupportQuarantine")
-    @DisplayName("says that quarantine is switched off under the default configuration too")
-    void says_that_quarantine_is_switched_off_under_the_default_configuration_too(Subscribable model) {
+    @DisplayName("says that quarantine is switched off under the default configuration at debug and not at warn")
+    void says_that_quarantine_is_switched_off_under_the_default_configuration_at_debug_and_not_at_warn(Subscribable model) {
+        runnerLog.setLevel(Level.DEBUG);
+
         SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
                 .run("orders", saga(), SagaStateStore.inMemory(), c -> {
                 }, null, SagaRunnerConfig.defaults())
                 .close();
 
         assertAll(
-                () -> assertThat(warnings()).hasSize(1),
-                () -> assertThat(warning()).contains("quarantine is switched off")
+                () -> assertThat(switchedOffLines(Level.WARN)).as("the lines at WARN").isEmpty(),
+                () -> assertThat(switchedOffLines(Level.DEBUG)).as("the lines at DEBUG").hasSize(1)
         );
+    }
+
+    /**
+     * Setting the budget to what the default is still asks for quarantine, so it is told at warn.
+     */
+    @ParameterizedTest
+    @MethodSource("modelsThatCannotSupportQuarantine")
+    @DisplayName("warns that quarantine is switched off when a budget equal to the default was set explicitly")
+    void warns_that_quarantine_is_switched_off_when_a_budget_equal_to_the_default_was_set_explicitly(Subscribable model) {
+        runnerLog.setLevel(Level.DEBUG);
+
+        SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .run("orders", saga(), SagaStateStore.inMemory(), c -> {
+                }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)))
+                .close();
+
+        assertAll(
+                () -> assertThat(switchedOffLines(Level.WARN)).as("the lines at WARN").hasSize(1),
+                () -> assertThat(switchedOffLines(Level.DEBUG)).as("the lines at DEBUG").isEmpty()
+        );
+    }
+
+    private List<String> switchedOffLines(Level level) {
+        return new ArrayList<>(appender.list).stream()
+                .filter(event -> event.getLevel() == level)
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.contains("quarantine is switched off for this saga"))
+                .toList();
     }
 
     private static Stream<Subscribable> modelsThatCannotSupportQuarantine() {

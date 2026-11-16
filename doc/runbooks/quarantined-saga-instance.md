@@ -477,8 +477,8 @@ which is the race in step 6.
 
 `SagaRunnerConfig.quarantineAfter` is how long one event has to keep failing before its instance can be quarantined
 on it. `SagaRunnerConfig.defaults()` sets it to 5 minutes from 0.35.0, and in 0.34.0 it was empty, which means never.
-On the annotation path it is `occurrent.saga.quarantine-after` instead, which is 5 minutes when it is left out or
-blank.
+On the annotation path it is `occurrent.saga.quarantine-after` instead, which is 5 minutes when it is left out. A
+blank value stops the application from starting.
 
 With quarantine on, from the defaults or set yourself, a `SagaRunner` on a subscription model that retains every
 event it delivers refuses to start without an `EventStoreQueries`, since `release` in step 5 reads the skipped inputs
@@ -492,9 +492,9 @@ metrics or caching, hides the interface unless it implements `SagaStateStoreSkip
 so make every decorator around such a store do that. Where the saga still starts, on a model that doesn't retain every
 event or with quarantine off, a decorator that doesn't makes `release` throw, and makes an instance quarantined before
 the decorator was put in place throw on each input it has to record as skipped. On a
-model that doesn't retain every event, or on a push feed, `SagaRunner` turns quarantine off and logs a `WARN` each time
-the saga starts, with the default configuration too. `SagaRunnerConfig.disableQuarantine()` or
-`occurrent.saga.quarantine-enabled=false` silences it.
+model that doesn't retain every event, or on a push feed, `SagaRunner` turns quarantine off each time the saga starts.
+It logs that at `WARN` for a budget you set and at `DEBUG` for the default one. `SagaRunnerConfig.disableQuarantine()`
+or `occurrent.saga.quarantine-enabled=false` turns quarantine off without either line.
 
 Lower it when you would rather find out sooner and are willing to quarantine an instance whose downstream service was
 only briefly unavailable. Raise it when your dispatcher talks to something that is routinely down for longer than five
@@ -502,8 +502,8 @@ minutes, so an instance is not quarantined for an outage that would have resolve
 
 Turning quarantine off restores the 0.33.0 behaviour, where the saga is never quarantined. How you say that differs
 by path. On the annotation path set `occurrent.saga.quarantine-enabled=false`, and otherwise call
-`SagaRunnerConfig.disableQuarantine()`. Removing `occurrent.saga.quarantine-after`, or leaving it blank, gives the
-default of 5 minutes, not off. Zero is refused on both paths,
+`SagaRunnerConfig.disableQuarantine()`. Removing `occurrent.saga.quarantine-after` gives the default of 5 minutes, not
+off, and leaving it blank stops the application from starting. Zero is refused on both paths,
 because a reader can take it to mean "never" or "immediately". The property stops the application from starting when
 it has at least one `@Saga` while quarantine is enabled, and `withQuarantineAfter(Duration.ZERO)` throws an `IllegalArgumentException`.
 
@@ -531,7 +531,8 @@ subscription, not only the events of the quarantined instance. It ends when a 0.
 0.35.0 node deletes the instance. A release doesn't end it, because a released instance is stored as `ACTIVE_MARKED`,
 which 0.34.0 can't decode either. A node whose catch-up replay failed on the event also has to restart before its
 subscription goes live. After a downgrade no 0.35.0 node is left to take the lease, so the stall lasts until the
-instance is deleted. To downgrade without that stall, do steps 1 to 4 on 0.35.0:
+instance is deleted. To downgrade without that stall, do steps 1 to 5 while the nodes run
+0.35.0:
 
 1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or
    `occurrent.saga.quarantine-enabled=false`, and have that running on every node before step 2. A node that still has
@@ -541,18 +542,25 @@ instance is deleted. To downgrade without that stall, do steps 1 to 4 on 0.35.0:
    collection, lists exactly those, and its cursor reaches every one. On another store,
    `findByStatus(QUARANTINED, ..)` returns at most `limit` instances and has no cursor, so you know a call listed them
    all only when it returns fewer than its `limit`. Raise the limit until it does.
-3. Delete with `SagaStateStore.delete(sagaId)` each one whose release returns `QUARANTINED_AGAIN`,
-   `QUARANTINED_EVENT_MISSING` or `STILL_RELEASING`.
+3. When a release returns `STILL_RELEASING`, an input failed again. With quarantine off there is no budget to run out,
+   so the instance stays releasing and the timer poller retries the input until it succeeds. Fix what makes the input
+   fail and call `release` again. Don't delete the instance while a 0.35.0 node runs. `SagaStateStore.delete(sagaId)`
+   takes no expected version, so a delete that reaches the store after the poller has finished the release deletes
+   the released instance.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
-   longer decodes or an event store read that failed, and release the instance again, or delete it.
-5. Repeat steps 2 to 4 until step 2 lists no instance with a quarantine id. Then stop every 0.35.0 node, and set every
-   `ACTIVE_MARKED` instance back to `ACTIVE`, released ones included, as
+   longer decodes or an event store read that failed, and release the instance again.
+5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `QUARANTINED_AGAIN` or
+   `QUARANTINED_EVENT_MISSING`, or that keeps failing for a cause you can't fix.
+6. Stop every 0.35.0 node. Then list the instances as step 2 does, and delete each one whose failure record has a
+   quarantine id with `SagaStateStore.delete(sagaId)`, from a process that runs no `SagaRunner`. With no `SagaRunner`
+   running, nothing releases an instance or delivers it an input, so each one is still quarantined when you delete it.
+7. Set every `ACTIVE_MARKED` instance back to `ACTIVE`, released ones included, as
    [the 0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#stored-saga-state-1) describes. It first lists the
    instances that hold a version 0.34.0 may never apply, and says what else 0.34.0 loses.
-6. Start the 0.34.0 nodes.
+8. Start the 0.34.0 nodes.
 
-An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already
-released. The
+An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `RELEASED` or `NOT_QUARANTINED` is
+released, so no step deletes it. The
 [0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#rolling-upgrades-from-0340-and-rolling-back-to-it) also
 covers a rolling upgrade from 0.34.0.
 

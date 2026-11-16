@@ -367,9 +367,9 @@ public final class SagaExecutionSupport {
 
     /**
      * The record a release of {@code current} writes for the input the instance was quarantined on, at
-     * {@link #RELEASE_HEAD_SEQ}, so it is replayed first. The executor deletes any record of that key under the
-     * instance's quarantine id and then writes this record, before the write of {@link #startRelease}. The record an earlier
-     * release kept when it was quarantined again on this input would otherwise keep its place.
+     * {@link #RELEASE_HEAD_SEQ}, so it is replayed first. The executor records it at the head with
+     * {@code SagaStateStoreSkippedInputs.recordSkippedInputAtHead}, in one write, before the write of {@link #startRelease}.
+     * The record an earlier release kept when it was quarantined again on this input would otherwise keep its place.
      */
     public static <S extends @Nullable Object> SkippedInput releaseHead(SagaEnvelope<S> current) {
         return new SkippedInput(RELEASE_HEAD_SEQ, Objects.requireNonNull(current.failure(), "failure").input());
@@ -973,7 +973,8 @@ public final class SagaExecutionSupport {
      * Skipping is wrong only for a version that was never applied, and a feed that delivers a version more than
      * {@code reorderWindow} behind the highest one, when that version did not fail, cannot be told from a replay, so the
      * version is lost. The exceptions are a pending version, which failed in the saga and so was not applied, and the
-     * input the instance's failure record names. Both stay new however far behind they are.
+     * input the instance's failure record names. Both stay new however far behind they are. A releasing instance keeps
+     * its failure record until the release ends, so there only the pending versions count.
      * <p>
      * An instance stored before 0.35.0 has a watermark per stream and no marks. Everything at or below that watermark
      * was applied, so it stays skipped whatever its type, and the type marks start from the next event.
@@ -989,7 +990,10 @@ public final class SagaExecutionSupport {
         if (version <= floor) {
             // A pending version or a failure record naming this input says it was never applied, whatever the floor says.
             // Later deliveries keep an unrelated failure record and only the save that applies the input clears it.
-            return isOutstanding(marks, meta) || namesFailureOf(current, meta) ? Delivery.NEW : Delivery.REDELIVERY;
+            // A release keeps the failure record while it replays, so a releasing instance goes by its pending versions
+            // alone, which the quarantine listed this input among and the replay that applies it removes it from.
+            return isOutstanding(marks, meta) || (!current.isReleasing() && namesFailureOf(current, meta))
+                    ? Delivery.NEW : Delivery.REDELIVERY;
         }
         TypeMark typeMark = marks == null ? null : marks.byType().get(typeKey(meta));
         if (typeMark == null || version > typeMark.mark()) {
@@ -1008,8 +1012,9 @@ public final class SagaExecutionSupport {
         }
         // A failure record naming this input says it was never applied, since the save that applies it clears the record.
         // It covers an instance written before pending existed, and skipping it as behind the window would acknowledge
-        // an event whose reaction never ran.
-        return namesFailureOf(current, meta) ? Delivery.NEW : Delivery.BEHIND_WINDOW;
+        // an event whose reaction never ran. A releasing instance keeps that record after its replay applied the input,
+        // so there the record says nothing and the pending versions checked above decide alone.
+        return !current.isReleasing() && namesFailureOf(current, meta) ? Delivery.NEW : Delivery.BEHIND_WINDOW;
     }
 
     /**

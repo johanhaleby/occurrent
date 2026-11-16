@@ -67,6 +67,13 @@ class SkippedInputKeyTest {
     }
 
     @Test
+    void refuses_a_cloud_event_key_whose_declared_id_length_leaves_no_room_for_a_source() {
+        assertThatThrownBy(() -> SkippedInputKey.parse("cloudevent:2:e1@cloudevent"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("neither a stream key");
+    }
+
+    @Test
     void reads_a_cloud_event_key_back_when_the_id_contains_colons_and_at_signs() {
         String id = "tenant:42:order@7:x";
         String key = SkippedInputKey.cloudEventKey(id, "urn:a:b@c");
