@@ -54,9 +54,10 @@ Every catch-up start does this:
    reactor stack before the live drain, as ADR 110 orders them.
 
 A catch-up that fails before its marker write writes nothing, so P stays and the next start replays from P again. On
-the reactor stack the write comes before the live drain, so a catch-up whose drain fails has already stored H. The
-events that drain did not deliver were handed in by calls that have not completed, so their listeners don't
-acknowledge them and the broker delivers them again. The write is a plain `save`.
+the reactor stack the write comes before the live drain, so a catch-up whose drain fails has already stored H, and the
+handover then deletes it, as "The reactor failure forget stays" below says. The events that drain did not deliver were
+handed in by calls that have not completed, so their listeners don't acknowledge them and the broker delivers them
+again. The write is a plain `save`.
 The blocking push model keeps passing `writeConditionFor(id)`, so a lease that has moved on is still refused as
 ADR 116 says. There is no other condition on it, and no fence.
 
@@ -126,14 +127,24 @@ An application that needs a guaranteed rebuild, or that changes the filter or th
 subscription id. The blocking push model still
 deletes first and cancels nothing when the delete throws.
 
-### The reactor failure forget goes
+### The reactor failure forget stays
 
-`ReactiveHandover.forgetCaughtUp`, `Source.forgetCaughtUp()`, the reactor push model's `markersNotYetDeleted` and the
-reactor feed's forget are removed. They are in `internal` packages or private, so no public API changes. A catch-up
-that fails before its marker write stores nothing, so the next start replays the failed event from P. When the drain
-fails after the write, the calls that handed in the undelivered events have not completed, and the broker delivers
-those events again. A live event whose delivery fails is a
-broker message nobody acknowledged, and the broker delivers it again.
+`ReactiveHandover` keeps deleting the marker through `Source.forgetCaughtUp()` when a delivery or a catch-up fails, as
+in 0.34.0. It tries the delete four times and then logs. Only the reactor push model's `markersNotYetDeleted` is
+removed, and it is private, so no public API changes.
+
+A handler or a view can write an event to the event store and feed it back, and `ReactiveHandover` answers such an
+event as taken in once it is queued, so no broker delivers it again. Take an event X like that, at a position at or
+below H, whose delivery to the view started before this catch-up held live delivery back. That delivery keeps running
+while the reactor stack writes H, so it can fail after the check that runs before the write. Without the delete, H
+stays stored, the next start resumes after it, and nothing delivers X again. With the delete, the next start replays
+from the beginning, which this decision makes safe in every case, and delivers X.
+
+The delete still loses X when the process crashes before it runs, when all four attempts fail, or when the store
+applies the marker write after it, as in 0.34.0.
+[#1552](https://github.com/johanhaleby/occurrent/issues/1552) closes that window by having `ReactiveHandover` wait for
+the deliveries that started before the catch-up held live delivery back before it writes the marker. The delete is then
+no longer needed for X.
 
 ### The replay callbacks
 
@@ -209,6 +220,9 @@ cost a longer replay, the API is unchanged, and the upgrade needs nothing.
   reorders writes costs replays, not events.
 * MongoDB's in-memory storage engine and a Redis failover are no longer a reason a marker can lose events. They can
   still lose a delete, which makes a subscribe after a cancel resume instead of rebuild.
+* The reactor stack still deletes the marker when a delivery fails, so an event a handler fed back and whose delivery
+  failed is lost when that delete is lost, as in 0.34.0, until
+  [#1552](https://github.com/johanhaleby/occurrent/issues/1552) is fixed.
 * The ADR 177 order is unchanged. Step 1 reads the marker as a position, and step 4 writes H.
 * The reactor push model still takes no `CheckpointWriteVersionSource`
   ([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 29), so its marker writes pass `any()`. Nothing
