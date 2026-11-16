@@ -551,8 +551,12 @@ lease while it does, so the saga's subscription stalls. The stall holds up every
 subscription, not only the events of the quarantined instance. It ends when a 0.35.0 node takes the lease, or when a
 0.35.0 node deletes the instance. A release doesn't end it, because a released instance is stored as `ACTIVE_MARKED`,
 which 0.34.0 can't decode either. A node whose catch-up replay failed on the event also has to restart before its
-subscription goes live. After a downgrade no 0.35.0 node is left to take the lease, so the stall lasts until the
-instance is deleted. To downgrade without that stall, do steps 1 to 5 while the nodes run
+subscription goes live. After a downgrade no 0.35.0 node is left to take the lease. A stall on a
+`QUARANTINED_RECORDING` instance then lasts until the instance is deleted. A stall on an `ACTIVE_MARKED` instance also
+ends once the `updateMany` in
+[the 0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#stored-saga-state-1) gives it its plain status back,
+since the 0.34.0 node reads the instance again on every retry and no 0.35.0 node is left to store it as
+`ACTIVE_MARKED` again. To downgrade without that stall, do steps 1 to 5 while the nodes run
 0.35.0:
 
 1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or

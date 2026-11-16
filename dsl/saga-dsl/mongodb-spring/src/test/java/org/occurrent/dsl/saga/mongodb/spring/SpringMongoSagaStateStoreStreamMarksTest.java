@@ -42,6 +42,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
@@ -1068,14 +1072,50 @@ class SpringMongoSagaStateStoreStreamMarksTest {
     @DisplayName("when the instances that lose a version on a downgrade are listed")
     class WhenTheInstancesThatLoseAVersionOnADowngradeAreListed {
 
-        // The filter of the "Stored saga state" section in doc/migration/upgrading-to-0.35.0.md, field for field.
-        private static final String GUIDE_FILTER = """
-                { status: "ACTIVE_MARKED", $or: [
-                    { "streamMarks.pending.versions.0": { $exists: true } },
-                    { "streamMarks.legacyFailed.0": { $exists: true } } ] }""";
+        private static final String GUIDE = "doc/migration/upgrading-to-0.35.0.md";
+        private static final String GUIDE_ANCHOR = "so it lists more instances than the ones that lose one:";
         private static final Map<String, StreamMarks> LEGACY_FAILED_ONLY_MARKS = Map.of(
                 STREAM_ID, new StreamMarks(3, Map.of(PLACED_TYPE, new TypeMark(12, List.of(9L, 10L, 11L), 8)), Map.of(), List.of(5L, 7L)),
                 "other", new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(), List.of()));
+
+        /**
+         * Reads the filter argument of {@code .find(} from the fenced javascript block that follows the anchor sentence
+         * in the migration guide, so the test fails when the guide's filter changes. Never falls back to a default.
+         */
+        private static String guideFilter() {
+            Path directory = Path.of("").toAbsolutePath();
+            while (directory != null && !Files.isRegularFile(directory.resolve(GUIDE))) {
+                directory = directory.getParent();
+            }
+            assertThat(directory).as("a directory above %s that holds %s", Path.of("").toAbsolutePath(), GUIDE).isNotNull();
+            String guide;
+            try {
+                guide = Files.readString(directory.resolve(GUIDE));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            int anchor = guide.indexOf(GUIDE_ANCHOR);
+            assertThat(anchor).as("the sentence ending \"%s\" in %s", GUIDE_ANCHOR, GUIDE).isNotNegative();
+            int fence = guide.indexOf("```javascript", anchor);
+            assertThat(fence).as("a fenced javascript block after the sentence ending \"%s\" in %s", GUIDE_ANCHOR, GUIDE).isNotNegative();
+            int blockEnd = guide.indexOf("```", fence + 3);
+            assertThat(blockEnd).as("the closing fence of the javascript block after the anchor in %s", GUIDE).isNotNegative();
+            String block = guide.substring(fence + "```javascript".length(), blockEnd);
+            int find = block.indexOf(".find(");
+            assertThat(find).as("a .find( call in the javascript block after the anchor in %s", GUIDE).isNotNegative();
+            int start = block.indexOf('{', find);
+            assertThat(start).as("the filter object after .find( in %s", GUIDE).isNotNegative();
+            int depth = 0;
+            for (int i = start; i < block.length(); i++) {
+                char c = block.charAt(i);
+                if (c == '{') {
+                    depth++;
+                } else if (c == '}' && --depth == 0) {
+                    return block.substring(start, i + 1);
+                }
+            }
+            throw new AssertionError("the filter object after .find( in " + GUIDE + " has no closing brace");
+        }
 
         private void saveWithId(String id, Map<String, StreamMarks> marks) {
             SagaEnvelope<String> envelope = new SagaEnvelope<>(id, "awaiting-payment", SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM_ID, 12L, "other", 1L), null,
@@ -1096,7 +1136,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             saveWithId("4", Map.of());
 
             // When
-            List<Document> listed = mongoOperations.find(new BasicQuery(GUIDE_FILTER, "{ state: 0 }"), Document.class, COLLECTION);
+            List<Document> listed = mongoOperations.find(new BasicQuery(guideFilter(), "{ state: 0 }"), Document.class, COLLECTION);
 
             // Then
             assertAll(
