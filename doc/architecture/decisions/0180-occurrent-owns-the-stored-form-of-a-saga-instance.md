@@ -74,8 +74,9 @@ store. `SpringMongoSagaStateStore` converts it with the application's `MongoConv
 The codec encodes a flow saga's `FlowStateImpl` itself, field by field, and never hands it to the `SagaStateCodec`. The
 received events become `CloudEvent` values, made by the `CloudEventConverter` the runner was given.
 `SpringMongoSagaStateStore` writes each of them as a CloudEvent JSON string with `cloudevents-json-jackson` and reads
-it back, which is what it stored before. A flow saga whose state is a `FlowState` other than `FlowStateImpl` gets an
-`IllegalArgumentException` on its first save.
+it back, which is what it stored before. `SagaRunner.run` refuses a saga whose initial state is a `FlowState` other than
+`FlowStateImpl` with an `IllegalArgumentException`, before it subscribes. The codec couldn't save that state, and a
+delivery dispatches the saga's commands before the save, so a later refusal would come after the commands went out.
 
 ### The SPI
 
@@ -145,8 +146,10 @@ Axon and NServiceBus also keep the values a lookup needs next to the serialized 
 - A `SagaStateStore` of your own stops compiling. The upgrade guide to 0.35.0 shows how to move it to `StoredSaga`.
 - A store that writes the `EncodedSaga` fields as it gets them, as `SpringMongoSagaStateStore` does, needs no change
   when Occurrent adds a field. A store that maps each field to a column of its own still has to add one.
-- The codec can't see what a store does with the `EncodedSaga`. A store that doesn't write a field still loses it, but it
-  has to skip it on purpose, since the store no longer names any field to write.
+- The codec can't see what a store does with the `EncodedSaga`. A store that maps each field to a column of its own has
+  to persist each one, the quarantine id and the skip count included. `SagaCodec` refuses to read an instance stored as
+  `QUARANTINED_RECORDING` without either of them and names the missing field, since a release of it would have nothing
+  to replay. Nothing catches another field a store drops.
 - A call to one of the removed constructors stops compiling. The 13-argument `SagaEnvelope` constructor and the
   5-argument `SagaFailure` constructor were the canonical ones in 0.34.0, so a call written against 0.34.0 breaks too.
   The upgrade guide to 0.35.0 shows the call to the canonical constructor.

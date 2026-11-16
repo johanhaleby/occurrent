@@ -45,6 +45,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaCodecTest {
@@ -233,7 +234,7 @@ class SagaCodecTest {
 
         @Test
         void a_quarantine_with_an_id_is_stored_as_quarantined_recording_and_reads_back_as_quarantined() {
-            SagaEnvelope<String> envelope = quarantined("q-1");
+            SagaEnvelope<String> envelope = withSkipCount(quarantined("q-1"), 0L);
 
             StoredSaga stored = codec.encode(envelope);
 
@@ -247,6 +248,51 @@ class SagaCodecTest {
 
             assertThat(stored.encoded().fields()).containsEntry(SagaCodec.STATUS, "QUARANTINED");
             assertThat(codec.decode(stored).status()).isEqualTo(SagaStatus.QUARANTINED);
+        }
+
+        @Test
+        void decode_refuses_a_quarantined_recording_instance_that_lacks_its_quarantine_id() {
+            StoredSaga stored = withoutField(codec.encode(quarantined("q-1")), "s1", SagaCodec.FAILURE_QUARANTINE_ID);
+
+            Throwable thrown = catchThrowable(() -> codec.decode(stored));
+
+            assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("s1").hasMessageContaining("failureQuarantineId");
+        }
+
+        @Test
+        void decode_refuses_a_quarantined_recording_instance_that_lacks_its_skip_count() {
+            StoredSaga stored = withoutField(codec.encode(withSkipCount(quarantined("q-1"), 0L)), "s1", SagaCodec.QUARANTINE_SKIP_COUNT);
+
+            Throwable thrown = catchThrowable(() -> codec.decode(stored));
+
+            assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("s1").hasMessageContaining("quarantineSkipCount");
+        }
+
+        @Test
+        void decodeWithoutState_refuses_a_quarantined_recording_instance_that_lacks_its_skip_count() {
+            StoredSaga stored = withoutField(codec.encode(withSkipCount(quarantined("q-1"), 0L)), "s1", SagaCodec.QUARANTINE_SKIP_COUNT);
+
+            Throwable thrown = catchThrowable(() -> codec.decodeWithoutState(stored));
+
+            assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("s1").hasMessageContaining("quarantineSkipCount");
+        }
+
+        @Test
+        void a_complete_quarantined_recording_instance_still_decodes() {
+            SagaEnvelope<String> envelope = withSkipCount(quarantined("q-1"), 0L);
+            StoredSaga stored = codec.encode(envelope);
+
+            assertThat(stored.encoded().fields()).containsEntry(SagaCodec.STATUS, SagaCodec.QUARANTINED_RECORDING);
+            assertThat(codec.decode(stored)).isEqualTo(envelope);
+        }
+
+        @Test
+        void a_plain_quarantined_instance_without_an_id_or_skip_count_still_decodes() {
+            StoredSaga stored = codec.encode(quarantined(null));
+
+            assertThat(stored.encoded().fields()).containsEntry(SagaCodec.STATUS, "QUARANTINED").doesNotContainKeys(SagaCodec.FAILURE_QUARANTINE_ID, SagaCodec.QUARANTINE_SKIP_COUNT);
+            assertThat(codec.decode(stored).status()).isEqualTo(SagaStatus.QUARANTINED);
+            assertThat(codec.decodeWithoutState(stored).status()).isEqualTo(SagaStatus.QUARANTINED);
         }
 
         @Test
@@ -797,6 +843,12 @@ class SagaCodecTest {
         EncodedSaga encoded = new EncodedSaga(fields);
         long version = fields.get(SagaCodec.VERSION) instanceof Number n ? n.longValue() : 0L;
         return new StoredSaga(sagaId, version, encoded, SagaCodec.indexOf(encoded));
+    }
+
+    private static StoredSaga withoutField(StoredSaga stored, String sagaId, String field) {
+        Map<String, Object> fields = new LinkedHashMap<>(stored.encoded().fields());
+        assertThat(fields.remove(field)).as("the field %s that the test removes", field).isNotNull();
+        return stored(sagaId, fields);
     }
 
     private static SagaEnvelope<String> bare(String sagaId, String state) {

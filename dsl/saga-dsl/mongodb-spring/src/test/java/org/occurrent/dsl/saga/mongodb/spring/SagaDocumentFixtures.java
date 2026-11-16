@@ -69,8 +69,6 @@ final class SagaDocumentFixtures {
     static final String NOT_STARTED = "not-started";
     static final String QUARANTINED_0_34_0 = "quarantined-0.34.0";
 
-    static final List<String> GENERATED = List.of(CORE_ACTIVE_WITH_TIMERS, FLOW_ACTIVE, ACTIVE_MARKED, QUARANTINED_RECORDING, RELEASING, COMPLETED, NOT_STARTED);
-
     private static final Instant CREATED_AT = Instant.parse("2026-03-04T05:06:07.123Z");
     private static final Instant UPDATED_AT = Instant.parse("2026-03-04T05:16:17.456Z");
     private static final Instant COMPLETED_AT = Instant.parse("2026-03-04T06:00:00.789Z");

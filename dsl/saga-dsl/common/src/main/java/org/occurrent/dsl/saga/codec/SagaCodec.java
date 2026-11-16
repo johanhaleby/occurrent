@@ -164,8 +164,9 @@ public final class SagaCodec<S extends @Nullable Object> {
     // is a warning and not a cap, and the remedy, a stepWindow on the flow, is configurable per saga.
     static final int RETAINED_EVENT_WARNING_THRESHOLD = 1_000;
 
-    // Bounds the size of the latch below. An instance that is retired by a TTL index never reaches delete, so its entry
-    // stays until the instance that was checked least recently is evicted. That instance warns again on its next save.
+    // Bounds the size of the latch below. An instance that a delete or a TTL index removes keeps its entry until an
+    // instance under its id is inserted again, or until it is the entry checked least recently and is evicted. An evicted
+    // instance that still retains that many events warns again on its next save.
     static final int RETAINED_EVENT_WARNING_LATCH_CAPACITY = 10_000;
 
     // Holds a saga id for as long as it has warned and not dropped below the threshold. Access-ordered so the instance
@@ -219,7 +220,10 @@ public final class SagaCodec<S extends @Nullable Object> {
         return decode(stored, false);
     }
 
-    /** Forgets that {@code sagaId} has warned about its retained events, for an instance that is deleted. */
+    /**
+     * Forgets that {@code sagaId} has warned about its retained events. The runner calls it when it inserts an instance,
+     * so a new instance under the id of one that was deleted warns about its own retained events.
+     */
     public void forget(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
         synchronized (retainedEventWarningLatch) {
@@ -345,6 +349,12 @@ public final class SagaCodec<S extends @Nullable Object> {
     private SagaEnvelope<S> decode(StoredSaga stored, boolean withState) {
         requireNonNull(stored, "stored cannot be null");
         Map<String, Object> fields = stored.encoded().fields();
+        // Every write that quarantines an instance stores both, and without either a release can't replay the inputs the
+        // instance skipped
+        if (QUARANTINED_RECORDING.equals(fields.get(STATUS))) {
+            requireStored(stored.sagaId(), fields, FAILURE_QUARANTINE_ID);
+            requireStored(stored.sagaId(), fields, QUARANTINE_SKIP_COUNT);
+        }
         Object encodedState = withState ? fields.get(STATE) : null;
         S state = encodedState == null ? null : decodeState(encodedState);
 
@@ -367,6 +377,13 @@ public final class SagaCodec<S extends @Nullable Object> {
                 streamWatermarks, nullableLong(fields.get(POSITION_WATERMARK)), instant(fields.get(CREATED_AT)),
                 instant(fields.get(UPDATED_AT)), instant(fields.get(COMPLETED_AT)), (String) fields.get(CURRENT_STEP), started,
                 decodeFailure(fields), decodeMarks(fields.get(STREAM_MARKS)), nullableLong(fields.get(QUARANTINE_SKIP_COUNT)));
+    }
+
+    private static void requireStored(String sagaId, Map<String, Object> fields, String field) {
+        if (fields.get(field) == null) {
+            throw new IllegalStateException("Saga instance '%s' is stored as %s without %s. The store has to persist every field of the StoredSaga it is given."
+                    .formatted(sagaId, QUARANTINED_RECORDING, field));
+        }
     }
 
     private static @Nullable SagaFailure decodeFailure(Map<String, Object> fields) {

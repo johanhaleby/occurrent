@@ -428,10 +428,10 @@ Don't delete the records by saga id alone. An event can start a new instance wit
 and when that instance is quarantined, its records are kept under a quarantine id of its own. A delete by saga id
 alone would delete those too, and the events they stand for have already been acknowledged.
 
-The Java call also drops the saga id from the store's in-memory latch for the retained-event warning a flow saga gets
-when it crosses the size threshold, and nothing in MongoDB does that. The consequence is that if this saga id comes
-back and crosses that threshold again, the warning stays suppressed until the entry is evicted or the application
-restarts.
+Neither delete resets the retained-event warning a flow saga logs when an instance crosses the size threshold. Each
+runner keeps in memory which saga ids have warned, and forgets one when it inserts an instance under it, so the runner
+that starts a new instance under this saga id warns when that instance crosses the threshold. A runner on another node
+that warned before keeps its entry until the entry is evicted or the node restarts.
 
 The business process the instance was running is a separate question, and Occurrent has no answer for it. An order
 half way through fulfilment when its instance stopped is still half way through it after you delete the row. Finish or

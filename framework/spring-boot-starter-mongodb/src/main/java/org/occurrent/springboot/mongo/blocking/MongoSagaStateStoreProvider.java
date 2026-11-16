@@ -40,7 +40,7 @@ class MongoSagaStateStoreProvider implements DefaultSagaStateStoreProvider {
         // Resolved on use rather than injected, so a store that is never defaulted to is never created.
         MongoOperations mongoOperations = applicationContext.getBean(MongoOperations.class);
         if (stateType == FlowState.class) {
-            // A flow saga's FlowState holds domain events, serialize them as CloudEvents (stable types) so they can move packages.
+            // The converter only marks this as a flow saga's store. The runner writes and reads the received events with its own.
             CloudEventConverter<?> converter = applicationContext.getBean(CloudEventConverter.class);
             return new SpringMongoSagaStateStore<>(mongoOperations, "saga-" + sagaId, stateType, converter);
         }

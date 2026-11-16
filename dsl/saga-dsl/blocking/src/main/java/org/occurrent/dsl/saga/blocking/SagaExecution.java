@@ -26,6 +26,7 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.*;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.flow.FlowState;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
@@ -185,9 +186,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         this.subscriptionId = subscriptionId;
         this.saga = saga;
         this.stateStore = stateStore;
-        // A flow saga's received events are written through the runner's converter. Any other saga has none to write. A
-        // FlowState that is not the executor's own gets the converter too, so the codec refuses it on the first save
-        this.envelopes = SagaEnvelopes.of(stateStore, saga.initialState() instanceof FlowState<?> ? converter : null);
+        // A FlowState that is not the executor's own can't be stored, and a delivery dispatches its commands before the
+        // save, so it is refused here, before the saga subscribes
+        Object initialState = saga.initialState();
+        if (initialState instanceof FlowState<?> && !(initialState instanceof FlowStateImpl<?>)) {
+            throw new IllegalArgumentException("Saga '%s' starts from a %s, but a saga whose state is a FlowState can only be run with the flow executor's own FlowState (FlowStateImpl). Build it with the flow DSL."
+                    .formatted(subscriptionId, initialState.getClass().getName()));
+        }
+        // A flow saga's received events are written through the runner's converter. Any other saga has none to write
+        this.envelopes = SagaEnvelopes.of(stateStore, initialState instanceof FlowState<?> ? converter : null);
         this.skippedInputs = stateStore instanceof SagaStateStoreSkippedInputs records ? records : null;
         this.dispatcher = dispatcher;
         this.converter = converter;
@@ -480,9 +487,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             recordPending(sagaId, meta, failure);
             return false;
         } catch (Throwable storeFailure) {
-            // What reaches here is the store being unreachable, or a store that can only read an instance whole
-            // failing to decode one. Rethrowing the original is today's behaviour and it is the right one for both,
-            // because a saga that cannot read its own instance cannot make progress on it either way. The retention
+            // What reaches here is the store failing, the codec refusing an instance the store read back, or the codec
+            // failing to encode the saga's initial state when the failure record is the instance's first write.
+            // Rethrowing the original is today's behaviour and it is the right one for each, because a saga that cannot
+            // read or write its own instance cannot make progress on it either way. The retention
             // check no longer reaches here, because a check that cannot answer is a refused quarantine with a warning
             // rather than a silent one.
             rethrowIfNotTheInstances(storeFailure);
@@ -1074,8 +1082,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // watermarks say it has already handled, so a state that no longer decodes must not be what decides whether the
     // subscription may move past one of those. The redelivery answer reuses SagaExecutionSupport's own rule rather than
     // restating it, and a timer carries EventMeta.NONE, which that rule answers no for.
-    // Asked through findWithoutState, so a store that can only read an instance whole says no and the load failure
-    // propagates as it did before.
+    // Asked through findWithoutState, which never decodes the state, so the state that failed to load isn't read again
+    // here.
     private boolean wouldHaveSkippedThisInput(String sagaId, EventMeta meta, Throwable loadFailure) {
         try {
             SagaEnvelope<S> withoutState = envelopes.findWithoutState(sagaId).orElse(null);

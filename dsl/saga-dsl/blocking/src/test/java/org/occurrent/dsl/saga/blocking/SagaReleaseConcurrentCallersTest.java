@@ -383,8 +383,8 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public Optional<SagaEnvelope<Order>> find(String sagaId) {
-            Optional<SagaEnvelope<Order>> found = super.find(sagaId);
+        public Optional<StoredSaga> find(String sagaId) {
+            Optional<StoredSaga> found = super.find(sagaId);
             if (isB() && bReads.incrementAndGet() == 1) {
                 bHasRead.countDown();
             }

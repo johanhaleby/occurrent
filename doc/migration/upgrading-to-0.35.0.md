@@ -920,6 +920,10 @@ set, in ascending order, after the id `after` (all of them when it is `null`), a
 poller asks for them on every poll and goes on with their release, starting each poll after the last id the previous
 one listed and from the first id again once a poll lists fewer than `limit`. None of the six methods has a default.
 
+A store that keeps the `StoredSaga` it's given as it is keeps the quarantine id and the skip count with it. A store
+that maps each field to a column of its own has to persist both, or reading an instance it quarantined throws an
+`IllegalStateException` that names the missing field.
+
 ### What to do
 
 If you don't want quarantine, turn it off with `SagaRunnerConfig.defaults().disableQuarantine()` or
@@ -1078,6 +1082,11 @@ as it is. The design is in
 - Code that calls `compareAndSave` or `compareAndSaveWithoutState` on a store directly, for example a test that seeds
   an instance. These take a `StoredSaga`.
 - A flow saga on `SagaStateStore.inMemory()`.
+- A flow saga on a `SpringMongoSagaStateStore` you build yourself with a `CloudEventConverter` other than the runner's.
+  0.34.0 wrote the received events with the store's converter, and 0.35.0 reads them with the runner's, so an instance
+  0.34.0 wrote is read through a converter that never wrote it. The Spring Boot starter gives both the same converter
+  bean.
+- A saga whose initial state is a `FlowState` of your own, which `SagaRunner.run` now refuses.
 
 An application that only hands `SpringMongoSagaStateStore` or `SagaStateStore.inMemory()` to the runner compiles
 unchanged.
@@ -1116,8 +1125,9 @@ The methods change like this:
 flow saga on it converts every received event to a `CloudEvent` on each save and back on each read, so a step that
 keeps many events costs more per save than in 0.34.0.
 
-A saga whose state is a `FlowState` other than the one the flow executor creates fails its first save with an
-`IllegalArgumentException`, on `SagaStateStore.inMemory()` too.
+`SagaRunner.run` throws an `IllegalArgumentException` for a saga whose initial state is a `FlowState` other than the
+one the flow executor creates, before it subscribes, on `SagaStateStore.inMemory()` too. 0.34.0 ran such a saga on the
+in-memory store.
 
 The `CloudEventConverter` you pass to the `SpringMongoSagaStateStore` constructor only marks the store as a flow
 saga's store. The runner's converter writes and reads the received events. A `null` converter with `FlowState.class`

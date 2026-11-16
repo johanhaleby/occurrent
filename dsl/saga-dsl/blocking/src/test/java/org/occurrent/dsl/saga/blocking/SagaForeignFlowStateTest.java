@@ -26,6 +26,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.saga.Saga;
+import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.flow.FlowState;
 
@@ -37,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * A FlowState that is not the flow executor's cannot be read back field by field, so the first save refuses it.
+ * A FlowState that is not the flow executor's cannot be read back field by field, so the runner refuses a saga that starts from one when it is built, before any delivery.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaForeignFlowStateTest {
@@ -77,16 +78,19 @@ class SagaForeignFlowStateTest {
     private final List<OrderCommand> dispatched = new ArrayList<>();
 
     @Test
-    void the_first_delivery_to_a_saga_with_such_a_state_is_refused_and_nothing_is_stored() {
+    void a_saga_whose_initial_state_is_a_hand_rolled_FlowState_is_refused_before_any_delivery_and_dispatches_nothing() {
         Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga = Saga.<OrderEvent, FlowState<OrderEvent>, OrderCommand>builder(new HandRolledFlowState("start"))
                 .correlateAll(OrderEvent::orderId)
                 .startsOn(OrderPlaced.class)
                 .evolve(OrderPlaced.class, (state, e) -> new HandRolledFlowState("placed"))
+                .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.issue(new ShipOrder(e.orderId()))))
                 .build();
-        SagaExecution<OrderEvent, FlowState<OrderEvent>, OrderCommand> execution = new SagaExecution<>("orders", saga, store, dispatched::add, converter,
-                SagaRunnerConfig.defaults(), event -> true);
 
-        Throwable thrown = catchThrowable(() -> execution.onCloudEvent(placed()));
+        Throwable thrown = catchThrowable(() -> {
+            SagaExecution<OrderEvent, FlowState<OrderEvent>, OrderCommand> execution = new SagaExecution<>("orders", saga, store, dispatched::add, converter,
+                    SagaRunnerConfig.defaults(), event -> true);
+            execution.onCloudEvent(placed());
+        });
 
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("FlowStateImpl");
         assertThat(store.find(ORDER)).isEmpty();

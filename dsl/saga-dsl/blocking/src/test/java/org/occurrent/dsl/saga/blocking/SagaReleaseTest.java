@@ -839,10 +839,10 @@ class SagaReleaseTest {
             placed();
             CloudEvent poison = added("poison");
             added("next");
-            SagaFailure legacyFailure = new SagaFailure(streamKey(poison), 2L, start, IllegalStateException.class.getName(), "cannot pack poison");
+            SagaFailure legacyFailure = new SagaFailure(streamKey(poison), 2L, start, IllegalStateException.class.getName(), "cannot pack poison", null, null);
             SagaEnvelope<Order> legacy = new SagaEnvelope<>(ORDER, new Order(ORDER, List.of("next")), SagaStatus.ACTIVE, 1, List.of(),
-                    Map.of(ORDER, 3L), null, start, start, null, null, true, legacyFailure);
-            assertThat(store.delegate.compareAndSave(ORDER, legacy, 0)).isTrue();
+                    Map.of(ORDER, 3L), null, start, start, null, null, true, legacyFailure, Map.of(), null);
+            assertThat(store.envelopes.compareAndSave(ORDER, legacy, 0)).isTrue();
             return poison;
         }
 

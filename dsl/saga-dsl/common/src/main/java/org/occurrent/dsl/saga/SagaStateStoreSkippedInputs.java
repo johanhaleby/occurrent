@@ -28,8 +28,11 @@ import java.util.List;
  * {@code SagaRunnerConfig.disableQuarantine()} to run a saga on such a store.
  * <p>
  * A store that implements this removes, in {@link SagaStateStore#delete(String)}, the records under the quarantine id of
- * the instance it deletes. It persists the quarantine id and the skip count of an instance like every other field,
- * since it keeps the {@link org.occurrent.dsl.saga.codec.StoredSaga} it is given as it is.
+ * the instance it deletes. It has to persist the quarantine id and the skip count of an instance, which are fields of
+ * the {@link org.occurrent.dsl.saga.codec.StoredSaga} it is given. A store that keeps that {@code StoredSaga} as it is
+ * does so already, while a store that maps each field to a column of its own has to add both.
+ * {@link org.occurrent.dsl.saga.codec.SagaCodec} refuses to read an instance stored as quarantined without either of
+ * them.
  * <p>
  * The runner sees only the store it is given, so a decorator around a store that implements this has to implement it
  * too and pass each call on. On a subscription model that holds every event, a saga with quarantine on and a decorator
