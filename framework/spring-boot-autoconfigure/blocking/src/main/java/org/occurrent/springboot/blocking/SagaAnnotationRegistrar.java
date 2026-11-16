@@ -157,8 +157,9 @@ class SagaAnnotationRegistrar {
 
         // A saga replaying its history from the beginning defaults to starting in the background, exactly as
         // @Subscription and @Projection do. startupMode was accepted and ignored here until now, so a saga always
-        // held up startup whatever it asked for. A push saga replays only when it catches up, and then always from the
-        // beginning, so it takes the push decision instead: only an explicit BACKGROUND moves it off the startup path.
+        // held up startup whatever it asked for. A push saga replays only when it catches up, and then on every start,
+        // from the beginning or after its stored catch-up marker, so it takes the push decision instead: only an
+        // explicit BACKGROUND moves it off the startup path.
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         boolean startsOnItsOwn = SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext);
         boolean waitUntilStarted = push
@@ -296,10 +297,10 @@ class SagaAnnotationRegistrar {
     }
 
     /**
-     * The resolved push feed, with a one-time catch-up in front of it unless {@code catchup = NONE}, so a saga that has
-     * never run is folded up from the event store before it starts taking live events. With {@code catchup = NONE} the
-     * feed is used bare and no event store is touched, which is the only thing that works when the events come from
-     * another application's broker.
+     * The resolved push feed, with a catch-up in front of it unless {@code catchup = NONE}, so a saga is folded up from
+     * the event store, from the beginning or after its stored catch-up marker, before it starts taking live events.
+     * With {@code catchup = NONE} the feed is used bare and no event store is touched, which is the only thing that
+     * works when the events come from another application's broker.
      * <p>
      * Only a {@code PushSubscriptionModel} is accepted, unlike {@code @Projection}, which also takes a
      * {@code DomainEventFeed}. A domain-event feed carries no stream metadata, and without it a saga cannot recognise a

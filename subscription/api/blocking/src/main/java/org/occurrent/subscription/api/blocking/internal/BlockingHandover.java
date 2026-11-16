@@ -598,7 +598,7 @@ public final class BlockingHandover<T, K> {
     }
 
     /**
-     * Run the one-time catch-up: replay the source's history (unless already caught up), then drain the buffered live
+     * Run a catch-up: replay the source's history (unless already caught up), then drain the buffered live
      * payloads and go live, then mark the catch-up complete.
      * <p>
      * A replay on a handover that is already live, a feed's {@code catchUp()} after its {@code goLive()}, waits for any
