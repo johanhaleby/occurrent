@@ -286,7 +286,7 @@ class SagaAnnotationRegistrar {
             // The startupMode hint only makes sense under the default catchup. With catchup=NONE there is no replay to
             // move off the startup path, and startupMode is rejected there anyway.
             String reason = catchesUp(annotation)
-                    ? "It catches up before going live, but always from the beginning, so there is no start position to choose. Use startupMode = BACKGROUND to keep that replay off the startup path"
+                    ? "It catches up before going live, from the beginning or after its stored catch-up marker, so there is no start position to choose. Use startupMode = BACKGROUND to keep that replay off the startup path"
                     : "With catchup=NONE it takes live events only, so there is no history to position into";
             throw new IllegalArgumentException("@Saga '%s' with source=PUSH cannot set startAt, startAtGlobalPosition or resumeBehavior. %s, and where the live feed resumes is the broker's business.".formatted(id, reason));
         }

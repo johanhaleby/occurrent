@@ -54,12 +54,12 @@ class SagaAnnotationPushValidationTest {
             .withUserConfiguration(ConverterConfiguration.class);
 
     @Test
-    void a_push_saga_that_sets_a_start_position_fails_fast_saying_it_always_replays_from_the_beginning() {
+    void a_push_saga_that_sets_a_start_position_fails_fast_saying_it_catches_up_from_the_beginning_or_after_its_stored_marker() {
         runner.withUserConfiguration(PushModelConfiguration.class, StartAtConfiguration.class).run(context -> {
             assertThat(context).hasFailed();
             assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
                     .hasMessageContaining("cannot set startAt, startAtGlobalPosition or resumeBehavior")
-                    .hasMessageContaining("always from the beginning");
+                    .hasMessageContaining("from the beginning or after its stored catch-up marker");
         });
     }
 
