@@ -69,6 +69,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -737,7 +738,7 @@ class StreamCatchupSubscriptionModelTest {
      * action to return, so its first call to the action never runs alongside the earlier one.
      */
     @Test
-    void a_replay_started_after_a_cancel_and_a_stop_waits_for_the_cancelled_replays_action_that_outlasts_both_waits() throws InterruptedException {
+    void a_replay_started_after_a_cancel_and_a_stop_waits_for_the_cancelled_replays_action_that_outlasts_both_waits() throws Exception {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
         write(eventStore, nameDefined("event1"));
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
@@ -746,6 +747,10 @@ class StreamCatchupSubscriptionModelTest {
         CountDownLatch firstActionReached = new CountDownLatch(1);
         CountDownLatch releaseFirstAction = new CountDownLatch(1);
         CountDownLatch secondActionReached = new CountDownLatch(1);
+        Logger catchupLog = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        catchupLog.addAppender(logged);
         try {
             subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
                 firstActionReached.countDown();
@@ -759,11 +764,19 @@ class StreamCatchupSubscriptionModelTest {
             subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> secondActionReached.countDown());
             subscription.start(true);
 
-            assertThat(secondActionReached.await(300, TimeUnit.MILLISECONDS)).as("the second replay entered the action while the first call to it, that a cancel and a stop gave up waiting for, is still in it").isFalse();
+            assertThat(stillRanWarnings(logged)).as("the warnings logged by the cancel and the stop, that both gave up waiting").satisfiesExactly(
+                    message -> assertThat(message).startsWith("A cancel returned while the action of subscription subscription still ran"),
+                    message -> assertThat(message).startsWith("A stop returned while the action of subscription subscription still ran"));
+            assertThat(earlierAttemptsDoneOfCurrentAttempt(subscription, subscriptionId))
+                    .as("the second replay is registered and still waits for the first call to the action, that a cancel and a stop gave up waiting for, to return")
+                    .isNotNull()
+                    .isNotDone();
+            assertThat(secondActionReached.getCount()).as("the second replay has not entered the action while the first call to it is still in it").isEqualTo(1);
             releaseFirstAction.countDown();
             assertThat(secondActionReached.await(5, TimeUnit.SECONDS)).as("the second replay enters the action once the first call has returned").isTrue();
         } finally {
             releaseFirstAction.countDown();
+            catchupLog.detachAppender(logged);
         }
     }
 
@@ -2781,6 +2794,18 @@ class StreamCatchupSubscriptionModelTest {
         @SuppressWarnings("unchecked")
         Map<String, ?> locks = (Map<String, ?>) field.get(model);
         return locks;
+    }
+
+    private static @Nullable CompletableFuture<?> earlierAttemptsDoneOfCurrentAttempt(AbstractCatchupSubscriptionModel model, String subscriptionId) throws ReflectiveOperationException {
+        Field currentAttemptField = AbstractCatchupSubscriptionModel.class.getDeclaredField("currentAttempt");
+        currentAttemptField.setAccessible(true);
+        Object attempt = ((Map<?, ?>) currentAttemptField.get(model)).get(subscriptionId);
+        if (attempt == null) {
+            return null;
+        }
+        Field earlierAttemptsDoneField = attempt.getClass().getDeclaredField("earlierAttemptsDone");
+        earlierAttemptsDoneField.setAccessible(true);
+        return (CompletableFuture<?>) earlierAttemptsDoneField.get(attempt);
     }
 
     private static List<String> stillRanWarnings(ListAppender<ILoggingEvent> logged) {
