@@ -54,4 +54,38 @@ public interface ReactiveSynchronousEventDispatcher {
      * application service does no synchronous-dispatch work at all for a write.
      */
     boolean hasSubscriptions();
+
+    /**
+     * Asked once when {@code execute} is called, on the caller's thread, before the reactive chain is assembled and
+     * before {@link #hasSubscriptions()}. It throws a {@link org.occurrent.application.service.WriteRefusedException}
+     * when no write may go through now, and {@code execute} returns a {@link Mono} that fails with it. The
+     * {@link WriteCheck} it returns is asked inside the chain with the events the command decided on, before they are
+     * written, and throws one when a handler that would never see them matches them. Nothing is written when either
+     * throws.
+     * <p>
+     * The default refuses nothing.
+     *
+     * @return The check for the events of this write.
+     */
+    default WriteCheck beforeWrite() {
+        return WriteCheck.NONE;
+    }
+
+    /**
+     * The check {@link #beforeWrite()} returns for the events of one write. It must not block, since it runs inside
+     * the reactive chain.
+     */
+    @FunctionalInterface
+    interface WriteCheck {
+        /**
+         * Refuses nothing.
+         */
+        WriteCheck NONE = newEvents -> {
+        };
+
+        /**
+         * @param newEvents The cloud events the command decided on, before the event store has written them
+         */
+        void check(List<CloudEvent> newEvents);
+    }
 }

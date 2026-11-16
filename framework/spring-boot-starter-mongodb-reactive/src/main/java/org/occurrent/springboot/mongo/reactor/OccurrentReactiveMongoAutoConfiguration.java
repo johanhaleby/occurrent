@@ -54,6 +54,7 @@ import org.occurrent.springboot.common.*;
 import org.occurrent.springboot.common.internal.LiveStartCheckpoints;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
 import org.occurrent.springboot.common.internal.AsynchronousSubscribables;
+import org.occurrent.springboot.common.internal.StartupGap;
 import org.occurrent.springboot.reactor.ComposedCatchupModel;
 import org.occurrent.springboot.reactor.DefaultReactiveSnapshotStoreProvider;
 import org.occurrent.springboot.reactor.OccurrentReactiveAnnotationConfiguration;
@@ -435,15 +436,16 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Conditional(OnStreamEventStoreCapabilityCondition.class)
     @ConditionalOnProperty(name = {"occurrent.event-store.enabled", "occurrent.application-service.enabled"}, havingValue = "true", matchIfMissing = true)
     public ApplicationService<E> occurrentApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter, OccurrentProperties occurrentProperties,
-                                                             ObjectProvider<ReactiveSynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<ReactiveTransactionExecutor> transactionExecutor) {
+                                                             ObjectProvider<ReactiveSynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<ReactiveTransactionExecutor> transactionExecutor,
+                                                             ObjectProvider<StartupGap> startupGaps) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         Retry retry = enableDefaultRetryStrategy ? GenericApplicationService.defaultRetry() : Retry.max(0);
         GenericApplicationService.Builder<E> builder = GenericApplicationService.builder(eventStore, cloudEventConverter).retry(retry);
         // Wire the synchronous subscription dispatcher and transaction executor into the builder when present, so a
         // @SynchronousSubscription handler is composed into the write chain, atomically with the write. Both are
         // resolved through ObjectProvider because they only exist when the feature is applicable, and either can be
-        // absent or user-replaced.
-        synchronousEventDispatcher.ifAvailable(builder::synchronousSubscriptions);
+        // absent or user-replaced. A write made during startup first registers the synchronous handlers, see StartupGap.
+        synchronousEventDispatcher.ifAvailable(dispatcher -> builder.synchronousSubscriptions(StartupGapClosingDispatcher.closingTheStartupGap(dispatcher, startupGaps)));
         transactionExecutor.ifAvailable(builder::transactionExecutor);
         return builder.build();
     }
@@ -467,13 +469,14 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @ConditionalOnProperty(name = {"occurrent.event-store.enabled", "occurrent.application-service.enabled"}, havingValue = "true", matchIfMissing = true)
     public DcbApplicationService<E> occurrentDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter,
                                                                      ObjectProvider<TagGenerator<E>> tagGeneratorProvider, OccurrentProperties occurrentProperties,
-                                                                     ObjectProvider<ReactiveSynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<ReactiveTransactionExecutor> transactionExecutor) {
+                                                                     ObjectProvider<ReactiveSynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<ReactiveTransactionExecutor> transactionExecutor,
+                                                                     ObjectProvider<StartupGap> startupGaps) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         Retry retry = enableDefaultRetryStrategy ? GenericDcbApplicationService.defaultRetry() : Retry.max(0);
         GenericDcbApplicationService.Builder<E> builder = GenericDcbApplicationService.builder(eventStore, cloudEventConverter).retry(retry);
         tagGeneratorProvider.ifAvailable(builder::tagGenerator);
         // Wire the synchronous subscription dispatcher and transaction executor when present (see occurrentApplicationService).
-        synchronousEventDispatcher.ifAvailable(builder::synchronousSubscriptions);
+        synchronousEventDispatcher.ifAvailable(dispatcher -> builder.synchronousSubscriptions(StartupGapClosingDispatcher.closingTheStartupGap(dispatcher, startupGaps)));
         transactionExecutor.ifAvailable(builder::transactionExecutor);
         return builder.build();
     }

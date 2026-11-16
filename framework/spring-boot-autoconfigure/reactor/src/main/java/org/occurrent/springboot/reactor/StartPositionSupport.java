@@ -21,8 +21,10 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
 import org.occurrent.eventstore.api.EventStoreCapability;
+import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReadScope;
 import org.occurrent.eventstore.api.dcb.reactor.internal.DcbCatchupReads;
+import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.eventstore.api.reactor.internal.CatchupReadScope;
 import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
@@ -41,12 +43,18 @@ import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.internal.StartPositionPin;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.springframework.aop.support.AopUtils;
+import org.springframework.beans.factory.BeanCreationException;
+import org.springframework.beans.factory.BeanCurrentlyInCreationException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.context.ApplicationContext;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
@@ -64,9 +72,13 @@ import java.util.function.Supplier;
 class StartPositionSupport {
 
     private final ApplicationContext applicationContext;
-    // Set once, from the first unproxied bean that opens catch-up read scopes, the event store
-    private volatile @Nullable Supplier<@Nullable String> liveStartReader;
-    private volatile @Nullable String contextLiveStart;
+
+    private record Boundary(Supplier<@Nullable String> reader, @Nullable String liveStart) {
+    }
+
+    // The boundary each unproxied bean that opens catch-up read scopes reported when it was created, by bean name
+    private final Map<String, Boundary> boundaries = new ConcurrentHashMap<>();
+    private boolean boundaryStoreRequested;
     // The boundary of each subscription a bean built after startup registers, in place of the context's
     private final Map<String, String> lateLiveStarts = new ConcurrentHashMap<>();
 
@@ -75,18 +87,75 @@ class StartPositionSupport {
     }
 
     // Only the bean itself, never a proxy, so reading the boundary invokes no advice and looks nothing up by name.
-    // The first such bean decides, and a store with no live start, such as the in-memory one, gives no boundary. A
-    // failed read fails the bean, since starting without the boundary would skip what is written during startup.
-    synchronized void recordStartBoundaryOf(Object bean) {
-        if (liveStartReader != null || AopUtils.isAopProxy(bean) || Schedulers.isInNonBlockingThread()) {
+    // Every such bean records its own, and the store the subscription model reads decides which one counts, so a store
+    // with no live start, such as the in-memory one, can't stand in for it. A failed read fails the bean, since
+    // starting without the boundary would skip what is written during startup.
+    synchronized void recordStartBoundaryOf(Object bean, String beanName) {
+        if (boundaries.containsKey(beanName) || AopUtils.isAopProxy(bean) || Schedulers.isInNonBlockingThread()) {
             return;
         }
         @Nullable Supplier<@Nullable String> reader = liveStartReaderOf(bean);
         if (reader == null) {
             return;
         }
-        contextLiveStart = reader.get();
-        liveStartReader = reader;
+        boundaries.put(beanName, new Boundary(reader, reader.get()));
+        createBoundaryStoreOnce();
+    }
+
+    // Another store on the same collection can write while the application starts, before the store the model reads
+    // exists. Creating the stores it is picked from at the first store's callback reads its boundary before such a
+    // write can happen. Picking it instantiates every candidate, so the bean whose callback this is gets skipped rather
+    // than created a second time, and a store that depends on it records its boundary as its own creation finishes.
+    private void createBoundaryStoreOnce() {
+        if (boundaryStoreRequested) {
+            return;
+        }
+        boundaryStoreRequested = true;
+        if (!(applicationContext.getAutowireCapableBeanFactory() instanceof ConfigurableBeanFactory beanFactory)) {
+            return;
+        }
+        Set<String> names = new LinkedHashSet<>(List.of(applicationContext.getBeanNamesForType(EventStore.class)));
+        names.addAll(List.of(applicationContext.getBeanNamesForType(DcbEventStore.class)));
+        for (String name : names) {
+            if (beanFactory.isCurrentlyInCreation(name)) {
+                continue;
+            }
+            try {
+                applicationContext.getBean(name);
+            } catch (BeanCreationException e) {
+                if (!e.contains(BeanCurrentlyInCreationException.class)) {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    // The store the subscription model reads, picked the way the store starter picks it, through
+    // PositionOrderedEventStores for stream catch-up and as the only or the @Primary DcbEventStore for DCB catch-up.
+    // Null when there is none, or several and none of them @Primary.
+    private @Nullable String boundaryStoreName() {
+        Set<EventStoreCapability> capabilities = applicationContext.getBeanProvider(OccurrentProperties.class).getIfAvailable(OccurrentProperties::new).getEventStore().getCapabilities();
+        @Nullable String name = null;
+        if (capabilities.contains(EventStoreCapability.STREAM)) {
+            try {
+                name = PositionOrderedEventStores.findName(applicationContext);
+            } catch (IllegalStateException severalStoresAndNoPrimary) {
+                name = null;
+            }
+        }
+        if (name == null && capabilities.contains(EventStoreCapability.DCB)) {
+            try {
+                name = applicationContext.getAutowireCapableBeanFactory().resolveNamedBean(DcbEventStore.class).getBeanName();
+            } catch (NoSuchBeanDefinitionException noneOrSeveralAndNoPrimary) {
+                name = null;
+            }
+        }
+        return name;
+    }
+
+    private @Nullable Boundary boundaryOfTheStore() {
+        @Nullable String name = boundaryStoreName();
+        return name == null ? null : boundaries.get(name);
     }
 
     private static @Nullable Supplier<@Nullable String> liveStartReaderOf(Object bean) {
@@ -100,8 +169,11 @@ class StartPositionSupport {
 
     // The boundary for a bean built after startup, read from the same event store, or null when there is none
     @Nullable String readLateLiveStart() {
-        @Nullable Supplier<@Nullable String> reader = liveStartReader;
-        return reader == null || Schedulers.isInNonBlockingThread() ? null : reader.get();
+        if (Schedulers.isInNonBlockingThread()) {
+            return null;
+        }
+        @Nullable Boundary boundary = boundaryOfTheStore();
+        return boundary == null ? null : boundary.reader().get();
     }
 
     void startAtLateBoundary(String subscriptionId, @Nullable String liveStart) {
@@ -222,8 +294,15 @@ class StartPositionSupport {
     // checkpoint, and when the application's SubscriptionResumePoints answers for the subscription, since that answer
     // is an explicit start
     private @Nullable Checkpoint startBoundaryFor(String subscriptionId) {
-        @Nullable String liveStart = lateLiveStarts.getOrDefault(subscriptionId, contextLiveStart);
-        if (liveStart == null || Schedulers.isInNonBlockingThread()) {
+        if (Schedulers.isInNonBlockingThread()) {
+            return null;
+        }
+        @Nullable String liveStart = lateLiveStarts.get(subscriptionId);
+        if (liveStart == null) {
+            @Nullable Boundary boundary = boundaryOfTheStore();
+            liveStart = boundary == null ? null : boundary.liveStart();
+        }
+        if (liveStart == null) {
             return null;
         }
         @Nullable SubscriptionResumePoints resumePoints = applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable();

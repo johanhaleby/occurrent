@@ -56,4 +56,36 @@ public interface SynchronousEventDispatcher {
      * application service does no synchronous-dispatch work at all for a write.
      */
     boolean hasSubscriptions();
+
+    /**
+     * Asked once when {@code execute} is called, on the caller's thread, before anything is read and before
+     * {@link #hasSubscriptions()}. It throws a {@link org.occurrent.application.service.WriteRefusedException} when no
+     * write may go through now. The {@link WriteCheck} it returns is asked with the events the command decided on,
+     * before they are written, and throws one when a handler that would never see them matches them. Nothing is
+     * written when either throws.
+     * <p>
+     * The default refuses nothing.
+     *
+     * @return The check for the events of this write.
+     */
+    default WriteCheck beforeWrite() {
+        return WriteCheck.NONE;
+    }
+
+    /**
+     * The check {@link #beforeWrite()} returns for the events of one write.
+     */
+    @FunctionalInterface
+    interface WriteCheck {
+        /**
+         * Refuses nothing.
+         */
+        WriteCheck NONE = newEvents -> {
+        };
+
+        /**
+         * @param newEvents The cloud events the command decided on, before the event store has written them
+         */
+        void check(List<CloudEvent> newEvents);
+    }
 }

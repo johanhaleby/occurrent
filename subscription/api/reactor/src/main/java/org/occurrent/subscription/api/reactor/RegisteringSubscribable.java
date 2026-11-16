@@ -358,6 +358,24 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     }
 
     /**
+     * The paused subscriptions whose filter matches at least one of {@code cloudEvents}. Routing skips a paused
+     * subscription, so a caller about to write these events can refuse the write instead of letting those handlers
+     * miss it.
+     *
+     * @param cloudEvents The events to match
+     * @return The ids of the paused subscriptions that match, empty when none does
+     */
+    protected final Set<String> pausedSubscriptionsMatching(List<CloudEvent> cloudEvents) {
+        Set<String> matching = new HashSet<>();
+        for (Registration registration : registrations) {
+            if (pausedSubscriptions.contains(registration.id()) && cloudEvents.stream().anyMatch(registration.matcher())) {
+                matching.add(registration.id());
+            }
+        }
+        return matching;
+    }
+
+    /**
      * Synchronized on {@link #registrationLock} because {@link #subscribe}, {@link #cancelSubscription} and
      * {@link #shutdown()} rearrange {@code subscriptionIds} and {@code registrations} in more than one step under
      * that same lock, so a reader taking it too cannot land between those steps and disagree with

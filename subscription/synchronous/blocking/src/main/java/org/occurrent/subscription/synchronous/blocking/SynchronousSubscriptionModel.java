@@ -18,6 +18,7 @@ package org.occurrent.subscription.synchronous.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.application.service.WriteRefusedException;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -25,6 +26,7 @@ import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.internal.SynchronousHandlersTestSwitch;
 
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -40,11 +42,12 @@ import java.util.function.Consumer;
  * other handlers rather than stopping at the first failure, because nothing rolls back on that path.
  * <p>
  * Unlike the asynchronous {@code SubscriptionModel}s, this model has no start position, checkpoint, catch-up, or
- * replay. It only ever reacts to events fed to it here and now. It is a full {@link org.occurrent.subscription.api.blocking.SubscriptionModel}, so
- * stopping it, or pausing a subscription, drops rather than defers events that arrive in the meantime (ADR 85).
- * Dispatch happens inside the write, so a stopped model here still lets the write succeed. Only the projection
- * behind it does not run, so stopping subscriptions and then accepting traffic leaves writes landing with no
- * projection. The register-and-route machinery lives in {@link RegisteringSubscribable}. This model adds the
+ * replay. It only ever reacts to events fed to it here and now, so a handler that misses an event never sees it. It is
+ * a full {@link org.occurrent.subscription.api.blocking.SubscriptionModel}, and the application service asks
+ * {@link #beforeWrite()} before every write, which refuses the write while the model is stopped or when a paused
+ * subscription matches its events. Events fed in directly, through {@link #dispatch(List)} or {@link #accept(List)},
+ * skip a paused subscription instead, as ADR 85 describes. The register-and-route machinery lives in
+ * {@link RegisteringSubscribable}. This model adds the
  * application-service dispatch entry point. For an externally driven push feed (RabbitMQ, Kafka, ...) use
  * {@code PushSubscriptionModel} instead.
  */
@@ -122,6 +125,28 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
     @Override
     public void accept(List<CloudEvent> cloudEvents) {
         dispatch(cloudEvents, false);
+    }
+
+    /**
+     * Refuses a write while this model is stopped and has handlers registered, and returns a check that refuses one
+     * whose events a paused subscription matches. A handler skipped either way would never see those events.
+     *
+     * @throws WriteRefusedException when this model is stopped and has handlers registered
+     */
+    @Override
+    public WriteCheck beforeWrite() {
+        if (dropsEventsWhileStopped) {
+            return WriteCheck.NONE;
+        }
+        if (!isRunning() && hasSubscriptions()) {
+            throw WriteRefusedException.synchronousSubscriptionsStopped();
+        }
+        return newEvents -> {
+            Set<String> paused = pausedSubscriptionsMatching(newEvents);
+            if (!paused.isEmpty()) {
+                throw WriteRefusedException.synchronousSubscriptionsPaused(paused);
+            }
+        };
     }
 
     /**

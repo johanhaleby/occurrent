@@ -113,6 +113,13 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
             throw new UnsupportedOperationException("The provided EventStore implementation does not support reading with a StreamReadFilter. EventStore must implement ReadEventStreamWithFilter in order to use filters when reading.");
         }
         @Nullable Function<List<E>, Mono<Void>> sideEffect = executeOptions.sideEffect();
+        ReactiveSynchronousEventDispatcher.WriteCheck writeCheck;
+        try {
+            // On the caller's thread and before hasSubscriptions(), since it can register handlers, see beforeWrite()
+            writeCheck = synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
+        } catch (RuntimeException refused) {
+            return Mono.error(refused);
+        }
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
         @Nullable Long fromStreamVersion = executeOptions.fromStreamVersion();
         int skip = fromStreamVersion == null ? 0 : Math.toIntExact(fromStreamVersion);
@@ -140,6 +147,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                             }
                             List<CloudEvent> newCloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
                             List<E> writtenDomainEvents = newDomainEvents;
+                            writeCheck.check(newCloudEvents);
                             return eventStore.write(streamId, eventStream.version(), Flux.fromIterable(newCloudEvents))
                                     .flatMap(writeResult -> {
                                         Result<E> result = new Result<>(writeResult, writtenDomainEvents);

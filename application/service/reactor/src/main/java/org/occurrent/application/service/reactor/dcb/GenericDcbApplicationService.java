@@ -136,6 +136,13 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
         @Nullable Function<List<E>, Mono<Void>> sideEffect = options.sideEffect();
+        ReactiveSynchronousEventDispatcher.WriteCheck writeCheck;
+        try {
+            // On the caller's thread and before hasSubscriptions(), since it can register handlers, see beforeWrite()
+            writeCheck = synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
+        } catch (RuntimeException refused) {
+            return Mono.error(refused);
+        }
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
         @Nullable DcbReadOptions readOptions = readOptions(options);
         boolean versionsRequested = options.versionsRequested();
@@ -157,7 +164,9 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                             return Mono.empty();
                         }
                         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-                        return Mono.just(new Decision<>(eventStream, newDomainEvents, addTags(options.tagGenerator(), newDomainEvents, cloudEvents)));
+                        List<CloudEvent> taggedEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
+                        writeCheck.check(taggedEvents);
+                        return Mono.just(new Decision<>(eventStream, newDomainEvents, taggedEvents));
                     });
             BiFunction<Decision<E>, Boolean, Mono<Result<E>>> appendAndDispatch = (decision, openedTransaction) -> Mono.defer(() -> {
                 if (failureAfterWrite.isHeld()) {

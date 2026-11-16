@@ -129,6 +129,8 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
               record Attempt<T1 extends @Nullable Object, T2>(T1 v1, T2 v2) {}
               // @formatter:on
 
+        // Before hasSubscriptions(), since it can register handlers, see beforeWrite()
+        SynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? SynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
 
         FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
@@ -156,6 +158,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                 }
 
                 List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
+                writeCheck.check(newEvents);
                 WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
 
                 if (dispatchSynchronously && !newEvents.isEmpty()) {

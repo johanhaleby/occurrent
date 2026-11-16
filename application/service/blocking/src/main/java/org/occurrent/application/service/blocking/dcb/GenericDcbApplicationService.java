@@ -140,6 +140,8 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
         @Nullable Consumer<List<E>> sideEffect = options.sideEffect();
+        // Before hasSubscriptions(), since it can register handlers, see beforeWrite()
+        SynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? SynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
         @Nullable DcbReadOptions readOptions = readOptions(options);
         boolean versionsRequested = options.versionsRequested();
@@ -174,7 +176,9 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             }
 
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-            return Optional.of(new Decision<>(eventStream, newDomainEvents, addTags(options.tagGenerator(), newDomainEvents, cloudEvents)));
+            List<CloudEvent> taggedEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
+            writeCheck.check(taggedEvents);
+            return Optional.of(new Decision<>(eventStream, newDomainEvents, taggedEvents));
         };
         BiFunction<Decision<E>, Boolean, Attempt<Optional<DcbAppendResult>, List<E>>> appendAndDispatch = (decision, openedTransaction) -> {
             if (failureAfterWrite.isHeld()) {
