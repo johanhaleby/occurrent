@@ -199,7 +199,7 @@ public class SpringMongoCheckpointStorage implements CatchupMarkerStorage {
         Document markerDocument = MongoCommons.generateCatchupMarkerDocument(subscriptionId, marker, generation);
         Supplier<Document> save = () -> persistConditionalCheckpointDocument(subscriptionId, markerDocument, condition);
         Document afterDocument = requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
-        return MongoCommons.checkpointWriteSucceeded(marker, condition, afterDocument);
+        return MongoCommons.catchupMarkerWriteSucceeded(marker, generation, condition, afterDocument);
     }
 
     @Override

@@ -231,7 +231,7 @@ public class NativeMongoCheckpointStorage implements CatchupMarkerStorage {
         Document markerDocument = generateCatchupMarkerDocument(subscriptionId, marker, generation);
         Supplier<Document> save = () -> persistConditionalCheckpointDocument(subscriptionId, markerDocument, condition);
         Document afterDocument = requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
-        return checkpointWriteSucceeded(marker, condition, afterDocument);
+        return catchupMarkerWriteSucceeded(marker, generation, condition, afterDocument);
     }
 
     @Override

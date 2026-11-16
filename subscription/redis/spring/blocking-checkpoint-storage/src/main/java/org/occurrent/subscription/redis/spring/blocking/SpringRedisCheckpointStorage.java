@@ -212,7 +212,9 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
     // KEYS[1] = checkpoint key, KEYS[2] = version key, KEYS[3] = generation hash. ARGV[1] = marker value, ARGV[2] =
     // generation, ARGV[3] = 'any', 'notOlderThan' or 'ifAbsent', ARGV[4] = write version for notOlderThan. Writes the
     // two keys the way NOT_OLDER_THAN_SCRIPT, IF_ABSENT_SCRIPT and a plain SET do, and stores the generation as the
-    // marker's stamp only when the write happens. Returns 1 when it wrote and 0 when the condition refused.
+    // marker's stamp only when the write happens. Returns 1 when it wrote and 0 when the condition refused. An
+    // ifAbsent save whose value and stamp are already stored returns 1, since that is a retry whose first attempt
+    // wrote and lost its reply.
     private static final RedisScript<Long> SAVE_CATCHUP_MARKER_SCRIPT = RedisScript.of(VERSION_IS_GREATER + """
             if ARGV[3] == 'notOlderThan' then
                 local storedVersion = redis.call('GET', KEYS[2])
@@ -223,6 +225,9 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
                 redis.call('SET', KEYS[2], ARGV[4])
             elseif ARGV[3] == 'ifAbsent' then
                 if redis.call('EXISTS', KEYS[1]) == 1 then
+                    if redis.call('GET', KEYS[1]) == ARGV[1] and redis.call('HGET', KEYS[3], 'stamp') == ARGV[2] then
+                        return 1
+                    end
                     return 0
                 end
                 redis.call('SET', KEYS[1], ARGV[1])

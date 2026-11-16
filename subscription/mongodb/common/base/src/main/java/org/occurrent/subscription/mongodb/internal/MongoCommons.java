@@ -487,6 +487,20 @@ public class MongoCommons {
     }
 
     /**
+     * Whether {@code afterDocument} shows that a catch-up marker save of {@code marker} with {@code generation} wrote,
+     * the way {@link #checkpointWriteSucceeded(Checkpoint, CheckpointWriteCondition, Document)} tells it for a
+     * checkpoint. An {@code ifAbsent} save also needs {@code generation} as the stored stamp, since a marker with the
+     * same value left by an earlier generation is stored without this save having written anything.
+     */
+    public static boolean catchupMarkerWriteSucceeded(Checkpoint marker, long generation, CheckpointWriteCondition condition, Document afterDocument) {
+        if (!checkpointWriteSucceeded(marker, condition, afterDocument)) {
+            return false;
+        }
+        return !(condition instanceof CheckpointWriteCondition.IfAbsent)
+                || afterDocument.get(CATCHUP_MARKER_GENERATION) instanceof Number stamp && stamp.longValue() == generation;
+    }
+
+    /**
      * The field that holds the generation in a generation document, and in a catch-up marker's checkpoint document
      * the generation the marker was saved with, its stamp. See ADR 179.
      */
