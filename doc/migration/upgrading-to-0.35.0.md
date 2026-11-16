@@ -3015,9 +3015,11 @@ What you see:
   again. Set `startupMode = BACKGROUND` so the application starts while the catch-up runs.
 - On the reactor stack a catch-up keeps the marker it found, and does not store the head, while an event a handler
   wrote to the event store and fed back waits to be handled and its replay did not read it. No broker delivers such an
-  event again, so the next start has to replay it. A handler that feeds back an event whenever it handles one, under
-  steady live traffic, can keep the marker from moving on, and each start then replays everything after the marker an
-  earlier start stored.
+  event again, so the next start has to replay it. On the reactor `CatchupProjectionFeed` and `DomainEventFeed`, where
+  a catch-up can run again after `goLive()`, a handler that feeds back an event whenever it handles one, under steady
+  live traffic, can keep the marker from moving on, and each start then replays everything after the marker an earlier
+  start stored. The reactor `CatchupThenPushSubscriptionModel` runs its catch-up before any live event is handled, so
+  it does not meet that cost.
 - `cancelSubscription(id)` still deletes the marker, and the next subscribe of the id replays from the beginning when
   that delete holds. The blocking push model deletes it before it cancels, and the reactor one after, and the `Mono`
   that the reactor `cancelSubscription(id)` returns completes once the delete is done. A delete that a Redis failover
