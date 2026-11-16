@@ -61,7 +61,8 @@ ADR 116 says. There is no other condition on it, and no fence.
 
 ### A lost or late write costs a longer replay
 
-Every value a start writes is a position its own replay has read past. So a marker that is older than it should be,
+Every value a start writes is the head its own replay read up to, which the next section shows is safe to resume
+after. So a marker that is older than it should be,
 because a write was lost, or because an old H reached the store after a newer one, makes the next start replay more
 events than it had to. It cannot make a start skip one. The handover's existing cache de-duplicates the overlap
 between the replay and the live feed within `CatchupThenLiveOptions.dedupCacheSize()`, and beyond that the
@@ -69,7 +70,7 @@ at-least-once contract already applies. The blocking push model's class javadoc 
 twice must leave the projection as applying it once would.
 
 The three steps in the context no longer lose events. A late write after a cancel's delete restores an H that the
-cancelled subscription's own replay had read past, so the next subscribe resumes after it instead of replaying from
+cancelled subscription's own replay had read up to, so the next subscribe resumes after it instead of replaying from
 the beginning. That is a resume, not a skipped event.
 
 ### Why H is safe to resume after
@@ -84,15 +85,16 @@ first, when it replays nothing at all:
   blocking model calls `liveFeed.subscribeCatchupThenPush` at `CatchupThenPushSubscriptionModel.java:388` and launches
   the replay at `:393`, and the reactor model registers at `:273` and launches at `:275`. An event that commits after
   H was read commits after that registration, and the broker delivers it.
-* The feeds are handed live events by the application's own broker listener. Until the feed is live, `acceptAndWait`
-  answers `DEFERRED` for every event, the listener doesn't acknowledge it, and the broker delivers it again once the
-  feed is live.
+* The feeds are handed live events by the application's own broker listener. Before the feed is live, and while a
+  replay runs, `acceptOrDefer` answers `DEFERRED`, the listener doesn't acknowledge the event, and the broker delivers
+  it again. `acceptAndWait` keeps the event in the feed's buffer until the drain after the replay applies it, and the
+  listener acknowledges it only once the call returns. When the call throws, the listener doesn't acknowledge it.
 
 Both need a broker that keeps the backlog of a consumer that is offline, which the blocking push model's class javadoc
 already states for a restart. Reading H after the live registration is part of this decision, so a push model that
 read H earlier would break it.
 
-H, and not the head read at mark time, is what gets stored, because H is a position the replay has read past. The
+H, and not the head read at mark time, is what gets stored, because H is the head the replay read up to. The
 reactor stack writes the marker before the live drain, so a crash between the write and the drain would leave events
 above H that only the buffer held. With H stored, the next start replays them. With the head at mark time stored, only
 the broker would deliver them again.
@@ -122,11 +124,29 @@ broker message nobody acknowledged, and the broker delivers it again.
 
 ### The replay callbacks
 
-`ReplayAware` and `ReactiveReplayAware` keep their 0.34.0 meaning. `replayStarted()`, `replayCompleted()` and
-`replayAbandoned()` run only for a replay from the beginning, when no marker is stored. A replay after a stored
-position delivers its events the way the live feed does, without the callbacks. A view that rebuilds itself between
-`replayStarted()` and `replayCompleted()`, such as `CoalescingMaterializedView`, keeps seeing a rebuild only when it
-gets one.
+`ReplayAware` and `ReactiveReplayAware` keep their 0.34.0 meaning, and so does the `CatchupListener` that
+`listenForCatchup` gives a push model. A start is one of three kinds:
+
+* No replay. `goLive()` replays nothing and sends none of the callbacks, as in 0.34.0.
+* A replay from the beginning, when no marker is stored. The view gets `replayStarted()`, then `replayCompleted()` or
+  `replayAbandoned()`, and `alreadyDeliveredByReplay()` for a live copy of an event the replay delivered. The
+  `CatchupListener` gets `catchupStarted` and `historyRead`.
+* A replay after a stored position. Its events reach the view the way live events do, and none of those callbacks is
+  sent.
+
+The handovers keep calling the source's `replayStarted()`, `replayCompleted()`, `replayAbandoned()` and
+`alreadyDeliveredByReplay()` on every replay, so the decision sits in each source. Both handovers call
+`isAlreadyCaughtUp()` before `replayStarted()`, `BlockingHandover` at line 720 and `ReactiveHandover` at line 1248 at
+`4d1cd8a916`. A marker source reads P and H there, answers `false`, and keeps both for the rest of that start. It passes
+the callbacks on to the view, or to the `CatchupListener`, only when P is absent. The blocking push model sends
+`catchupStarted` from that point instead of from the thread that launches the replay, which still sends it before the
+replay delivers anything.
+
+A view that rebuilds itself between `replayStarted()` and `replayCompleted()`, such as `CoalescingMaterializedView`,
+keeps seeing a rebuild only when it gets one. `RecordingMaterializedView` deletes every append it has recorded for the
+projection after `replayStarted()` or `catchupStarted`, so sending either for a replay after P would drop the records
+of appends the view still holds. Without them it records each replayed append as it applies it, and a live copy that
+the handover drops as a duplicate needs no record of its own.
 
 ### What was tried and dropped
 
@@ -137,7 +157,9 @@ took that type. MongoDB raised the generation with `$inc` and then switched to r
 with `w: "majority"` and `j: true`, and refused to forget on a server without journaling. Redis kept the generation in
 a hash next to the checkpoint and wrote a random token.
 
-That design needs a forget that stays done once acknowledged, and no store Occurrent ships can promise it:
+That design needs a forget that stays done once acknowledged. `InMemoryCheckpointStorage` keeps one, and a restart
+loses every marker it holds anyway. The MongoDB and Redis storages can't promise one, and the reactor forget can give
+up:
 
 * Redis acknowledges a write before its replicas have it, so a failover loses an acknowledged forget. `WAIT` would
   narrow the window, and the Redis documentation calls it best effort.
