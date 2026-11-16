@@ -1693,15 +1693,15 @@ Plain `read(id)` and `exists(id)` still find a marker saved with a generation th
 
 ### Who is affected
 
-- You run MongoDB as a replica set or a sharded cluster. Both writes of a forget wait for `w: "majority"`, whatever
-  write concern your collection or `MongoOperations` has. `readCatchupMarker(id)` reads the generation with
+- You run MongoDB as a replica set or a sharded cluster. Both writes of a forget wait for `w: "majority"` and
+  `j: true`, whatever write concern your collection or `MongoOperations` has. `readCatchupMarker(id)` reads the generation with
   `LINEARIZABLE` read concern, which a majority has to confirm. When no majority answers within 10 seconds, the
   attempt fails, and the storage's `RetryStrategy` decides whether to try again. On a client with a `timeoutMS` above
   0, that `timeoutMS` bounds each attempt instead. A `timeoutMS` of 0 waits forever, so there the storage still gives
   each attempt 10 seconds. A standalone server refuses
-  `LINEARIZABLE`, and the storage then reads with `MAJORITY`. The check needs `writeConcernMajorityJournalDefault` at
-  `true` in the replica set configuration, which is MongoDB's default. With `false`, a forget a majority acknowledged
-  can still roll back, and a forgotten marker can then read as present after a later forget.
+  `LINEARIZABLE`, and the storage then reads with `MAJORITY`. A server that runs without journaling refuses
+  `j: true`, and the storage then sends the forget without it and logs a warning. That server can't journal a forget,
+  so a crash loses an acknowledged one.
 - You clean up the checkpoint collection or the Redis key space with a job of your own. Leave the generation documents
   and hashes in place. Removing one puts the generation of that subscription id back at 0, and a marker saved before
   an earlier forget can then read as present again.
