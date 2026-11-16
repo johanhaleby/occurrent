@@ -57,6 +57,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -139,6 +140,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     private final ExecutorService cloudEventDispatcher;
     private final MongoDatabase database;
     private final ChangeStreamSubscriptions subscriptions;
+    // The stillWanted of a two-argument canResumeFrom running on this thread, for the one-argument canResumeFrom it calls
+    private final ThreadLocal<BooleanSupplier> stillWantedOfTheCall = new ThreadLocal<>();
 
     /**
      * Create a subscription using the native MongoDB sync driver. It will by default use a {@link RetryStrategy} for retries,
@@ -446,7 +449,30 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      */
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint) {
-        return subscriptions.canResumeFrom(eventCollection.getNamespace().getCollectionName(), checkpoint);
+        BooleanSupplier stillWanted = stillWantedOfTheCall.get();
+        return subscriptions.canResumeFrom(eventCollection.getNamespace().getCollectionName(), checkpoint, stillWanted == null ? () -> true : stillWanted);
+    }
+
+    /**
+     * {@link #canResumeFrom(Checkpoint)}, except that a transient failure is also thrown, instead of retried, once
+     * {@code stillWanted} answers {@code false}. A catch-up calls this overload from its replay thread. It calls
+     * {@link #canResumeFrom(Checkpoint)}, so a subclass that overrides only that method is still called, and
+     * {@code stillWanted} ends the retry when the override calls {@code super.canResumeFrom(checkpoint)} on the same
+     * thread.
+     */
+    @Override
+    public boolean canResumeFrom(Checkpoint checkpoint, BooleanSupplier stillWanted) {
+        BooleanSupplier outer = stillWantedOfTheCall.get();
+        stillWantedOfTheCall.set(stillWanted);
+        try {
+            return canResumeFrom(checkpoint);
+        } finally {
+            if (outer == null) {
+                stillWantedOfTheCall.remove();
+            } else {
+                stillWantedOfTheCall.set(outer);
+            }
+        }
     }
 
 
