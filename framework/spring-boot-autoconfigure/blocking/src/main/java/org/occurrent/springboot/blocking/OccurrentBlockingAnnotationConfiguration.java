@@ -20,7 +20,7 @@ import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.springboot.common.PushCatchupStatus;
-import org.occurrent.springboot.common.PushCatchupStatusImpl;
+import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;

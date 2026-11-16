@@ -17,7 +17,7 @@
 package org.occurrent.springboot.reactor;
 
 import org.occurrent.springboot.common.PushCatchupStatus;
-import org.occurrent.springboot.common.PushCatchupStatusImpl;
+import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;

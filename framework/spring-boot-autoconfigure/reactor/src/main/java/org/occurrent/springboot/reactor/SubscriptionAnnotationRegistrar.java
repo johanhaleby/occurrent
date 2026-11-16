@@ -32,10 +32,10 @@ import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
-import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.HandlerScan;
-import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
+import org.occurrent.springboot.common.internal.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
@@ -60,8 +60,8 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
-import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
-import static org.occurrent.springboot.common.SubscriptionAnnotations.subscriptionsStartOnTheirOwn;
+import static org.occurrent.springboot.common.internal.SubscriptionAnnotations.shouldWaitUntilStarted;
+import static org.occurrent.springboot.common.internal.SubscriptionAnnotations.subscriptionsStartOnTheirOwn;
 import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 
 /**
