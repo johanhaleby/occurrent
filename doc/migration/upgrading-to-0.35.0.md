@@ -612,7 +612,9 @@ report is [#1305](https://github.com/johanhaleby/occurrent/issues/1305).
 ### Who is affected
 
 A saga fed through a broker or a partitioner that does not keep a stream's events in version order. A saga fed straight
-from an Occurrent event store, in order, behaves as before.
+from an Occurrent event store, in order, applies events as before. Every saga on `SpringMongoSagaStateStore` is
+affected by how 0.35.0 stores its instances, whatever feeds it. Roll every saga node in one rollout, and run an
+`updateMany` before you go back to 0.34.0, as [the stored saga state for late versions](#stored-saga-state-1) describes.
 
 ### What changes
 
@@ -693,10 +695,27 @@ that stream and event type, the saga skips it and logs a warning once per stream
 rollout. An event that a 0.35.0 node parked after it failed in the saga is different, since that failure recorded it
 as pending, and the saga applies it whenever it arrives again.
 
-During a rolling upgrade a 0.34.0 node stalls on the first event for an `ACTIVE` instance that holds stream marks,
-the same way it stalls on a quarantined instance, as
-[Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it) describes.
-Its timer poller asks for `ACTIVE` instances only, so the timers of an `ACTIVE_MARKED` instance wait while a 0.34.0 node
+During a rolling upgrade, what a 0.34.0 node does with an event for an `ACTIVE_MARKED` instance depends on what feeds
+the saga:
+
+- An Occurrent subscription, or a Kafka or RabbitMQ source with `REDELIVER`, delivers the event again and again, so the
+  saga's subscription, or the partition or queue, stalls on it, the same way it stalls on a quarantined instance, as
+  [Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it) describes.
+  The stall ends once a 0.35.0 node gets the event, so finishing the rollout ends it.
+- A Kafka or RabbitMQ source with `PARK` parks the event and acknowledges it, as the previous paragraph says. It parks
+  every event it gets for such an instance, which is every instance a 0.35.0 node has handled an event with a stream
+  version for. In a Kafka rollout each restart rebalances the partitions, so a partition a 0.35.0 node consumed can
+  move to a 0.34.0 consumer, which then parks every event for the instances that 0.35.0 node handled. Publish the
+  parked messages again after the rollout. A message whose version is `reorderWindow` or more behind what the instance
+  has applied is skipped with a warning. To avoid that, set the source's
+  `onDeliveryFailure` to `REDELIVER` on the 0.34.0 nodes before the rollout, so they stall instead of parking, and set
+  it back to `PARK` after it.
+- A `PushSubscriptionModel` that your own code pushes events into throws the exception back to that code. When your
+  code doesn't push the event again, the instance never gets it. Push each event that failed again once every saga
+  node runs 0.35.0. One whose version is `reorderWindow` or more behind what the instance has applied is skipped with a
+  warning.
+
+A 0.34.0 node's timer poller asks for `ACTIVE` instances only, so the timers of an `ACTIVE_MARKED` instance wait while a 0.34.0 node
 holds the timer lease. Roll every saga node to 0.35.0 in one rollout, without a long canary.
 
 `findByStatus(ACTIVE, ..)` matches both strings. A query you wrote by hand for `status: "ACTIVE"`, and an alert built
@@ -829,7 +848,9 @@ and the issue is [#1259](https://github.com/johanhaleby/occurrent/issues/1259).
 starter does the same when `occurrent.saga.quarantine-after` is left out, and
 `occurrent.saga.quarantine-enabled=false` turns it off. In 0.34.0 both left quarantine off. The 3- and 4-argument
 `SagaRunnerConfig` constructors still never quarantine. With quarantine on, a rolling upgrade from 0.34.0 can stall a
-saga's subscription, as [Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it) describes.
+saga's subscription on a quarantined instance, as [Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it) describes.
+Turning quarantine off doesn't avoid that, since a 0.34.0 node also fails on every `ACTIVE_MARKED` instance, as
+[the stored saga state for late versions](#stored-saga-state-1) describes.
 
 A blank `occurrent.saga.quarantine-after` kept quarantine off in 0.34.0. In 0.35.0 the application fails at startup
 on one, and the message says to set `occurrent.saga.quarantine-enabled=false` to keep quarantine off.
@@ -868,7 +889,9 @@ means and what to do next. In Spring Boot the saga's `SagaSubscription` is the `
 
 The timer poller goes on with a release that failed on an input or was interrupted. One poll replays at most
 `timerBatchLimit` records, 100 by default, shared evenly among the releasing instances it lists, at least one each, and
-the next poll goes on where the last one stopped. A `release` call has no such bound.
+the next poll goes on where the last one stopped. A `release` call has no such bound. The poller goes on with an
+instance only once it has gone a whole `timerPollInterval` without a write, so it skips a release that is still
+running on any node, as long as that release takes less than `timerPollInterval` over each input.
 
 A timer that came due while the instance was quarantined fires after every recorded input has been replayed, because a
 saga's timers run on processing time. For a saga that uses a timer as a deadline, a replayed input from after the

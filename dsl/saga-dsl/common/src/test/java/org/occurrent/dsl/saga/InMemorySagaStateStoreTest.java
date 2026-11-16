@@ -33,6 +33,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -657,6 +659,68 @@ class InMemorySagaStateStoreTest {
                     () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1")),
                     () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "c@1"))
             );
+        }
+
+        // One writer records seq 0, 1, 2 and so on, each call completing before the next starts, so any one read of the
+        // records must hold a prefix of them and its lowest seq is 0 as soon as it holds any. Other writers fill the store with
+        // records of other instances, which is what a read of one instance iterates past when all records share one map
+        @Test
+        void read_the_lowest_seq_recorded_before_the_read_while_other_skips_record_concurrently() throws Exception {
+            int recorded = 10_000;
+            for (int i = 0; i < 20_000; i++) {
+                store.recordSkippedInput("other-" + i, "q1", new SkippedInput(i, "x@" + i));
+            }
+            AtomicLong completed = new AtomicLong();
+            AtomicReference<String> violation = new AtomicReference<>();
+            CountDownLatch go = new CountDownLatch(1);
+            ExecutorService executor = Executors.newFixedThreadPool(4);
+            try {
+                Future<?> writer = executor.submit(() -> {
+                    go.await();
+                    for (int i = 0; i < recorded; i++) {
+                        store.recordSkippedInput("s1", "q1", new SkippedInput(i, "s@" + i));
+                        completed.incrementAndGet();
+                    }
+                    return null;
+                });
+                List<Future<Object>> noise = List.of(1, 2).stream().map(thread -> executor.submit(() -> {
+                    go.await();
+                    for (int i = 0; i < recorded && completed.get() < recorded; i++) {
+                        store.recordSkippedInput("noise-" + thread + "-" + i, "q1", new SkippedInput(i, "n@" + i));
+                    }
+                    return null;
+                })).toList();
+                Future<?> reader = executor.submit(() -> {
+                    go.await();
+                    while (completed.get() < recorded) {
+                        long recordedBeforeTheRead = completed.get();
+                        List<SkippedInput> lowest = store.findSkippedInputs("s1", "q1", 1);
+                        if (recordedBeforeTheRead > 0 && lowest.isEmpty()) {
+                            violation.compareAndSet(null, "empty after " + recordedBeforeTheRead + " records");
+                        } else if (!lowest.isEmpty() && lowest.getFirst().seq() != 0) {
+                            violation.compareAndSet(null, "lowest was " + lowest.getFirst() + " after " + recordedBeforeTheRead + " records");
+                        }
+                        List<SkippedInput> all = store.findSkippedInputs("s1", "q1", Integer.MAX_VALUE);
+                        for (int i = 0; i < all.size(); i++) {
+                            if (all.get(i).seq() != i) {
+                                violation.compareAndSet(null, "read " + all.size() + " records and the one at " + i + " was " + all.get(i));
+                                break;
+                            }
+                        }
+                    }
+                    return null;
+                });
+                go.countDown();
+                writer.get(20, TimeUnit.SECONDS);
+                reader.get(20, TimeUnit.SECONDS);
+                for (Future<?> future : noise) {
+                    future.get(20, TimeUnit.SECONDS);
+                }
+            } finally {
+                executor.shutdownNow();
+            }
+
+            assertThat(violation.get()).as("a read of the records of one instance").isNull();
         }
     }
 }

@@ -153,9 +153,16 @@ defect), a listener that delivers from several threads, a Kafka topic whose part
 produced, and a RabbitMQ `prefetchCount` or a number of concurrent publishers of one stream that is larger than the
 window.
 
-During a rolling upgrade a 0.34.0 node stalls on the first event for an `ACTIVE` instance that holds stream marks,
-which a 0.35.0 node adds for every event with a stream version it handles, a failed one included, and the timers of such an instance wait while a 0.34.0 node holds the timer lease. Saga nodes have to be rolled in one rollout,
-without a long canary. A query written by hand for `status: "ACTIVE"` misses the instances stored as `ACTIVE_MARKED`.
+During a rolling upgrade a 0.34.0 node throws on every event for an `ACTIVE` instance that holds stream marks, which a
+0.35.0 node adds for every event with a stream version it handles, a failed one included. What then happens to the
+event depends on what feeds the saga. An Occurrent subscription, or a Kafka or RabbitMQ source with `REDELIVER`,
+delivers it again, so the subscription, partition or queue stalls until a 0.35.0 node gets the event. A source with
+`PARK` parks and acknowledges it, and once a Kafka rebalance hands a partition to a 0.34.0 consumer, that consumer
+parks every event of such an instance. The parked messages have to be published again after the rollout, and one
+`reorderWindow` or more behind the instance is skipped with a warning, so the upgrade guide advises `REDELIVER` on the
+0.34.0 nodes for the rollout. A `PushSubscriptionModel` throws the exception back to the code that pushed the event,
+and the instance never gets the event unless that code pushes it again. The timers of such an instance wait while a
+0.34.0 node holds the timer lease. Saga nodes have to be rolled in one rollout, without a long canary. A query written by hand for `status: "ACTIVE"` misses the instances stored as `ACTIVE_MARKED`.
 
 Going back to 0.34.0 is an explicit step. Once every 0.35.0 node has stopped, a query lists the `ACTIVE_MARKED`
 instances whose marks hold a version in `pending` or `legacyFailed`, which 0.34.0 never applies once a later version of

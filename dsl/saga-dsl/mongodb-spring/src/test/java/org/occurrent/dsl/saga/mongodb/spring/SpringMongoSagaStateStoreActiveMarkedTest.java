@@ -96,6 +96,11 @@ class SpringMongoSagaStateStoreActiveMarkedTest {
         return envelope(sagaId, SagaStatus.ACTIVE, 1, List.of(new TimerEntry("t", firesAt)), null, marks);
     }
 
+    private static SagaEnvelope<String> activeUpdatedAt(String sagaId, Map<String, StreamMarks> marks, Instant updatedAt) {
+        return new SagaEnvelope<>(sagaId, "awaiting-payment", SagaStatus.ACTIVE, 1, List.of(), Map.of("order-1", 6L), null,
+                NOW.minusSeconds(600), updatedAt, null, null, true, null, marks, null);
+    }
+
     private static String storedStatus(MongoOperations mongoOperations, String sagaId) {
         return requireNonNull(mongoOperations.findOne(Query.query(where("_id").is(sagaId)), Document.class, COLLECTION)).getString("status");
     }
@@ -168,6 +173,32 @@ class SpringMongoSagaStateStoreActiveMarkedTest {
                         .containsExactlyInAnyOrder("plain", "marked"),
                 () -> assertThat(SagaEnvelopes.of(store, null).findByStatus(SagaStatus.QUARANTINED, NOW.plusSeconds(60), 10)).extracting(SagaEnvelope::sagaId)
                         .containsExactly("quarantined")
+        );
+    }
+
+    @Test
+    void findByStatus_ACTIVE_returns_ACTIVE_and_ACTIVE_MARKED_instances_interleaved_in_ascending_updatedAt_order_and_the_limit_cuts_that_ordered_list() {
+        MongoOperations mongoOperations = mongoOperations();
+        SpringMongoSagaStateStore<String> store = store(mongoOperations);
+        SagaEnvelopes<String> envelopes = SagaEnvelopes.of(store, null);
+        envelopes.compareAndSave("marked-t5", activeUpdatedAt("marked-t5", MARKS, NOW.minusSeconds(50)), 0);
+        envelopes.compareAndSave("plain-t1", activeUpdatedAt("plain-t1", Map.of(), NOW.minusSeconds(90)), 0);
+        envelopes.compareAndSave("marked-t4", activeUpdatedAt("marked-t4", MARKS, NOW.minusSeconds(60)), 0);
+        envelopes.compareAndSave("marked-t2", activeUpdatedAt("marked-t2", MARKS, NOW.minusSeconds(80)), 0);
+        envelopes.compareAndSave("plain-t3", activeUpdatedAt("plain-t3", Map.of(), NOW.minusSeconds(70)), 0);
+
+        List<SagaEnvelope<String>> firstThree = envelopes.findByStatus(SagaStatus.ACTIVE, NOW, 3);
+        List<SagaEnvelope<String>> all = envelopes.findByStatus(SagaStatus.ACTIVE, NOW, 10);
+
+        assertAll(
+                () -> assertThat(List.of(storedStatus(mongoOperations, "plain-t1"), storedStatus(mongoOperations, "marked-t2"), storedStatus(mongoOperations, "plain-t3"),
+                        storedStatus(mongoOperations, "marked-t4"), storedStatus(mongoOperations, "marked-t5")))
+                        .as("the stored status strings interleave in updatedAt order")
+                        .containsExactly("ACTIVE", "ACTIVE_MARKED", "ACTIVE", "ACTIVE_MARKED", "ACTIVE_MARKED"),
+                () -> assertThat(firstThree).as("limit 3 cuts the ordered list across both stored strings").extracting(SagaEnvelope::sagaId)
+                        .containsExactly("plain-t1", "marked-t2", "plain-t3"),
+                () -> assertThat(all).as("limit above the total").extracting(SagaEnvelope::sagaId)
+                        .containsExactly("plain-t1", "marked-t2", "plain-t3", "marked-t4", "marked-t5")
         );
     }
 

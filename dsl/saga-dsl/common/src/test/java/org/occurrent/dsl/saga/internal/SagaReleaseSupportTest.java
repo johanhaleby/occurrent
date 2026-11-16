@@ -16,11 +16,16 @@
 
 package org.occurrent.dsl.saga.internal;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.dsl.saga.*;
 import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.FailureRecord;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.Outcome;
@@ -29,6 +34,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.function.UnaryOperator;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -524,6 +531,39 @@ class SagaReleaseSupportTest {
                     () -> assertThat(rebased.streamWatermarks()).isEqualTo(computed.streamWatermarks())
             );
         }
+
+        static Stream<Arguments> fieldsThatMoveAlone() {
+            return Stream.of(
+                    Arguments.of("status", (UnaryOperator<SagaEnvelope<OrderState>>) a -> new SagaEnvelope<>(a.sagaId(), a.state(), SagaStatus.ACTIVE, a.version(), a.timers(),
+                            a.streamWatermarks(), null, a.createdAt(), a.updatedAt(), a.completedAt(), a.currentStep(), a.started(), a.failure(), a.streamMarks(), a.quarantineSkipCount())),
+                    Arguments.of("timers", (UnaryOperator<SagaEnvelope<OrderState>>) a -> new SagaEnvelope<>(a.sagaId(), a.state(), a.status(), a.version(), List.of(),
+                            a.streamWatermarks(), null, a.createdAt(), a.updatedAt(), a.completedAt(), a.currentStep(), a.started(), a.failure(), a.streamMarks(), a.quarantineSkipCount())),
+                    Arguments.of("stream marks", (UnaryOperator<SagaEnvelope<OrderState>>) a -> new SagaEnvelope<>(a.sagaId(), a.state(), a.status(), a.version(), a.timers(),
+                            a.streamWatermarks(), null, a.createdAt(), a.updatedAt(), a.completedAt(), a.currentStep(), a.started(), a.failure(), Map.of("o1", new StreamMarks(7, Map.of())), a.quarantineSkipCount())),
+                    Arguments.of("createdAt", (UnaryOperator<SagaEnvelope<OrderState>>) a -> new SagaEnvelope<>(a.sagaId(), a.state(), a.status(), a.version(), a.timers(),
+                            a.streamWatermarks(), null, a.createdAt().plusSeconds(1), a.updatedAt(), a.completedAt(), a.currentStep(), a.started(), a.failure(), a.streamMarks(), a.quarantineSkipCount())),
+                    Arguments.of("updatedAt", (UnaryOperator<SagaEnvelope<OrderState>>) a -> new SagaEnvelope<>(a.sagaId(), a.state(), a.status(), a.version(), a.timers(),
+                            a.streamWatermarks(), null, a.createdAt(), a.updatedAt().plusSeconds(1), a.completedAt(), a.currentStep(), a.started(), a.failure(), a.streamMarks(), a.quarantineSkipCount())),
+                    Arguments.of("completedAt", (UnaryOperator<SagaEnvelope<OrderState>>) a -> new SagaEnvelope<>(a.sagaId(), a.state(), a.status(), a.version(), a.timers(),
+                            a.streamWatermarks(), null, a.createdAt(), a.updatedAt(), NOW, a.currentStep(), a.started(), a.failure(), a.streamMarks(), a.quarantineSkipCount())),
+                    Arguments.of("started", (UnaryOperator<SagaEnvelope<OrderState>>) a -> new SagaEnvelope<>(a.sagaId(), a.state(), a.status(), a.version(), a.timers(),
+                            a.streamWatermarks(), null, a.createdAt(), a.updatedAt(), a.completedAt(), a.currentStep(), false, a.failure(), a.streamMarks(), a.quarantineSkipCount())),
+                    Arguments.of("failure", (UnaryOperator<SagaEnvelope<OrderState>>) a -> new SagaEnvelope<>(a.sagaId(), a.state(), a.status(), a.version(), a.timers(),
+                            a.streamWatermarks(), null, a.createdAt(), a.updatedAt(), a.completedAt(), a.currentStep(), a.started(), failedOn(9), a.streamMarks(), a.quarantineSkipCount()))
+            );
+        }
+
+        @ParameterizedTest(name = "is not an append when only the {0} moved as well")
+        @MethodSource("fieldsThatMoveAlone")
+        void is_not_an_append_when_one_more_field_moved_as_well(String field, UnaryOperator<SagaEnvelope<OrderState>> move) {
+            SagaEnvelope<OrderState> before = quarantined(releasingOn(9), 3L);
+            SagaEnvelope<OrderState> counted = SagaExecutionSupport.withSkipFinished(SagaExecutionSupport.withSkipCounted(before));
+
+            assertAll(
+                    () -> assertThat(SagaExecutionSupport.differsOnlyByRecordedSkips(before, counted)).as("control: nothing but the skip moved").isTrue(),
+                    () -> assertThat(SagaExecutionSupport.differsOnlyByRecordedSkips(before, move.apply(counted))).as(field).isFalse()
+            );
+        }
     }
 
     @Nested
@@ -610,6 +650,76 @@ class SagaReleaseSupportTest {
             SagaEnvelope<OrderState> current = quarantined(failedOn(9), 3L);
 
             assertThatThrownBy(() -> SagaExecutionSupport.withMissingInputQuarantined(current, "o1@7", NOW)).isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Nested
+    class ClassifyingAnInputTheFailureRecordNames {
+
+        private static final String TYPE = "org.example.PaymentReserved";
+
+        // Version 10 of stream S is below the type's mark of 310 by more than the reorder window and not among the applied
+        // versions, so the stream marks have forgotten it. Only a failure record naming it can say it was never applied
+        private SagaEnvelope<OrderState> withFailureOn(SagaStatus status, SagaFailure failure) {
+            StreamMarks marks = new StreamMarks(5, Map.of(TYPE, new TypeMark(310, List.of(), 0)));
+            return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), status, 4, List.of(), Map.of("S", 5L), null, NOW.minusSeconds(7200), QUARANTINED_AT,
+                    null, null, true, failure, Map.of("S", marks), 0L);
+        }
+
+        private EventMeta s10() {
+            return new EventMeta("S", 10L, 10L, TYPE);
+        }
+
+        private SagaFailure failureOnS10(@Nullable Instant releasedAt) {
+            return new SagaFailure("S@10", 10L, QUARANTINED_AT, IllegalStateException.class.getName(), "boom", releasedAt, QUARANTINE_ID);
+        }
+
+        @Test
+        void is_not_new_while_the_instance_is_releasing_since_the_stream_marks_decide_alone() {
+            SagaEnvelope<OrderState> releasing = withFailureOn(SagaStatus.QUARANTINED, failureOnS10(NOW));
+
+            assertAll(
+                    () -> assertThat(releasing.isReleasing()).as("control: releasing").isTrue(),
+                    () -> assertThat(SagaExecutionSupport.classify(releasing, s10(), SagaExecutionSupport.DEFAULT_REORDER_WINDOW)).isEqualTo(SagaExecutionSupport.Delivery.BEHIND_WINDOW)
+            );
+        }
+
+        @Test
+        void is_not_new_while_the_instance_is_releasing_when_it_is_at_or_below_the_floor_too_and_is_new_as_a_live_delivery() {
+            SagaFailure releasingOnS3 = new SagaFailure("S@3", 3L, QUARANTINED_AT, IllegalStateException.class.getName(), "boom", NOW, QUARANTINE_ID);
+            SagaFailure notReleasingOnS3 = new SagaFailure("S@3", 3L, QUARANTINED_AT, IllegalStateException.class.getName(), "boom", null, QUARANTINE_ID);
+            EventMeta s3 = new EventMeta("S", 3L, 3L, TYPE);
+
+            assertAll(
+                    () -> assertThat(SagaExecutionSupport.classify(withFailureOn(SagaStatus.QUARANTINED, releasingOnS3), s3, SagaExecutionSupport.DEFAULT_REORDER_WINDOW))
+                            .as("releasing").isEqualTo(SagaExecutionSupport.Delivery.REDELIVERY),
+                    () -> assertThat(SagaExecutionSupport.classify(withFailureOn(SagaStatus.ACTIVE, notReleasingOnS3), s3, SagaExecutionSupport.DEFAULT_REORDER_WINDOW))
+                            .as("not releasing").isEqualTo(SagaExecutionSupport.Delivery.NEW)
+            );
+        }
+
+        @Test
+        void is_not_applied_again_by_a_release_replaying_it() {
+            SagaEnvelope<OrderState> releasing = withFailureOn(SagaStatus.QUARANTINED, failureOnS10(NOW));
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.replay(saga(), "o1", releasing, new SkippedInput(0, "S@10"),
+                    SagaInput.event(new PaymentReserved("o1")), s10(), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
+
+            assertAll(
+                    () -> assertThat(outcome.processed()).isFalse(),
+                    () -> assertThat(outcome.envelope()).isNull()
+            );
+        }
+
+        @Test
+        void is_new_as_a_live_delivery_when_the_failure_record_names_it_and_no_release_is_running() {
+            SagaEnvelope<OrderState> notReleasing = withFailureOn(SagaStatus.ACTIVE, failureOnS10(null));
+
+            assertAll(
+                    () -> assertThat(notReleasing.isReleasing()).as("control: not releasing").isFalse(),
+                    () -> assertThat(SagaExecutionSupport.classify(notReleasing, s10(), SagaExecutionSupport.DEFAULT_REORDER_WINDOW)).isEqualTo(SagaExecutionSupport.Delivery.NEW),
+                    () -> assertThat(deliver(notReleasing, SagaInput.event(new PaymentReserved("o1")), s10()).processed()).isTrue()
+            );
         }
     }
 }

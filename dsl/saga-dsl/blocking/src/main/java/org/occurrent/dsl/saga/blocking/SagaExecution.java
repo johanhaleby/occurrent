@@ -593,7 +593,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     /**
      * Go on with the release of every instance that is releasing, which retries an input that failed during a release
      * until it succeeds or its budget runs out, and resumes a release a crash interrupted. Asked on every poll, so with
-     * a competing-consumer strategy only the node holding the saga's timer lease asks. A store that does not implement
+     * a competing-consumer strategy only the node holding the saga's timer lease asks.
+     * <p>
+     * A release writes the instance for every record it applies and for every input that fails, so an instance written
+     * within the last {@code timerPollInterval} has a release still running, on this node or another, and the poll
+     * skips it. Polls are a {@code timerPollInterval} apart from the end of one to the start of the next, so a
+     * release this poller went on with is older than that by the next poll. A release that stopped, after a crash or a
+     * failed input, is gone on with by the first poll a {@code timerPollInterval} after its last write. A release that
+     * takes longer than that over one record, or a node whose clock is that far ahead of the writer's, can still have
+     * the poll replay the record it is on, and both dispatch its commands, which delivery at least once allows. A store that does not implement
      * {@link SagaStateStoreSkippedInputs} has no releasing instances to list, and a runner without an
      * {@link EventStoreQueries} has nothing to replay from, so neither asks.
      * <p>
@@ -622,7 +630,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         int share = releasing.isEmpty() ? 0 : Math.max(1, config.timerBatchLimit() / releasing.size());
         for (String sagaId : releasing) {
             try {
-                continueRelease(sagaId, queries, records, share);
+                continueRelease(sagaId, queries, records, share, clock.get().minus(config.timerPollInterval()));
             } catch (Throwable t) {
                 log.warn("Saga '{}' could not go on with the release of instance '{}'. The next poll tries again.", subscriptionId, sagaId, t);
                 if (!SagaExecutionSupport.isAttributableToTheInstance(t)) {
@@ -708,7 +716,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     private SagaSubscription.ReleaseResult continueReleaseToTheEnd(String sagaId, EventStoreQueries queries, SagaStateStoreSkippedInputs records) {
-        return Objects.requireNonNull(continueRelease(sagaId, queries, records, Integer.MAX_VALUE));
+        return Objects.requireNonNull(continueRelease(sagaId, queries, records, Integer.MAX_VALUE, null));
     }
 
     /**
@@ -728,11 +736,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * from what it finds, so two nodes releasing the same instance compete for each record.
      * <p>
      * At most {@code maxRecords} records are replayed. When a further record is there after that, this returns
-     * {@code null} with the instance still releasing, and the next call goes on from that record.
+     * {@code null} with the instance still releasing, and the next call goes on from that record. With
+     * {@code leaveIfWrittenSince}, an instance first read with an {@code updatedAt} after it is left as it is, and this
+     * returns {@code null}.
      */
-    private SagaSubscription.@Nullable ReleaseResult continueRelease(String sagaId, EventStoreQueries queries, SagaStateStoreSkippedInputs records, int maxRecords) {
+    private SagaSubscription.@Nullable ReleaseResult continueRelease(String sagaId, EventStoreQueries queries, SagaStateStoreSkippedInputs records, int maxRecords,
+                                                                     @Nullable Instant leaveIfWrittenSince) {
         int lostInARow = 0;
         int replayed = 0;
+        boolean firstRead = true;
         while (true) {
             SagaEnvelope<S> current = envelopes.find(sagaId).orElse(null);
             SagaSubscription.ReleaseResult ended = resultUnlessReleasing(current);
@@ -740,6 +752,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return ended;
             }
             current = Objects.requireNonNull(current);
+            Instant updatedAt = current.updatedAt();
+            if (firstRead && leaveIfWrittenSince != null && updatedAt != null && updatedAt.isAfter(leaveIfWrittenSince)) {
+                return null;
+            }
+            firstRead = false;
             String quarantineId = current.quarantineId();
             if (quarantineId == null) {
                 throw new IllegalStateException("Saga '" + subscriptionId + "' instance '" + sagaId + "' is releasing with no quarantine id, which only a state store that does not persist SagaFailure.quarantineId leaves.");

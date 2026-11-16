@@ -40,9 +40,12 @@ import static java.util.Objects.requireNonNull;
 public final class InMemorySagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S>, SagaStateStoreSkippedInputs {
 
     private final ConcurrentMap<String, StoredSaga> store = new ConcurrentHashMap<>();
-    private final ConcurrentMap<SkippedInputId, SkippedInput> skippedInputs = new ConcurrentHashMap<>();
+    // One immutable map from key to record per instance and quarantine id, replaced whole on every write. A read then
+    // takes every record written before it, so the lowest seq it returns is the lowest recorded, also while skips record
+    // concurrently. Iterating one map shared by every instance could miss a record written before one it does see
+    private final ConcurrentMap<Quarantine, Map<String, SkippedInput>> skippedInputs = new ConcurrentHashMap<>();
 
-    private record SkippedInputId(String sagaId, String quarantineId, String key) {
+    private record Quarantine(String sagaId, String quarantineId) {
     }
 
     @Override
@@ -140,7 +143,8 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     @Override
     public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
         requireNonNull(input, "input cannot be null");
-        skippedInputs.putIfAbsent(skippedInputId(sagaId, quarantineId, input.key()), input);
+        skippedInputs.compute(quarantine(sagaId, quarantineId), (ignored, records) ->
+                records != null && records.containsKey(input.key()) ? records : with(records, input));
     }
 
     @Override
@@ -150,9 +154,8 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         if (limit < 1) {
             throw new IllegalArgumentException("limit must be positive, was " + limit);
         }
-        return skippedInputs.entrySet().stream()
-                .filter(entry -> entry.getKey().sagaId().equals(sagaId) && entry.getKey().quarantineId().equals(quarantineId))
-                .map(Map.Entry::getValue)
+        Map<String, SkippedInput> records = skippedInputs.getOrDefault(new Quarantine(sagaId, quarantineId), Map.of());
+        return records.values().stream()
                 .sorted(SkippedInput.ORDER)
                 .limit(limit)
                 .toList();
@@ -161,25 +164,37 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     @Override
     public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
         requireNonNull(head, "head cannot be null");
-        skippedInputs.put(skippedInputId(sagaId, quarantineId, head.key()), head);
+        skippedInputs.compute(quarantine(sagaId, quarantineId), (ignored, records) -> with(records, head));
     }
 
     @Override
     public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
         requireNonNull(input, "input cannot be null");
-        skippedInputs.remove(skippedInputId(sagaId, quarantineId, input.key()), input);
+        skippedInputs.computeIfPresent(quarantine(sagaId, quarantineId), (ignored, records) -> {
+            if (!input.equals(records.get(input.key()))) {
+                return records;
+            }
+            Map<String, SkippedInput> remaining = new HashMap<>(records);
+            remaining.remove(input.key());
+            return remaining.isEmpty() ? null : Map.copyOf(remaining);
+        });
     }
 
     @Override
     public void deleteSkippedInputs(String sagaId, String quarantineId) {
         requireNonNull(sagaId, "sagaId cannot be null");
         requireNonNull(quarantineId, "quarantineId cannot be null");
-        skippedInputs.keySet().removeIf(id -> id.sagaId().equals(sagaId) && id.quarantineId().equals(quarantineId));
+        skippedInputs.remove(new Quarantine(sagaId, quarantineId));
     }
 
-    private static SkippedInputId skippedInputId(String sagaId, String quarantineId, String key) {
-        return new SkippedInputId(requireNonNull(sagaId, "sagaId cannot be null"), requireNonNull(quarantineId, "quarantineId cannot be null"),
-                requireNonNull(key, "key cannot be null"));
+    private static Quarantine quarantine(String sagaId, String quarantineId) {
+        return new Quarantine(requireNonNull(sagaId, "sagaId cannot be null"), requireNonNull(quarantineId, "quarantineId cannot be null"));
+    }
+
+    private static Map<String, SkippedInput> with(@Nullable Map<String, SkippedInput> records, SkippedInput input) {
+        Map<String, SkippedInput> written = records == null ? new HashMap<>() : new HashMap<>(records);
+        written.put(input.key(), input);
+        return Map.copyOf(written);
     }
 
     @Override

@@ -309,7 +309,9 @@ What `release` returns, and what to do next:
 and returns `STILL_RELEASING`. After every poll the timer poller goes
 on with each instance that is releasing, which with a competing-consumer strategy happens only on the node that holds
 the saga's timer lease, and without one on every node. The poller also goes on with a release that a crash or a
-restart interrupted. You can call `release` again too, and it goes on where the release stands.
+restart interrupted. It does either only once the instance has gone a whole `timerPollInterval`, 15 seconds by
+default, without a write, so it skips a release that is still running. You can call `release` again too, and it goes
+on where the release stands.
 
 The poller polls only while the saga's `timersEnabled` returns `true`, so a release that is under way waits with the
 timers while that gate is closed, only because the poller is what goes on with it. The gate exists for timers, which
@@ -530,8 +532,12 @@ lease while it does, so the saga's subscription stalls. The stall holds up every
 subscription, not only the events of the quarantined instance. It ends when a 0.35.0 node takes the lease, or when a
 0.35.0 node deletes the instance. A release doesn't end it, because a released instance is stored as `ACTIVE_MARKED`,
 which 0.34.0 can't decode either. A node whose catch-up replay failed on the event also has to restart before its
-subscription goes live. After a downgrade no 0.35.0 node is left to take the lease, so the stall lasts until the
-instance is deleted. To downgrade without that stall, do steps 1 to 5 while the nodes run
+subscription goes live. After a downgrade no 0.35.0 node is left to take the lease. A stall on a
+`QUARANTINED_RECORDING` instance then lasts until the instance is deleted. A stall on an `ACTIVE_MARKED` instance also
+ends once the `updateMany` in
+[the 0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#stored-saga-state-1) gives it its plain status back,
+since the 0.34.0 node reads the instance again on every retry and no 0.35.0 node is left to store it as
+`ACTIVE_MARKED` again. To downgrade without that stall, do steps 1 to 5 while the nodes run
 0.35.0:
 
 1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or

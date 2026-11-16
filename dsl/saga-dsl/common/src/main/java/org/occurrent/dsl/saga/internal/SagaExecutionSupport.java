@@ -485,8 +485,9 @@ public final class SagaExecutionSupport {
 
     /**
      * Whether {@code after}, read when a write computed from {@code before} lost its compare-and-set, differs from
-     * {@code before} only by inputs the instance skipped and recorded in between. That is a higher version and a higher
-     * {@link SagaEnvelope#quarantineSkipCount()}, and nothing else. A release then writes
+     * {@code before} only by inputs the instance skipped and recorded in between. That is a higher version with every
+     * other compared field equal. {@link SagaEnvelope#quarantineSkipCount()} isn't compared, since a skip raises it,
+     * and neither are the saga id, the current step and the deprecated position watermark. A release then writes
      * what it computed again on top of {@code after}, see {@link #rebased}, rather than applying the input a second time.
      * The state is compared with {@code equals}, so a state type without one never matches, and the input is applied
      * again and its reaction dispatched again, as any lost write is.

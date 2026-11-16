@@ -128,7 +128,7 @@ class SpringMongoSagaStateStoreRetryTest {
 
     @Test
     void a_transient_failure_on_a_read_is_retried_rather_than_reaching_the_caller() {
-        MongoOperations mongoOperations = failing(mongoOperations(), "findById", 1);
+        MongoOperations mongoOperations = failing(mongoOperations(), "findOne", 1);
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
         SagaEnvelopes.of(store, null).compareAndSave("order-1", payment("order-1"), 0);
 
@@ -198,7 +198,7 @@ class SpringMongoSagaStateStoreRetryTest {
         // actually ships rather than a limit the test invented. The limit is what keeps a sustained outage from
         // retrying without end, since this store has no shutdown flag to stop one.
         AtomicInteger calls = new AtomicInteger();
-        MongoOperations mongoOperations = alwaysFailing(mongoOperations(), "findById", calls);
+        MongoOperations mongoOperations = alwaysFailing(mongoOperations(), "findOne", calls);
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class, null,
                 SpringMongoSagaStateStore.defaultRetryStrategy().backoff(Backoff.fixed(1)));
 
@@ -216,7 +216,7 @@ class SpringMongoSagaStateStoreRetryTest {
 
     @Test
     void the_constructor_that_accepts_a_retry_strategy_is_honoured_and_a_transient_failure_reaches_the_caller() {
-        MongoOperations mongoOperations = failing(mongoOperations(), "findById", 1);
+        MongoOperations mongoOperations = failing(mongoOperations(), "findOne", 1);
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class, null, RetryStrategy.none());
 
         Throwable thrown = catchThrowable(() -> SagaEnvelopes.of(store, null).find("order-7"));
