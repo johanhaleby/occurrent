@@ -147,67 +147,76 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
     private static final String GENERATION_KEY_PREFIX = "occurrent:catchup-marker:";
 
     /**
-     * Returned by the write scripts below when the write went through.
+     * Returned by the write scripts below, as a string, when the write went through.
      */
     private static final long WRITE_SUCCEEDED = -1L;
 
     /**
-     * Returned by the write and read scripts below when no version is stored for the subscription id, which is
-     * distinct from {@link #WRITE_SUCCEEDED} and from every version this storage ever writes, since a write version
-     * is always the non-negative fencing token a competing-consumer strategy hands the caller.
+     * Returned by the write and read scripts below, as a string, when no version is stored for the subscription id,
+     * which is distinct from {@link #WRITE_SUCCEEDED} and from every version this storage ever writes, since a write
+     * version is always the non-negative fencing token a competing-consumer strategy hands the caller.
      */
     private static final long NO_VERSION_STORED = -2L;
+
+    // Lua's tonumber turns a version into a double, which holds every integer only up to 2^53, so two versions above
+    // that can compare equal. Every version this storage writes is a non-negative long in plain decimal digits
+    // without leading zeros, so the longer string is the greater version, and two of the same length compare digit by
+    // digit. The digits are compared as bytes, since Lua compares strings with the server's collation locale.
+    private static final String VERSION_IS_GREATER = """
+            local function versionIsGreater(a, b)
+                if #a ~= #b then
+                    return #a > #b
+                end
+                for i = 1, #a do
+                    local x, y = string.byte(a, i), string.byte(b, i)
+                    if x ~= y then
+                        return x > y
+                    end
+                end
+                return false
+            end
+            """;
 
     // KEYS[1] = checkpoint key, KEYS[2] = version key. ARGV[1] = checkpoint value, ARGV[2] = write version as
     // plain decimal digits. Nothing is stored is accepted, since that is a checkpoint written before this
     // condition existed. Otherwise the write is accepted when the stored version is not greater than the one
-    // offered, and refused with the stored version otherwise.
-    private static final RedisScript<Long> NOT_OLDER_THAN_SCRIPT = RedisScript.of("""
-            local storedVersionRaw = redis.call('GET', KEYS[2])
-            if storedVersionRaw then
-                local storedVersion = tonumber(storedVersionRaw)
-                local writeVersion = tonumber(ARGV[2])
-                if storedVersion > writeVersion then
-                    return storedVersion
-                end
+    // offered, and refused with the stored version otherwise. Returns a string, see READ_VERSION_SCRIPT.
+    private static final RedisScript<String> NOT_OLDER_THAN_SCRIPT = RedisScript.of(VERSION_IS_GREATER + """
+            local storedVersion = redis.call('GET', KEYS[2])
+            if storedVersion and versionIsGreater(storedVersion, ARGV[2]) then
+                return storedVersion
             end
             redis.call('SET', KEYS[1], ARGV[1])
             redis.call('SET', KEYS[2], ARGV[2])
-            return -1
-            """, Long.class);
+            return '-1'
+            """, String.class);
 
     // KEYS[1] = checkpoint key, KEYS[2] = version key. ARGV[1] = checkpoint value. Accepted only when the
     // checkpoint key does not exist yet, whatever version would be stored. The version key is left untouched
-    // either way, since ifAbsent is about whether a checkpoint is stored, not a version.
-    private static final RedisScript<Long> IF_ABSENT_SCRIPT = RedisScript.of("""
+    // either way, since ifAbsent is about whether a checkpoint is stored, not a version. Returns a string, see
+    // READ_VERSION_SCRIPT.
+    private static final RedisScript<String> IF_ABSENT_SCRIPT = RedisScript.of("""
             if redis.call('EXISTS', KEYS[1]) == 1 then
-                local storedVersionRaw = redis.call('GET', KEYS[2])
-                if storedVersionRaw then
-                    return tonumber(storedVersionRaw)
-                end
-                return -2
+                return redis.call('GET', KEYS[2]) or '-2'
             end
             redis.call('SET', KEYS[1], ARGV[1])
-            return -1
-            """, Long.class);
+            return '-1'
+            """, String.class);
 
-    // KEYS[1] = version key. No ARGV.
-    private static final RedisScript<Long> READ_VERSION_SCRIPT = RedisScript.of("""
-            local storedVersionRaw = redis.call('GET', KEYS[1])
-            if storedVersionRaw then
-                return tonumber(storedVersionRaw)
-            end
-            return -2
-            """, Long.class);
+    // KEYS[1] = version key. No ARGV. Returns the stored version as the string it is stored as, since an integer
+    // reply would go through a Lua number and lose precision above 2^53.
+    private static final RedisScript<String> READ_VERSION_SCRIPT = RedisScript.of("""
+            return redis.call('GET', KEYS[1]) or '-2'
+            """, String.class);
 
     // KEYS[1] = checkpoint key, KEYS[2] = version key, KEYS[3] = generation hash. ARGV[1] = marker value, ARGV[2] =
     // generation, ARGV[3] = 'any', 'notOlderThan' or 'ifAbsent', ARGV[4] = write version for notOlderThan. Writes the
     // two keys the way NOT_OLDER_THAN_SCRIPT, IF_ABSENT_SCRIPT and a plain SET do, and stores the generation as the
     // marker's stamp only when the write happens. Returns 1 when it wrote and 0 when the condition refused.
-    private static final RedisScript<Long> SAVE_CATCHUP_MARKER_SCRIPT = RedisScript.of("""
+    private static final RedisScript<Long> SAVE_CATCHUP_MARKER_SCRIPT = RedisScript.of(VERSION_IS_GREATER + """
             if ARGV[3] == 'notOlderThan' then
-                local storedVersionRaw = redis.call('GET', KEYS[2])
-                if storedVersionRaw and tonumber(storedVersionRaw) > tonumber(ARGV[4]) then
+                local storedVersion = redis.call('GET', KEYS[2])
+                if storedVersion and versionIsGreater(storedVersion, ARGV[4]) then
                     return 0
                 end
                 redis.call('SET', KEYS[1], ARGV[1])
@@ -252,9 +261,9 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
     @SuppressWarnings({"rawtypes", "unchecked"})
     private static final RedisSerializer<List> RAW_REPLY_SERIALIZER = (RedisSerializer) RedisSerializer.byteArray();
 
-    // The scripts above other than READ_CATCHUP_MARKER_SCRIPT only ever return a Long, and this is never asked to deserialize one, since a Long
-    // reply comes back from the driver as a Long already. It exists because the execute overload that takes
-    // explicit serializers demands one of the right type.
+    // SAVE_CATCHUP_MARKER_SCRIPT and FORGET_CATCHUP_MARKER_SCRIPT only ever return a Long, and this is never asked to
+    // deserialize one, since a Long reply comes back from the driver as a Long already. It exists because the execute
+    // overload that takes explicit serializers demands one of the right type.
     private static final RedisSerializer<Long> RESULT_SERIALIZER = new RedisSerializer<Long>() {
         @Override
         public byte @Nullable [] serialize(@Nullable Long value) {
@@ -273,7 +282,7 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
     // Encodes a script's ARGV. A checkpoint value is handed to the RedisOperations' own value serializer, the same
     // one opsForValue().set(..) uses, since a byte-identical encoding there is what keeps a plain GET reading it
     // correctly. Everything else this storage passes as a script argument is already-encoded plain digits, handed
-    // through unchanged, since the script parses them with Lua's tonumber and nothing requires the value serializer
+    // through unchanged, since the scripts compare them as decimal strings and nothing requires the value serializer
     // to produce a decimal string.
     private final RedisSerializer<Object> conditionArgsSerializer;
 
@@ -435,7 +444,7 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
      * retried on the path that threw it", and a slot mismatch or a key of the wrong type is the same kind of
      * failure, just reported by Redis instead of by this class.
      */
-    private Checkpoint saveConditionally(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition, RedisScript<Long> script, byte[]... extraArgs) {
+    private Checkpoint saveConditionally(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition, RedisScript<String> script, byte[]... extraArgs) {
         // Standalone mode has no slot to protect, so it skips this restriction entirely rather than narrowing it.
         if (!standalone) {
             requireClusterSlotAlignable(subscriptionId);
@@ -445,8 +454,8 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
             args[0] = checkpoint.asString();
             System.arraycopy(extraArgs, 0, args, 1, extraArgs.length);
 
-            long outcome = requireNonNull(redis.execute(script, conditionArgsSerializer, RESULT_SERIALIZER,
-                    List.of(subscriptionId, versionKey(subscriptionId)), args));
+            long outcome = Long.parseLong(requireNonNull(redis.execute(script, conditionArgsSerializer, RedisSerializer.string(),
+                    List.of(subscriptionId, versionKey(subscriptionId)), args)));
             if (outcome == WRITE_SUCCEEDED) {
                 return checkpoint;
             }
@@ -562,10 +571,11 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
     public OptionalLong writeVersion(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireOutsideReservedNamespaces(subscriptionId);
-        Supplier<@Nullable Long> read = () -> redis.execute(READ_VERSION_SCRIPT, RedisSerializer.string(), RESULT_SERIALIZER,
+        Supplier<@Nullable String> read = () -> redis.execute(READ_VERSION_SCRIPT, RedisSerializer.string(), RedisSerializer.string(),
                 List.of(versionKey(subscriptionId)));
-        Long storedVersion = executeWithRetry(read, retryUnlessShutdownOrUnretryable, retryStrategy).get();
-        return storedVersion == null || storedVersion == NO_VERSION_STORED ? OptionalLong.empty() : OptionalLong.of(storedVersion);
+        String storedVersion = executeWithRetry(read, retryUnlessShutdownOrUnretryable, retryStrategy).get();
+        long version = storedVersion == null ? NO_VERSION_STORED : Long.parseLong(storedVersion);
+        return version == NO_VERSION_STORED ? OptionalLong.empty() : OptionalLong.of(version);
     }
 
     /**
@@ -764,8 +774,8 @@ public class SpringRedisCheckpointStorage implements CatchupMarkerStorage {
             @Override
             public byte @Nullable [] serialize(@Nullable Object value) {
                 // A write version arrives pre-encoded as plain decimal digits, passed through unchanged so the
-                // script's tonumber can read it. Anything else is a checkpoint value, encoded the same way
-                // opsForValue().set(..) would encode it.
+                // script can compare it as a decimal string. Anything else is a checkpoint value, encoded the same
+                // way opsForValue().set(..) would encode it.
                 return value instanceof byte[] alreadyEncoded ? alreadyEncoded : checkpointValueSerializer.serialize(value);
             }
 

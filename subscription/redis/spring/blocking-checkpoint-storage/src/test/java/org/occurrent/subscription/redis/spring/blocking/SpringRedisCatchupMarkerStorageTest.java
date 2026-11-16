@@ -26,23 +26,31 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.CatchupMarker;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.data.redis.serializer.RedisSerializer;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -95,6 +103,56 @@ class SpringRedisCatchupMarkerStorageTest {
 
         // Then
         assertThat(new long[]{first, second, third}).doesNotContain(0).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void a_not_older_than_marker_write_below_the_stored_version_is_refused_when_both_versions_are_above_2_pow_53_and_adjacent() {
+        // Given
+        SpringRedisCheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(9007199254740993L));
+
+        // When
+        boolean written = storage.saveCatchupMarker(subscriptionId, MARKER, 0, CheckpointWriteCondition.notOlderThan(9007199254740992L));
+
+        // Then
+        assertAll(
+                () -> assertThat(written).as("written").isFalse(),
+                () -> assertThat(storage.read(subscriptionId)).as("checkpoint").isEqualTo(new StringBasedCheckpoint("first")),
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("write version").hasValue(9007199254740993L)
+        );
+    }
+
+    @Test
+    void every_attempt_of_one_forget_sends_its_own_generation() {
+        // Given, a first attempt that reaches Redis and then fails, so the call retries
+        List<String> generationsSent = new CopyOnWriteArrayList<>();
+        AtomicBoolean failNext = new AtomicBoolean(true);
+        StringRedisTemplate failingAfterTheFirstAttempt = new StringRedisTemplate(connectionFactory) {
+            @Override
+            public <T> T execute(RedisScript<T> script, RedisSerializer<?> argsSerializer, RedisSerializer<T> resultSerializer, List<String> keys, Object... args) {
+                // The forget script is the only one called with three keys and exactly one argument, the generation
+                boolean forget = keys.size() == 3 && args.length == 1;
+                if (forget) {
+                    generationsSent.add(new String((byte[]) args[0], UTF_8));
+                }
+                T result = super.execute(script, argsSerializer, resultSerializer, keys, args);
+                if (forget && failNext.getAndSet(false)) {
+                    throw new RedisConnectionFailureException("Connection lost after the script ran");
+                }
+                return result;
+            }
+        };
+        failingAfterTheFirstAttempt.afterPropertiesSet();
+        SpringRedisCheckpointStorage storage = new SpringRedisCheckpointStorage(failingAfterTheFirstAttempt, RetryStrategy.fixed(1L).maxAttempts(3));
+
+        // When
+        storage.forgetCatchupMarker(subscriptionId);
+
+        // Then
+        assertAll(
+                () -> assertThat(generationsSent).as("generations sent, one per attempt").hasSize(2).doesNotHaveDuplicates(),
+                () -> assertThat(String.valueOf(storage.readCatchupMarker(subscriptionId).generation())).as("generation stored").isEqualTo(generationsSent.get(1))
+        );
     }
 
     // A failover lost the forget that raised the generation from 4 to 5, after an attempt had read 5

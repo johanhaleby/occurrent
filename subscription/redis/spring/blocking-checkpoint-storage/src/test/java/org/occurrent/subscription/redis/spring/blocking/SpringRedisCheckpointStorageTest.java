@@ -78,6 +78,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
@@ -266,6 +267,76 @@ class SpringRedisCheckpointStorageTest {
                 assertThatThrownBy(() -> storage.save(subscriptionId, new StringBasedCheckpoint("stale"), CheckpointWriteCondition.notOlderThan(1)))
                         .as("a version below the stored one must be refused immediately, not queued behind a 30 second backoff")
                         .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class));
+    }
+
+    private static final long ABOVE_2_POW_53 = 9007199254740993L;
+    private static final long TWO_POW_53 = 9007199254740992L;
+
+    @Test
+    void a_not_older_than_write_below_the_stored_version_is_refused_when_both_versions_are_above_2_pow_53_and_adjacent() {
+        // Given
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String subscriptionId = UUID.randomUUID().toString();
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(ABOVE_2_POW_53));
+
+        // When
+        Throwable refusal = catchThrowable(() -> storage.save(subscriptionId, new StringBasedCheckpoint("stale"), CheckpointWriteCondition.notOlderThan(TWO_POW_53)));
+
+        // Then
+        assertAll(
+                () -> assertThat(refusal).isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(((CheckpointWriteConditionNotFulfilledException) refusal).storedVersion).as("stored version in the refusal").hasValue(ABOVE_2_POW_53),
+                () -> assertThat(storage.read(subscriptionId)).as("checkpoint").isEqualTo(new StringBasedCheckpoint("first")),
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("write version").hasValue(ABOVE_2_POW_53)
+        );
+    }
+
+    @Test
+    void a_not_older_than_write_above_the_stored_version_is_accepted_when_both_versions_are_above_2_pow_53_and_adjacent() {
+        // Given
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String subscriptionId = UUID.randomUUID().toString();
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(TWO_POW_53));
+
+        // When
+        storage.save(subscriptionId, new StringBasedCheckpoint("second"), CheckpointWriteCondition.notOlderThan(ABOVE_2_POW_53));
+
+        // Then
+        assertAll(
+                () -> assertThat(storage.read(subscriptionId)).as("checkpoint").isEqualTo(new StringBasedCheckpoint("second")),
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("write version").hasValue(ABOVE_2_POW_53)
+        );
+    }
+
+    @Test
+    void write_version_returns_the_exact_stored_version_above_2_pow_53() {
+        // Given
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String subscriptionId = UUID.randomUUID().toString();
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(ABOVE_2_POW_53));
+
+        // When
+        var writeVersion = storage.writeVersion(subscriptionId);
+
+        // Then
+        assertThat(writeVersion).hasValue(ABOVE_2_POW_53);
+    }
+
+    @Test
+    void an_if_absent_refusal_reports_the_exact_stored_version_above_2_pow_53() {
+        // Given
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String subscriptionId = UUID.randomUUID().toString();
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(ABOVE_2_POW_53));
+
+        // When
+        Throwable refusal = catchThrowable(() -> storage.save(subscriptionId, new StringBasedCheckpoint("second"), CheckpointWriteCondition.ifAbsent()));
+
+        // Then
+        assertAll(
+                () -> assertThat(refusal).isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(((CheckpointWriteConditionNotFulfilledException) refusal).storedVersion).as("stored version in the refusal").hasValue(ABOVE_2_POW_53)
+        );
     }
 
     @Test
