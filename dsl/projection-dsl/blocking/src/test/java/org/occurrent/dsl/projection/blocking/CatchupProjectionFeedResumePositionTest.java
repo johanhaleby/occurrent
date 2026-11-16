@@ -166,6 +166,50 @@ class CatchupProjectionFeedResumePositionTest {
     }
 
     @Test
+    void an_event_that_commits_after_the_head_was_read_at_a_position_before_it_is_folded_once_when_the_listener_waits_for_the_drain() {
+        write("1", "2");
+        long head = store.currentPosition();
+        List<String> order = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feed = new AtomicReference<>();
+        AtomicReference<FutureTask<Void>> listener = new AtomicReference<>();
+        // X is not in the store, so only the drain after the replay can fold it. acceptAndWait(..) from the catch-up
+        // thread would wait for its own drain, so the listener is a second thread, parked in the buffer before the
+        // head is returned.
+        PositionOrderedReader reservedBeforeTheHeadCommittedAfter = new PositionOrderedReader() {
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return store.readInPositionOrder(filter, range);
+            }
+
+            @Override
+            public long currentPosition() {
+                long read = store.currentPosition();
+                if (listener.get() == null) {
+                    listener.set(bufferedLiveDelivery(() -> {
+                        feed.get().acceptAndWait(new Counted("X"));
+                        order.add("returned:X");
+                    }));
+                }
+                return read;
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return store.writesPosition();
+            }
+        };
+        feed.set(CatchupProjectionFeed.create("counter", (MaterializedView<Counted>) event -> order.add("fold:" + event.eventId()), Filter.all(),
+                reservedBeforeTheHeadCommittedAfter, converter, Counted::eventId, marker));
+
+        feed.get().catchUp();
+
+        assertThat(listener.get()).succeedsWithin(Duration.ofSeconds(5));
+        assertThat(order).as("X folded once by the drain, and acceptAndWait(..) returned normally only after that fold")
+                .containsExactly("fold:1", "fold:2", "fold:X", "returned:X");
+        assertThat(GlobalCheckpoint.positionOf(marker.read("counter"))).isEqualTo(head);
+    }
+
+    @Test
     void a_marker_stored_by_0_34_0_is_read_as_a_resume_position() {
         write("1", "2", "3");
         marker.save("counter", GlobalCheckpoint.of(store.currentPosition() - 1));
