@@ -194,7 +194,7 @@ class ProjectionAnnotationFencingWiringTest {
         }
 
         // One event, so the catch-up (which the default startupMode waits for) reaches the end of the reader and
-        // writes its one-shot marker, the write this test class observes the condition of.
+        // stores its marker, the write this test class observes the condition of.
         @Bean
         PositionOrderedReader reader() {
             return new PositionOrderedReader() {

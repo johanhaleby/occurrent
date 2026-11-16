@@ -28,7 +28,9 @@ import org.occurrent.dsl.projection.blocking.ResumePositionFixtures.RecordingRep
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.time.Duration;
@@ -40,6 +42,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.dsl.projection.blocking.ResumePositionFixtures.bufferedLiveDelivery;
 import static org.occurrent.dsl.projection.blocking.ResumePositionFixtures.converter;
 
@@ -251,6 +254,57 @@ class CatchupProjectionFeedResumePositionTest {
 
         assertThat(fromTheBeginning.calls).containsExactly("replayStarted", "update:1", "update:2", "replayCompleted", "alreadyDeliveredByReplay");
         assertThat(afterTheMarker.calls).as("plain updates, no replay callbacks").containsExactly("update:3");
+    }
+
+    @Test
+    void a_stopped_replay_after_a_stored_marker_does_not_tell_the_view_it_was_abandoned() {
+        write("1", "2");
+        catchUp(new CopyOnWriteArrayList<>());
+        write("3", "4");
+        RecordingReplayAwareView view = new RecordingReplayAwareView();
+        CatchupProjectionFeed<Counted> feed = feed(view);
+        view.onUpdate = feed::stopCatchUp;
+
+        feed.catchUp();
+
+        assertThat(view.calls).as("stopped after the first event, and no replay callbacks for a replay after a marker").containsExactly("update:3");
+    }
+
+    @Test
+    void an_event_written_while_the_marker_is_read_is_replayed_and_covered_by_the_marker_stored_after_the_catch_up() {
+        write("1", "2");
+        AtomicBoolean armed = new AtomicBoolean();
+        InMemoryCheckpointStorage writingOnRead = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint read(String subscriptionId) {
+                Checkpoint stored = super.read(subscriptionId);
+                if (armed.compareAndSet(true, false)) {
+                    write("late");
+                }
+                return stored;
+            }
+        };
+        CatchupProjectionFeed.create("counter", (MaterializedView<Counted>) event -> {
+        }, Filter.all(), store, converter, Counted::eventId, writingOnRead).catchUp();
+        armed.set(true);
+        List<String> folded = new CopyOnWriteArrayList<>();
+
+        CatchupProjectionFeed.create("counter", (MaterializedView<Counted>) event -> folded.add(event.eventId()), Filter.all(),
+                store, converter, Counted::eventId, writingOnRead).catchUp();
+
+        assertThat(folded).as("the event written during the marker read").containsExactly("late");
+        assertThat(GlobalCheckpoint.positionOf(writingOnRead.read("counter"))).as("the head was read after the marker, so it includes the late event")
+                .isEqualTo(store.currentPosition());
+    }
+
+    @Test
+    void a_stored_checkpoint_that_is_not_a_catch_up_marker_fails_the_catch_up_naming_the_id_and_the_way_out() {
+        marker.save("counter", new StringBasedCheckpoint("resume-token-xyz"));
+        CatchupProjectionFeed<Counted> feed = feed(event -> {
+        });
+
+        assertThatThrownBy(feed::catchUp)
+                .hasMessageContaining("counter").hasMessageContaining("subscribe under a new id").isInstanceOf(IllegalStateException.class);
     }
 
     private void write(String... ids) {

@@ -1001,8 +1001,8 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(stopped.isRunning("proj")).isFalse();
         assertThat(firstRun).isNotEmpty();
 
-        // The whole point: a partial replay must not look like a finished one. If the marker were written here, the
-        // next start would skip the replay and the events never folded would be lost with nothing to show for it.
+        // The whole point: a partial replay must not look like a finished one. A marker stored here would make the
+        // next start resume after the head, and the events never folded would be lost with nothing to show for it.
         assertThat(marker.exists("proj")).isFalse();
 
         PushSubscriptionModel feed2 = new PushSubscriptionModel();

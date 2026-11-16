@@ -179,8 +179,8 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         DurableSubscriptionModel forwarderSubscription = new DurableSubscriptionModel(forwarderSubscriptionModel, forwarderCheckpoints);
         // The forwarder and its subscription are built once, below, and run continuously through both boots.
         // Only the consumer side, the source, the push model and the projection's Spring context, is torn
-        // down and rebuilt between them. The same catch-up-complete marker backs both boots, which is the
-        // one thing a real consumer restart must preserve for resume (rather than replay) to be possible.
+        // down and rebuilt between them. The same marker storage backs both boots, so the second catch-up
+        // resumes after the position the first stored, as it does after a real consumer restart.
         CheckpointStorage pushCatchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "push-catchup-checkpoints");
         // The read-model store also survives the restart below, by being the same Java object both boots share
         // rather than a fresh one per boot, so the assertions can tell "resumed with state intact" apart from
@@ -295,6 +295,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                                 assertThat(store.get(orderIdQueuedWhileConsumerWasDown)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
                         assertThat(countingReader.replaysFromTheBeginning()).isZero();
+                        assertThat(countingReader.replaysAfterAPosition()).isEqualTo(1);
 
                         String orderIdAfterRestart = "order-" + UUID.randomUUID();
                         eventStore.write(orderIdAfterRestart, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdAfterRestart, "Gadget")));
@@ -304,6 +305,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                                 assertThat(store.get(orderIdAfterRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
 
                         assertThat(countingReader.replaysFromTheBeginning()).isZero();
+                        assertThat(countingReader.replaysAfterAPosition()).isEqualTo(1);
                     } finally {
                         context2.close();
                     }

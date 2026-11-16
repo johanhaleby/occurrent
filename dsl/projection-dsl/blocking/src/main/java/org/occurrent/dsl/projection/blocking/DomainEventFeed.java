@@ -496,7 +496,7 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Run the one-time catch-up of the registered projection (replay history, then go live). Call once, after the
+     * Run the catch-up of the registered projection (replay history, then go live). Call once, after the
      * projection is registered and the live feed is wired.
      * <p>
      * A failure here is terminal for this feed, so let it reach the caller and do not start the application. The
@@ -520,7 +520,7 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Run the one-time catch-up of the projection registered under {@code id}. Use this over {@link #catchUpAll()}
+     * Run the catch-up of the projection registered under {@code id}. Use this over {@link #catchUpAll()}
      * when the caller knows which projection it means and wants a mismatch to fail rather than pass silently.
      * <p>
      * A call the projection makes while this feed is calling it returns once the catch-up has been asked for, without
