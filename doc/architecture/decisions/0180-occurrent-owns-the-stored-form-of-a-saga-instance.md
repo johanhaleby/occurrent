@@ -150,7 +150,13 @@ Axon and NServiceBus also keep the values a lookup needs next to the serialized 
   to persist each one, the failure input, the quarantine id and the skip count included. `SagaCodec` refuses to read an
   instance stored as `QUARANTINED_RECORDING` without any of them and names the missing field, since a release of it
   would have nothing to replay. It checks the decoded values, because a failure stored without its input decodes to no
-  failure and loses the quarantine id with it. Nothing catches another field a store drops.
+  failure and loses the quarantine id with it. The delivery that quarantined the instance is still acknowledged, since
+  only a read refuses it. After that every delivery to the instance throws the refusal, and so do a `findByStatus`
+  page that holds it and `release`. Fixing the store doesn't fix an instance it already wrote, which needs the field
+  set by hand or a delete.
+- Nothing catches another field a store drops. A store that drops `failureReleasedAt` makes `release` return
+  `QUARANTINED_AGAIN` without replaying anything, and only the `INFO` line a release logs when it starts names that
+  cause.
 - A call to one of the removed constructors stops compiling. The 13-argument `SagaEnvelope` constructor and the
   5-argument `SagaFailure` constructor were the canonical ones in 0.34.0, so a call written against 0.34.0 breaks too.
   The upgrade guide to 0.35.0 shows the call to the canonical constructor.
