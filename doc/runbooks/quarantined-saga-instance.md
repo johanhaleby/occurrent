@@ -288,9 +288,9 @@ runs and becomes `ACTIVE` once no recorded input is left, so an event that arriv
 replayed too. Once it is `ACTIVE`, its timers fire again.
 
 A timer that came due while the instance was quarantined fires after every recorded input has been replayed,
-including inputs that arrived after its deadline. For a saga that uses a timer as a deadline, a replayed input from
-after the deadline that cancels or re-arms the timer means the timeout never fires, where live delivery would have
-fired it before that input.
+including inputs that arrived after its deadline, because a saga's timers run on processing time. For a saga that uses
+a timer as a deadline, a replayed input from after the deadline that cancels or re-arms the timer means the timeout
+never fires.
 
 On the Spring stack the `@Saga` registrar publishes the saga's `SagaSubscription` under the bean name
 `sagaSubscription-<id>`. Running a saga programmatically, `SagaRunner.run` returns it.

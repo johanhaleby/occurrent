@@ -782,9 +782,9 @@ The timer poller goes on with a release that failed on an input or was interrupt
 `timerBatchLimit` records, 100 by default, shared evenly among the releasing instances it lists, at least one each, and
 the next poll goes on where the last one stopped. A `release` call has no such bound.
 
-A timer that came due while the instance was quarantined fires after every recorded input has been replayed. For a
-saga that uses a timer as a deadline, a replayed input from after the deadline that cancels or re-arms the timer means
-the timeout never fires, where live delivery would have fired it before that input.
+A timer that came due while the instance was quarantined fires after every recorded input has been replayed, because a
+saga's timers run on processing time. For a saga that uses a timer as a deadline, a replayed input from after the
+deadline that cancels or re-arms the timer means the timeout never fires.
 
 Release reads the events with an `EventStoreQueries`. You give a `SagaRunner` one with `eventStoreQueries(..)`, and the
 Spring Boot starter passes its own `EventStoreQueries` bean when the context has one, or several with one of them
