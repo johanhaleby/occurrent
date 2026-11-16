@@ -156,7 +156,7 @@ other sections compile fine and behave differently, so read them first.
   handler of a synchronous subscription that fails now makes `execute` throw, where a retry could run the command again.
 - [A forgotten catch-up marker stays forgotten](#a-forgotten-catch-up-marker-stays-forgotten). The blocking
   checkpoint storages keep a generation per subscription id next to the checkpoints. On MongoDB a forget waits for a
-  majority, and on Redis the marker calls refuse ids under `occurrent:catchup-marker:`. Compiles unchanged.
+  majority, and on Redis every call refuses ids under `occurrent:catchup-marker:`. Compiles unchanged.
 
 ### Spring Boot starter
 
@@ -1699,13 +1699,22 @@ Plain `read(id)` and `exists(id)` still find a marker saved with a generation th
   attempt fails, and the storage's `RetryStrategy` decides whether to try again. On a client with a `timeoutMS` above
   0, that `timeoutMS` bounds each attempt instead. A `timeoutMS` of 0 waits forever, so there the storage still gives
   each attempt 10 seconds. A standalone server refuses
-  `LINEARIZABLE`, and the storage then reads with `MAJORITY`.
+  `LINEARIZABLE`, and the storage then reads with `MAJORITY`. The check needs `writeConcernMajorityJournalDefault` at
+  `true` in the replica set configuration, which is MongoDB's default. With `false`, a forget a majority acknowledged
+  can still roll back, and a forgotten marker can then read as present after a later forget.
 - You clean up the checkpoint collection or the Redis key space with a job of your own. Leave the generation documents
   and hashes in place. Removing one puts the generation of that subscription id back at 0, and a marker saved before
   an earlier forget can then read as present again.
-- You use `SpringRedisCheckpointStorage` with a subscription id that starts with `occurrent:catchup-marker:`. The
-  marker calls refuse it with an `IllegalArgumentException`. In Cluster-safe mode they also refuse the ids that a
-  conditional `save` refuses, such as `""` and `"{}orders"`.
+- You use `SpringRedisCheckpointStorage` with a subscription id that starts with `occurrent:catchup-marker:`. Every
+  call refuses it with an `IllegalArgumentException`, `read`, `save`, `delete`, `exists` and `writeVersion` included,
+  and `evaluatesWriteConditionsFor` answers `false` for it. A plain `save` or `delete` of such an id could otherwise
+  overwrite or remove the generation of another id. `writeVersion` now also refuses an id under
+  `occurrent:checkpoint-version:`, as the other calls already did. In Cluster-safe mode the marker calls also refuse
+  the ids that a conditional `save` refuses, such as `""` and `"{}orders"`. Move a subscription with such an id to another id before you
+  upgrade, since `read` refuses the id afterwards too.
+- You run 0.34.0 nodes against the same Redis, or a client of your own writes under `occurrent:catchup-marker:`. A
+  call that finds a key of the wrong type there now throws Redis's `WRONGTYPE` error at once instead of retrying it
+  forever.
 - You wrote a `CheckpointStorage` of your own that keeps catch-up markers. Read the next section.
 
 ### A storage of your own
@@ -1736,16 +1745,20 @@ makes, but a forget or a read on a 0.34.0 node behaves as in 0.34.0 until every 
 You're affected if you cancel a `CatchupThenPushSubscriptionModel` subscription on a 0.34.0 node during the rollout
 while a marker write for the same id is still on its way to the store. The cancel deletes the marker, the late write
 can bring it back, and the next subscribe of that id then skips the replay it needed, as in 0.34.0. No new case starts
-once the last 0.34.0 node is gone, but a marker that came back stays until a 0.35.0 node forgets the id. On MongoDB it
-comes back only for an id that no 0.35.0 node has forgotten yet. On Redis it comes back unless the last marker call a
-0.35.0 node made on the id was a forget. If you cancelled subscriptions during the rollout and need them to replay
-when you subscribe them again, cancel them once more after the last 0.34.0 node is gone, so a 0.35.0 node forgets
-their markers.
+once the last 0.34.0 node is gone, but a marker that came back stays until a 0.35.0 node forgets the id.
+
+Which ids it reaches depends on the node whose write is late. A late write from a 0.35.0 node brings the marker back
+on any id, on MongoDB and on Redis, since a 0.34.0 cancel doesn't change the generation. A late write from a 0.34.0
+node brings it back on MongoDB only for an id that no 0.35.0 node has forgotten yet, and on Redis unless the last
+marker call a 0.35.0 node made on the id was a forget.
+
+So don't cancel catch-up subscriptions on 0.34.0 nodes during the rollout. If you did, cancel those subscriptions once
+more after the last 0.34.0 node is gone, so a 0.35.0 node forgets their markers.
 
 In a mixed cluster:
 
-- A 0.34.0 forget doesn't change the generation. A late write after it brings the marker back, as in 0.34.0, and the
-  marker stays present after the upgrade until a 0.35.0 node forgets the id.
+- A 0.34.0 forget doesn't change the generation. A late write after it, from a node of either version, brings the
+  marker back, as in 0.34.0, and the marker stays present after the upgrade until a 0.35.0 node forgets the id.
 - A 0.34.0 node's late write after a 0.35.0 forget still brings the marker back for the 0.34.0 nodes.
 - A forget on a 0.35.0 node deletes the checkpoint only after a majority has its generation raise. Until then the
   0.34.0 nodes keep reading the marker. The default `RetryStrategy` of the MongoDB storages keeps trying. When a
