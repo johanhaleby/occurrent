@@ -114,19 +114,25 @@ class SpringMongoCatchupMarkerCommandsTest {
     }
 
     @Test
-    void forget_raises_the_generation_then_deletes_the_marker_both_at_majority_with_journal_and_a_write_timeout() {
+    void forget_sets_a_generation_other_than_0_then_deletes_the_marker_both_at_majority_with_journal_and_a_write_timeout() {
         // When
         storage.forgetCatchupMarker(subscriptionId);
 
         // Then
         List<Command> writes = commands.commands().stream().filter(command -> COLLECTION.equals(command.collection())).toList();
         assertThat(writes).extracting(Command::name).as("%s", writes).containsExactly("update", "delete");
-        Command raise = writes.get(0);
+        Command change = writes.get(0);
         Command delete = writes.get(1);
         BsonDocument majorityWithJournalAndTimeout = new BsonDocument("w", new BsonString("majority")).append("j", BsonBoolean.TRUE).append("wtimeout", new BsonInt64(TEN_SECONDS_IN_MILLIS));
+        BsonDocument generationUpdate = change.document().getArray("updates").get(0).asDocument();
+        BsonDocument update = generationUpdate.getDocument("u");
         assertAll(
-                () -> assertThat(raise.document().getArray("updates").get(0).asDocument().getDocument("q").get("_id")).as("%s", raise).isEqualTo(generationId()),
-                () -> assertThat(normalized(raise.document().getDocument("writeConcern", new BsonDocument()))).as("%s", raise).isEqualTo(majorityWithJournalAndTimeout),
+                () -> assertThat(generationUpdate.getDocument("q").get("_id")).as("%s", change).isEqualTo(generationId()),
+                () -> assertThat(generationUpdate.getBoolean("upsert").getValue()).as("upsert, %s", change).isTrue(),
+                () -> assertThat(update.keySet()).as("update operators, %s", change).containsExactly("$set"),
+                () -> assertThat(update.getDocument("$set").keySet()).as("fields set, %s", change).containsExactly("generation"),
+                () -> assertThat(update.getDocument("$set").get("generation")).as("generation set, %s", change).isInstanceOf(BsonInt64.class).isNotEqualTo(new BsonInt64(0)),
+                () -> assertThat(normalized(change.document().getDocument("writeConcern", new BsonDocument()))).as("%s", change).isEqualTo(majorityWithJournalAndTimeout),
                 () -> assertThat(delete.document().getArray("deletes").get(0).asDocument().getDocument("q").get("_id")).as("%s", delete).isEqualTo(new BsonString(subscriptionId)),
                 () -> assertThat(normalized(delete.document().getDocument("writeConcern", new BsonDocument()))).as("%s", delete).isEqualTo(majorityWithJournalAndTimeout)
         );

@@ -20,8 +20,9 @@ import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoCollection;
 import org.bson.BsonBoolean;
-import org.bson.BsonDocument;
+import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -32,6 +33,8 @@ import org.occurrent.subscription.CatchupMarker;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.mongodb.internal.CatchupMarkerForgetWrites;
+import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.testsupport.mongodb.RecordingCommandListener;
 import org.occurrent.testsupport.mongodb.RecordingCommandListener.Command;
 import org.testcontainers.containers.GenericContainer;
@@ -39,12 +42,14 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -68,49 +73,65 @@ class NativeMongoCatchupMarkerNoJournalTest {
     private NativeMongoCheckpointStorage storage;
 
     @BeforeEach
-    void open_a_store_that_does_not_retry() {
+    void open_a_store_that_retries_a_few_times_without_waiting() {
         mongoClient = MongoClients.create(MongoClientSettings.builder()
                 .applyConnectionString(new ConnectionString("mongodb://" + withoutJournaling.getHost() + ":" + withoutJournaling.getMappedPort(27017)))
                 .addCommandListener(commands)
                 .build());
-        String database = "nojournal_" + UUID.randomUUID().toString().replace("-", "");
-        storage = new NativeMongoCheckpointStorage(mongoClient.getDatabase(database).getCollection(COLLECTION), RetryStrategy.none());
+        storage = open(RetryStrategy.fixed(1L).maxAttempts(5));
     }
 
     @AfterEach
     void close_mongo_client() {
+        storage.shutdown();
         mongoClient.close();
     }
 
     @Test
-    void forget_leaves_the_marker_absent_and_asks_for_journal_only_until_the_server_refuses_it() {
+    void forget_fails_with_the_journaling_message_and_the_refusal_as_cause_after_one_attempt_and_keeps_the_marker() {
         // Given
         long before = storage.readCatchupMarker(subscriptionId).generation();
         storage.saveCatchupMarker(subscriptionId, MARKER, before, CheckpointWriteCondition.any());
         commands.clear();
 
         // When
-        Throwable firstForget = catchThrowable(() -> storage.forgetCatchupMarker(subscriptionId));
-        CatchupMarker forgotten = storage.readCatchupMarker(subscriptionId);
-        Throwable secondForget = catchThrowable(() -> storage.forgetCatchupMarker(subscriptionId));
-        CatchupMarker forgottenAgain = storage.readCatchupMarker(subscriptionId);
+        Throwable thrown = catchThrowable(() -> storage.forgetCatchupMarker(subscriptionId));
+        CatchupMarker afterTheFailedForget = storage.readCatchupMarker(subscriptionId);
 
         // Then
         List<Command> forgetWrites = commands.commands().stream()
                 .filter(command -> COLLECTION.equals(command.collection()) && (command.name().equals("update") || command.name().equals("delete")))
                 .toList();
-        List<Boolean> askedForJournal = forgetWrites.stream().map(write -> write.document().getDocument("writeConcern", new BsonDocument()).containsKey("j")).toList();
         assertAll(
-                () -> assertThat(firstForget).as("first forget").isNull(),
-                () -> assertThat(secondForget).as("second forget").isNull(),
-                () -> assertThat(forgetWrites).extracting(Command::name).as("%s", forgetWrites).containsExactly("update", "update", "delete", "update", "delete"),
-                () -> assertThat(askedForJournal).as("asked for j in each write, in order, %s", forgetWrites).containsExactly(true, false, false, false, false),
-                () -> assertThat(forgetWrites.get(0).document().getDocument("writeConcern").get("j")).as("j in the first write").isEqualTo(BsonBoolean.TRUE),
-                () -> assertThat(forgetWrites.get(0).reply()).as("the server refused the first write, so it has no success reply, %s", forgetWrites.get(0)).isNull(),
-                () -> assertThat(forgotten.isPresent()).as("present after the forget").isFalse(),
-                () -> assertThat(forgotten.generation()).as("generation after the forget").isNotEqualTo(before),
-                () -> assertThat(forgottenAgain.isPresent()).as("present after the second forget").isFalse(),
-                () -> assertThat(forgottenAgain.generation()).as("generation after the second forget").isNotIn(before, forgotten.generation())
+                () -> assertThat(thrown).as("thrown").isExactlyInstanceOf(IllegalStateException.class).hasMessage(CatchupMarkerForgetWrites.JOURNALING_REQUIRED_MESSAGE),
+                () -> assertThat(thrown.getCause()).as("cause").matches(MongoCommons::isJournalNotSupported, "is the refusal of j: true"),
+                () -> assertThat(forgetWrites).extracting(Command::name).as("one attempt, a refused update and no delete, %s", forgetWrites).containsExactly("update"),
+                () -> assertThat(forgetWrites.get(0).document().getDocument("writeConcern").get("j")).as("j in the refused write").isEqualTo(BsonBoolean.TRUE),
+                () -> assertThat(forgetWrites.get(0).reply()).as("the server refused the write, so it has no success reply, %s", forgetWrites.get(0)).isNull(),
+                () -> assertThat(afterTheFailedForget.isPresent()).as("present after the failed forget").isTrue(),
+                () -> assertThat(afterTheFailedForget.generation()).as("generation after the failed forget").isEqualTo(before)
         );
+    }
+
+    @Test
+    void forget_under_the_default_retry_strategy_fails_at_once_instead_of_retrying_without_end() {
+        // Given, the default strategy has no limit on the number of attempts, so only a refusal that is not retried ends the call
+        NativeMongoCheckpointStorage withDefaultStrategy = open(null);
+
+        try {
+            // When
+            Throwable thrown = assertTimeoutPreemptively(Duration.ofSeconds(10), () -> catchThrowable(() -> withDefaultStrategy.forgetCatchupMarker(subscriptionId)));
+
+            // Then
+            assertThat(thrown).isExactlyInstanceOf(IllegalStateException.class).hasMessage(CatchupMarkerForgetWrites.JOURNALING_REQUIRED_MESSAGE);
+        } finally {
+            withDefaultStrategy.shutdown();
+        }
+    }
+
+    private NativeMongoCheckpointStorage open(RetryStrategy retryStrategy) {
+        String database = "nojournal_" + UUID.randomUUID().toString().replace("-", "");
+        MongoCollection<Document> collection = mongoClient.getDatabase(database).getCollection(COLLECTION);
+        return retryStrategy == null ? new NativeMongoCheckpointStorage(collection) : new NativeMongoCheckpointStorage(collection, retryStrategy);
     }
 }
