@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
@@ -193,7 +194,7 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
         // dontCatchUncaughtExceptions(), so a store failure that is not retried away fails this test on the record it
         // wrote rather than on the exception it threw on the subscription's delivery thread. The record is the defect.
         await().dontCatchUncaughtExceptions().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            Optional<SagaEnvelope<String>> found = readStore.findWithoutState("order-1");
+            Optional<SagaEnvelope<String>> found = SagaEnvelopes.of(readStore, null).findWithoutState("order-1");
             assertThat(found).isPresent();
             assertAll(
                     () -> assertThat(found.get().failure())
@@ -224,14 +225,14 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
         // writing the record, uncaught on the subscription's delivery thread. That is the documented behaviour, not a
         // bug this poll should surface.
         await().dontCatchUncaughtExceptions().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            Optional<SagaEnvelope<String>> found = readStore.findWithoutState("order-2");
+            Optional<SagaEnvelope<String>> found = SagaEnvelopes.of(readStore, null).findWithoutState("order-2");
             assertThat(found).isPresent();
             assertThat(found.get().failure())
                     .as("with retries off, the same single MongoDB failure must reach the runner and start the quarantine budget, which is what the other test proves the default strategy prevents")
                     .isNotNull();
         });
 
-        SagaFailure failure = readStore.findWithoutState("order-2").orElseThrow().failure();
+        SagaFailure failure = SagaEnvelopes.of(readStore, null).findWithoutState("order-2").orElseThrow().failure();
         assertThat(failure.firstFailedAt()).isNotNull();
     }
 }

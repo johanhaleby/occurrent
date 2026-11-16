@@ -182,7 +182,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
      * @param collectionName      the collection the instances are stored in, which must not end in {@code _skipped_inputs}
      * @param stateType           the user state type, needed to read the stored state back into an object
-     * @param cloudEventConverter the converter of a flow saga's application, or {@code null} for a core saga for a core saga
+     * @param cloudEventConverter the converter of a flow saga's application, or {@code null} for a core saga
      * @param retryStrategy       the strategy used when a read or a write fails
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter, RetryStrategy retryStrategy) {
@@ -196,7 +196,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         this.skippedInputsCollectionName = collectionName + SKIPPED_INPUTS_SUFFIX;
         this.stateType = Objects.requireNonNull(stateType, "stateType cannot be null");
-        this.flowSaga = stateType == FlowState.class;
+        this.flowSaga = cloudEventConverter != null;
         if (stateType == FlowState.class && cloudEventConverter == null) {
             // A hand-built store that omits the converter would have no way to tell the runner it holds a flow saga, so fail
             // loud here instead.
@@ -281,8 +281,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
         Objects.requireNonNull(saga, "saga cannot be null");
         if (expectedVersion == 0) {
-            // There is no document yet, so there is no stored state to leave alone.
-            return compareAndSave(saga, expectedVersion);
+            throw new IllegalArgumentException("compareAndSaveWithoutState cannot insert saga " + saga.sagaId() + ", since it holds no state. Insert it with compareAndSave.");
         }
         Document document = toDocument(saga);
         Update update = new Update();

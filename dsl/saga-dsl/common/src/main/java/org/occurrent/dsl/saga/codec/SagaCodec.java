@@ -33,6 +33,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -217,6 +218,7 @@ public final class SagaCodec<S extends @Nullable Object> {
 
     /** Forgets that {@code sagaId} has warned about its retained events, for an instance that is deleted. */
     public void forget(String sagaId) {
+        requireNonNull(sagaId, "sagaId cannot be null");
         synchronized (retainedEventWarningLatch) {
             retainedEventWarningLatch.remove(sagaId);
         }
@@ -249,7 +251,7 @@ public final class SagaCodec<S extends @Nullable Object> {
 
     /** The index of a saga read back as {@code encoded}, which a store builds when it reads only the fields it queries on. */
     public static SagaIndex indexOf(EncodedSaga encoded) {
-        Map<String, Object> fields = encoded.fields();
+        Map<String, Object> fields = requireNonNull(encoded, "encoded cannot be null").fields();
         String storedStatus = (String) fields.get(STATUS);
         Object nextTimer = fields.get(NEXT_TIMER_FIRES_AT);
         Object updatedAt = fields.get(UPDATED_AT);
@@ -259,6 +261,7 @@ public final class SagaCodec<S extends @Nullable Object> {
     }
 
     private StoredSaga encode(SagaEnvelope<S> envelope, boolean withState) {
+        requireNonNull(envelope, "envelope cannot be null");
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put(STATUS, storedStatus(envelope));
         fields.put(VERSION, envelope.version());
@@ -337,6 +340,7 @@ public final class SagaCodec<S extends @Nullable Object> {
     }
 
     private SagaEnvelope<S> decode(StoredSaga stored, boolean withState) {
+        requireNonNull(stored, "stored cannot be null");
         Map<String, Object> fields = stored.encoded().fields();
         Object encodedState = withState ? fields.get(STATE) : null;
         S state = encodedState == null ? null : decodeState(encodedState);
@@ -398,7 +402,8 @@ public final class SagaCodec<S extends @Nullable Object> {
             new TreeMap<>(marks.pendingSince()).forEach((version, since) -> {
                 Map<String, Object> entry = new LinkedHashMap<>();
                 entry.put(MARKS_VERSION, version);
-                entry.put(MARKS_SINCE, since);
+                // Truncated to millis, the precision every other instant of the instance is kept at
+                entry.put(MARKS_SINCE, since.truncatedTo(ChronoUnit.MILLIS));
                 pendingSince.add(entry);
             });
             Map<String, Object> stream = new LinkedHashMap<>();

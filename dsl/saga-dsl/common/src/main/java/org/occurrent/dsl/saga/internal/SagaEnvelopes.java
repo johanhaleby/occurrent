@@ -72,24 +72,30 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
     }
 
     public boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
-        return store.compareAndSave(codec.encode(sameInstance(sagaId, envelope)), expectedVersion);
+        sameInstance(sagaId, envelope);
+        forgetOnInsert(sagaId, expectedVersion);
+        return store.compareAndSave(codec.encode(envelope), expectedVersion);
     }
 
     /** An insert, which is an expected version of 0, writes the whole envelope, because no stored state exists to leave alone. */
     public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
         sameInstance(sagaId, envelope);
         if (expectedVersion == 0) {
+            forgetOnInsert(sagaId, expectedVersion);
             return store.compareAndSave(codec.encode(envelope), expectedVersion);
         }
         return store.compareAndSaveWithoutState(codec.encodeWithoutState(envelope), expectedVersion);
     }
 
     public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
+        requireNonNull(now, "now cannot be null");
         return store.findWithDueTimers(now, limit).stream().map(codec::decodeWithoutState).toList();
     }
 
     /** @throws UnsupportedOperationException if the store does not implement {@link SagaStateStoreQueries} */
     public List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
+        requireNonNull(status, "status cannot be null");
+        requireNonNull(updatedBefore, "updatedBefore cannot be null");
         if (!(store instanceof SagaStateStoreQueries<?> queries)) {
             throw new UnsupportedOperationException("The provided SagaStateStore implementation does not support enumerating instances. %s must implement SagaStateStoreQueries in order to use findByStatus.".formatted(store.getClass().getName()));
         }
@@ -99,6 +105,14 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
     public void delete(String sagaId) {
         store.delete(sagaId);
         codec.forget(sagaId);
+    }
+
+    // An instance a TTL index removed never reaches delete, so a new instance under its id would otherwise inherit its
+    // warning and never warn about its own retained events
+    private void forgetOnInsert(String sagaId, long expectedVersion) {
+        if (expectedVersion == 0) {
+            codec.forget(sagaId);
+        }
     }
 
     private static <S extends @Nullable Object> SagaEnvelope<S> sameInstance(String sagaId, SagaEnvelope<S> envelope) {

@@ -25,6 +25,7 @@ import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.*;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
@@ -185,8 +186,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         this.subscriptionId = subscriptionId;
         this.saga = saga;
         this.stateStore = stateStore;
-        // A flow saga's received events are written through the runner's converter. Any other saga has none to write.
-        this.envelopes = SagaEnvelopes.of(stateStore, saga.initialState() instanceof FlowStateImpl<?> ? converter : null);
+        // A flow saga's received events are written through the runner's converter. Any other saga has none to write. A
+        // FlowState that is not the executor's own gets the converter too, so the codec refuses it on the first save
+        this.envelopes = SagaEnvelopes.of(stateStore, saga.initialState() instanceof FlowState<?> ? converter : null);
         this.skippedInputs = stateStore instanceof SagaStateStoreSkippedInputs records ? records : null;
         this.dispatcher = dispatcher;
         this.converter = converter;

@@ -64,25 +64,33 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     @Override
     public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
         requireNonNull(saga, "saga cannot be null");
-        return compareAndSet(saga, expectedVersion, existing -> saga);
+        return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga));
     }
 
     @Override
     public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
         requireNonNull(saga, "saga cannot be null");
+        if (expectedVersion == 0) {
+            throw new IllegalArgumentException("compareAndSaveWithoutState cannot insert saga " + saga.sagaId() + ", since it holds no state. Insert it with compareAndSave.");
+        }
         return compareAndSet(saga, expectedVersion, existing -> {
-            if (existing == null) {
-                return saga;
-            }
+            // A positive expected version only matches an instance that is stored
+            Map<String, Object> stored = requireNonNull(existing).encoded().fields();
             // The stored state and the step derived from it stay where they are
             Map<String, Object> fields = new LinkedHashMap<>(saga.encoded().fields());
             for (String kept : List.of(SagaCodec.CURRENT_STEP, SagaCodec.STATE)) {
-                if (existing.encoded().fields().containsKey(kept)) {
-                    fields.put(kept, existing.encoded().fields().get(kept));
+                if (stored.containsKey(kept)) {
+                    fields.put(kept, stored.get(kept));
                 }
             }
-            return new StoredSaga(saga.sagaId(), saga.version(), new EncodedSaga(fields), saga.index());
+            return indexed(new EncodedSaga(fields), saga);
         });
+    }
+
+    // Derived from the encoded form rather than taken from the caller, so a query sees what a store that reads its index
+    // back from the stored fields sees
+    private static StoredSaga indexed(EncodedSaga encoded, StoredSaga saga) {
+        return new StoredSaga(saga.sagaId(), saga.version(), encoded, SagaCodec.indexOf(encoded));
     }
 
     private boolean compareAndSet(StoredSaga saga, long expectedVersion, java.util.function.UnaryOperator<@Nullable StoredSaga> next) {

@@ -14,30 +14,27 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.saga.mongodb.spring;
+package org.occurrent.dsl.saga.codec;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mongodb.client.MongoCollection;
-import org.bson.Document;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.mongodb.core.MongoOperations;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -52,20 +49,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-import static org.occurrent.dsl.saga.mongodb.spring.SpringMongoSagaStateStore.RETAINED_EVENT_WARNING_LATCH_CAPACITY;
-import static org.occurrent.dsl.saga.mongodb.spring.SpringMongoSagaStateStore.RETAINED_EVENT_WARNING_THRESHOLD;
+import static org.occurrent.dsl.saga.codec.SagaCodec.RETAINED_EVENT_WARNING_LATCH_CAPACITY;
+import static org.occurrent.dsl.saga.codec.SagaCodec.RETAINED_EVENT_WARNING_THRESHOLD;
 
 /**
- * Docker-free: {@code compareAndSave} only needs {@code MongoOperations.insert} to return without throwing, which a mock
- * gives for free, so the retained-size warning in {@code flowStateToDocument} is exercised without a real MongoDB.
- * Follows the {@code ListAppender} convention from
- * {@code SagaExecutionSupportTest.UnmatchedTimer}.
+ * The retained-size warning of the flow saga encoding, driven through {@link SagaCodec#encode} so no store is needed.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class SpringMongoSagaStateStoreRetainedSizeWarningTest {
+class SagaCodecRetainedSizeWarningTest {
 
     sealed interface FlowEvent permits Tick {
     }
@@ -75,14 +66,14 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
 
     private ListAppender<ILoggingEvent> appender;
     private Logger logger;
-    private SpringMongoSagaStateStore<FlowState<FlowEvent>> store;
+    private SagaCodec<FlowState<FlowEvent>> codec;
 
     private boolean loggerWasAdditive;
 
     @BeforeEach
     void attachAppenderAndCreateStore() {
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
-        logger = context.getLogger(SpringMongoSagaStateStore.class);
+        logger = context.getLogger(SagaCodec.class);
         loggerWasAdditive = logger.isAdditive();
         // The capacity tests below invoke the warning path tens of thousands of times, and additivity would forward
         // every one of those log events to the root console appender as well as this test's own appender.
@@ -91,15 +82,7 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
         appender.start();
         logger.addAppender(appender);
 
-        MongoOperations mongoOperations = mock(MongoOperations.class);
-        @SuppressWarnings("unchecked")
-        MongoCollection<Document> collection = mock(MongoCollection.class);
-        when(mongoOperations.getCollection(any())).thenReturn(collection);
-        when(collection.createIndex(any())).thenReturn("index");
-
-        CloudEventConverter<FlowEvent> converter = new JacksonCloudEventConverter.Builder<FlowEvent>(new ObjectMapper(), URI.create("urn:test"))
-                .idMapper(FlowEvent::toString).build();
-        store = new SpringMongoSagaStateStore<>(mongoOperations, "saga-flow", rawFlowStateType(), converter);
+        codec = SagaCodec.of(SagaStateCodec.identity(), new TickConverter());
     }
 
     @AfterEach
@@ -108,9 +91,21 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
         logger.setAdditive(loggerWasAdditive);
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static Class<FlowState<FlowEvent>> rawFlowStateType() {
-        return (Class) FlowState.class;
+    private static final class TickConverter implements CloudEventConverter<FlowEvent> {
+        @Override
+        public CloudEvent toCloudEvent(FlowEvent event) {
+            return CloudEventBuilder.v1().withId(((Tick) event).eventId()).withSource(URI.create("urn:test")).withType("tick").build();
+        }
+
+        @Override
+        public FlowEvent toDomainEvent(CloudEvent cloudEvent) {
+            return new Tick(cloudEvent.getId());
+        }
+
+        @Override
+        public String getCloudEventType(Class<? extends FlowEvent> type) {
+            return "tick";
+        }
     }
 
     private static List<FlowEvent> ticks(int count) {
@@ -122,7 +117,7 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
                 "waiting", ticks(retainedEventCount), 0, 0, false, null, ActionKind.NONE, -1);
         SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>(
                 sagaId, state, SagaStatus.ACTIVE, 0, List.of(), Map.of(), null, null, null, null, null, true, null, Map.of(), null);
-        store.compareAndSave(sagaId, envelope, 0);
+        codec.encode(envelope);
     }
 
     private List<ILoggingEvent> warnings() {
@@ -162,7 +157,7 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
     @Test
     void deleting_an_instance_still_above_the_threshold_frees_its_latch_entry() {
         save("s1", RETAINED_EVENT_WARNING_THRESHOLD);
-        store.delete("s1");
+        codec.forget("s1");
 
         save("s1", RETAINED_EVENT_WARNING_THRESHOLD);
 
@@ -190,20 +185,20 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
     }
 
     // Exercises warnIfRetainedSizeCrossesThreshold directly, with plain counts, rather than through compareAndSave: at
-    // the real capacity that would mean building and CloudEvent-serializing 1,000+ retained events for over 10,000
+    // the real capacity that would mean building and encoding 1,000+ retained events for over 10,000
     // instances, which is too slow for a unit test and tests nothing extra over the smaller counts used here.
     @Test
     void a_new_instance_past_capacity_evicts_the_least_recently_used_entry() {
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
-            store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+            codec.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
         int warningsAtCapacity = warnings().size();
 
-        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
+        codec.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
 
         assertThat(warningsAtCapacity).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
         assertThat(warnings().size()).isEqualTo(warningsAtCapacity + 1);
-        assertThat(store.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
+        assertThat(codec.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
     }
 
     // Every save of an already-tracked instance is itself an access under the latch's access-order mode, so it is
@@ -214,19 +209,19 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
     @Test
     void resaving_already_tracked_instances_never_makes_them_re_warn() {
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
-            store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+            codec.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
         // Evicts s0, the least recently used entry.
-        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
+        codec.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
         int warningsAfterOverflow = warnings().size();
 
         for (int i = 1; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
-            store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+            codec.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
 
         assertThat(warnings().size()).as("every one of these instances was already tracked, so none re-warn")
                 .isEqualTo(warningsAfterOverflow);
-        assertThat(store.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
+        assertThat(codec.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
     }
 
     // Distinguishes access order from plain insertion order: an instance saved first but kept warm by every later
@@ -237,13 +232,13 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
     @Test
     void repeatedly_resaving_an_instance_protects_it_from_eviction_by_later_arrivals() {
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
-            store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+            codec.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
-            store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
-            store.warnIfRetainedSizeCrossesThreshold("new" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+            codec.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
+            codec.warnIfRetainedSizeCrossesThreshold("new" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
-        store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
+        codec.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
 
         long s0Warnings = warnings().stream().filter(event -> event.getFormattedMessage().contains("'s0'")).count();
         assertThat(s0Warnings).as("s0 was kept warm throughout and never evicted, so it only ever warned once, at the start")
@@ -258,16 +253,16 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
     @Test
     void an_instance_that_stops_being_saved_is_eventually_evicted_and_warns_again_without_delete() {
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
-            store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+            codec.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
         // s0 is now abandoned: never saved again. Enough new instances arrive to cycle the whole cache, which must
         // evict s0 along the way since it is the least recently used entry throughout.
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
-            store.warnIfRetainedSizeCrossesThreshold("t" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+            codec.warnIfRetainedSizeCrossesThreshold("t" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
         int warningsBeforeResave = warnings().size();
 
-        store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
+        codec.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
 
         assertThat(warnings().size()).as("s0's entry was evicted while abandoned, so this is a fresh crossing")
                 .isEqualTo(warningsBeforeResave + 1);
@@ -283,7 +278,7 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
 
         for (int round = 0; round < 3; round++) {
             for (int i = 0; i < populationSize; i++) {
-                store.warnIfRetainedSizeCrossesThreshold("r" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+                codec.warnIfRetainedSizeCrossesThreshold("r" + i, RETAINED_EVENT_WARNING_THRESHOLD);
             }
         }
 
@@ -297,13 +292,13 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
     // one, and re-warns on its own very next save, even though it never stopped being active.
     @Test
     void continuously_active_instance_can_still_be_evicted_by_enough_churn_between_its_own_saves() {
-        store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
+        codec.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
-            store.warnIfRetainedSizeCrossesThreshold("oneShot" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+            codec.warnIfRetainedSizeCrossesThreshold("oneShot" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
         int warningsBeforeResavingS0 = warnings().size();
 
-        store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
+        codec.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
 
         assertThat(warnings().size()).as("s0 was evicted by the churn even though it was continuously active")
                 .isEqualTo(warningsBeforeResavingS0 + 1);
@@ -326,7 +321,7 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
                 ready.countDown();
                 await(start);
                 for (int i = 0; i < idsPerThread; i++) {
-                    store.warnIfRetainedSizeCrossesThreshold("thread" + threadIndex + "-id" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+                    codec.warnIfRetainedSizeCrossesThreshold("thread" + threadIndex + "-id" + i, RETAINED_EVENT_WARNING_THRESHOLD);
                 }
             }));
         }
@@ -341,7 +336,7 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
         }
 
         assertThat(threadCount * idsPerThread).as("test setup pushes past capacity").isGreaterThan(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
-        assertThat(store.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
+        assertThat(codec.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
     }
 
     private static void await(CountDownLatch latch) {

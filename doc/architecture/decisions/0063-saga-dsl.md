@@ -212,3 +212,10 @@ every step" wildcard matching. A process that needs any of those drops down to t
 > composed flow children still arm the same `Qualified("step", ..)` name for a step they both have, and nobody assigns
 > a child a namespace of its own. All three of the things `compose` is deferred over here are still deferred. The flow
 > layer has taken `step` for its own step timers, so whatever assigns namespaces to children has to keep away from it.
+
+> **Amended on 2026-11-16 by [ADR 180](0180-occurrent-owns-the-stored-form-of-a-saga-instance.md).** `SagaCodec` in
+> `saga-dsl-common` encodes and decodes `FlowStateImpl`, so no `SagaStateStore` constructs or reads it any more. A store
+> has no `instanceof FlowStateImpl` serialization branch, and the bookkeeping fields above stop being a store concern.
+> Their meaning can still change between versions, and the codec is what has to read the data an earlier version wrote.
+> The codec casts `FlowState` to `FlowStateImpl` where the store did. `FlowStateImpl` stays `public`, since `SagaCodec`,
+> in another package, and the executor in `saga-dsl-blocking` still use it.

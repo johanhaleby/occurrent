@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -129,9 +130,9 @@ class SpringMongoSagaStateStoreRetryTest {
     void a_transient_failure_on_a_read_is_retried_rather_than_reaching_the_caller() {
         MongoOperations mongoOperations = failing(mongoOperations(), "findById", 1);
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
-        store.compareAndSave("order-1", payment("order-1"), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-1", payment("order-1"), 0);
 
-        SagaEnvelope<Payment> read = store.find("order-1").orElseThrow();
+        SagaEnvelope<Payment> read = SagaEnvelopes.of(store, null).find("order-1").orElseThrow();
 
         assertThat(read.state()).isEqualTo(new Payment(12L));
     }
@@ -141,7 +142,7 @@ class SpringMongoSagaStateStoreRetryTest {
         MongoOperations mongoOperations = failing(mongoOperations(), "insert", 1);
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
 
-        boolean saved = store.compareAndSave("order-2", payment("order-2"), 0);
+        boolean saved = SagaEnvelopes.of(store, null).compareAndSave("order-2", payment("order-2"), 0);
 
         assertThat(saved).isTrue();
     }
@@ -150,10 +151,10 @@ class SpringMongoSagaStateStoreRetryTest {
     void a_transient_failure_replacing_an_existing_instance_is_retried_and_the_replacement_is_still_saved() {
         MongoOperations mongoOperations = mongoOperations();
         SagaStateStore<Payment> setup = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
-        setup.compareAndSave("order-3", payment("order-3"), 0);
+        SagaEnvelopes.of(setup, null).compareAndSave("order-3", payment("order-3"), 0);
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing(mongoOperations, "findAndReplace", 1), COLLECTION, Payment.class);
 
-        boolean saved = store.compareAndSave("order-3", replacementPayment("order-3"), 1);
+        boolean saved = SagaEnvelopes.of(store, null).compareAndSave("order-3", replacementPayment("order-3"), 1);
 
         assertThat(saved).isTrue();
     }
@@ -162,10 +163,10 @@ class SpringMongoSagaStateStoreRetryTest {
     void a_transient_failure_finding_due_timers_is_retried_and_the_instance_is_still_found() {
         MongoOperations mongoOperations = mongoOperations();
         SagaStateStore<Payment> setup = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
-        setup.compareAndSave("order-4", payment("order-4"), 0);
+        SagaEnvelopes.of(setup, null).compareAndSave("order-4", payment("order-4"), 0);
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing(mongoOperations, "find", 1), COLLECTION, Payment.class);
 
-        List<SagaEnvelope<Payment>> due = store.findWithDueTimers(NOW.plusSeconds(60), 10);
+        List<SagaEnvelope<Payment>> due = SagaEnvelopes.of(store, null).findWithDueTimers(NOW.plusSeconds(60), 10);
 
         assertThat(due).extracting(SagaInstance::sagaId).containsExactly("order-4");
     }
@@ -174,12 +175,12 @@ class SpringMongoSagaStateStoreRetryTest {
     void a_transient_failure_deleting_an_instance_is_retried_and_the_instance_is_still_gone() {
         MongoOperations mongoOperations = mongoOperations();
         SagaStateStore<Payment> setup = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
-        setup.compareAndSave("order-5", payment("order-5"), 0);
+        SagaEnvelopes.of(setup, null).compareAndSave("order-5", payment("order-5"), 0);
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing(mongoOperations, "remove", 1), COLLECTION, Payment.class);
 
         store.delete("order-5");
 
-        assertThat(store.find("order-5")).isEmpty();
+        assertThat(SagaEnvelopes.of(store, null).find("order-5")).isEmpty();
     }
 
     @Test
@@ -188,7 +189,7 @@ class SpringMongoSagaStateStoreRetryTest {
 
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
 
-        assertThat(store.compareAndSave("order-6", payment("order-6"), 0)).isTrue();
+        assertThat(SagaEnvelopes.of(store, null).compareAndSave("order-6", payment("order-6"), 0)).isTrue();
     }
 
     @Test
@@ -201,7 +202,7 @@ class SpringMongoSagaStateStoreRetryTest {
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class, null,
                 SpringMongoSagaStateStore.defaultRetryStrategy().backoff(Backoff.fixed(1)));
 
-        Throwable thrown = catchThrowable(() -> store.find("order-8"));
+        Throwable thrown = catchThrowable(() -> SagaEnvelopes.of(store, null).find("order-8"));
 
         assertAll(
                 () -> assertThat(calls)
@@ -218,7 +219,7 @@ class SpringMongoSagaStateStoreRetryTest {
         MongoOperations mongoOperations = failing(mongoOperations(), "findById", 1);
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class, null, RetryStrategy.none());
 
-        Throwable thrown = catchThrowable(() -> store.find("order-7"));
+        Throwable thrown = catchThrowable(() -> SagaEnvelopes.of(store, null).find("order-7"));
 
         assertThat(thrown).isInstanceOf(DataAccessResourceFailureException.class);
     }

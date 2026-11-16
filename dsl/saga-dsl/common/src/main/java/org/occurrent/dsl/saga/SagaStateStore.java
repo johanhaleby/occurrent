@@ -95,7 +95,9 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * state, and the state the instance stopped on is still there afterwards for whoever repairs the converter.
      * <p>
      * An insert, meaning an {@code expectedVersion} of {@code 0}, goes through {@link #compareAndSave(StoredSaga, long)}
-     * with the whole instance, because there is no stored state to leave alone.
+     * with the whole instance, because there is no stored state to leave alone. A store throws
+     * {@link IllegalArgumentException} for an {@code expectedVersion} of {@code 0} here, since {@code saga} holds no state
+     * to insert.
      */
     boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion);
 

@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
 import org.bson.Document;
@@ -113,9 +114,9 @@ class SpringMongoSagaStateStoreReleaseTest {
     @Test
     void a_releasing_instance_round_trips_with_its_release_time_its_quarantine_id_and_its_skip_count() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
-        store.compareAndSave("order-1", releasing("order-1"), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-1", releasing("order-1"), 0);
 
-        SagaEnvelope<Payment> read = store.find("order-1").orElseThrow();
+        SagaEnvelope<Payment> read = SagaEnvelopes.of(store, null).find("order-1").orElseThrow();
 
         assertAll(
                 () -> assertThat(read.failure()).isEqualTo(failure(RELEASED_AT, QUARANTINE_ID)),
@@ -128,9 +129,9 @@ class SpringMongoSagaStateStoreReleaseTest {
     @Test
     void a_skip_count_of_0_reads_back_as_0_and_not_as_no_count() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
-        store.compareAndSave("order-2", envelope("order-2", SagaStatus.QUARANTINED, 1, failure(null, QUARANTINE_ID), 0L), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-2", envelope("order-2", SagaStatus.QUARANTINED, 1, failure(null, QUARANTINE_ID), 0L), 0);
 
-        SagaEnvelope<Payment> read = store.find("order-2").orElseThrow();
+        SagaEnvelope<Payment> read = SagaEnvelopes.of(store, null).find("order-2").orElseThrow();
 
         assertAll(
                 () -> assertThat(read.quarantineSkipCount()).isEqualTo(0L),
@@ -143,16 +144,16 @@ class SpringMongoSagaStateStoreReleaseTest {
     void a_quarantined_instance_with_a_quarantine_id_is_stored_as_QUARANTINED_RECORDING_and_one_without_as_QUARANTINED() {
         MongoOperations mongoOperations = mongoOperations();
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations);
-        store.compareAndSave("with-id", envelope("with-id", SagaStatus.QUARANTINED, 1, failure(null, QUARANTINE_ID), 0L), 0);
-        store.compareAndSave("without-id", envelope("without-id", SagaStatus.QUARANTINED, 1, failure(null, null), null), 0);
-        store.compareAndSave("active", envelope("active", SagaStatus.ACTIVE, 1, null, null), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("with-id", envelope("with-id", SagaStatus.QUARANTINED, 1, failure(null, QUARANTINE_ID), 0L), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("without-id", envelope("without-id", SagaStatus.QUARANTINED, 1, failure(null, null), null), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("active", envelope("active", SagaStatus.ACTIVE, 1, null, null), 0);
 
         assertAll(
                 () -> assertThat(stored(mongoOperations, "with-id").getString("status")).isEqualTo("QUARANTINED_RECORDING"),
                 () -> assertThat(stored(mongoOperations, "without-id").getString("status")).isEqualTo("QUARANTINED"),
                 () -> assertThat(stored(mongoOperations, "active").getString("status")).isEqualTo("ACTIVE"),
-                () -> assertThat(store.find("with-id").orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
-                () -> assertThat(store.find("without-id").orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED)
+                () -> assertThat(SagaEnvelopes.of(store, null).find("with-id").orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(SagaEnvelopes.of(store, null).find("without-id").orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED)
         );
     }
 
@@ -165,9 +166,9 @@ class SpringMongoSagaStateStoreReleaseTest {
                 .append("quarantineSkipCount", 2L), COLLECTION);
 
         assertAll(
-                () -> assertThat(store.find("by-034").orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
-                () -> assertThat(store.find("recording").orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
-                () -> assertThat(store.find("recording").orElseThrow().quarantineId()).isEqualTo(QUARANTINE_ID)
+                () -> assertThat(SagaEnvelopes.of(store, null).find("by-034").orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(SagaEnvelopes.of(store, null).find("recording").orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(SagaEnvelopes.of(store, null).find("recording").orElseThrow().quarantineId()).isEqualTo(QUARANTINE_ID)
         );
     }
 
@@ -175,11 +176,11 @@ class SpringMongoSagaStateStoreReleaseTest {
     void findByStatus_returns_the_instances_stored_under_either_quarantined_string() {
         MongoOperations mongoOperations = mongoOperations();
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations);
-        store.compareAndSave("with-id", envelope("with-id", SagaStatus.QUARANTINED, 1, failure(null, QUARANTINE_ID), 0L), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("with-id", envelope("with-id", SagaStatus.QUARANTINED, 1, failure(null, QUARANTINE_ID), 0L), 0);
         mongoOperations.insert(quarantinedBy034("by-034"), COLLECTION);
-        store.compareAndSave("active", envelope("active", SagaStatus.ACTIVE, 1, null, null), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("active", envelope("active", SagaStatus.ACTIVE, 1, null, null), 0);
 
-        List<String> found = store.findByStatus(SagaStatus.QUARANTINED, NOW.plusSeconds(60), 10).stream().map(SagaEnvelope::sagaId).sorted().toList();
+        List<String> found = SagaEnvelopes.of(store, null).findByStatus(SagaStatus.QUARANTINED, NOW.plusSeconds(60), 10).stream().map(SagaEnvelope::sagaId).sorted().toList();
 
         assertThat(found).containsExactly("by-034", "with-id");
     }
@@ -188,11 +189,11 @@ class SpringMongoSagaStateStoreReleaseTest {
     void the_releasing_query_finds_only_quarantined_instances_with_a_release_time_in_id_order_under_either_string() {
         MongoOperations mongoOperations = mongoOperations();
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations);
-        store.compareAndSave("order-c", releasing("order-c"), 0);
-        store.compareAndSave("order-a", releasing("order-a"), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-c", releasing("order-c"), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-a", releasing("order-a"), 0);
         mongoOperations.insert(quarantinedBy034("order-b").append("failureReleasedAt", RELEASED_AT.toEpochMilli()), COLLECTION);
-        store.compareAndSave("order-0", envelope("order-0", SagaStatus.QUARANTINED, 1, failure(null, QUARANTINE_ID), 0L), 0);
-        store.compareAndSave("order-1", envelope("order-1", SagaStatus.ACTIVE, 1, failure(RELEASED_AT, null), null), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-0", envelope("order-0", SagaStatus.QUARANTINED, 1, failure(null, QUARANTINE_ID), 0L), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-1", envelope("order-1", SagaStatus.ACTIVE, 1, failure(RELEASED_AT, null), null), 0);
 
         assertAll(
                 () -> assertThat(store.findReleasingSagaIds(null, 10)).containsExactly("order-a", "order-b", "order-c"),
@@ -204,9 +205,9 @@ class SpringMongoSagaStateStoreReleaseTest {
     void the_releasing_query_lists_only_the_ids_strictly_after_the_given_one_in_id_order_up_to_the_limit() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         for (String id : List.of("order-c", "order-a", "order-d", "order-b")) {
-            store.compareAndSave(id, releasing(id), 0);
+            SagaEnvelopes.of(store, null).compareAndSave(id, releasing(id), 0);
         }
-        store.compareAndSave("order-bb", envelope("order-bb", SagaStatus.ACTIVE, 1, null, null), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-bb", envelope("order-bb", SagaStatus.ACTIVE, 1, null, null), 0);
 
         assertAll(
                 () -> assertThat(store.findReleasingSagaIds("order-a", 10)).containsExactly("order-b", "order-c", "order-d"),
@@ -230,12 +231,12 @@ class SpringMongoSagaStateStoreReleaseTest {
     void the_reads_without_the_state_carry_the_release_fields_of_an_instance_whose_state_no_longer_decodes() {
         MongoOperations mongoOperations = mongoOperations();
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations);
-        store.compareAndSave("order-3", releasing("order-3"), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-3", releasing("order-3"), 0);
         mongoOperations.updateFirst(Query.query(where("_id").is("order-3")),
                 new Update().set("state", new Document("amount", "lots")), COLLECTION);
 
-        SagaEnvelope<Payment> byStatus = store.findByStatus(SagaStatus.QUARANTINED, NOW.plusSeconds(60), 10).getFirst();
-        SagaEnvelope<Payment> withoutState = store.findWithoutState("order-3").orElseThrow();
+        SagaEnvelope<Payment> byStatus = SagaEnvelopes.of(store, null).findByStatus(SagaStatus.QUARANTINED, NOW.plusSeconds(60), 10).getFirst();
+        SagaEnvelope<Payment> withoutState = SagaEnvelopes.of(store, null).findWithoutState("order-3").orElseThrow();
 
         assertAll(
                 () -> assertThat(byStatus.failure()).isEqualTo(failure(RELEASED_AT, QUARANTINE_ID)),
@@ -249,9 +250,9 @@ class SpringMongoSagaStateStoreReleaseTest {
     void a_save_without_the_state_removes_the_release_fields_an_instance_made_active_no_longer_carries() {
         MongoOperations mongoOperations = mongoOperations();
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations);
-        store.compareAndSave("order-4", releasing("order-4"), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-4", releasing("order-4"), 0);
 
-        boolean saved = store.compareAndSaveWithoutState("order-4", envelope("order-4", SagaStatus.ACTIVE, 2, null, null), 1);
+        boolean saved = SagaEnvelopes.of(store, null).compareAndSaveWithoutState("order-4", envelope("order-4", SagaStatus.ACTIVE, 2, null, null), 1);
 
         Document stored = stored(mongoOperations, "order-4");
         assertAll(
@@ -266,11 +267,11 @@ class SpringMongoSagaStateStoreReleaseTest {
     void a_save_without_the_state_that_clears_the_release_time_keeps_the_quarantine_id_and_the_skip_count_and_stops_the_instance_releasing() {
         MongoOperations mongoOperations = mongoOperations();
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations);
-        store.compareAndSave("order-5", releasing("order-5"), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-5", releasing("order-5"), 0);
 
-        store.compareAndSaveWithoutState("order-5", envelope("order-5", SagaStatus.QUARANTINED, 2, failure(null, QUARANTINE_ID), 4L), 1);
+        SagaEnvelopes.of(store, null).compareAndSaveWithoutState("order-5", envelope("order-5", SagaStatus.QUARANTINED, 2, failure(null, QUARANTINE_ID), 4L), 1);
 
-        SagaEnvelope<Payment> read = store.find("order-5").orElseThrow();
+        SagaEnvelope<Payment> read = SagaEnvelopes.of(store, null).find("order-5").orElseThrow();
         assertAll(
                 () -> assertThat(stored(mongoOperations, "order-5")).doesNotContainKey("failureReleasedAt"),
                 () -> assertThat(read.isReleasing()).isFalse(),
@@ -286,7 +287,7 @@ class SpringMongoSagaStateStoreReleaseTest {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations);
         mongoOperations.insert(quarantinedBy034("order-6"), COLLECTION);
 
-        SagaEnvelope<Payment> read = store.find("order-6").orElseThrow();
+        SagaEnvelope<Payment> read = SagaEnvelopes.of(store, null).find("order-6").orElseThrow();
 
         assertAll(
                 () -> assertThat(read.status()).isEqualTo(SagaStatus.QUARANTINED),
@@ -407,7 +408,7 @@ class SpringMongoSagaStateStoreReleaseTest {
     @Test
     void delete_removes_the_instance_and_its_records_under_its_quarantine_id_only_and_no_other_instance_records() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
-        store.compareAndSave("order-13", releasing("order-13"), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("order-13", releasing("order-13"), 0);
         store.recordSkippedInput("order-13", "q-1", new SkippedInput(0, "a@1"));
         store.recordSkippedInput("order-13", "q-2", new SkippedInput(0, "b@1"));
         store.recordSkippedInput("order-14", "q-1", new SkippedInput(0, "c@1"));
@@ -415,7 +416,7 @@ class SpringMongoSagaStateStoreReleaseTest {
         store.delete("order-13");
 
         assertAll(
-                () -> assertThat(store.find("order-13")).isEmpty(),
+                () -> assertThat(SagaEnvelopes.of(store, null).find("order-13")).isEmpty(),
                 () -> assertThat(store.findSkippedInputs("order-13", "q-1", 10)).isEmpty(),
                 () -> assertThat(store.findSkippedInputs("order-13", "q-2", 10)).containsExactly(new SkippedInput(0, "b@1")),
                 () -> assertThat(store.findSkippedInputs("order-14", "q-1", 10)).containsExactly(new SkippedInput(0, "c@1"))
@@ -426,17 +427,17 @@ class SpringMongoSagaStateStoreReleaseTest {
     void delete_keeps_the_records_of_an_instance_created_with_the_same_id_between_the_removal_of_the_instance_and_the_delete_of_its_records() {
         MongoOperations mongoOperations = mongoOperations();
         SpringMongoSagaStateStore<Payment> direct = store(mongoOperations);
-        direct.compareAndSave("order-20", releasing("order-20"), 0);
+        SagaEnvelopes.of(direct, null).compareAndSave("order-20", releasing("order-20"), 0);
         direct.recordSkippedInput("order-20", "q-1", new SkippedInput(0, "a@1"));
         MongoOperations recreatingAfterTheRemoval = afterTheFirstFindAndRemove(mongoOperations, () -> {
-            direct.compareAndSave("order-20", envelope("order-20", SagaStatus.QUARANTINED, 1, failure(null, "q-2"), 1L), 0);
+            SagaEnvelopes.of(direct, null).compareAndSave("order-20", envelope("order-20", SagaStatus.QUARANTINED, 1, failure(null, "q-2"), 1L), 0);
             direct.recordSkippedInput("order-20", "q-2", new SkippedInput(0, "b@1"));
         });
 
         store(recreatingAfterTheRemoval).delete("order-20");
 
         assertAll(
-                () -> assertThat(direct.find("order-20")).hasValueSatisfying(recreated -> assertThat(recreated.quarantineId()).isEqualTo("q-2")),
+                () -> assertThat(SagaEnvelopes.of(direct, null).find("order-20")).hasValueSatisfying(recreated -> assertThat(recreated.quarantineId()).isEqualTo("q-2")),
                 () -> assertThat(direct.findSkippedInputs("order-20", "q-1", 10)).isEmpty(),
                 () -> assertThat(direct.findSkippedInputs("order-20", "q-2", 10)).containsExactly(new SkippedInput(0, "b@1"))
         );
