@@ -498,13 +498,15 @@ public class MongoCommons {
     public static final String CATCHUP_MARKER_GENERATION_ID = "catchupMarker";
 
     /**
-     * How long a forget waits for a majority to acknowledge each of its two writes before it throws.
+     * How long each attempt of a forget write waits for a majority to acknowledge it before the attempt fails. On a
+     * client with a {@code timeoutMS} above 0, that {@code timeoutMS} bounds the attempt instead.
      */
     public static final Duration CATCHUP_MARKER_FORGET_WRITE_TIMEOUT = Duration.ofSeconds(10);
 
     /**
-     * How long each find of a marker read may run on the server before it throws. A {@code MAJORITY} find waits too,
-     * on a collection whose creation a majority hasn't acknowledged yet.
+     * How long each find of a marker read may run on the server before the attempt fails. A {@code MAJORITY} find
+     * waits too, on a collection whose creation a majority hasn't acknowledged yet. On a client with a
+     * {@code timeoutMS} above 0, that {@code timeoutMS} bounds the find instead.
      */
     public static final Duration CATCHUP_MARKER_READ_MAX_TIME = Duration.ofSeconds(10);
 
