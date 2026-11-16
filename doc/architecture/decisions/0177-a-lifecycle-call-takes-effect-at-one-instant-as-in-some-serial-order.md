@@ -78,8 +78,8 @@ replay before the next event, and X is then held paused. Today a pause during a 
 only at the handover ([#1256](https://github.com/johanhaleby/occurrent/issues/1256)).
 
 A call to the action that a replay started before a `cancelSubscription(X)` or `stop()` took effect can still be
-running when that call has taken effect. Once the call has let go of its locks, it waits up to 1
-second for the action to return. Past that it returns all the same and logs a `WARN` naming X, and the replay delivers
+running when that call has taken effect. Once the call has let go of the handover lock, it waits up
+to 1 second for the action to return. Past that it returns all the same and logs a `WARN` naming X, and the replay delivers
 no further event. S2 holds either way, because the replay let the event through before the call took effect. A call made from inside
 X's action doesn't wait for that action, which can only return after the call does. A cancel of X after a `stop()`
 parked its replay doesn't wait again, since the stop did. `shutdown()` doesn't wait. A `pauseSubscription(X)` doesn't
@@ -166,7 +166,7 @@ The rule needs one lock for each scope, taken in a fixed order:
 | 1 | `ManualStartSubscriptionModel` model lock | its `start(..)`, `stop()` and registration |
 | 2 | catch-up model lock, read and write | `start(..)`, `stop()` and `shutdown()` exclusively, across the loop over every id and the wrapped model's own `start(..)` or `stop()`. Every per-id call shared, around its claim. Replay threads never take it. The composite `CatchupSubscriptionModel` and its children share one model lock, as they share the claims. Its `start(..)` and `stop()` take it exclusively across every child's `beginStart()` or `stopReplay()` and the wrapped model's call |
 | 3 | per-id claim (`lifecycleClaims`) | each lifecycle call on X, as today |
-| 4 | per-id handover lock | the replay thread at every step it takes on its own, including the check that lets each event through to the action and the check and the write of a catch-up checkpoint, but never while the action runs |
+| 4 | per-id handover lock | the replay thread at every step it takes on its own, including the check that lets each event through to the action and the check and the write of a catch-up checkpoint, but never while it runs the action |
 | 5 | `lifecycleLock` | short reads and writes of shared fields, nothing taken under it |
 
 The model lock replaces the reasoning behind `lifecycleGeneration`, `liveDelegateResumes` and `stoppedByFailedStart`.

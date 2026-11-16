@@ -166,9 +166,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // branch), and cancelRunningCatchup. The identity check above only made the ownership decision itself atomic, not
     // what followed it, so a cancellation or a fresh registration could land in the gap after an attempt decided it was
     // still current but before it finished acting on that. Held across those transitions and a catch-up checkpoint
-    // write, never across the subscriber's action, so a slow action never holds up a cancel or a stop on this lock.
-    // Counted like lifecycleClaims, so an
-    // entry is kept only while a thread holds the lock or waits for it.
+    // write, never across the replay's call to the subscriber's action, so a slow call never holds up a cancel or a
+    // stop on this lock. Counted like lifecycleClaims, so an entry is kept only while a thread holds the lock or waits
+    // for it.
     private final ConcurrentMap<String, CountedLock> handoverLocks;
     // One claim per subscriptionId, held by a lifecycle call for as long as it runs, see claim(..). An entry exists
     // while a thread holds the claim or waits for it, and is removed once none does, so the map holds nothing for an id
@@ -213,7 +213,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // it returns, and then moved to what is kept for the subscription when the cancel threw, so start(true) and every
     // resume find them all through the cancel, also when the subscription wasn't made through this model.
     private final ConcurrentMap<String, CancelUnderWay> cancelsUnderWay;
-    // Done once every attempt of a parked replay that a cancel or a resume dropped for the id has returned, kept only
+    // Done once every attempt of a replay that a cancel, a resume or a stop dropped for the id has returned, kept only
     // until then, so the next replay of the id doesn't run the action alongside one of them
     private final ConcurrentMap<String, CompletableFuture<Void>> droppedReplaysReturned;
     // How many cancels have started, each counted once it is in cancelsUnderWay and before it changes anything else
