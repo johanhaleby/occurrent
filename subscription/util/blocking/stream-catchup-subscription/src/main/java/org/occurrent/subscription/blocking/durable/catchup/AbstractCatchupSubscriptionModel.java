@@ -165,8 +165,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // (saveIfStillSafe), a finishing attempt's checkpoint cleanup and delegate subscribe (or its cancelled-cleanup
     // branch), and cancelRunningCatchup. The identity check above only made the ownership decision itself atomic, not
     // what followed it, so a cancellation or a fresh registration could land in the gap after an attempt decided it was
-    // still current but before it finished acting on that. Held only across those short transitions, never across
-    // the subscriber's action, so a long catch-up is never serialized by this lock. Counted like lifecycleClaims, so an
+    // still current but before it finished acting on that. Held across those transitions and a catch-up checkpoint
+    // write, never across the subscriber's action, so a slow action never holds up a cancel or a stop on this lock.
+    // Counted like lifecycleClaims, so an
     // entry is kept only while a thread holds the lock or waits for it.
     private final ConcurrentMap<String, CountedLock> handoverLocks;
     // One claim per subscriptionId, held by a lifecycle call for as long as it runs, see claim(..). An entry exists
@@ -2393,6 +2394,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         if (attempt.replay.cancelled) {
             if (currentAttempt.remove(subscriptionId, attempt)) {
                 runningCatchupSubscriptions.remove(subscriptionId);
+                // registerOrPark no longer finds the attempt the cancel ended, and its action can still run
+                waitForTheDroppedReplay(subscriptionId, attempt.done);
             }
         } else if (hold(subscriptionId, attempt)) {
             AbstractCatchupSubscriptionModel owner = attempt.owner;
@@ -3211,8 +3214,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * Cancels the catch-up of {@code subscriptionId} and the subscription in the live delegate, and deletes its stored
-     * position. When the replay has already let an event through to the subscriber's action, this waits up to a second
-     * for the action to return before it cancels the subscription in the live delegate. When the action hasn't returned
+     * position. When the replay has already let an event through to the subscriber's action and a stop hasn't parked it
+     * since, this waits up to a second for the action to return before it cancels the subscription in the live
+     * delegate. When the action hasn't returned
      * by then, it logs a {@code WARN} and goes on. The replay lets no further event through and stores nothing more once
      * the action returns. It doesn't wait either for a subscribe of the id on another thread whose start-position function is
      * asked for this model with no claim held. That subscribe subscribes nothing, and the subscription it returns never
@@ -3308,8 +3312,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * for the subscription as it was made stays too, and {@link #cancelSubscription(String)} forgets it once the live
      * delegate has cancelled the subscription.
      * <p>
-     * When the replay has already let an event through to the subscriber's action, this waits up to a second for the
-     * action to return, and logs a {@code WARN} and returns when it hasn't by then. It doesn't wait when called from that
+     * When the replay has already let an event through to the subscriber's action, and a stop hasn't parked it since,
+     * this waits up to a second for the action to return, and logs a {@code WARN} and returns when it hasn't by then.
+     * It doesn't wait when called from that
      * action. The replay lets no further event through either way.
      */
     public void cancelRunningCatchup(String subscriptionId) {
@@ -3352,7 +3357,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (parked != null) {
                 parked.replay().cancelled = true;
                 parked.replay().result.cancel(false);
-                waitForTheDroppedReplay(subscriptionId, parked);
+                waitForTheDroppedReplay(subscriptionId, parked.earlierAttemptsDone());
             }
         }
         if (admitted != null) {
@@ -3488,7 +3493,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 if (held != null && parkedReplays.remove(subscriptionId, held)) {
                     held.replay().cancelled = true;
                     held.replay().result.cancel(false);
-                    waitForTheDroppedReplay(subscriptionId, held);
+                    waitForTheDroppedReplay(subscriptionId, held.earlierAttemptsDone());
                 }
                 if (heldByTheResume) {
                     pauseRequestedDuringCatchup.remove(subscriptionId);
@@ -3630,11 +3635,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Each replay is parked under its {@link #claim}. A failure to claim one is thrown once the others are parked, and
      * that replay parks itself once it next asks whether to go on.
      * <p>
-     * No replayed event reaches the subscriber's action once a replay is parked. An event a replay handed to the action
-     * before that is waited for, up to a second for all of them together, so this usually returns only once the action
-     * has returned. Past the second it returns all the same and logs a {@code WARN} naming the subscriptions whose
-     * action still runs. Called from inside an action, it doesn't wait for that action. Each cancel and each stop waits
-     * on its own, so a stop after a cancel whose action still runs waits for that action again.
+     * A replay lets no event through to the subscriber's action once it is parked. A call to the action that a replay
+     * started before that is waited for, up to a second for all of them together. Past the second this returns all the
+     * same and logs a {@code WARN} naming the subscriptions whose action still runs. Called from inside an action, it
+     * doesn't wait for that action. It waits for every replay still registered, so a stop after a cancel whose action
+     * still runs waits for that action again, and a cancel after this doesn't wait for a replay this parked.
      */
     public void stopReplay() {
         List<ActionInFlight> admitted = new ArrayList<>();
@@ -3895,10 +3900,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
-    // Keeps the earlier attempts of a parked replay that was dropped for subscriptionId until they have returned, so
+    // Keeps returned, the attempts of a replay that was dropped for subscriptionId, until they have returned, so
     // registerOrPark makes the next replay of the id wait for them. Called with the handover lock held.
-    private void waitForTheDroppedReplay(String subscriptionId, ParkedReplay dropped) {
-        CompletableFuture<Void> returned = dropped.earlierAttemptsDone();
+    private void waitForTheDroppedReplay(String subscriptionId, CompletableFuture<Void> returned) {
         if (returned.isDone()) {
             return;
         }
@@ -3911,7 +3915,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@code catchup} and returns {@code null} while this model is stopped or {@code holdPaused} is set, or when the
      * {@link CatchupListener} throws as the replay starts, which is logged at {@code ERROR}. Called with the
      * handover lock held. A replay still parked for the id is dropped, and waitUntilStarted on its handle returns false.
-     * The new replay waits for the attempt that a cancel ended and that is still registered for the id, for the
+     * The new replay waits for the attempt that a cancel ended, also once a stop has removed it, for the
      * earlier attempts of a replay it drops, and for those of a parked replay a cancel or a resume dropped, so an
      * action that runs past the cancel's or the stop's wait never runs alongside the new replay's first call to it.
      */

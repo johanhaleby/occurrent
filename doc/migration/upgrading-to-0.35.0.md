@@ -2821,8 +2821,9 @@ The code compiles unchanged, and there is no OpenRewrite recipe, because no sign
 
 In 0.34.0 `cancelSubscription(id)` and `stop()` on the blocking `StreamCatchupSubscriptionModel`,
 `DcbCatchupSubscriptionModel` and `CatchupSubscriptionModel` returned without waiting for a replay that was in the
-subscriber's action, and the replay could hand the action one more event after the call returned. Now no replayed event
-reaches the action once the call has taken effect, and the call waits up to a second for the action to return. See
+subscriber's action, and the replay could hand the action one more event after the call returned. Now the replay lets
+no event through to the action once the call has taken effect, and the call waits up to a second for the action to
+return. See
 [ADR 177](../architecture/decisions/0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md).
 
 ### Who is affected
@@ -2835,13 +2836,15 @@ only makes the call wait until it has returned.
 ### What changes
 
 * `cancelSubscription(id)` waits up to a second for a call to the action that the replay of `id` already started,
-  before it cancels the subscription in the live delegate and deletes the stored position.
+  before it cancels the subscription in the live delegate and deletes the stored position. When a `stop()` has
+  already parked that replay, the cancel doesn't wait again.
 * `stop()` waits up to a second in all for the replays it parks, before the live delegate stops.
 * Past the second, the call returns all the same and logs a `WARN` naming the subscription, and the replay hands the
   action no further event.
 * A cancel or a stop made from inside a replay's action doesn't wait for that action. `shutdown()` doesn't wait.
 * A subscribe of an id right after a cancel of it returns at once, as in 0.34.0. Its replay waits on its own thread
-  until the cancelled replay's call to the action has returned.
+  until the cancelled replay's call to the action has returned, also when a `stop()` came between the cancel and the
+  subscribe.
 
 ### What to do
 

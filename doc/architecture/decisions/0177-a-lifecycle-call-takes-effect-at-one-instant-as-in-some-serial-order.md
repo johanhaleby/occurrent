@@ -77,11 +77,15 @@ S2 covers pause in every phase. A `pauseSubscription(X)` that returns while X st
 replay before the next event, and X is then held paused. Today a pause during a subscribe-started catch-up takes effect
 only at the handover ([#1256](https://github.com/johanhaleby/occurrent/issues/1256)).
 
-A call to the action that a replay started before a `cancelSubscription(X)`, `pauseSubscription(X)` or `stop()` took
-effect can still be running when that call has taken effect. Once the call has let go of its locks, it waits up to 1
+A call to the action that a replay started before a `cancelSubscription(X)` or `stop()` took effect can still be
+running when that call has taken effect. Once the call has let go of its locks, it waits up to 1
 second for the action to return. Past that it returns all the same and logs a `WARN` naming X, and the replay delivers
-no further event. S2 holds either way, because the action started before the call took effect. A call made from inside
-X's action doesn't wait for that action, which can only return after the call does. `shutdown()` doesn't wait.
+no further event. S2 holds either way, because the replay let the event through before the call took effect. A call made from inside
+X's action doesn't wait for that action, which can only return after the call does. A cancel of X after a `stop()`
+parked its replay doesn't wait again, since the stop did. `shutdown()` doesn't wait. A `pauseSubscription(X)` doesn't
+wait either. It ends a replay at once only while the replay waits to run again after a failure, when no action runs,
+and otherwise takes effect at the handover ([#1256](https://github.com/johanhaleby/occurrent/issues/1256)), after the
+replay's last call to the action has returned.
 
 ### Blocking catch-up
 

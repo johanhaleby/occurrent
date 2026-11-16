@@ -449,6 +449,41 @@ class DcbCatchupSubscriptionModelTest {
     }
 
     /**
+     * Issue #1517. A cancel and then a stop each wait up to ACTION_WAIT for an action still running, and both give up
+     * with a WARN. The stop drops the attempt the cancel ended, and a replay that runs later must still wait for the
+     * action to return, so its first call to the action never runs alongside the earlier one.
+     */
+    @Test
+    void a_replay_started_after_a_cancel_and_a_stop_waits_for_the_cancelled_replays_action_that_outlasts_both_waits() throws InterruptedException {
+        appendTagged("name:1", nameDefined("event1"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
+        String subscriptionId = "subscription";
+
+        CountDownLatch firstActionReached = new CountDownLatch(1);
+        CountDownLatch releaseFirstAction = new CountDownLatch(1);
+        CountDownLatch secondActionReached = new CountDownLatch(1);
+        try {
+            subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+                firstActionReached.countDown();
+                awaitLatch(releaseFirstAction);
+            });
+            assertThat(firstActionReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // Both give up on the blocked action after their wait, so the first call is still in it afterwards
+            subscription.cancelSubscription(subscriptionId);
+            subscription.stop();
+            subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> secondActionReached.countDown());
+            subscription.start(true);
+
+            assertThat(secondActionReached.await(300, TimeUnit.MILLISECONDS)).as("the second replay entered the action while the first call to it, that a cancel and a stop gave up waiting for, is still in it").isFalse();
+            releaseFirstAction.countDown();
+            assertThat(secondActionReached.await(5, TimeUnit.SECONDS)).as("the second replay enters the action once the first call has returned").isTrue();
+        } finally {
+            releaseFirstAction.countDown();
+        }
+    }
+
+    /**
      * Issue #827 (deferred from PR 823's per-attempt identity fix, #737), the DCB side of the same gap the blocking
      * stream catch-up has. The identity check made the ownership decision itself atomic, but not what followed it.
      * A cancellation landing after this attempt decided it was still current, but before the delegate subscribe

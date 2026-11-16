@@ -732,6 +732,42 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     /**
+     * Issue #1517. A cancel and then a stop each wait up to ACTION_WAIT for an action still running, and both give up
+     * with a WARN. The stop drops the attempt the cancel ended, and a replay that runs later must still wait for the
+     * action to return, so its first call to the action never runs alongside the earlier one.
+     */
+    @Test
+    void a_replay_started_after_a_cancel_and_a_stop_waits_for_the_cancelled_replays_action_that_outlasts_both_waits() throws InterruptedException {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        String subscriptionId = "subscription";
+
+        CountDownLatch firstActionReached = new CountDownLatch(1);
+        CountDownLatch releaseFirstAction = new CountDownLatch(1);
+        CountDownLatch secondActionReached = new CountDownLatch(1);
+        try {
+            subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+                firstActionReached.countDown();
+                awaitLatch(releaseFirstAction);
+            });
+            assertThat(firstActionReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // Both give up on the blocked action after their wait, so the first call is still in it afterwards
+            subscription.cancelSubscription(subscriptionId);
+            subscription.stop();
+            subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> secondActionReached.countDown());
+            subscription.start(true);
+
+            assertThat(secondActionReached.await(300, TimeUnit.MILLISECONDS)).as("the second replay entered the action while the first call to it, that a cancel and a stop gave up waiting for, is still in it").isFalse();
+            releaseFirstAction.countDown();
+            assertThat(secondActionReached.await(5, TimeUnit.SECONDS)).as("the second replay enters the action once the first call has returned").isTrue();
+        } finally {
+            releaseFirstAction.countDown();
+        }
+    }
+
+    /**
      * Copilot review on PR #823 (issue #737). A stale in-flight event's checkpoint save survived being cancelled,
      * since the identity check treated "nobody registered" as always safe to persist, not distinguishing a
      * cancellation (which also deletes the stored checkpoint, expecting it gone) from a graceful shutdown (which
