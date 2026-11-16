@@ -47,8 +47,8 @@ The key is the stream id with the stream version when the event has both, which 
 which `Filter.cloudEvent(id, source)` reads back. After a release finds a recorded input's event missing,
 `SagaFailure.input` holds the key that input was recorded under, so it can be a CloudEvent key, see point 5. A key
 already recorded isn't recorded again, and neither is the key of the input the failure record names, so a redelivered
-input adds no record. An instance quarantined before 0.35.0 has no
-quarantine id, see point 2, so its skips record nothing, as in 0.34.0.
+input adds no record. An instance a 0.34.0 node quarantined or last wrote has no quarantine id, see point 2, so its
+skips record nothing, as in 0.34.0.
 
 The rule is keyed on the instance being quarantined, not on one branch of the executor. Three places skip an input for
 a quarantined instance, and all three record it:
@@ -79,16 +79,13 @@ parameter, since none of its methods reads the state, and none of them has a def
 `SpringMongoSagaStateStore` implement it. Point 7 says what the runner does with a store that doesn't.
 
 The write that quarantines an `ACTIVE` instance gives its failure record a new quarantine id and sets the skip counter
-to 0. The saga reads the instance back after that write. When the quarantine id or the skip counter didn't persist, it
-writes the instance back as it was before the quarantine, logs an `ERROR` and fails the input instead of acknowledging
-it. A skip records nothing for an instance without them, so an instance left `QUARANTINED` would have the redelivery of
-that input and every later one acknowledged with nothing recorded and no `WARN`. Undone, it is quarantined again on the
-next failure of the input, so every delivery fails the same way until the store persists both. When another write
-changes the instance before the undo, the saga reads it again and writes it back again, up to `maxCasAttempts` times.
-No path of the saga writes an instance that is quarantined without an id, so only a write from outside the saga can
-make every attempt lose. The instance then stays `QUARANTINED` without them, and the saga logs a second `ERROR` that
-says so. The id names the whole quarantine until the instance is `ACTIVE` again, so a release that quarantines the instance again keeps the id, and
-keeps the counter for the records that stay. Records are stored under the saga id and the
+to 0. Occurrent encodes every field of the instance itself, see
+[ADR 180](0180-occurrent-owns-the-stored-form-of-a-saga-instance.md), and a store writes every field the encoding
+holds. So the quarantine id and the skip counter are written with the status that says the instance is quarantined, and
+the saga doesn't read the instance back to check them.
+
+The id names the whole quarantine until the instance is `ACTIVE` again, so a release that quarantines the instance
+again keeps the id, and keeps the counter for the records that stay. Records are stored under the saga id and the
 quarantine id, and a release reads only those under the current id. A record left over from an earlier quarantine of the
 same instance is never replayed.
 
@@ -188,8 +185,8 @@ quarantined, or no instance has that id. The refusals in point 4 throw instead.
 
 ### 4. What release refuses
 
-Release throws `IllegalStateException` for an instance quarantined before 0.35.0. Its failure record has no quarantine
-id, so it has no records to replay. The exception message names the way out, `SagaStateStore.delete(sagaId)`. A restart
+Release throws `IllegalStateException` for a quarantined instance that a 0.34.0 node quarantined or last wrote. Its
+failure record has no quarantine id, so it has no records to replay. The exception message names the way out, `SagaStateStore.delete(sagaId)`. A restart
 of the saga's subscription isn't one, since a quarantined instance skips every event a restart offers it.
 
 Release also throws `IllegalStateException` for an instance whose state no longer decodes, and the message names the
@@ -319,7 +316,7 @@ there is no `EventStoreQueries` bean, or several and none of them `@Primary`. Th
 
 ### 8. Persisted format
 
-- `SagaFailure` gains `releasedAt` and a quarantine id, both nullable. Its five-argument constructor stays. On MongoDB
+- `SagaFailure` gains `releasedAt` and a quarantine id, both nullable. Its five-argument constructor goes, see ADR 180. On MongoDB
   they are the top-level `failureReleasedAt` and `failureQuarantineId` fields, next to the other flattened `failure*`
   fields.
 - `SagaEnvelope` gains the skip counter. It is delivery bookkeeping like the stream marks, not lifecycle, so
@@ -328,7 +325,7 @@ there is no `EventStoreQueries` bean, or several and none of them `@Primary`. Th
   `_skipped_inputs` appended. A unique index on the
   saga id, the quarantine id and the key keeps a key from being recorded twice, and an index on the saga id, the
   quarantine id and the sequence number serves the order release reads them in.
-- A document written before 0.35.0 has none of these fields and reads as not releasing, with no quarantine id.
+- A document a 0.34.0 node wrote has none of these fields and reads as not releasing, with no quarantine id.
 
 On MongoDB, an instance whose failure record has a quarantine id is stored with the status `QUARANTINED_RECORDING`
 instead of `QUARANTINED`. `SagaStatus` doesn't change. The 0.35.0 store reads both strings as `QUARANTINED`, and its
@@ -437,12 +434,9 @@ The upgrade guide has the procedure for operators, in
   `occurrent.saga.quarantine-enabled=false` as the ways to turn quarantine off.
 - `SagaFailure` gains two components, so a record pattern over it stops compiling. `SagaEnvelope` changes in 0.35.0
   already, and gains one more component.
-- A custom `SagaStateStore` with quarantine on has to implement `SagaStateStoreSkippedInputs`, persist the new fields
-  and delete the records in `delete(sagaId)`, or turn quarantine off. Without the interface the runner refuses to
-  start, see point 7. On a store that loses the quarantine id or the skip counter, every delivery of the input that
-  would quarantine an instance fails and the instance stays out of quarantine, see point 2. A release reads the instance back after setting `releasedAt` and throws
-  when `releasedAt`, the quarantine id or the skip counter didn't persist, rather than replaying into an instance that
-  would forget it is releasing.
+- A custom `SagaStateStore` with quarantine on has to implement `SagaStateStoreSkippedInputs` and delete the records in
+  `delete(sagaId)`, or turn quarantine off. Without the interface the runner refuses to start, see point 7. The new
+  fields ask nothing of the store, since Occurrent encodes them with the rest of the instance, see ADR 180.
 
 ## Rejected alternatives
 
