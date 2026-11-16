@@ -309,7 +309,10 @@ from after the deadline that cancels or re-arms the timer means the timeout neve
 instance back. Five minutes is the budget ADR 134 Decision point 3 argues for.
 
 It still applies only to subscription models that retain every event they deliver. On any other model `SagaRunner`
-turns quarantine off and logs a `WARN`, as it did in 0.34.0.
+turns quarantine off and logs that at startup. A budget you set, with `withQuarantineAfter(..)`, a `SagaRunnerConfig`
+constructor or `occurrent.saga.quarantine-after`, gets a `WARN`, as in 0.34.0. The default budget gets a `DEBUG`, so an
+application that never asked for quarantine doesn't get a new warning each time the saga starts.
+`SagaRunnerConfig` records which of the two it holds in `quarantineAfterDefaulted`.
 
 The default applies to every `SagaRunner`. On a model that retains every event, `SagaRunner.run` throws an
 `IllegalStateException` when quarantine is on and the runner has no `EventStoreQueries`, whether quarantine comes from
