@@ -1775,11 +1775,173 @@ class SagaReleaseTest {
             );
         }
 
+        @Test
+        void the_undo_gives_up_when_every_attempt_loses_to_a_write_from_outside_the_saga() {
+            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheQuarantineId();
+            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(() -> anotherWriteBeforeEachOfTheNext(CONFIG.maxCasAttempts())));
+
+            Throwable delivery = catchThrowable(() -> deliver(poison));
+
+            assertAll(
+                    () -> assertThat(delivery)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessage("cannot pack poison"),
+                    () -> assertThat(delivery.getSuppressed()).isEmpty(),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(instance().quarantineId()).isNull(),
+                    () -> assertThat(errors()).anyMatch(m -> m.contains("could not be undone because the instance was written by something else on each of "
+                                                                         + CONFIG.maxCasAttempts() + " attempts")),
+                    () -> assertThat(errors()).noneMatch(m -> m.contains("so the quarantine was undone"))
+            );
+        }
+
+        @Test
+        void the_undo_stops_and_recreates_nothing_when_the_instance_is_gone_after_a_lost_write() {
+            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheQuarantineId();
+            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(() -> {
+                anotherWriteLeavesTheInstanceQuarantinedWithoutAnId();
+                store.delegate.delete(ORDER);
+            }));
+
+            Throwable delivery = catchThrowable(() -> deliver(poison));
+
+            assertAll(
+                    () -> assertThat(delivery)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessage("cannot pack poison"),
+                    () -> assertThat(delivery.getSuppressed()).isEmpty(),
+                    () -> assertThat(store.delegate.find(ORDER)).isEmpty(),
+                    () -> assertThat(errors()).noneMatch(m -> m.contains("could not be undone"))
+            );
+        }
+
+        @Test
+        void the_undo_leaves_the_instance_as_it_is_when_a_lost_write_took_it_out_of_quarantine() {
+            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheQuarantineId();
+            AtomicReference<SagaEnvelope<Order>> leftByTheOtherWrite = new AtomicReference<>();
+            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(() -> {
+                anotherWriteLeaves(SagaStatus.ACTIVE, null, null);
+                leftByTheOtherWrite.set(instance());
+            }));
+
+            Throwable delivery = catchThrowable(() -> deliver(poison));
+
+            assertAll(
+                    () -> assertThat(delivery)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessage("cannot pack poison"),
+                    () -> assertThat(delivery.getSuppressed()).isEmpty(),
+                    () -> assertThat(leftByTheOtherWrite.get().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(instance().status()).isEqualTo(leftByTheOtherWrite.get().status()),
+                    () -> assertThat(instance().version()).isEqualTo(leftByTheOtherWrite.get().version()),
+                    () -> assertThat(errors()).noneMatch(m -> m.contains("could not be undone"))
+            );
+        }
+
+        @Test
+        void the_undo_does_not_overwrite_a_quarantine_that_a_lost_write_left_with_both_its_id_and_its_skip_count() {
+            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheQuarantineId();
+            AtomicReference<SagaEnvelope<Order>> leftByTheOtherWrite = new AtomicReference<>();
+            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(() -> {
+                SagaFailure failure = instance().failure();
+                SagaFailure withId = new SagaFailure(failure.input(), failure.position(), failure.firstFailedAt(), failure.failureType(),
+                        failure.failureMessage(), failure.releasedAt(), "another-quarantine");
+                anotherWriteLeaves(SagaStatus.QUARANTINED, withId, 7L);
+                leftByTheOtherWrite.set(instance());
+            }));
+
+            Throwable delivery = catchThrowable(() -> deliver(poison));
+
+            assertAll(
+                    () -> assertThat(delivery)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessage("cannot pack poison"),
+                    () -> assertThat(delivery.getSuppressed()).isEmpty(),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(instance().quarantineId()).isEqualTo("another-quarantine"),
+                    () -> assertThat(instance().quarantineSkipCount()).isEqualTo(7L),
+                    () -> assertThat(instance().version()).isEqualTo(leftByTheOtherWrite.get().version()),
+                    () -> assertThat(errors()).noneMatch(m -> m.contains("could not be undone"))
+            );
+        }
+
+        @Test
+        void the_delivery_fails_with_the_original_failure_and_the_store_failure_suppressed_when_the_store_throws_inside_the_undo() {
+            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheQuarantineId();
+            RuntimeException storeFailure = new IllegalStateException("the store went away");
+            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(() -> {
+                throw storeFailure;
+            }));
+
+            Throwable delivery = catchThrowable(() -> deliver(poison));
+
+            assertAll(
+                    () -> assertThat(delivery)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessage("cannot pack poison"),
+                    () -> assertThat(delivery.getSuppressed()).containsExactly(storeFailure),
+                    () -> assertThat(errors()).anyMatch(m -> m.contains("undoing the quarantine failed because the state store failed")),
+                    () -> assertThat(errors()).noneMatch(m -> m.contains("could not list it as pending"))
+            );
+        }
+
+        // The failing event is pending, and the next delivery of it is past its budget, which quarantines the instance.
+        private CloudEvent pendingPoisonOnAStoreThatDropsTheQuarantineId() {
+            deliver(placed());
+            failing.add("poison");
+            CloudEvent poison = added("poison");
+            assertThatThrownBy(() -> deliver(poison)).isInstanceOf(IllegalStateException.class);
+            store.dropsTheQuarantineId = true;
+            now.set(now.get().plus(BUDGET));
+            return poison;
+        }
+
+        // Runs just before a write, makes another write succeed first, and does the same before each of the next count - 1 writes
+        private void anotherWriteBeforeEachOfTheNext(int count) {
+            anotherWriteLeavesTheInstanceQuarantinedWithoutAnId();
+            if (count > 1) {
+                store.beforeNextWriteWithoutState(() -> anotherWriteBeforeEachOfTheNext(count - 1));
+            }
+        }
+
+        private List<String> errors() {
+            return appender.list.stream()
+                    .filter(e -> e.getLevel() == Level.ERROR)
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .toList();
+        }
+
+        private ListAppender<ILoggingEvent> appender;
+        private Logger executionLog;
+        private @Nullable Level originalLevel;
+
+        @BeforeEach
+        void startCapturing() {
+            appender = new ListAppender<>();
+            appender.start();
+            executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            originalLevel = executionLog.getLevel();
+            executionLog.setLevel(Level.ERROR);
+        }
+
+        @AfterEach
+        void stopCapturing() {
+            executionLog.setLevel(originalLevel);
+            executionLog.detachAppender(appender);
+            appender.stop();
+        }
+
         private void anotherWriteLeavesTheInstanceQuarantinedWithoutAnId() {
             SagaEnvelope<Order> stored = instance();
-            SagaEnvelope<Order> next = new SagaEnvelope<>(stored.sagaId(), stored.state(), stored.status(), stored.version() + 1, stored.timers(),
+            anotherWriteLeaves(stored.status(), stored.failure(), stored.quarantineSkipCount());
+        }
+
+        private void anotherWriteLeaves(SagaStatus status, @Nullable SagaFailure failure, @Nullable Long quarantineSkipCount) {
+            SagaEnvelope<Order> stored = instance();
+            SagaEnvelope<Order> next = new SagaEnvelope<>(stored.sagaId(), stored.state(), status, stored.version() + 1, stored.timers(),
                     stored.streamWatermarks(), stored.positionWatermark(), stored.createdAt(), stored.updatedAt(), stored.completedAt(),
-                    stored.currentStep(), stored.started(), stored.failure(), stored.streamMarks(), stored.quarantineSkipCount());
+                    stored.currentStep(), stored.started(), failure, stored.streamMarks(), quarantineSkipCount);
             assertThat(store.delegate.compareAndSave(ORDER, next, stored.version())).isTrue();
         }
     }
