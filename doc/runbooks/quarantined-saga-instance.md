@@ -438,7 +438,9 @@ also deletes the records of the inputs the instance skipped, under the quarantin
 has a `failureQuarantineId`, delete those records too:
 
 ```javascript
-db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({ sagaId: "order-4711", quarantineId: removed.failureQuarantineId })
+if (removed && removed.failureQuarantineId) {
+  db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({ sagaId: "order-4711", quarantineId: removed.failureQuarantineId })
+}
 ```
 
 Don't delete the records by saga id alone. An event can start a new instance with the same saga id after the delete,

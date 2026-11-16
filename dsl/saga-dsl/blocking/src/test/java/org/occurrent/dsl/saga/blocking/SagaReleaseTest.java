@@ -1348,6 +1348,29 @@ class SagaReleaseTest {
         }
 
         @Test
+        void a_skip_whose_last_write_loses_to_another_skip_keeps_its_record_and_its_place() {
+            deliver(placed());
+            failing.add("poison");
+            quarantineOn(added("poison"));
+            CloudEvent x = appendOn("o1-other", new ItemAdded(nextEventId(), ORDER, "x"));
+            CloudEvent y = added("y");
+            // y is skipped in full between x's record and x's last write, so x's last write loses while the instance stays quarantined
+            store.afterNextRecord(() -> deliver(y));
+
+            deliver(x);
+
+            List<SkippedInput> records = records();
+            failing.clear();
+            ReleaseResult result = execution.release(ORDER);
+            assertAll(
+                    () -> assertThat(records).extracting(SkippedInput::key).containsExactly(streamKey(x), streamKey(y)),
+                    () -> assertThat(records).extracting(SkippedInput::seq).doesNotHaveDuplicates().isSorted(),
+                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(items()).containsExactly("poison", "x", "y")
+            );
+        }
+
+        @Test
         void a_redelivered_skip_of_a_recorded_key_raises_the_count_keeps_the_first_record_and_its_number_and_changes_the_version_twice() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             SagaEnvelope<Order> before = instance();

@@ -321,8 +321,9 @@ public final class SagaExecutionSupport {
      * the new {@code seq} goes unused. Then it saves {@link #withSkipFinished(SagaEnvelope)} of what it saved first. A
      * lost write reads the instance again and decides again, so an instance that turned active in between
      * applies the input instead. A release turns the instance active only in a write that expects the version it read
-     * before it found no records, so the last write is what keeps a release from turning the instance active past a
-     * record it did not see.
+     * before it found no records. A release that read the instance before the first write therefore loses that write.
+     * One that read the instance after the first write, and the records before this record, can turn the instance active
+     * past the record. The last write then loses, and the executor applies the input to the active instance.
      * <p>
      * Nothing is recorded when the instance is not quarantined, was quarantined by 0.34.0 and has no quarantine id or
      * no count, when the input is a timer or an event with no key, when the instance counts the input as applied
@@ -476,8 +477,11 @@ public final class SagaExecutionSupport {
      * id and no skip count. Save it with {@code compareAndSaveWithoutState(..., current.version())},
      * and only when {@code current} was read before a read of its records that found none. A skip writes its record
      * between two writes that each raise the version. When the first came after {@code current} was read, this write
-     * loses and the release reads the records again. When it came before, this write wins, the skip's second write
-     * loses, and the skip deletes its record again and applies its input to the active instance.
+     * loses and the release reads the records again. When it came before, this write can win, and the skip's second
+     * write then loses. The skip reads the instance again and deletes its record when the instance is no longer
+     * quarantined under its quarantine id, and its input is applied to the active instance. A skip whose read came before
+     * this write keeps its record, and nothing reads it after that, but its input is applied to the active instance all
+     * the same.
      *
      * @throws IllegalStateException when the instance is not releasing
      */
