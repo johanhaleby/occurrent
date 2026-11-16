@@ -4,9 +4,8 @@ Date: 2026-11-13
 
 ## Status
 
-Accepted. Decides [#983](https://github.com/johanhaleby/occurrent/issues/983) in decision point 1, and the part of
-[#979](https://github.com/johanhaleby/occurrent/issues/979) about writes made while the application starts in decision
-points 2 and 3. Amends Decision point 4 of
+Accepted. Decides [#983](https://github.com/johanhaleby/occurrent/issues/983) in decision point 1, and
+[#979](https://github.com/johanhaleby/occurrent/issues/979) in decision points 2 and 3. Amends Decision point 4 of
 [ADR 127](0127-a-subscription-is-a-descriptor-and-the-annotation-stops-naming-the-concept.md), "A descriptor
 annotation is read after the singletons are instantiated". ADR 127 shipped in 0.34.0, so it is amended by reference
 here and gets a pointer in its Status section.
@@ -244,7 +243,15 @@ is the write the subscription would miss. The Mongo event stores and the in-memo
 
 A bean built after startup, such as a `@Lazy` bean the startup scan can't see a handler on, reads its own live start
 when it is created, and its subscriptions begin there. A write between startup and that bean's creation is history
-to it, so a subscription at `NOW` doesn't get it.
+to it, so a subscription at `NOW` doesn't get it. The read comes before the bean's `@PostConstruct` method runs, since
+Spring runs that method from `CommonAnnotationBeanPostProcessor`, which it moves to the end of the post-processor
+chain, so a subscription at `NOW` gets what that method writes. A `FactoryBean` built after startup reads the live
+start for its product the same way, before the factory's own `@PostConstruct` method runs. The product's class is
+unknown until `getObject` runs, so every such factory makes that read, also one whose product declares no handler.
+
+A `@SynchronousSubscription` on a bean built after startup registers once the bean's `@PostConstruct` method has run,
+and it has no replay. A write that method makes through the application service is stored, and that bean's own
+synchronous handler never gets it. 0.34.0 registered such a handler at the same point and behaved the same.
 
 ### 3. A write through the application service waits for the synchronous handlers
 
@@ -362,7 +369,7 @@ error, with the place to write from in its message.
   application starts the subscriptions.
 - A write while the synchronous subscription model is stopped, or one whose events a paused synchronous subscription
   matches, fails with `WriteRefusedException` instead of going past that handler.
-- #979 isn't closed. A subscription on a bean built after startup still misses what was written between startup and
-  the bean's creation.
+- A subscription at `NOW` on a bean built after startup gets what that bean writes from its `@PostConstruct` method. A
+  write between startup and the bean's creation is history to it. A synchronous handler on such a bean gets neither.
 - The code compiles unchanged. [The upgrade guide](../../migration/upgrading-to-0.35.0.md#a-write-through-the-application-service-is-refused-while-the-application-starts)
   says who is affected by decision points 2 and 3 and what to do.

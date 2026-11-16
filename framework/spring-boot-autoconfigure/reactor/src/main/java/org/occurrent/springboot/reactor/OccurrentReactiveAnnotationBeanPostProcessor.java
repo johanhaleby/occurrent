@@ -160,15 +160,26 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // created and a lookup by name for it would deadlock or hand back the unproxied target, which is the whole
     // reason registration moved to afterSingletonsInstantiated.
     //
-    // A FactoryBean is skipped, because the container passes the factory itself under the product's own bean name
+    // A FactoryBean's class is not recorded, because the container passes the factory itself under the product's own bean name
     // and the factory's class says nothing about the product's. The product arrives at
     // postProcessAfterInitialization instead, under the same name, and is recorded there.
     //
     // A handler bean built after startup reads its own start boundary here, as it is created, and a live-only first
-    // start of its handlers begins there rather than at the boundary of the application context.
+    // start of its handlers begins there rather than at the boundary of the application context. This runs before the
+    // bean's @PostConstruct method, since Spring moves CommonAnnotationBeanPostProcessor to the end of the chain, so
+    // a write from that method is after the boundary.
+    //
+    // A FactoryBean built after startup reads the boundary for its product here too. Its product's class is unknown
+    // until getObject runs, so the read is made for every such factory, and a write from the factory's @PostConstruct
+    // method or from getObject is then after the boundary. That costs one read of the event store's position per
+    // FactoryBean built after startup, also when its product declares no handler.
     @Override
     public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
-        if (!(bean instanceof FactoryBean<?>)) {
+        if (bean instanceof FactoryBean<?>) {
+            if (startupScanComplete) {
+                readLateLiveStartFor(beanName);
+            }
+        } else {
             // put rather than putIfAbsent, because a creation that failed is retried and the retry can produce a
             // different class than the attempt that failed. The recording has to describe the instance the
             // container is building now, not the first one it tried.
@@ -185,6 +196,10 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (!declaresAnyOccurrentAnnotation(userClass, true)) {
             return;
         }
+        readLateLiveStartFor(beanName);
+    }
+
+    private void readLateLiveStartFor(String beanName) {
         @Nullable String liveStart = startPositionSupport.readLateLiveStart();
         if (liveStart == null) {
             lateLiveStarts.remove(beanName);
@@ -240,7 +255,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // sees the flag set. Registering it twice is not possible, since both check the same RegisteredHandlers.
         if (startupScanComplete && beanFactory.containsBeanDefinition(beanName)) {
             boolean singleton = beanFactory.isSingleton(beanName);
-            // A FactoryBean's product never reached the callback above, so it reads its boundary now
+            // A FactoryBean's product takes the boundary its factory read in the callback above. A later product of
+            // the same factory, or one whose factory was built before the startup scan ended, reads it now
             @Nullable String lateLiveStart = lateLiveStarts.remove(beanName);
             if (lateLiveStart == null && beanFactory.isFactoryBean(beanName) && declaresAnyOccurrentAnnotation(userClassOf(bean), true)) {
                 lateLiveStart = startPositionSupport.readLateLiveStart();
