@@ -208,7 +208,8 @@ registrar's `close()`, and the reset [#1291](https://github.com/johanhaleby/occu
 
 The catch-up marker is written in this order on both stacks:
 
-1. Read the marker, and skip the replay when it's there.
+1. Read the marker as the position the replay resumes after, see
+   [ADR 179](0179-a-catch-up-marker-is-the-position-the-next-catch-up-resumes-after.md).
 2. Replay the history.
 3. Deliver the payloads buffered during the replay.
 4. Write the marker.
