@@ -801,7 +801,9 @@ instances, each poll logs a `WARN` and tries again. The runbook covers what is l
 `failureReleasedAt`, `failureQuarantineId` and `quarantineSkipCount`. The skipped inputs are documents in a collection
 of their own, named after the saga collection with `_skipped_inputs` appended, one per skipped input, each with
 `sagaId`, `quarantineId`, `seq` and `key`. A document 0.34.0 wrote has none of these fields, and reads as an instance
-that is not releasing, with no quarantine id.
+that is not releasing, with no quarantine id. The constructor now throws an `IllegalArgumentException` for a saga
+collection whose name ends in `_skipped_inputs`, because a store on the name without that suffix would keep its skipped
+inputs in the same collection. Rename such a collection before you upgrade.
 
 An instance that 0.35.0 quarantined is stored with the status `QUARANTINED_RECORDING` instead of `QUARANTINED`. Both
 read back as `SagaStatus.QUARANTINED`, and the store's own queries match both. A query you wrote by hand for

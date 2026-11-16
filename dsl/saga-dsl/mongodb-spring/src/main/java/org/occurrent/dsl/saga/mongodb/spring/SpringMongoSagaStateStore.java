@@ -87,7 +87,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * next to the instances named after it with {@code _skipped_inputs} appended. Each holds {@code sagaId},
  * {@code quarantineId}, {@code seq} and {@code key}, with a unique index on {@code sagaId}, {@code quarantineId} and
  * {@code key}, and an index on {@code sagaId}, {@code quarantineId} and {@code seq} for the order a release reads them
- * in.
+ * in. The constructor refuses a collection name that ends in {@code _skipped_inputs}, because a store on {@code orders}
+ * keeps its skipped inputs in {@code orders_skipped_inputs}, and a store on that name would share the collection.
  * <p>
  * An instance quarantined with a quarantine id is stored with the status {@value #QUARANTINED_RECORDING} rather than
  * {@code QUARANTINED}, and both read back as {@link SagaStatus#QUARANTINED}. See {@link #QUARANTINED_RECORDING} for why.
@@ -99,6 +100,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
 
+    private static final String SKIPPED_INPUTS_SUFFIX = "_skipped_inputs";
     private static final String ID = "_id";
     private static final String STATE = "state";
     private static final String STATUS = "status";
@@ -260,7 +262,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * {@value #DEFAULT_MAX_ATTEMPTS} attempts.
      *
      * @param mongoOperations the {@link MongoOperations} used to read and write instance documents
-     * @param collectionName  the collection the instances are stored in
+     * @param collectionName  the collection the instances are stored in, which must not end in {@code _skipped_inputs}
      * @param stateType       the user state type, needed to read the stored state back into an object
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType) {
@@ -273,7 +275,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * core saga.
      *
      * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
-     * @param collectionName      the collection the instances are stored in
+     * @param collectionName      the collection the instances are stored in, which must not end in {@code _skipped_inputs}
      * @param stateType           the user state type, needed to read the stored state back into an object
      * @param cloudEventConverter the converter used to (de)serialize a flow saga's received events, or {@code null}
      */
@@ -286,7 +288,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * Pass {@link RetryStrategy#none()} to have every failure reach the caller on the first attempt.
      *
      * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
-     * @param collectionName      the collection the instances are stored in
+     * @param collectionName      the collection the instances are stored in, which must not end in {@code _skipped_inputs}
      * @param stateType           the user state type, needed to read the stored state back into an object
      * @param cloudEventConverter the converter used to (de)serialize a flow saga's received events, or {@code null} for a core saga
      * @param retryStrategy       the strategy used when a read or a write fails
@@ -296,7 +298,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         this.retryStrategy = Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName cannot be null");
-        this.skippedInputsCollectionName = collectionName + "_skipped_inputs";
+        if (collectionName.endsWith(SKIPPED_INPUTS_SUFFIX)) {
+            String sharedWith = collectionName.substring(0, collectionName.length() - SKIPPED_INPUTS_SUFFIX.length());
+            throw new IllegalArgumentException("collectionName '" + collectionName + "' ends in '" + SKIPPED_INPUTS_SUFFIX + "', and a store on '" + sharedWith
+                                               + "' keeps its skipped inputs in that collection, so the two would share it. Pick a name that does not end in '" + SKIPPED_INPUTS_SUFFIX + "'.");
+        }
+        this.skippedInputsCollectionName = collectionName + SKIPPED_INPUTS_SUFFIX;
         this.stateType = Objects.requireNonNull(stateType, "stateType cannot be null");
         if (stateType == FlowState.class && cloudEventConverter == null) {
             // A flow saga's FlowState holds domain events, and this store serializes them as CloudEvents through the

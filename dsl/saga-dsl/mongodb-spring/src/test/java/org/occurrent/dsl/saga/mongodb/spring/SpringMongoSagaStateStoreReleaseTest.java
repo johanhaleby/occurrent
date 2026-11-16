@@ -432,4 +432,14 @@ class SpringMongoSagaStateStoreReleaseTest {
                 () -> assertThat(store.findSkippedInputs("order-15", "q-2", 10)).isEmpty()
         );
     }
+
+    @Test
+    void a_store_cannot_be_created_on_a_collection_name_ending_in_the_suffix_of_the_skipped_inputs_collection() {
+        MongoOperations mongoOperations = mongoOperations();
+
+        assertThatThrownBy(() -> new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION + "_skipped_inputs", Payment.class))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("'" + COLLECTION + "_skipped_inputs'")
+                .hasMessageContaining("a store on '" + COLLECTION + "'");
+    }
 }
