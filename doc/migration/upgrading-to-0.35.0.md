@@ -151,8 +151,8 @@ other sections compile fine and behave differently, so read them first.
   `UnsupportedStartAtException` for a `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` subscription
   whose change stream history is gone. In 0.34.0 a `waitUntilStarted()` with no timeout never returned, one with a
   timeout answered `false`, and `start(true)` returned. Through a mongos, a subscription at a stored position, or at
-  a present that `subscribe(..)` read before its change stream began to open, counts as started once the change
-  stream's first reply came, whatever that setting is. Compiles unchanged.
+  a present that `subscribe(..)` read earlier than right before its change stream opened, such as on a stopped model,
+  counts as started once the change stream's first reply came, whatever that setting is. Compiles unchanged.
 - [A subscription handle throws once the model gives the subscription up](#a-subscription-handle-throws-once-the-model-gives-the-subscription-up).
   A handle from `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` that answered `true` throws from
   `waitUntilStarted(..)` once the model refuses the subscription after a loss of history, or holds it paused after a
@@ -2984,15 +2984,16 @@ In 0.34.0 the model removed the subscription and released no waiter, so a `waitU
 returned, one with a timeout answered `false`, and `start(true)` returned.
 
 Through a mongos, whatever `restartSubscriptionsOnChangeStreamHistoryLost` is set to, a subscription that starts at a
-stored position now counts as started only once the change stream's first reply came, where 0.34.0 counted it as
-started as the change stream opened. On a quiet collection a wait can then take up to the `maxAwaitTime` configured, or
-the server's default when none is, so a `waitUntilStarted(..)` with a shorter timeout answers `false`. So does a
-subscription at the present whose position `subscribe(..)` read before the change stream began to open, such as one
-made while the model was stopped and started later, or one resumed after a pause before its first reply, since that
-position can have left the oplog by then. A start at the present that the change stream reads as it opens counts as
-started as the change stream opens. So does every start on a replica set, unless the model can't ask MongoDB whether
-it reaches it through a mongos. It then waits for the first reply, as through a mongos, and asks again at the next
-start.
+stored position now counts as started only once the change stream's first reply came, where 0.34.0 counted it as started
+as the change stream opened. On a quiet collection a wait can then take up to the `maxAwaitTime` configured, or the
+server's default when none is, so a `waitUntilStarted(..)` with a shorter timeout answers `false`. So does a
+subscription at the present that opens at the position `subscribe(..)` read for it, unless its change stream opens right
+after that read on the first try. One made while the model was stopped and started later, one resumed after a pause
+before its first reply, and one whose first try to open failed wait, since that position can have left the oplog by
+then. A start at the present read right before the change stream opens counts as started as it opens, which covers a
+`subscribe(..)` at `StartAt.now()` on a started model and a resume at `StartAt.now()`. So does every start on a replica
+set, unless the model can't ask MongoDB whether it reaches it through a mongos. It then waits for the first reply, as
+through a mongos, and asks again at the next start.
 
 ### Who is affected
 
@@ -3005,8 +3006,8 @@ history can fail to start with the `UnsupportedStartAtException`. Set
 to start it in the background.
 
 Code that waits with a timeout for a subscription that reaches a sharded cluster through a mongos and starts at a
-stored position, or at a present that `subscribe(..)` read before the change stream began to open, whatever
-`restartSubscriptionsOnChangeStreamHistoryLost` is set to. Give the wait a timeout with room
+stored position, or at a present that `subscribe(..)` read earlier than right before the change stream opened,
+whatever `restartSubscriptionsOnChangeStreamHistoryLost` is set to. Give the wait a timeout with room
 for opening the change stream and for its `maxAwaitTime`, or the server's default when none is set.
 
 ### What to do

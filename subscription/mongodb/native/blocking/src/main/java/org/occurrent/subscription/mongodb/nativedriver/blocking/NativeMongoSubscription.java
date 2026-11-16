@@ -42,9 +42,10 @@ public record NativeMongoSubscription(String subscriptionId, CountDownLatch subs
      * Answers {@code true} once the change stream of the subscription has opened. Through a mongos, a subscription
      * that starts at a stored position, a checkpoint, an operation time or a resume token, counts as opened only once
      * its change stream's first reply came, which can take up to the model's {@code maxAwaitTime}, or the server's
-     * default when none is set. So does a subscription at the present whose position {@code subscribe(..)} read before
-     * the change stream began to open, as one made while the model was stopped and started later, or one resumed
-     * after a pause before its first reply, since that position can have left the oplog by then.
+     * default when none is set. So does a subscription at the present that opens at the position {@code subscribe(..)}
+     * read for it, unless its change stream opens right after that read on the first try. One made while the model was
+     * stopped and started later, one resumed after a pause before its first reply, and one whose first try to open
+     * failed wait, since that position can have left the oplog by then.
      * <p>
      * An open change stream doesn't mean that MongoDB has confirmed it is healthy. After a failure the model restarts
      * the change stream, apart from a loss of its history with {@code restartSubscriptionsOnChangeStreamHistoryLost}
