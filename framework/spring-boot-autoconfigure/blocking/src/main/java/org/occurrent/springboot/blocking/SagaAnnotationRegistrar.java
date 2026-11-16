@@ -143,8 +143,9 @@ class SagaAnnotationRegistrar {
                 : AsynchronousSubscribables.resolve(applicationContext, Subscribable.class, RegisteringSubscribable.class);
         SagaStateStore<S> stateStore = resolveSagaStateStore(annotation, method, HandlerScan.implementationClassOf(bean), id);
         CommandDispatcher<C> commandDispatcher = resolveCommandDispatcher(annotation, id);
-        // A push model ignores StartAt, and a replay in front of it always starts at the beginning, so there is no
-        // start position to compute. rejectStartPositionAttributes has already refused the four that would imply one.
+        // A push model ignores StartAt, and a replay in front of it starts from the beginning or after its stored
+        // catch-up marker, so there is no start position to compute. rejectStartPositionAttributes has already
+        // refused the four that would imply one.
         StartAt startAt = push ? null : startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
         SagaRunnerConfig config = withQuarantineBudget(SagaRunnerConfig.defaults(), occurrentProperties().getSaga().getQuarantineAfter())
                 .withTimerPollInterval(sagaTimerPollInterval())
@@ -259,8 +260,8 @@ class SagaAnnotationRegistrar {
     }
 
     /**
-     * A push saga takes no start position, whether or not it catches up: a replay always starts at the beginning, and
-     * where the live feed resumes after a restart is the broker's business. {@code startAt},
+     * A push saga takes no start position, whether or not it catches up: a replay starts from the beginning or after
+     * its stored catch-up marker, and where the live feed resumes after a restart is the broker's business. {@code startAt},
      * {@code startAtGlobalPosition} and {@code resumeBehavior} would all do nothing, and rejecting them says so instead
      * of letting the caller believe otherwise. {@code @Projection(source = PUSH)} rejects the same three, plus the
      * synchronous mode, which {@code @Saga} does not have.
