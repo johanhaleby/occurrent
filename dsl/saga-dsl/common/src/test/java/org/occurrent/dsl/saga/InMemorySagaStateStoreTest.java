@@ -22,9 +22,12 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.codec.EncodedSaga;
 import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -736,5 +739,48 @@ class InMemorySagaStateStoreTest {
 
             assertThat(violation.get()).as("a read of the records of one instance").isNull();
         }
+    }
+
+    @Nested
+    class CompareAndSaveWithoutState {
+
+        @Test
+        void leaves_an_instance_that_stores_no_state_and_no_current_step_without_both_when_the_given_fields_hold_them() {
+            compareAndSave("s1", stepped("s1", null, 1), 0);
+            StoredSaga given = withCurrentStep(codec.encode(stepped("s1", "given-state", 2)), "given-step");
+            assertThat(given.encoded().fields()).containsKeys(SagaCodec.STATE, SagaCodec.CURRENT_STEP);
+
+            boolean saved = store.compareAndSaveWithoutState(given, 1);
+
+            assertThat(saved).isTrue();
+            assertThat(store.find("s1")).hasValueSatisfying(stored -> assertThat(stored.encoded().fields())
+                    .doesNotContainKeys(SagaCodec.STATE, SagaCodec.CURRENT_STEP));
+        }
+
+        @Test
+        void keeps_the_state_and_current_step_of_the_stored_instance_over_the_ones_in_the_given_fields() {
+            store.compareAndSave(withCurrentStep(codec.encode(stepped("s1", "stored-state", 1)), "stored-step"), 0);
+            Map<String, Object> before = store.find("s1").orElseThrow().encoded().fields();
+            assertThat(before).containsKeys(SagaCodec.STATE, SagaCodec.CURRENT_STEP);
+
+            boolean saved = store.compareAndSaveWithoutState(withCurrentStep(codec.encode(stepped("s1", "given-state", 2)), "given-step"), 1);
+
+            assertThat(saved).isTrue();
+            Map<String, Object> after = store.find("s1").orElseThrow().encoded().fields();
+            assertAll(
+                    () -> assertThat(after).containsEntry(SagaCodec.STATE, before.get(SagaCodec.STATE)),
+                    () -> assertThat(after).containsEntry(SagaCodec.CURRENT_STEP, "stored-step"));
+        }
+    }
+
+    private static SagaEnvelope<String> stepped(String sagaId, String state, long version) {
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, List.of(), Map.of(), null, NOW, NOW, null, null, true, null, Map.of(), null);
+    }
+
+    // The step a flow saga stores next to its state, which the codec writes only for a flow state
+    private static StoredSaga withCurrentStep(StoredSaga saga, String currentStep) {
+        Map<String, Object> fields = new LinkedHashMap<>(saga.encoded().fields());
+        fields.put(SagaCodec.CURRENT_STEP, currentStep);
+        return new StoredSaga(saga.sagaId(), saga.version(), new EncodedSaga(fields), saga.index());
     }
 }

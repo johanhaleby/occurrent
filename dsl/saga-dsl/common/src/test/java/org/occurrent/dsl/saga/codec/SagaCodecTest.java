@@ -252,7 +252,7 @@ class SagaCodecTest {
 
         @Test
         void decode_refuses_a_quarantined_recording_instance_that_lacks_its_quarantine_id() {
-            StoredSaga stored = withoutField(codec.encode(quarantined("q-1")), "s1", SagaCodec.FAILURE_QUARANTINE_ID);
+            StoredSaga stored = withoutField(codec.encode(withSkipCount(quarantined("q-1"), 0L)), "s1", SagaCodec.FAILURE_QUARANTINE_ID);
 
             Throwable thrown = catchThrowable(() -> codec.decode(stored));
 
@@ -261,7 +261,7 @@ class SagaCodecTest {
 
         @Test
         void decode_refuses_a_quarantined_recording_instance_that_lacks_its_failure_input() {
-            StoredSaga stored = withoutField(codec.encode(quarantined("q-1")), "s1", SagaCodec.FAILURE_INPUT);
+            StoredSaga stored = withoutField(codec.encode(withSkipCount(quarantined("q-1"), 0L)), "s1", SagaCodec.FAILURE_INPUT);
 
             Throwable thrown = catchThrowable(() -> codec.decode(stored));
 
@@ -284,6 +284,18 @@ class SagaCodecTest {
             Throwable thrown = catchThrowable(() -> codec.decodeWithoutState(stored));
 
             assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("s1").hasMessageContaining("quarantineSkipCount");
+        }
+
+        @Test
+        void encode_refuses_a_quarantined_recording_envelope_that_lacks_its_skip_count_with_the_message_decode_gives() {
+            SagaEnvelope<String> envelope = quarantined("q-1");
+            StoredSaga complete = codec.encode(withSkipCount(envelope, 0L));
+            Throwable decodeRefusal = catchThrowable(() -> codec.decode(withoutField(complete, "s1", SagaCodec.QUARANTINE_SKIP_COUNT)));
+
+            Throwable thrown = catchThrowable(() -> codec.encode(envelope));
+
+            assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("s1").hasMessageContaining("quarantineSkipCount")
+                    .hasMessage(decodeRefusal.getMessage());
         }
 
         @Test
@@ -336,7 +348,7 @@ class SagaCodecTest {
         void a_quarantine_with_an_id_and_stream_marks_is_stored_as_quarantined_recording() {
             SagaFailure failure = new SagaFailure("i", null, FAILED_AT, "t", null, null, "q-1");
             SagaEnvelope<String> envelope = new SagaEnvelope<>("s1", "state", SagaStatus.QUARANTINED, 0, List.of(), Map.of(), null, null, null, null, null, true, failure,
-                    Map.of("stream-1", new StreamMarks(1, Map.of())), null);
+                    Map.of("stream-1", new StreamMarks(1, Map.of())), 0L);
 
             assertThat(codec.encode(envelope).encoded().fields()).containsEntry(SagaCodec.STATUS, SagaCodec.QUARANTINED_RECORDING);
         }
@@ -401,7 +413,7 @@ class SagaCodecTest {
         void a_quarantine_that_has_a_release_time_is_releasing_and_names_its_quarantine_id() {
             SagaFailure failure = new SagaFailure("i", null, FAILED_AT, "t", null, RELEASED_AT, "q-1");
 
-            SagaIndex index = codec.encode(withFailure(quarantined("q-1"), failure)).index();
+            SagaIndex index = codec.encode(withSkipCount(withFailure(quarantined("q-1"), failure), 0L)).index();
 
             assertThat(index.releasing()).isTrue();
             assertThat(index.quarantineId()).isEqualTo("q-1");
@@ -411,7 +423,7 @@ class SagaCodecTest {
         void a_quarantine_without_a_release_time_is_not_releasing() {
             SagaFailure failure = new SagaFailure("i", null, FAILED_AT, "t", null, null, "q-1");
 
-            assertThat(codec.encode(withFailure(quarantined("q-1"), failure)).index().releasing()).isFalse();
+            assertThat(codec.encode(withSkipCount(withFailure(quarantined("q-1"), failure), 0L)).index().releasing()).isFalse();
         }
 
         @Test
@@ -423,8 +435,8 @@ class SagaCodecTest {
 
         @Test
         void indexOf_the_stored_fields_of_a_releasing_quarantine_gives_its_stored_status_due_timer_update_time_and_quarantine_id() {
-            StoredSaga stored = codec.encode(withFailure(withTimers(withUpdatedAt(quarantined("q-1"), UPDATED), new TimerEntry("t", 10L, null)),
-                    new SagaFailure("i", null, FAILED_AT, "t", null, RELEASED_AT, "q-1")));
+            StoredSaga stored = codec.encode(withSkipCount(withFailure(withTimers(withUpdatedAt(quarantined("q-1"), UPDATED), new TimerEntry("t", 10L, null)),
+                    new SagaFailure("i", null, FAILED_AT, "t", null, RELEASED_AT, "q-1")), 0L));
 
             SagaIndex index = SagaCodec.indexOf(stored.encoded());
 

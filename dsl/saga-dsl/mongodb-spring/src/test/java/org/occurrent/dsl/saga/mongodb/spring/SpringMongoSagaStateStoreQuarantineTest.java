@@ -33,6 +33,8 @@ import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaInstance;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -224,6 +226,44 @@ class SpringMongoSagaStateStoreQuarantineTest {
                 () -> assertThat(read.positionWatermark()).isEqualTo(6L),
                 () -> assertThat(read.timers()).extracting(TimerEntry::name).containsExactly("payment")
         );
+    }
+
+    @Test
+    void findWithoutState_returns_stored_fields_that_hold_no_state() {
+        MongoOperations mongoOperations = mongoOperations();
+        SpringMongoSagaStateStore<Payment> store = paymentStore(mongoOperations);
+        SagaEnvelopes.of(store, null).compareAndSave("order-10", activePayment("order-10"), 0);
+        assertThat(requireNonNull(mongoOperations.findOne(Query.query(where("_id").is("order-10")), Document.class, COLLECTION))).containsKey("state");
+
+        StoredSaga read = store.findWithoutState("order-10").orElseThrow();
+
+        assertThat(read.encoded().fields()).doesNotContainKey(SagaCodec.STATE);
+    }
+
+    @Test
+    void findWithDueTimers_returns_stored_fields_that_hold_no_state() {
+        MongoOperations mongoOperations = mongoOperations();
+        SpringMongoSagaStateStore<Payment> store = paymentStore(mongoOperations);
+        SagaEnvelopes.of(store, null).compareAndSave("order-11", activePayment("order-11"), 0);
+        assertThat(requireNonNull(mongoOperations.findOne(Query.query(where("_id").is("order-11")), Document.class, COLLECTION))).containsKey("state");
+
+        List<StoredSaga> due = store.findWithDueTimers(NOW.plusSeconds(1), 10);
+
+        assertThat(due).extracting(StoredSaga::sagaId).containsExactly("order-11");
+        assertThat(due.getFirst().encoded().fields()).doesNotContainKey(SagaCodec.STATE);
+    }
+
+    @Test
+    void findByStatus_returns_stored_fields_that_hold_no_state() {
+        MongoOperations mongoOperations = mongoOperations();
+        SpringMongoSagaStateStore<Payment> store = paymentStore(mongoOperations);
+        SagaEnvelopes.of(store, null).compareAndSave("order-12", activePayment("order-12"), 0);
+        assertThat(requireNonNull(mongoOperations.findOne(Query.query(where("_id").is("order-12")), Document.class, COLLECTION))).containsKey("state");
+
+        List<StoredSaga> found = store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(60), 10);
+
+        assertThat(found).extracting(StoredSaga::sagaId).containsExactly("order-12");
+        assertThat(found.getFirst().encoded().fields()).doesNotContainKey(SagaCodec.STATE);
     }
 
     @Test
