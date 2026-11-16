@@ -218,6 +218,30 @@ class CatchupThenPushSubscriptionModelResumePositionTest {
         assertThat(marker.read("proj").block(Duration.ofSeconds(5))).as("checkpoint of another subscription under the same id").isEqualTo(foreign);
     }
 
+    @Test
+    void a_handler_that_feeds_back_an_event_while_the_catch_up_replays_has_its_marker_stored_when_the_start_completes() {
+        append("1", "2");
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> handled = new CopyOnWriteArrayList<>();
+        new CatchupThenPushSubscriptionModel(store, feed, marker)
+                .subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.defer(() -> {
+                    handled.add(e.getId());
+                    if (e.getId().startsWith("fed-back-")) {
+                        return Mono.empty();
+                    }
+                    String fedBack = "fed-back-" + e.getId();
+                    append(fedBack);
+                    return feed.accept(event(fedBack));
+                }))
+                .waitUntilStarted().block(Duration.ofSeconds(5));
+
+        assertThat(handled).as("handled by the model that fed them back").contains("1", "2", "fed-back-1", "fed-back-2");
+        // Read right after the start completes, without the wait for the model to finish that the subscribe helper does.
+        assertThat(marker.read("proj").hasElement().block(Duration.ofSeconds(5))).as("marker stored when the start completed").isTrue();
+        assertThat(storedPosition()).as("the head read before the replay").isEqualTo(2L);
+        assertThat(start(store)).as("a new model resumes after the marker").containsExactly("fed-back-1", "fed-back-2");
+    }
+
     private List<String> start(PositionOrderedReader reader) {
         List<String> delivered = new CopyOnWriteArrayList<>();
         subscribe(reader, new PushSubscriptionModel(), delivered);

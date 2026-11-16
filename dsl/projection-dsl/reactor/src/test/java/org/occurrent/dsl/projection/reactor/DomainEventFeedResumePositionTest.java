@@ -25,6 +25,7 @@ import org.occurrent.dsl.projection.reactor.ResumePositionFixtures.InMemoryLog;
 import org.occurrent.dsl.projection.reactor.ResumePositionFixtures.RecordingReplayAwareView;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 
 import java.time.Duration;
@@ -32,6 +33,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.dsl.projection.reactor.ResumePositionFixtures.converter;
 
 /**
@@ -138,6 +140,17 @@ class DomainEventFeedResumePositionTest {
         feed.goLive("counter").block(TIMEOUT);
 
         assertThat(storedPosition()).as("marker after goLive(..)").isEmpty();
+    }
+
+    @Test
+    void a_stored_checkpoint_that_is_not_a_catch_up_marker_is_still_stored_unchanged_after_the_catch_up_refused_it() {
+        log.append("1");
+        StringBasedCheckpoint foreign = new StringBasedCheckpoint("resume-token-xyz");
+        marker.save("counter", foreign).block(TIMEOUT);
+
+        assertThat(catchThrowable(() -> catchUpAll(new RecordingReplayAwareView()))).as("the refused catch-up").isNotNull();
+
+        assertThat(marker.read("counter").block(TIMEOUT)).as("checkpoint of another subscription under the same id").isEqualTo(foreign);
     }
 
     // A stopped catch-up writes no marker, so a later one replays from where the stopped one started.
