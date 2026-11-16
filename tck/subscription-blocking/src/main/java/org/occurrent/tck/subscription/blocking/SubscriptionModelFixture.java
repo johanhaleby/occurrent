@@ -119,8 +119,8 @@ public interface SubscriptionModelFixture {
      * variant here. What the suite holds it to is that the subscription works, not that the position moved anything.
      * A model that cannot honour a position and refuses it instead owes the refusal, which is what
      * {@code CatchupThenPushSubscriptionModel} does with every variant but
-     * {@link StartAtVariant#SUBSCRIPTION_MODEL_DEFAULT}, since it replays a whole history and has nothing to apply a
-     * caller's position to.
+     * {@link StartAtVariant#SUBSCRIPTION_MODEL_DEFAULT}, since it replays from the beginning or after its stored
+     * catch-up marker and has nothing to apply a caller's position to.
      * <p>
      * The default is all four, because that is what every Occurrent model but that one does.
      */

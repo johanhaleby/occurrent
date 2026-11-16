@@ -32,8 +32,13 @@ import org.occurrent.cloudevents.EventMetadata;
  * {@link MaterializedView}, the projection DSL's recording wrapper, forwards this capability to its delegate rather
  * than needing to be unwrapped itself, so there is still nothing here that needs a {@code findIn}.
  * <p>
- * {@link #replayCompleted()} runs before the replay's driver records the catch-up as complete, so an implementation
- * that buffers must have written every buffered update by the time this method returns. A write that fails here fails
+ * The callbacks run only for a replay from the beginning, which a catch-up does when no catch-up marker is stored. A
+ * catch-up that resumes after a stored marker delivers its events the way live events are delivered, with none of
+ * these callbacks, so a view that rebuilds itself between {@link #replayStarted()} and {@link #replayCompleted()} sees
+ * a rebuild only when it gets one.
+ * <p>
+ * {@link #replayCompleted()} runs before the replay's driver stores its catch-up marker, so an implementation that
+ * buffers must have written every buffered update by the time this method returns. A write that fails here fails
  * the whole catch-up, exactly as a failed write inside the per-event fold does today.
  */
 public interface ReplayAware {
@@ -43,15 +48,16 @@ public interface ReplayAware {
 
     /**
      * The replay finished delivering every event; anything buffered since {@link #replayStarted()} must be written
-     * before this method returns, because the driver records the catch-up complete immediately afterwards.
+     * before this method returns, because the driver stores the catch-up marker immediately afterwards.
      */
     void replayCompleted();
 
     /**
      * The replay was stopped before it finished. Anything buffered since {@link #replayStarted()} must be discarded
-     * rather than written: the replay that would have produced a complete batch never finished, and the next catch-up
-     * replays the whole history again, so a partial write here would only store state the next replay recomputes
-     * anyway. Must not throw: a failure here must not mask whatever the replay was already unwinding from.
+     * rather than written: the replay that would have produced a complete batch never finished, and it stored no
+     * catch-up marker, so the next catch-up delivers those events again and a partial write here would only store
+     * state that delivery recomputes anyway. Must not throw: a failure here must not mask whatever the replay was
+     * already unwinding from.
      */
     void replayAbandoned();
 

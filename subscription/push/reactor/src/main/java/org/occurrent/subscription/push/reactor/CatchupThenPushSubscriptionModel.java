@@ -60,22 +60,23 @@ import java.util.function.Supplier;
  * history from the event store, then hands over to the live push feed, so a brand-new or rebuilt projection is
  * backfilled before it consumes the broker.
  * <p>
- * The catch-up applies the replayed events first, then the events a replayed handler wrote, and then records the
- * catch-up-complete marker. A live event fed through {@code accept(..)} during the replay waits in a bounded unicast
+ * The catch-up applies the replayed events first, then the events a replayed handler wrote, and then stores the
+ * catch-up marker. A live event fed through {@code accept(..)} during the replay waits in a bounded unicast
  * sink until after that, unless the sink is full, and the overlap is de-duplicated by the CloudEvent id and source
  * together. A replay stopped before going live drops the events fed from outside that the sink held, and keeps the
  * events a replayed handler wrote, as described below.
  * <p>
- * Contract (see ADR 62 and the blocking model): catch-up is Occurrent's job and runs once per subscription id, guarded
- * by an optional {@link CheckpointStorage} marker so a restart skips it. {@link #cancelSubscription(String)} deletes the
- * marker, so subscribing the same id again replays the history. The delete runs after the cancel returns, and one that
- * fails does not change that answer in this process, since this model then trusts no marker for the id until a delete
- * succeeds or a new catch-up writes one. A process that ends before the delete succeeds keeps the marker, so the
- * history is skipped after a restart. The {@link Mono} that {@code cancelSubscription(..)} returns completes once the
- * marker is deleted, so wait for it when a restart must not skip the history. No live position is persisted, so
- * resuming the
- * live feed is the job of whatever feeds the {@link PushSubscriptionModel}. Only stream and capability-agnostic
- * subscription filters can be replayed.
+ * Contract (see ADR 62 and the blocking model): catch-up is Occurrent's job and live resume is the broker's. An
+ * optional {@link CheckpointStorage} catch-up marker stores the head of the store read before each replay, so the next
+ * catch-up for the id replays only the events after it and the broker delivers the rest. Correctness across a restart
+ * then depends on the broker retaining the backlog for an offline consumer. With no marker stored, the catch-up
+ * replays from the beginning, and a marker older than it should be costs a longer replay and no event
+ * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-is-the-position-the-next-catch-up-resumes-after.md">ADR 179</a>).
+ * The marker is keyed by the subscription id alone, so a subscribe that changes the filter or the handler uses a new
+ * subscription id. {@link #cancelSubscription(String)} deletes the marker, and says when subscribing the same id
+ * again resumes instead of replaying from the beginning. No live position is persisted, so
+ * resuming the live feed is the job of whatever feeds the {@link PushSubscriptionModel}. Only stream and
+ * capability-agnostic subscription filters can be replayed.
  * <p>
  * Feeding {@link PushSubscriptionModel#accept(Iterable)} from an event store's write path is supported only for the
  * in-memory event store, and Occurrent ships no reactive {@link PositionOrderedReader} over that store for this model
@@ -391,7 +392,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                         catchupOwners.remove(subscriptionId, replayDone);
                     } else {
                         // Stopped rather than failed, so the handover is intact, nothing is marked, and both the
-                        // registration and the launcher are kept: start(true) replays the whole history again, the
+                        // registration and the launcher are kept: start(true) replays again from the same marker, the
                         // answer CatchupProjectionFeed.stopCatchUp() already records (ADR 104). Forgetting the replay
                         // entry last is what makes "launcher present, nothing replaying" mean stopped.
                         // Under the monitor with the relaunch check, so a start(true) racing this either finds
@@ -451,7 +452,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         Supplier<Sinks.One<Boolean>> launch = interruptibleReplays.get(subscriptionId);
         // catchupOwners, not replayingSubscriptions. The latter is released at the drain, before this model drops
         // the launcher, so a resume landing in that window would read "launcher present, nothing replaying", take
-        // it to mean stopped, and replay the whole history again over a handover that has already gone live.
+        // it to mean stopped, and replay again over a handover that has already gone live.
         if (launch == null || catchupOwners.containsKey(subscriptionId)) {
             return null;
         }
@@ -491,8 +492,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // the same place and for the same reason, in BlockingHandover.
     //
     // A sample, not a hold. The monitor is released when this returns, so a cancel can still take the id away
-    // while the write this answer allowed is running, and that is fine, since the attempt had read the whole
-    // history and held the id when the write began, which is all a marker claims.
+    // while the write this answer allowed is running, and that is fine, since the attempt had replayed the events up
+    // to the head it stores and held the id when the write began, which is all a marker claims.
     //
     // Taken on the same monitor as the puts in launchReplay, the removes in cancelSubscription and the flag stop()
     // sets, so the answer is never read part way through one of those. The write itself stays outside the monitor,
@@ -537,15 +538,15 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     /**
      * Stops the live feed and any catch-up replay still in flight. Reversible: a stopped replay keeps its registration
-     * on the live feed and is replayed from the beginning by {@link #start(boolean)}, because a stop is not a failure.
+     * on the live feed and is replayed again by {@link #start(boolean)}, because a stop is not a failure.
      * That is the decision {@code CatchupProjectionFeed.stopCatchUp()} already records, ported here rather than
      * re-derived (ADR 104).
      * <p>
      * A replay this interrupts marks nothing, and neither does one that had already read its last event, since the
      * marker step asks whether this model is stopped before it writes. What a stop cannot do is call off a write
      * that has already begun, because that would mean waiting for a checkpoint store here. Such a marker stands,
-     * and the subscription it belongs to is caught up rather than replayed again, since the attempt that wrote it
-     * had read the whole history and held the id when the write began.
+     * and the next catch-up for the subscription resumes after it, since the attempt that wrote it had replayed the
+     * events up to the head it stores and held the id when the write began.
      * <p>
      * The marker is written before the events buffered during the replay are delivered, so a stop arriving while
      * they are being delivered finds it already written. The blocking twin writes it after that delivery instead
@@ -565,8 +566,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * Starts the live feed and, when {@code resumeSubscriptionsAutomatically}, replays the history again for every
      * subscription whose catch-up {@link #stop()} interrupted.
      * <p>
-     * A stop is not a failure, so nothing was marked and the replay starts from the beginning rather than from a
-     * cursor this model does not keep. Under {@code start(false)} the interrupted replays are left for
+     * A stop is not a failure, so nothing was marked and the replay starts from the marker stored before the stopped
+     * one, or from the beginning when none was stored. Under {@code start(false)} the interrupted replays are left for
      * {@link #resumeSubscription(String)} to pick up one at a time.
      */
     @Override
@@ -669,14 +670,18 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     /**
-     * Cancels the subscription and deletes its catch-up marker from the {@link CheckpointStorage}. The returned
-     * {@link Mono} completes once the marker is deleted and fails when deleting it fails. Once it completes,
-     * subscribing the same id replays the history, in this process and after a restart.
+     * Cancels the subscription and deletes its catch-up marker from the {@link CheckpointStorage}, the same clean-up a
+     * cancel does for a durable subscription's checkpoint. The returned {@link Mono} completes once the marker is
+     * deleted and fails when deleting it fails.
+     * <p>
+     * Subscribing the same id again replays from the beginning when the delete reached the store and no marker write
+     * reached it later. A delete that fails, one the store loses in a failover, or a marker write the store applies
+     * after the delete, makes that subscribe resume after the old marker instead. To rebuild the projection for
+     * certain, subscribe under a new subscription id.
      * <p>
      * The cancel happens when you call this, whether or not anything subscribes to the returned {@code Mono}. When the
-     * delete fails, the subscription stays cancelled and the marker stays stored, so call this again. Do the same after
-     * a restart when the process ended before the {@code Mono} completed. It deletes the marker for an id this model
-     * has never subscribed too.
+     * delete fails, the subscription stays cancelled and the marker stays stored. It deletes the marker for an id this
+     * model has never subscribed to.
      * <p>
      * Without a {@link CheckpointStorage} there is no marker, and the {@code Mono} completes at once.
      *
@@ -700,11 +705,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         }
         // Started here rather than by whoever subscribes, so the delete runs even when nobody waits for it. Cached,
         // so a caller that waits does not delete a second time. A subscribe after the cancel reads the marker only
-        // once the delete ends, and one that fails marks the marker as not deleted, so that subscribe replays the
-        // history.
+        // once the delete ends.
         Mono<Void> delete = deleteMarker(subscriptionId, catchupMarker);
         delete.subscribe(unused -> {
-        }, error -> log.warn("Could not delete the catch-up marker of cancelled subscription {}. Subscribing it again in this process replays its history, but after a restart the marker makes it skip its history unless the subscription is cancelled again first.", subscriptionId, error));
+        }, error -> log.warn("Could not delete the catch-up marker of cancelled subscription {}. Subscribing it again resumes after that marker instead of replaying from the beginning, unless the subscription is cancelled again first.", subscriptionId, error));
         return Mono.when(liveFeedCancelled, delete).cache();
     }
 

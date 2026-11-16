@@ -28,13 +28,18 @@ import reactor.core.publisher.Mono;
  * A view that does not implement this interface is never told anything and keeps writing through per event. Whoever
  * drives a replay probes for it with an {@code instanceof} check at the point of need.
  * <p>
+ * The callbacks run only for a replay from the beginning, which a catch-up does when no catch-up marker is stored. A
+ * catch-up that resumes after a stored marker delivers its events the way live events are delivered, with none of
+ * these callbacks, so a view that rebuilds itself between {@link #replayStarted()} and {@link #replayCompleted()} sees
+ * a rebuild only when it gets one.
+ * <p>
  * Only {@link #replayCompleted()} returns a {@link Mono}: it is the one call the driving engine actually awaits,
  * chained before the catch-up marker is recorded, so an implementation that buffers can make that write asynchronous.
  * {@link #replayStarted()} and {@link #replayAbandoned()} are plain signals the engine calls inline on its own worker
  * thread and never waits on, the same shape the blocking twin uses for all three methods.
  * <p>
- * {@link #replayCompleted()} must complete before the replay's driver records the catch-up as complete, so an
- * implementation that buffers must have written every buffered update by the time the returned {@link Mono} completes.
+ * {@link #replayCompleted()} must complete before the replay's driver stores its catch-up marker, so an implementation
+ * that buffers must have written every buffered update by the time the returned {@link Mono} completes.
  * A {@link Mono} that errors here fails the whole catch-up, exactly as a failed write inside the per-event fold does
  * today.
  */
@@ -45,18 +50,19 @@ public interface ReactiveReplayAware {
 
     /**
      * The replay finished delivering every event; anything buffered since {@link #replayStarted()} must be written
-     * before the returned {@link Mono} completes, because the driver records the catch-up complete afterwards. Before
-     * it does, it folds the events this call, {@link #replayStarted()} and the replayed folds fed it. When one of
-     * those fails or is refused, the catch-up fails and is not recorded complete, see
+     * before the returned {@link Mono} completes, because the driver stores the catch-up marker afterwards. Before it
+     * does, it folds the events this call, {@link #replayStarted()} and the replayed folds fed it. When one of those
+     * fails or is refused, the catch-up fails and stores no marker, see
      * {@link CatchupProjectionFeed#catchUp()}.
      */
     Mono<Void> replayCompleted();
 
     /**
      * The replay was stopped before it finished. Anything buffered since {@link #replayStarted()} must be discarded
-     * rather than written: the replay that would have produced a complete batch never finished, and the next catch-up
-     * replays the whole history again, so a partial write here would only store state the next replay recomputes
-     * anyway. Must not throw: a failure here must not mask whatever the replay was already unwinding from.
+     * rather than written: the replay that would have produced a complete batch never finished, and it stored no
+     * catch-up marker, so the next catch-up delivers those events again and a partial write here would only store
+     * state that delivery recomputes anyway. Must not throw: a failure here must not mask whatever the replay was
+     * already unwinding from.
      */
     void replayAbandoned();
 

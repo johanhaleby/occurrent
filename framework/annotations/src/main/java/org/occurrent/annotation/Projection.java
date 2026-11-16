@@ -129,10 +129,10 @@ public @interface Projection {
      * (typically {@link StartupMode#BACKGROUND} if replaying history, otherwise
      * {@link StartupMode#WAIT_UNTIL_STARTED}).
      * <p>
-     * A {@link Source#PUSH} projection is the exception: its catch-up always replays from the beginning, so reading
-     * {@link StartupMode#DEFAULT} as "background because it replays history" would move every push projection off the
-     * startup path. {@code DEFAULT} therefore waits there, and only an explicit {@link StartupMode#BACKGROUND} does
-     * not.
+     * A {@link Source#PUSH} projection is the exception: its catch-up replays on every start, from the beginning or
+     * after its stored catch-up marker, so reading {@link StartupMode#DEFAULT} as "background because it replays
+     * history" would move every push projection off the startup path. {@code DEFAULT} therefore waits there, and only
+     * an explicit {@link StartupMode#BACKGROUND} does not.
      */
     StartupMode startupMode() default StartupMode.DEFAULT;
 
@@ -179,9 +179,10 @@ public @interface Projection {
      * Its type decides how live events are delivered (a {@code PushSubscriptionModel} delivers CloudEvents, a
      * {@code DomainEventFeed} delivers domain events directly). A push source is mutually exclusive with
      * {@link Mode#SYNCHRONOUS}, and it rejects {@link #startAt()}, {@link #startAtGlobalPosition()} and
-     * {@link #resumeBehavior()}, since the catch-up always replays from the beginning and where the live feed resumes
-     * is the broker's responsibility. {@link #startupMode()} <em>is</em> supported under the default {@link #catchup()}:
-     * set it to {@link StartupMode#BACKGROUND} to keep that replay off the startup path.
+     * {@link #resumeBehavior()}, since the catch-up replays from the beginning or after its stored catch-up marker,
+     * and where the live feed resumes is the broker's responsibility. {@link #startupMode()} <em>is</em> supported
+     * under the default {@link #catchup()}: set it to {@link StartupMode#BACKGROUND} to keep that replay off the
+     * startup path.
      */
     Source source() default Source.EVENT_STORE;
 

@@ -572,8 +572,9 @@ public final class SubscriptionAnnotations {
      * catch-up off the startup path.
      * <p>
      * Deliberately not {@link #shouldWaitUntilStarted(boolean, StartupMode)}, which maps {@code DEFAULT} to
-     * "background if it replays history". A push catch-up always replays from the beginning, so reusing that would
-     * move every existing push projection off the startup path without anyone asking for it. Shared by all four push
+     * "background if it replays history". A push catch-up replays on every start, from the beginning or after its
+     * stored catch-up marker, so reusing that would move every existing push projection off the startup path without
+     * anyone asking for it. Shared by all four push
      * registration paths (a {@code PushSubscriptionModel} or a {@code DomainEventFeed}, on either stack) so they
      * cannot drift apart on this.
      */

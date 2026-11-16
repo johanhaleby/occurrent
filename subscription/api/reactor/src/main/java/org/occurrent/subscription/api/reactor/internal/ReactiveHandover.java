@@ -96,13 +96,22 @@ public final class ReactiveHandover<T, K> {
      * record that the catch-up completed.
      */
     public interface Source<T> {
-        /** Whether a prior catch-up already completed, so this one should skip straight to going live. */
+        /**
+         * Whether this catch-up skips its replay and goes straight to live. Subscribed before
+         * {@link #replayStarted()} and {@link #replay()}, so a source that replays after a stored position reads that
+         * position here.
+         */
         Mono<Boolean> isAlreadyCaughtUp();
 
-        /** The history to replay, in position order, from the beginning. */
+        /** The history to replay, in position order. */
         Flux<T> replay();
 
-        /** Record that the catch-up completed. */
+        /**
+         * Record that the catch-up completed. Subscribed after the replay and before the buffered live payloads are
+         * drained. A source that stores where the next catch-up resumes stores the head it read before the replay,
+         * not one read here
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-is-the-position-the-next-catch-up-resumes-after.md">ADR 179</a>).
+         */
         Mono<Void> markCaughtUp();
 
         /**
@@ -110,7 +119,7 @@ public final class ReactiveHandover<T, K> {
          * stop one already in flight, because the model was stopped or is shutting down.
          * <p>
          * A stop is not a failure. {@link #markCaughtUp()} is not called and no terminal error is recorded, so the
-         * next catch-up replays the whole history and the handover stays usable.
+         * next catch-up replays again from where the stopped catch-up started and the handover stays usable.
          * <p>
          * What the stop does with the live payloads depends on where the handover stood when the replay started. One
          * that had not gone live drains nothing and does not go live. The payloads it held and those arriving after
