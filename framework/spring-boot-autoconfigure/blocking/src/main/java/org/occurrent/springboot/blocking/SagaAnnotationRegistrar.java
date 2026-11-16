@@ -23,6 +23,7 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.blocking.RedeliveryDetection;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
@@ -155,6 +156,7 @@ class SagaAnnotationRegistrar {
         SagaRunner<E, C> configured = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
         CompetingConsumerStrategy competingConsumerStrategy = resolveSagaCompetingConsumerStrategy();
         SagaRunner<E, C> withStrategy = competingConsumerStrategy == null ? configured : configured.competingConsumerStrategy(competingConsumerStrategy);
+        rejectStoreWithoutSkippedInputs(id, config, subscribable, stateStore);
         EventStoreQueries eventStoreQueries = resolveEventStoreQueries(id, config, subscribable);
         // Effectively final, so a withheld push saga can close over it and run the same registration later.
         final SagaRunner<E, C> runner = eventStoreQueries == null ? withStrategy : withStrategy.eventStoreQueries(eventStoreQueries);
@@ -655,6 +657,18 @@ class SagaAnnotationRegistrar {
             throw new IllegalStateException("@Saga '%s' quarantines an instance that keeps failing and needs an EventStoreQueries to release a quarantined instance from, but no EventStoreQueries bean exists. Define the event store as a bean, or turn quarantine off with occurrent.saga.quarantine-enabled=false.".formatted(id));
         }
         return null;
+    }
+
+    // The runner refuses such a store too, but names only SagaRunnerConfig.disableQuarantine(), which an application on
+    // the starter does not call
+    private static void rejectStoreWithoutSkippedInputs(String id, SagaRunnerConfig config, Subscribable subscribable, SagaStateStore<?> stateStore) {
+        if (config.quarantineAfter().isEmpty() || stateStore instanceof SagaStateStoreSkippedInputs) {
+            return;
+        }
+        boolean retainsEveryEvent = HistoryRetainingSubscriptions.findIn(subscribable).map(HistoryRetainingSubscriptions::retainsEveryEvent).orElse(false);
+        if (retainsEveryEvent) {
+            throw new IllegalStateException("@Saga '%s' quarantines an instance that keeps failing, and its state store %s does not implement SagaStateStoreSkippedInputs, so a quarantined instance could neither record the inputs it skips nor be released. Implement SagaStateStoreSkippedInputs on the store, as the in-memory and MongoDB stores do, or turn quarantine off with occurrent.saga.quarantine-enabled=false.".formatted(id, stateStore.getClass().getName()));
+        }
     }
 
     private Duration sagaTimerPollInterval() {

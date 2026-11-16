@@ -117,8 +117,9 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     }
 
     @Override
-    public void deleteSkippedInputByKey(String sagaId, String quarantineId, String key) {
-        skippedInputs.remove(skippedInputId(sagaId, quarantineId, key));
+    public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
+        requireNonNull(head, "head cannot be null");
+        skippedInputs.put(skippedInputId(sagaId, quarantineId, head.key()), head);
     }
 
     @Override

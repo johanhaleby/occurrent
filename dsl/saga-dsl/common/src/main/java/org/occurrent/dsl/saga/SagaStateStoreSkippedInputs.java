@@ -88,11 +88,15 @@ public interface SagaStateStoreSkippedInputs {
     List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit);
 
     /**
-     * Delete the record of {@code key} under the quarantine {@code quarantineId} of {@code sagaId}, whatever its
-     * {@code seq}. Nothing happens when there is none. Release uses it only to move the record of the input it starts
-     * from to the head, and deletes every other record with {@link #deleteSkippedInput(String, String, SkippedInput)}.
+     * Record {@code head} under the quarantine {@code quarantineId} of {@code sagaId} with {@code head}'s {@code seq},
+     * whatever {@code seq} a record of the same key has already. A record of that key that is there already gets
+     * {@code head}'s {@code seq}, and a key with no record gets one. Atomic per key, so no reader finds the key without a
+     * record while it moves, and two callers writing one key store one record with the {@code seq} the last of them
+     * wrote. Release calls it with the input it starts from at {@code seq} {@code -1}, which moves the record an earlier
+     * release left for that input to the head, and records every other input with
+     * {@link #recordSkippedInput(String, String, SkippedInput)}.
      */
-    void deleteSkippedInputByKey(String sagaId, String quarantineId, String key);
+    void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head);
 
     /**
      * Delete the record of {@code input}'s key under the quarantine {@code quarantineId} of {@code sagaId}, only when its
