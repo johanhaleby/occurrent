@@ -50,8 +50,9 @@ import java.util.function.Supplier;
 
 /**
  * The shared reactive catch-up-then-live coordination: the replay is folded to completion, then the payloads the
- * replay fed, then the catch-up-complete marker is recorded, then the live feed is delivered. Live payloads arriving
- * during the replay are buffered in a bounded unicast sink, and the replay-to-live overlap is de-duplicated by an id
+ * replay fed, then the catch-up marker is recorded, then the live feed is delivered. The marker is not recorded while
+ * a payload this engine's own code fed waits unfolded for the live feed, see {@link #catchUp(Source)}. Live payloads
+ * arriving during the replay are buffered in a bounded unicast sink, and the replay-to-live overlap is de-duplicated by an id
  * extracted from the payload. Each phase folds one payload at a time and the phases run one after another, so the
  * de-dup cache is only ever touched by one thread at a time. That is ordering, not visibility: an asynchronous fold completes on whichever
  * thread ran it, so {@code BoundedIdCache} is synchronized and must stay that way. Extracted from (and mirrors exactly) the reactor projection
@@ -71,9 +72,9 @@ import java.util.function.Supplier;
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
  * <p>
  * <strong>This engine's ordering differs from the blocking one on purpose</strong>: here, the catch-up-complete
- * {@link Mono} returned by {@link #catchUp(Source)} completes, and the marker is persisted, <em>before</em> the
- * buffered live payloads are folded, because the returned {@code Mono} completes once the marker phase is done rather
- * than at the end of the live stream. It does <em>not</em> complete before the replayed payloads are folded: the marker
+ * {@link Mono} returned by {@link #catchUp(Source)} completes, and the marker, when it is written, is persisted,
+ * <em>before</em> the buffered live payloads are folded, because the returned {@code Mono} completes once the marker
+ * phase is done rather than at the end of the live stream. It does <em>not</em> complete before the replayed payloads are folded: the marker
  * phase starts only after the replay phase has finished folding. Called from this engine's own code, it emits
  * {@code true} before the replay has run, see {@link #catchUp(Source)}. The blocking engine's
  * {@code BlockingHandover.catchUp} returns only <em>after</em> the buffered live
@@ -1028,9 +1029,6 @@ public final class ReactiveHandover<T, K> {
         }
     }
 
-    // The bookkeeping deliver(..) does in its doFinally, for a payload that never reaches it. Without it a drain that
-    // counted the payload never reaches zero, so its source is never told its buffer drained and its replay turn is
-    // never given back, which parks every later replay.
     private void registerIfFedByOwnCode(LiveAck ack, Item<K> stamped) {
         if (ack.answeredOnceQueued) {
             fedByOwnCodeInLiveSink.put(ack, stamped.dedupKey());
@@ -1054,7 +1052,15 @@ public final class ReactiveHandover<T, K> {
         return false;
     }
 
+    // The bookkeeping deliver(..) does in its doFinally, for a payload that never reaches it. Without it a drain that
+    // counted the payload never reaches zero, so its source is never told its buffer drained and its replay turn is
+    // never given back, which parks every later replay. Left in fedByOwnCodeInLiveSink, the payload would also hold
+    // back the marker of a later catch-up whose replay does not deliver it.
     private void dropFromBacklogAndDrains(Item<K> item) {
+        LiveAck ack = item.ack();
+        if (ack != null) {
+            fedByOwnCodeInLiveSink.remove(ack);
+        }
         if (!settledHere(item)) {
             return;
         }
