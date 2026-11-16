@@ -29,7 +29,8 @@ import java.util.List;
  * <p>
  * A store that implements this persists every member of {@link SagaEnvelope} and {@link SagaFailure},
  * {@link SagaFailure#releasedAt()}, {@link SagaFailure#quarantineId()} and {@link SagaEnvelope#quarantineSkipCount()}
- * included, and removes an instance's records in {@link SagaStateStore#delete(String)}. The executor reads an instance
+ * included, and in {@link SagaStateStore#delete(String)} removes the records under the quarantine id of the instance it
+ * deletes. The executor reads an instance
  * back after the write that quarantines it and after a release starts, because an instance without a quarantine id or
  * a skip count records nothing it skips. When the quarantine id or the skip count did not persist, it writes the
  * instance back as it was before the quarantine and fails the input, so every delivery of that input fails until the
@@ -101,8 +102,9 @@ public interface SagaStateStoreSkippedInputs {
     void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input);
 
     /**
-     * Delete every record of {@code sagaId}, under every quarantine id. {@link SagaStateStore#delete(String)} does this
-     * too.
+     * Delete every record under the quarantine {@code quarantineId} of {@code sagaId}. Records under any other quarantine
+     * id stay, so a later instance with the same saga id, which records under a quarantine id of its own, keeps its
+     * records. {@link SagaStateStore#delete(String)} does this for the quarantine id of the instance it deletes.
      */
-    void deleteSkippedInputs(String sagaId);
+    void deleteSkippedInputs(String sagaId, String quarantineId);
 }

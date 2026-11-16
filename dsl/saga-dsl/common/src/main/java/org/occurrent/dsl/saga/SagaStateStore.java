@@ -141,8 +141,11 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * source can no longer redeliver any of its events, until then let a TTL expire it, so a late redelivery still finds
      * the terminal instance and is skipped rather than resurrecting it.
      * <p>
-     * A store that implements {@link SagaStateStoreSkippedInputs} deletes the instance's records too, under every
-     * quarantine id, so a later instance with the same id inherits none of them.
+     * A store that implements {@link SagaStateStoreSkippedInputs} also deletes the records under the quarantine id the
+     * deleted instance had, after the instance itself. Records under any other quarantine id stay, so a later instance
+     * with the same id, which records under a quarantine id of its own, keeps its records even when it was created and
+     * quarantined between those two deletes. A record under a quarantine id no instance has is never read again, so one
+     * left behind takes up storage and nothing else.
      */
     void delete(String sagaId);
 

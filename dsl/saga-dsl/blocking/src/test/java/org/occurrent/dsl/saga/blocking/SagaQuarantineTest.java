@@ -1939,8 +1939,8 @@ class SagaQuarantineTest {
         }
 
         @Override
-        public void deleteSkippedInputs(String sagaId) {
-            delegate.deleteSkippedInputs(sagaId);
+        public void deleteSkippedInputs(String sagaId, String quarantineId) {
+            delegate.deleteSkippedInputs(sagaId, quarantineId);
         }
 
         private static SagaEnvelope<OrderState> withState(SagaEnvelope<OrderState> envelope, @Nullable OrderState state) {

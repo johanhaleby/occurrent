@@ -128,9 +128,10 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     }
 
     @Override
-    public void deleteSkippedInputs(String sagaId) {
+    public void deleteSkippedInputs(String sagaId, String quarantineId) {
         requireNonNull(sagaId, "sagaId cannot be null");
-        skippedInputs.keySet().removeIf(id -> id.sagaId().equals(sagaId));
+        requireNonNull(quarantineId, "quarantineId cannot be null");
+        skippedInputs.keySet().removeIf(id -> id.sagaId().equals(sagaId) && id.quarantineId().equals(quarantineId));
     }
 
     private static SkippedInputId skippedInputId(String sagaId, String quarantineId, String key) {
@@ -160,7 +161,13 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     @Override
     public void delete(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
-        store.remove(sagaId);
-        deleteSkippedInputs(sagaId);
+        SagaEnvelope<S> removed = store.remove(sagaId);
+        // Only the records of the instance removed here, so a later instance with the same id keeps the ones it wrote
+        // under a quarantine id of its own
+        SagaFailure failure = removed == null ? null : removed.failure();
+        String quarantineId = failure == null ? null : failure.quarantineId();
+        if (quarantineId != null) {
+            deleteSkippedInputs(sagaId, quarantineId);
+        }
     }
 }

@@ -549,8 +549,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     @Override
-    public void deleteSkippedInputs(String sagaId) {
-        Query query = Query.query(where(SKIPPED_SAGA_ID).is(Objects.requireNonNull(sagaId, "sagaId cannot be null")));
+    public void deleteSkippedInputs(String sagaId, String quarantineId) {
+        Query query = Query.query(where(SKIPPED_SAGA_ID).is(Objects.requireNonNull(sagaId, "sagaId cannot be null"))
+                .and(SKIPPED_QUARANTINE_ID).is(Objects.requireNonNull(quarantineId, "quarantineId cannot be null")));
         retryStrategy.execute(() -> mongoOperations.remove(query, skippedInputsCollectionName));
     }
 
@@ -573,10 +574,17 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public void delete(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        retryStrategy.execute(() -> mongoOperations.remove(Query.query(where(ID).is(sagaId)), collectionName));
+        Query query = Query.query(where(ID).is(sagaId));
+        query.fields().include(FAILURE_QUARANTINE_ID);
+        Document removed = retryStrategy.execute(() -> mongoOperations.findAndRemove(query, Document.class, collectionName));
         // After the instance, so a crash in between leaves records no instance reads rather than an instance whose
-        // records are gone. A later instance with the same id starts a quarantine of its own, under a new id
-        deleteSkippedInputs(sagaId);
+        // records are gone. Only the records of the instance removed here, so a later instance with the same id, created
+        // and quarantined in between, keeps the ones it wrote under a quarantine id of its own. A retried remove that
+        // finds the instance gone already returns nothing, and its records stay, read by nothing
+        String quarantineId = removed == null ? null : removed.getString(FAILURE_QUARANTINE_ID);
+        if (quarantineId != null) {
+            deleteSkippedInputs(sagaId, quarantineId);
+        }
         synchronized (retainedEventWarningLatch) {
             retainedEventWarningLatch.remove(sagaId);
         }

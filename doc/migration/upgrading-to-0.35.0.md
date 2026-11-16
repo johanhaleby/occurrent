@@ -872,7 +872,9 @@ reads the instance back after it sets `releasedAt`, and throws an `IllegalStateE
 persist.
 
 The store also keeps the skipped inputs, with `recordSkippedInput`, `findSkippedInputs`, `deleteSkippedInput`,
-`deleteSkippedInputByKey` and `deleteSkippedInputs`, and deletes them in `delete(sagaId)`. It implements
+`deleteSkippedInputByKey` and `deleteSkippedInputs(sagaId, quarantineId)`. In `delete(sagaId)` it deletes the records
+under the quarantine id of the instance it removes, after the instance, and leaves the records under any other
+quarantine id alone, since a new instance with the same saga id can be started and quarantined in between. It implements
 `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`
 set, in ascending order, after the id `after` (all of them when it is `null`), and at most `limit` of them. The timer
 poller asks for them on every poll and goes on with their release, starting each poll after the last id the previous
