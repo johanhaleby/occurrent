@@ -22,6 +22,8 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoCommandException;
+import com.mongodb.ServerAddress;
 import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoChangeStreamCursor;
 import com.mongodb.client.MongoClient;
@@ -33,6 +35,9 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.awaitility.core.ConditionTimeoutException;
 import org.bson.BsonDocument;
+import org.bson.BsonElement;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.junit.jupiter.api.AfterEach;
@@ -92,6 +97,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.TEN_SECONDS;
+import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_SELF;
@@ -137,6 +143,8 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
     // The change streams the model opened with its subscription's pipeline, as spies, so the position each opened at can be read back
     private final List<ChangeStreamIterable<Document>> opened = new CopyOnWriteArrayList<>();
     private final AtomicInteger presentReads = new AtomicInteger();
+    // Loses the history on the next read of a change stream the model opened with its subscription's pipeline
+    private final AtomicBoolean historyLost = new AtomicBoolean();
     private final List<CountDownLatch> heldReads = new CopyOnWriteArrayList<>();
     private final Logger modelLog = (Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
     private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
@@ -463,6 +471,36 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
         assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isTrue();
         assertThat(handled).as("events delivered").containsExactly(e1.eventId());
         assertThat(refused).as("start refusals told").isEmpty();
+    }
+
+    @Test
+    void a_run_that_restarts_from_now_after_its_history_was_lost_is_held_paused_when_the_read_of_the_change_stream_gives_no_position_and_the_handle_it_started_on_throws_until_a_resume_starts_it() {
+        // Given: a subscription that has started, on a model that restarts after a history loss
+        subscriptionModel = new SpringMongoSubscriptionModel(templateThatSendsNoOperationTime(), withConfig(eventCollectionName, timeRepresentation)
+                .retryStrategy(RetryStrategy.fixed(100)).maxAwaitTime(Duration.ofSeconds(1)).restartSubscriptionsOnChangeStreamHistoryLost(true));
+        List<String> refused = new CopyOnWriteArrayList<>();
+        subscriptionModel.addStartRefusalListener(onStartRefusal((id, refusal) -> refused.add(id)));
+        String subscriptionId = UUID.randomUUID().toString();
+        Subscription started = subscriptionModel.subscribe(subscriptionId, filter(), StartAt.now(), __ -> {
+        });
+        assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).as("answer while the change stream was open").isTrue();
+
+        // When: its history is lost while the server gives no position to restart from
+        presentRead.set(() -> cursorReading(null, null));
+        historyLost.set(true);
+        waitAtMostFor(TEN_SECONDS, () -> subscriptionModel.isPaused(subscriptionId));
+
+        // Then: held paused, and the handle it started on throws
+        assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+        assertThat(catchThrowable(() -> started.waitUntilStarted(Duration.ofSeconds(1)))).as("thrown by the handle it started on")
+                .isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("MongoDB gave neither an operation time nor a change stream position");
+        assertThat(refused).as("start refusals told").isEmpty();
+
+        // And when it is resumed once the server gives a position again, the handle it started on answers started
+        presentRead.set(null);
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+        assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isTrue();
+        assertThat(started.waitUntilStarted(Duration.ofSeconds(1))).as("handle it started on answers started once the resume started it").isTrue();
     }
 
     @Test
@@ -887,10 +925,28 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
                 return realOpen;
             }
             ChangeStreamIterable<Document> recorded = spy(realOpen);
+            doAnswer(cursorInvocation -> losingItsHistoryWhenAsked((MongoChangeStreamCursor<ChangeStreamDocument<Document>>) cursorInvocation.callRealMethod())).when(recorded).cursor();
             opened.add(recorded);
             return recorded;
         }).when(wrapped).watch(anyList(), eq(Document.class));
         return wrapped;
+    }
+
+    @SuppressWarnings("unchecked")
+    private MongoChangeStreamCursor<ChangeStreamDocument<Document>> losingItsHistoryWhenAsked(MongoChangeStreamCursor<ChangeStreamDocument<Document>> real) {
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = mock(MongoChangeStreamCursor.class, delegatesTo(real));
+        doAnswer(invocation -> {
+            if (historyLost.compareAndSet(true, false)) {
+                throw historyLostError();
+            }
+            return real.tryNext();
+        }).when(cursor).tryNext();
+        return cursor;
+    }
+
+    private static MongoCommandException historyLostError() {
+        List<BsonElement> elements = List.of(new BsonElement("code", new BsonInt32(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE)), new BsonElement("codeName", new BsonString("ChangeStreamHistoryLost")));
+        return new MongoCommandException(new BsonDocument(elements), new ServerAddress());
     }
 
     private MongoChangeStreamCursor<ChangeStreamDocument<Document>> readCounted(Supplier<MongoChangeStreamCursor<ChangeStreamDocument<Document>>> answer) {

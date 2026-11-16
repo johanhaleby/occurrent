@@ -1935,13 +1935,13 @@ public class SpringMongoSubscriptionModelTest {
 
         @Test
         void a_refused_run_stays_known_until_its_failure_is_recorded() throws Exception {
-            // Given a run whose position waits to answer a global checkpoint, and a started latch whose first read, made
-            // while the failure of the run is recorded, holds the thread until released
+            // Given a run whose position waits to answer a global checkpoint, and a first start whose recording of the
+            // failure holds the thread until released
             String subscriptionId = UUID.randomUUID().toString();
             CountDownLatch positionAsked = new CountDownLatch(1);
             CountDownLatch positionMayAnswer = new CountDownLatch(1);
             CountDownLatch release = new CountDownLatch(1);
-            AtomicReference<HoldsTheFirstReadOfTheStartedLatch> holdsTheRead = new AtomicReference<>();
+            CountDownLatch recording = new CountDownLatch(1);
             Subscription refused = subscriptionModel.subscribe(subscriptionId, StartAt.dynamic(ctx -> {
                 positionAsked.countDown();
                 awaitUpToTenSeconds(positionMayAnswer);
@@ -1950,14 +1950,11 @@ public class SpringMongoSubscriptionModelTest {
             });
             try {
                 assertThat(positionAsked.await(10, SECONDS)).isTrue();
-                replaceLatchOfTheRunOf(subscriptionModel, subscriptionId, "startedLatch", own -> {
-                    holdsTheRead.set(new HoldsTheFirstReadOfTheStartedLatch(own, release));
-                    return holdsTheRead.get();
-                });
+                holdTheRecordingOfTheFailureOfTheRunOf(subscriptionModel, subscriptionId, recording, release);
 
                 // When the refusal is recording the failure of the run
                 positionMayAnswer.countDown();
-                assertThat(holdsTheRead.get().reached.await(10, SECONDS)).isTrue();
+                assertThat(recording.await(10, SECONDS)).isTrue();
 
                 // Then the run is still known, so nobody reads it as gone before its failure can be read
                 assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
@@ -2117,6 +2114,32 @@ public class SpringMongoSubscriptionModelTest {
                 return true;
             } catch (ConditionTimeoutException bound) {
                 return false;
+            }
+        }
+
+        // The failure of a refused run is recorded on its first start, which can't be reached from a public method, so it is
+        // replaced through the private fields by one that holds the thread recording a failure until released
+        private static void holdTheRecordingOfTheFailureOfTheRunOf(SpringMongoSubscriptionModel model, String subscriptionId, CountDownLatch recording, CountDownLatch release) {
+            try {
+                Field subscriptionsField = SpringMongoSubscriptionModel.class.getDeclaredField("subscriptions");
+                subscriptionsField.setAccessible(true);
+                Object subscriptions = subscriptionsField.get(model);
+                Field runningField = subscriptions.getClass().getDeclaredField("runningSubscriptions");
+                runningField.setAccessible(true);
+                Object run = ((Map<?, ?>) runningField.get(subscriptions)).get(subscriptionId);
+                Field firstStartField = run.getClass().getDeclaredField("firstStart");
+                firstStartField.setAccessible(true);
+                Object own = firstStartField.get(run);
+                AtomicBoolean first = new AtomicBoolean(true);
+                firstStartField.set(run, org.mockito.Mockito.mock(own.getClass(), org.mockito.Mockito.withSettings().spiedInstance(own).defaultAnswer(invocation -> {
+                    if (invocation.getMethod().getName().equals("recordFailure") && first.getAndSet(false)) {
+                        recording.countDown();
+                        awaitUpToTenSeconds(release);
+                    }
+                    return invocation.callRealMethod();
+                })));
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
             }
         }
 
@@ -2751,9 +2774,9 @@ public class SpringMongoSubscriptionModelTest {
 
         @Timeout(value = 20, unit = SECONDS)
         @Test
-        void a_history_loss_after_the_subscription_started_keeps_the_handle_started_frees_the_id_and_tells_the_start_refusal_listeners() {
-            // Given a subscription whose change stream opens, and then loses its history when it is read
-            AtomicBoolean losing = new AtomicBoolean(true);
+        void a_history_loss_after_the_subscription_started_makes_the_next_wait_of_its_handle_throw_frees_the_id_and_tells_the_start_refusal_listeners() {
+            // Given a subscription whose change stream opened and answered that it started
+            AtomicBoolean losing = new AtomicBoolean();
             MongoCommandException historyLost = new MongoCommandException(new BsonDocument("ok", new BsonInt32(0)).append("code", new BsonInt32(286))
                     .append("codeName", new BsonString("ChangeStreamHistoryLost")), new ServerAddress());
             MongoTemplate template = new MongoTemplate(mongoTemplate.getMongoDatabaseFactory()) {
@@ -2774,21 +2797,61 @@ public class SpringMongoSubscriptionModelTest {
                 refusals.add(refusal);
             }));
             String subscriptionId = UUID.randomUUID().toString();
-
-            // When
             Subscription subscription = subscriptionModel.subscribe(subscriptionId, __ -> {
             });
             boolean started = subscription.waitUntilStarted(Duration.ofSeconds(10));
+
+            // When its history is lost on a later read
+            losing.set(true);
             await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(refusals).hasSize(1));
 
             // Then
             assertThat(started).as("answer while the change stream was open").isTrue();
-            assertThat(subscription.waitUntilStarted(Duration.ofSeconds(1))).as("answer after the history was lost").isTrue();
+            Throwable timedWait = catchThrowable(() -> subscription.waitUntilStarted(Duration.ofSeconds(1)));
+            Throwable untimedWait = catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+                subscription.waitUntilStarted();
+            }));
+            assertRefusedBecauseTheHistoryWasLost(timedWait, subscriptionId);
+            assertRefusedBecauseTheHistoryWasLost(untimedWait, subscriptionId);
             assertThat(refusedIds).containsExactly(subscriptionId);
             assertThat(refusals.getFirst()).hasMessageStartingWith("There was not enough oplog to resume subscription \"" + subscriptionId + "\"").rootCause().isSameAs(historyLost);
             assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId);
             assertThat(subscriptionModel.subscribe(subscriptionId, __ -> {
             }).waitUntilStarted(Duration.ofSeconds(10))).as("the id is free to subscribe with again").isTrue();
+        }
+
+        @Timeout(value = 20, unit = SECONDS)
+        @Test
+        void a_history_loss_after_a_resumed_run_started_makes_the_next_wait_of_the_handle_the_resume_returned_throw() {
+            // Given a subscription that was paused and resumed, and whose resumed run answered that it started
+            AtomicBoolean losing = new AtomicBoolean();
+            MongoCommandException historyLost = new MongoCommandException(new BsonDocument("ok", new BsonInt32(0)).append("code", new BsonInt32(286))
+                    .append("codeName", new BsonString("ChangeStreamHistoryLost")), new ServerAddress());
+            MongoTemplate template = new MongoTemplate(mongoTemplate.getMongoDatabaseFactory()) {
+                @Override
+                public MongoDatabase getDb() {
+                    return historyLostWhenRead(super.getDb(), losing, historyLost);
+                }
+            };
+            subscriptionModel = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING)
+                    .restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.pauseSubscription(subscriptionId);
+            Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+            boolean started = resumed.waitUntilStarted(Duration.ofSeconds(10));
+
+            // When its history is lost on a later read
+            losing.set(true);
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId));
+
+            // Then
+            assertThat(started).as("answer while the resumed change stream was open").isTrue();
+            assertRefusedBecauseTheHistoryWasLost(catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(1))), subscriptionId);
+            assertRefusedBecauseTheHistoryWasLost(catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+                resumed.waitUntilStarted();
+            })), subscriptionId);
         }
     }
 
@@ -3065,35 +3128,6 @@ public class SpringMongoSubscriptionModelTest {
             if (first.getAndSet(false)) {
                 positionMayAnswer.countDown();
                 Awaitility.await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(10, MILLIS)).until(() -> own.getCount() == 0);
-            }
-            return own.getCount();
-        }
-
-        @Override
-        public void countDown() {
-            own.countDown();
-        }
-    }
-
-    // Replaces the latch of a run that its failure to start is read from and counted down on. The first read waits until
-    // released, which holds the thread that is recording the failure of a refused run
-    private static final class HoldsTheFirstReadOfTheStartedLatch extends CountDownLatch {
-        private final CountDownLatch own;
-        private final CountDownLatch release;
-        private final CountDownLatch reached = new CountDownLatch(1);
-        private final AtomicBoolean first = new AtomicBoolean(true);
-
-        private HoldsTheFirstReadOfTheStartedLatch(CountDownLatch own, CountDownLatch release) {
-            super(1);
-            this.own = own;
-            this.release = release;
-        }
-
-        @Override
-        public long getCount() {
-            if (first.getAndSet(false)) {
-                reached.countDown();
-                awaitUpToTenSeconds(release);
             }
             return own.getCount();
         }

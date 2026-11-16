@@ -1565,14 +1565,18 @@ public final class ChangeStreamSubscriptions {
         // held, so a start never races the hold it clears
         private volatile @Nullable UnsupportedStartAtException held;
 
-        // A run that recorded a failure releases the waiters itself, once the id is free
-        void started() {
+        // A run that recorded a failure releases the waiters itself, once the id is free. So a run that starts after
+        // that, such as an older run a resume replaced, releases nobody, and the monitor makes that one decision with
+        // recordFailure
+        synchronized void started() {
             held = null;
             started = true;
-            latch.countDown();
+            if (refusal.get() == null) {
+                latch.countDown();
+            }
         }
 
-        void recordFailure(UnsupportedStartAtException failure) {
+        synchronized void recordFailure(UnsupportedStartAtException failure) {
             refusal.compareAndSet(null, failure);
         }
 

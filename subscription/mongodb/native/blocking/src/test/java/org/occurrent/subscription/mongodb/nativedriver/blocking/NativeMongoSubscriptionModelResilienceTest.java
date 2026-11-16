@@ -98,6 +98,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -456,19 +457,27 @@ public class NativeMongoSubscriptionModelResilienceTest {
     }
 
     /**
-     * Wraps {@code realEventCollection} so that the first change stream opens, and then throws {@code exception} as soon
-     * as it is read, the way MongoDB answers a {@code getMore} once the history is gone. Every later {@code watch(...)}
-     * call behaves like the real collection.
+     * Wraps {@code realEventCollection} so that every change stream it opens is the real one, whose reads fail with
+     * {@code exception} while {@code losing} is set, the way MongoDB answers a {@code getMore} once the history is gone.
      */
     @SuppressWarnings("unchecked")
-    private MongoCollection<Document> collectionThatFailsDuringIterationOnlyOnce(RuntimeException exception) {
-        MongoChangeStreamCursor<ChangeStreamDocument<Document>> throwingCursor = mock(MongoChangeStreamCursor.class);
-        doThrow(exception).when(throwingCursor).tryNext();
-        ChangeStreamIterable<Document> throwingIterable = iterableOf(throwingCursor);
+    private MongoCollection<Document> collectionThatLosesItsHistoryWhenReadWhile(AtomicBoolean losing, RuntimeException exception) {
         MongoCollection<Document> collection = mock(MongoCollection.class);
-        when(collection.watch(anyList(), eq(Document.class)))
-                .thenReturn(throwingIterable)
-                .thenAnswer(invocation -> realEventCollection.watch((List<? extends Bson>) invocation.getArgument(0), Document.class));
+        when(collection.watch(anyList(), eq(Document.class))).thenAnswer(watch -> {
+            ChangeStreamIterable<Document> iterable = spy(realEventCollection.watch((List<? extends Bson>) watch.getArgument(0), Document.class));
+            doAnswer(open -> {
+                MongoChangeStreamCursor<ChangeStreamDocument<Document>> real = (MongoChangeStreamCursor<ChangeStreamDocument<Document>>) open.callRealMethod();
+                MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = mock(MongoChangeStreamCursor.class, delegatesTo(real));
+                doAnswer(read -> {
+                    if (losing.get()) {
+                        throw exception;
+                    }
+                    return real.tryNext();
+                }).when(cursor).tryNext();
+                return cursor;
+            }).when(iterable).cursor();
+            return iterable;
+        });
         return collection;
     }
 
@@ -625,33 +634,68 @@ public class NativeMongoSubscriptionModelResilienceTest {
         }
 
         @Test
-        void a_history_loss_after_the_subscription_started_keeps_the_handle_started_frees_the_id_and_tells_the_start_refusal_listeners() {
-            // Given a subscription whose change stream opened, and then loses its history when it is read
+        void a_history_loss_after_the_subscription_started_makes_the_next_wait_of_its_handle_throw_frees_the_id_and_tells_the_start_refusal_listeners() {
+            // Given a subscription whose change stream opened and answered that it started
+            AtomicBoolean losing = new AtomicBoolean();
             MongoCommandException historyLost = changeStreamHistoryLostException();
-            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsDuringIterationOnlyOnce(historyLost), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatLosesItsHistoryWhenReadWhile(losing, historyLost), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
                     NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(exponentialBackoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS), 2)));
             CopyOnWriteArrayList<String> refusedIds = new CopyOnWriteArrayList<>();
             CopyOnWriteArrayList<UnsupportedStartAtException> refusals = new CopyOnWriteArrayList<>();
             subscriptionModel.addStartRefusalListener(onStartRefusal((refusedId, refusal) -> {
+                // What the listener is told is what the subscription is made again with, so a loss that kept coming would
+                // refuse the second subscription too
+                losing.set(false);
                 refusedIds.add(refusedId);
                 refusals.add(refusal);
             }));
             String subscriptionId = UUID.randomUUID().toString();
-
-            // When
             Subscription subscription = subscriptionModel.subscribe(subscriptionId, __ -> {
             });
             boolean started = subscription.waitUntilStarted(Duration.ofSeconds(10));
+
+            // When its history is lost on a later read
+            losing.set(true);
             await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(refusals).hasSize(1));
 
             // Then
             assertThat(started).as("answer while the change stream was open").isTrue();
-            assertThat(subscription.waitUntilStarted(Duration.ofSeconds(1))).as("answer after the history was lost").isTrue();
+            Throwable timedWait = catchThrowable(() -> subscription.waitUntilStarted(Duration.ofSeconds(1)));
+            Throwable untimedWait = catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+                subscription.waitUntilStarted();
+            }));
+            assertRefusedBecauseTheHistoryWasLost(timedWait, subscriptionId);
+            assertRefusedBecauseTheHistoryWasLost(untimedWait, subscriptionId);
             assertThat(refusedIds).containsExactly(subscriptionId);
             assertThat(refusals.getFirst()).hasMessageStartingWith("There was not enough oplog to resume subscription \"" + subscriptionId + "\"").rootCause().isSameAs(historyLost);
             assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId);
             assertThat(subscriptionModel.subscribe(subscriptionId, __ -> {
             }).waitUntilStarted(Duration.ofSeconds(10))).as("the id is free to subscribe with again").isTrue();
+        }
+
+        @Test
+        void a_history_loss_after_a_resumed_run_started_makes_the_next_wait_of_the_handle_the_resume_returned_throw() {
+            // Given a subscription that was paused and resumed, and whose resumed run answered that it started
+            AtomicBoolean losing = new AtomicBoolean();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatLosesItsHistoryWhenReadWhile(losing, changeStreamHistoryLostException()), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(exponentialBackoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS), 2)));
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.pauseSubscription(subscriptionId);
+            Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+            boolean started = resumed.waitUntilStarted(Duration.ofSeconds(10));
+
+            // When its history is lost on a later read
+            losing.set(true);
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId));
+
+            // Then
+            assertThat(started).as("answer while the resumed change stream was open").isTrue();
+            assertRefusedBecauseTheHistoryWasLost(catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(1))), subscriptionId);
+            assertRefusedBecauseTheHistoryWasLost(catchThrowable(() -> assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+                resumed.waitUntilStarted();
+            })), subscriptionId);
         }
 
         @Test

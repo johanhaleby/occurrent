@@ -2993,8 +2993,8 @@ checkpoint for one is older than the oplog's history can fail to start with the 
 to start it in the background.
 
 Code that waits with a timeout for a subscription that reaches a sharded cluster through a mongos and starts at a
-stored position, whatever `restartSubscriptionsOnChangeStreamHistoryLost` is set to. Give the wait a timeout longer
-than the change stream's `maxAwaitTime`.
+stored position, whatever `restartSubscriptionsOnChangeStreamHistoryLost` is set to. Give the wait a timeout with room
+for opening the change stream and for its `maxAwaitTime`, or the server's default when none is set.
 
 ### What to do
 

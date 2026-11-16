@@ -565,12 +565,13 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
         // Then
         assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
         assertThat(subscriptionModel.isRunning(subscriptionId)).as("running").isFalse();
-        assertThat(catchThrowable(() -> started.waitUntilStarted(Duration.ofSeconds(1)))).as("thrown by the handle it started on").isNull();
+        assertThat(catchThrowable(() -> started.waitUntilStarted(Duration.ofSeconds(1)))).as("thrown by the handle it started on").isExactlyInstanceOf(UnsupportedStartAtException.class);
         assertThat(refused).as("start refusals told").isEmpty();
 
         // And when it is resumed once the server gives a position again
         presentRead.set(null);
         subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+        assertThat(started.waitUntilStarted(Duration.ofSeconds(1))).as("handle it started on answers started once the resume started it").isTrue();
         NameDefined e1 = nameDefined("name1");
         mongoEventStore.write("1", 0, serialize(e1));
         waitAtMostFor(TEN_SECONDS, () -> handled.contains(e1.eventId()));
