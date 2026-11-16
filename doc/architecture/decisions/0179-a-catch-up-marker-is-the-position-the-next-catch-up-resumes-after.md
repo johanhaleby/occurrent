@@ -53,7 +53,10 @@ Every catch-up start does this:
 4. Write H as the marker, at the point where 0.34.0 writes it. The blocking stack writes it after the drain, and the
    reactor stack before the live drain, as ADR 110 orders them.
 
-A catch-up that fails writes nothing, so P stays and the next start replays from P again. The write is a plain `save`.
+A catch-up that fails before its marker write writes nothing, so P stays and the next start replays from P again. On
+the reactor stack the write comes before the live drain, so a catch-up whose drain fails has already stored H. The
+events that drain did not deliver were handed in by calls that have not completed, so their listeners don't
+acknowledge them and the broker delivers them again. The write is a plain `save`.
 The blocking push model keeps passing `writeConditionFor(id)`, so a lease that has moved on is still refused as
 ADR 116 says. There is no other condition on it, and no fence.
 
@@ -62,12 +65,17 @@ ADR 116 says. There is no other condition on it, and no fence.
 ### A lost or late write costs a longer replay
 
 Every value a start writes is the head its own replay read up to, which the next section shows is safe to resume
-after. So a marker that is older than it should be,
-because a write was lost, or because an old H reached the store after a newer one, makes the next start replay more
+after. So a marker that is older than it should be, because a write was lost, or because an old H reached the store after a newer one, makes the next start replay more
 events than it had to. It cannot make a start skip one. The handover's existing cache de-duplicates the overlap
 between the replay and the live feed within `CatchupThenLiveOptions.dedupCacheSize()`, and beyond that the
 at-least-once contract already applies. The blocking push model's class javadoc says that applying the same event
 twice must leave the projection as applying it once would.
+
+All of this holds for one filter and one projection per subscription id. The marker is keyed by the id alone, so a
+subscribe that reuses an id with another filter or another projection resumes after a head that the old one read,
+and skips the events at or below it that only the new filter matches. 0.34.0 skipped the whole replay in that case, so
+this is no regression, and the migration guide says to use a new subscription id when the filter or the projection
+changes.
 
 The three steps in the context no longer lose events. A late write after a cancel's delete restores an H that the
 cancelled subscription's own replay had read up to, so the next subscribe resumes after it instead of replaying from
@@ -87,8 +95,10 @@ first, when it replays nothing at all:
   H was read commits after that registration, and the broker delivers it.
 * The feeds are handed live events by the application's own broker listener. Before the feed is live, and while a
   replay runs, `acceptOrDefer` answers `DEFERRED`, the listener doesn't acknowledge the event, and the broker delivers
-  it again. `acceptAndWait` keeps the event in the feed's buffer until the drain after the replay applies it, and the
-  listener acknowledges it only once the call returns. When the call throws, the listener doesn't acknowledge it.
+  it again. `acceptAndWait` keeps the event in the feed's buffer until the drain after the replay applies it. A
+  blocking listener acknowledges the event once the call returns and not when it throws. A reactor listener
+  acknowledges it once the returned `Mono` completes and not when it errors, and the reactor `acceptOrDefer` completes
+  with `DEFERRED`.
 
 Both need a broker that keeps the backlog of a consumer that is offline, which the blocking push model's class javadoc
 already states for a restart. Reading H after the live registration is part of this decision, so a push model that
@@ -112,14 +122,17 @@ did.
 `cancelSubscription(id)` keeps deleting the marker, the same clean-up a cancel does for a durable subscription's
 checkpoint, so the next subscribe of the id replays from the beginning. It no longer promises that. A delete a failover
 loses, or a marker write the store applies after the delete, makes the next subscribe resume from the old position instead.
-An application that needs a guaranteed rebuild subscribes under a new subscription id. The blocking push model still
+An application that needs a guaranteed rebuild, or that changes the filter or the projection, subscribes under a new
+subscription id. The blocking push model still
 deletes first and cancels nothing when the delete throws.
 
 ### The reactor failure forget goes
 
 `ReactiveHandover.forgetCaughtUp`, `Source.forgetCaughtUp()`, the reactor push model's `markersNotYetDeleted` and the
 reactor feed's forget are removed. They are in `internal` packages or private, so no public API changes. A catch-up
-that fails writes no marker, so the next start replays the failed event from P. A live event whose delivery fails is a
+that fails before its marker write stores nothing, so the next start replays the failed event from P. When the drain
+fails after the write, the calls that handed in the undelivered events have not completed, and the broker delivers
+those events again. A live event whose delivery fails is a
 broker message nobody acknowledged, and the broker delivers it again.
 
 ### The replay callbacks
