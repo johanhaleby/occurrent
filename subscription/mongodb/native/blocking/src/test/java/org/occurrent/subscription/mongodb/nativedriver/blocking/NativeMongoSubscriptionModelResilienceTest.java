@@ -94,6 +94,7 @@ import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
@@ -592,16 +593,26 @@ public class NativeMongoSubscriptionModelResilienceTest {
             String subscriptionId = UUID.randomUUID().toString();
 
             // When
-            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(2));
+            Subscription subscription = subscriptionModel.subscribe(subscriptionId, __ -> {});
+            awaitGivenUp(subscriptionId);
+            Throwable waitOfFirst = catchThrowable(() -> subscription.waitUntilStarted(Duration.ofSeconds(2)));
 
             // Then
-            await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
+            assertRefusedBecauseTheHistoryWasLost(waitOfFirst, subscriptionId);
+            // The strongest proof the entry isn't leaked: the id is free to reuse. If it were still in either map,
+            // this would throw IllegalArgumentException("Subscription ... is already defined.").
+            AtomicReference<Subscription> resubscribed = new AtomicReference<>();
+            assertThatCode(() -> resubscribed.set(subscriptionModel.subscribe(subscriptionId, __ -> {}))).doesNotThrowAnyException();
+            awaitGivenUp(subscriptionId);
+            assertRefusedBecauseTheHistoryWasLost(catchThrowable(() -> resubscribed.get().waitUntilStarted(Duration.ofSeconds(2))), subscriptionId);
+        }
+
+        // The refusal is recorded before the id is freed, so a wait of the handle after this throws it
+        private void awaitGivenUp(String subscriptionId) {
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
                 assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
                 assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse();
             });
-            // The strongest proof the entry isn't leaked: the id is free to reuse. If it were still in either map,
-            // this would throw IllegalArgumentException("Subscription ... is already defined.").
-            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(2));
         }
 
         @Test
