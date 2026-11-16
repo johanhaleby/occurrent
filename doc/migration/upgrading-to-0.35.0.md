@@ -865,7 +865,9 @@ A store that implements it has to save `SagaFailure.releasedAt()`, `SagaFailure.
 `SagaEnvelope.quarantineSkipCount()`, and read them back. The saga reads the instance back after the write that
 quarantines it. When the quarantine id or the skip count didn't persist, it writes the instance back as it was before
 the quarantine, logs an `ERROR` and fails the event instead of acknowledging it, since an instance without them skips
-every later input without recording it. Every delivery of the event fails the same way until the store persists both. A release
+every later input without recording it. Every delivery of the event fails the same way until the store persists both.
+When something outside the saga writes the instance before each of `maxCasAttempts` undo attempts, the instance stays
+`QUARANTINED` without them and skips later inputs unrecorded, and a second `ERROR` says so. A release
 reads the instance back after it sets `releasedAt`, and throws an `IllegalStateException` when one of the three didn't
 persist.
 

@@ -469,7 +469,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     // every later input with nothing recorded
                     SagaStatus before = current == null ? SagaStatus.ACTIVE : current.status();
                     if (undoneQuarantine(sagaId, withoutId, before)) {
-                        log.error("Saga '{}' instance '{}' was quarantined on the event '{}', but its state store {} did not persist SagaFailure.quarantineId or SagaEnvelope.quarantineSkipCount, so the quarantine was undone, unless another write had already taken the instance out of it. "
+                        log.error("Saga '{}' instance '{}' was quarantined on the event '{}', but its state store {} did not persist SagaFailure.quarantineId or SagaEnvelope.quarantineSkipCount, so the quarantine was undone, unless another write had changed the instance first. "
                                         + "The event goes back to whatever feeds this subscription instead of being acknowledged, and every delivery of it fails the same way until the store persists both.",
                                 subscriptionId, sagaId, meta.redeliveryKey(), stateStore.getClass().getName(), failure);
                     } else {
