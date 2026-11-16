@@ -33,9 +33,9 @@ import org.occurrent.cloudevents.EventMetadata;
  * than needing to be unwrapped itself, so there is still nothing here that needs a {@code findIn}.
  * <p>
  * The callbacks run only for a replay from the beginning, which a catch-up does when no catch-up marker is stored. A
- * catch-up that resumes after a stored marker delivers its events the way live events are delivered, with none of
- * these callbacks, so a view that rebuilds itself between {@link #replayStarted()} and {@link #replayCompleted()} sees
- * a rebuild only when it gets one.
+ * blocking catch-up that finds a stored marker skips its replay. A reactor catch-up that finds one resumes after it
+ * and delivers those events the way live events are delivered, with none of these callbacks, so a view that rebuilds
+ * itself between {@link #replayStarted()} and {@link #replayCompleted()} sees a rebuild only when it gets one.
  * <p>
  * {@link #replayCompleted()} runs before the replay's driver stores its catch-up marker, so an implementation that
  * buffers must have written every buffered update by the time this method returns. A write that fails here fails

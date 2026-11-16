@@ -129,9 +129,10 @@ public @interface Projection {
      * (typically {@link StartupMode#BACKGROUND} if replaying history, otherwise
      * {@link StartupMode#WAIT_UNTIL_STARTED}).
      * <p>
-     * A {@link Source#PUSH} projection is the exception: its catch-up replays on every start, from the beginning or
-     * after its stored catch-up marker, so reading {@link StartupMode#DEFAULT} as "background because it replays
-     * history" would move every push projection off the startup path. {@code DEFAULT} therefore waits there, and only
+     * A {@link Source#PUSH} projection is the exception: its catch-up replays from the beginning when no catch-up
+     * marker is stored, and on the reactor stack after the stored marker on every later start, so reading
+     * {@link StartupMode#DEFAULT} as "background because it replays history" would move every push projection off the
+     * startup path. {@code DEFAULT} therefore waits there, and only
      * an explicit {@link StartupMode#BACKGROUND} does not.
      */
     StartupMode startupMode() default StartupMode.DEFAULT;
@@ -179,17 +180,19 @@ public @interface Projection {
      * Its type decides how live events are delivered (a {@code PushSubscriptionModel} delivers CloudEvents, a
      * {@code DomainEventFeed} delivers domain events directly). A push source is mutually exclusive with
      * {@link Mode#SYNCHRONOUS}, and it rejects {@link #startAt()}, {@link #startAtGlobalPosition()} and
-     * {@link #resumeBehavior()}, since the catch-up replays from the beginning or after its stored catch-up marker,
-     * and where the live feed resumes is the broker's responsibility. {@link #startupMode()} <em>is</em> supported
-     * under the default {@link #catchup()}: set it to {@link StartupMode#BACKGROUND} to keep that replay off the
-     * startup path.
+     * {@link #resumeBehavior()}, since the catch-up replays from the beginning, or on the reactor stack after its
+     * stored catch-up marker, and where the live feed resumes is the broker's responsibility.
+     * {@link #startupMode()} <em>is</em> supported under the default {@link #catchup()}: set it to
+     * {@link StartupMode#BACKGROUND} to keep that replay off the startup path.
      */
     Source source() default Source.EVENT_STORE;
 
     /**
      * Whether a {@link Source#PUSH} projection is backfilled from the event store before it goes live.
-     * {@link Catchup#FROM_EVENT_STORE} (the default) replays history and hands over each time the projection starts,
-     * from the beginning, or after the stored catch-up marker when there is one. {@link Catchup#NONE} takes
+     * {@link Catchup#FROM_EVENT_STORE} (the default) replays history and hands over. On the blocking stack it replays
+     * from the beginning once, and a start that finds the stored catch-up marker skips the replay. On the reactor
+     * stack it replays each time the projection starts, from the beginning, or after the stored marker when there is
+     * one. {@link Catchup#NONE} takes
      * live events only and touches no event store at all, which is what a projection fed by another application's
      * broker needs, since the local event store holds none of those events. With a {@code PushSubscriptionModel} feed
      * that skips the catch-up wrapper entirely, and with a {@code DomainEventFeed} the projection registers and goes

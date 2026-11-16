@@ -474,7 +474,7 @@ class CatchupThenPushSubscriptionModelTest {
         Throwable thrown = catchThrowable(() ->
                 model.subscribe("proj", null, StartAt.now(), ce -> Mono.empty()));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("replays a projection's history from the beginning, or after its stored catch-up marker");
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("replays a projection's history from the beginning, or on the reactor stack after its stored catch-up marker");
     }
 
     @Test

@@ -143,9 +143,8 @@ class SagaAnnotationRegistrar {
                 : AsynchronousSubscribables.resolve(applicationContext, Subscribable.class, RegisteringSubscribable.class);
         SagaStateStore<S> stateStore = resolveSagaStateStore(annotation, method, HandlerScan.implementationClassOf(bean), id);
         CommandDispatcher<C> commandDispatcher = resolveCommandDispatcher(annotation, id);
-        // A push model ignores StartAt, and a replay in front of it starts from the beginning or after its stored
-        // catch-up marker, so there is no start position to compute. rejectStartPositionAttributes has already
-        // refused the four that would imply one.
+        // A push model ignores StartAt, and a replay in front of it always starts at the beginning, so there is no
+        // start position to compute. rejectStartPositionAttributes has already refused the four that would imply one.
         StartAt startAt = push ? null : startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
         SagaRunnerConfig config = withQuarantineBudget(SagaRunnerConfig.defaults(), occurrentProperties().getSaga().getQuarantineAfter())
                 .withTimerPollInterval(sagaTimerPollInterval())
@@ -158,9 +157,8 @@ class SagaAnnotationRegistrar {
 
         // A saga replaying its history from the beginning defaults to starting in the background, exactly as
         // @Subscription and @Projection do. startupMode was accepted and ignored here until now, so a saga always
-        // held up startup whatever it asked for. A push saga replays only when it catches up, and then on every start,
-        // from the beginning or after its stored catch-up marker, so it takes the push decision instead: only an
-        // explicit BACKGROUND moves it off the startup path.
+        // held up startup whatever it asked for. A push saga replays only when it catches up, and then always from the
+        // beginning, so it takes the push decision instead: only an explicit BACKGROUND moves it off the startup path.
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         boolean startsOnItsOwn = SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext);
         boolean waitUntilStarted = push
@@ -260,8 +258,8 @@ class SagaAnnotationRegistrar {
     }
 
     /**
-     * A push saga takes no start position, whether or not it catches up: a replay starts from the beginning or after
-     * its stored catch-up marker, and where the live feed resumes after a restart is the broker's business. {@code startAt},
+     * A push saga takes no start position, whether or not it catches up: a replay always starts at the beginning, and
+     * where the live feed resumes after a restart is the broker's business. {@code startAt},
      * {@code startAtGlobalPosition} and {@code resumeBehavior} would all do nothing, and rejecting them says so instead
      * of letting the caller believe otherwise. {@code @Projection(source = PUSH)} rejects the same three, plus the
      * synchronous mode, which {@code @Saga} does not have.
@@ -288,7 +286,7 @@ class SagaAnnotationRegistrar {
             // The startupMode hint only makes sense under the default catchup. With catchup=NONE there is no replay to
             // move off the startup path, and startupMode is rejected there anyway.
             String reason = catchesUp(annotation)
-                    ? "It catches up before going live, from the beginning or after its stored catch-up marker, so there is no start position to choose. Use startupMode = BACKGROUND to keep that replay off the startup path"
+                    ? "It catches up before going live, but always from the beginning, so there is no start position to choose. Use startupMode = BACKGROUND to keep that replay off the startup path"
                     : "With catchup=NONE it takes live events only, so there is no history to position into";
             throw new IllegalArgumentException("@Saga '%s' with source=PUSH cannot set startAt, startAtGlobalPosition or resumeBehavior. %s, and where the live feed resumes is the broker's business.".formatted(id, reason));
         }
@@ -298,10 +296,10 @@ class SagaAnnotationRegistrar {
     }
 
     /**
-     * The resolved push feed, with a catch-up in front of it unless {@code catchup = NONE}, so a saga is folded up from
-     * the event store, from the beginning or after its stored catch-up marker, before it starts taking live events.
-     * With {@code catchup = NONE} the feed is used bare and no event store is touched, which is the only thing that
-     * works when the events come from another application's broker.
+     * The resolved push feed, with a one-time catch-up in front of it unless {@code catchup = NONE}, so a saga that has
+     * never run is folded up from the event store before it starts taking live events. With {@code catchup = NONE} the
+     * feed is used bare and no event store is touched, which is the only thing that works when the events come from
+     * another application's broker.
      * <p>
      * Only a {@code PushSubscriptionModel} is accepted, unlike {@code @Projection}, which also takes a
      * {@code DomainEventFeed}. A domain-event feed carries no stream metadata, and without it a saga cannot recognise a

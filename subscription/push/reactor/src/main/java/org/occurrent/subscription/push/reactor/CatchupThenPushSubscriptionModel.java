@@ -73,10 +73,11 @@ import java.util.function.Supplier;
  * catch-up for the id replays only the events after it and the broker delivers the rest. Correctness across a restart
  * then depends on the broker retaining the backlog for an offline consumer. With no marker stored, the catch-up
  * replays from the beginning, and a marker older than it should be costs a longer replay and no event
- * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-is-the-position-the-next-catch-up-resumes-after.md">ADR 179</a>).
- * The marker is keyed by the subscription id alone, so a subscribe that changes the filter or the handler uses a new
- * subscription id. {@link #cancelSubscription(String)} deletes the marker, and says when subscribing the same id
- * again resumes instead of replaying from the beginning. No live position is persisted, so
+ * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md">ADR 179</a>).
+ * The blocking model reads a stored marker as a finished catch-up and skips the replay instead. The marker is keyed
+ * by the subscription id alone, so a subscribe that changes the filter or the handler uses a new subscription id.
+ * {@link #cancelSubscription(String)} deletes the marker, and says when subscribing the same id again resumes instead
+ * of replaying from the beginning. No live position is persisted, so
  * resuming the live feed is the job of whatever feeds the {@link PushSubscriptionModel}. Only stream and
  * capability-agnostic subscription filters can be replayed.
  * <p>

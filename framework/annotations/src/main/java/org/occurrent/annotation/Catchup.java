@@ -26,8 +26,9 @@ public enum Catchup {
     /**
      * By default it replays the event store from the beginning the first time it runs, then hands over to the live
      * feed, so a subscription that has never run works through the stored history before it starts reacting to live
-     * events. Each catch-up stores the event store's head, read before its replay, as its catch-up marker, and a
-     * restart replays only the events after that marker before it hands over again.
+     * events. On the blocking stack it records that it finished, so a restart skips it and lets the broker resume. On
+     * the reactor stack each catch-up stores the event store's head, read before its replay, as its catch-up marker,
+     * and a restart replays only the events after that marker before it hands over again.
      * <p>
      * The replay reads the local event store, so what it finds there is whatever this application appended. That
      * covers the ordinary case, where the same application writes its events and publishes them, and the feed then

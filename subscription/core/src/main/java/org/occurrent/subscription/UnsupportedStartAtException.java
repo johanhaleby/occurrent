@@ -22,7 +22,8 @@ package org.occurrent.subscription;
  * <p>
  * Which positions a model accepts is a property of the model rather than a bug. {@code InMemorySubscriptionModel}
  * keeps no history, so it starts from now or from its own default and nothing else, and a catch-up-then-push model
- * replays from the beginning or after its stored catch-up marker, so there is no position for a caller to choose.
+ * replays from the beginning, or on the reactor stack after its stored catch-up marker, so there is no position for a
+ * caller to choose.
  */
 public final class UnsupportedStartAtException extends SubscriptionRefusedException {
 

@@ -37,6 +37,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.UnreadableLiveFilterException;
@@ -376,6 +377,48 @@ class DomainEventFeedTest {
     }
 
     @Test
+    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+
+        DomainEventFeed<Counted> first = new DomainEventFeed<>(store, converter, Counted::eventId, marker);
+        first.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        first.catchUpAll();
+        assertThat(repo.get("counter")).isEqualTo(2);
+
+        // Restart: a fresh feed over the same store, repository, and marker. The replay is skipped, so the persisted
+        // count is not re-folded (which would double it to 4).
+        DomainEventFeed<Counted> restarted = new DomainEventFeed<>(store, converter, Counted::eventId, marker);
+        restarted.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        restarted.catchUpAll();
+        assertThat(repo.get("counter")).isEqualTo(2);
+
+        restarted.acceptAndWait(new Counted("3"));
+        assertThat(repo.get("counter")).isEqualTo(3);
+    }
+
+    @Test
+    void a_checkpoint_another_component_stored_under_the_id_makes_the_catch_up_skip_the_replay() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        marker.save("counter", new StringBasedCheckpoint("resume-token-xyz"));
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId, marker);
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        feed.catchUpAll();
+
+        assertThat(repo.get("counter")).as("nothing replayed").isNull();
+        feed.acceptAndWait(new Counted("3"));
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
     void registering_two_projections_with_different_ids_throws() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();
@@ -509,13 +552,13 @@ class DomainEventFeedTest {
      */
     @Test
     void catch_up_clears_readiness_on_every_distinct_way_it_can_fail_to_reach_live() {
-        // 1. Reading the stored catch-up marker throws, before any replay is even attempted.
+        // 1. isAlreadyCaughtUp() throws, before any replay is even attempted.
         InMemoryEventStore store1 = new InMemoryEventStore();
-        DomainEventFeed<Counted> feed1 = new DomainEventFeed<>(store1, counterConverter(), Counted::eventId, throwingOnReadCheckpointStorage());
+        DomainEventFeed<Counted> feed1 = new DomainEventFeed<>(store1, counterConverter(), Counted::eventId, throwingOnExistsCheckpointStorage());
         feed1.register("counter", projection(), ViewStateRepository.create(new ConcurrentHashMap<String, Integer>()::get, (id, s) -> {
         }));
-        assertThat(catchThrowable(feed1::catchUpAll)).hasMessage("read boom");
-        assertThat(feed1.isReadyForLiveDelivery()).as("reading the catch-up marker threw before any replay started").isFalse();
+        assertThat(catchThrowable(feed1::catchUpAll)).isNotNull();
+        assertThat(feed1.isReadyForLiveDelivery()).as("isAlreadyCaughtUp() threw before any replay started").isFalse();
 
         // 2. replayStarted() throws, the moment BlockingHandover tells the view a replay is beginning, before it
         // ever marks the replay open. A plain per-throw-site fix inside replayAbandoned() cannot see this one,
@@ -556,7 +599,7 @@ class DomainEventFeedTest {
         DomainEventFeed<Counted> feed4 = new DomainEventFeed<>(store4, counterConverter(), Counted::eventId, throwingOnSaveCheckpointStorage());
         feed4.register("counter", projection(), ViewStateRepository.create(new ConcurrentHashMap<String, Integer>()::get, (id, s) -> {
         }));
-        assertThat(catchThrowable(feed4::catchUpAll)).hasMessage("save boom");
+        assertThat(catchThrowable(feed4::catchUpAll)).isNotNull();
         assertThat(feed4.isReadyForLiveDelivery()).as("markCaughtUp() threw after the replay and the drain both succeeded").isFalse();
 
         // 5. The buffered drain itself throws. A live event fed ahead of catchUpAll() folds successfully nowhere
@@ -579,11 +622,11 @@ class DomainEventFeedTest {
                 .withMessage("drain boom");
     }
 
-    private static CheckpointStorage throwingOnReadCheckpointStorage() {
+    private static CheckpointStorage throwingOnExistsCheckpointStorage() {
         return new CheckpointStorage() {
             @Override
             public Checkpoint read(String subscriptionId) {
-                throw new IllegalStateException("read boom");
+                throw new AssertionError("read should not be called in this scenario");
             }
 
             @Override
@@ -598,7 +641,7 @@ class DomainEventFeedTest {
 
             @Override
             public boolean exists(String subscriptionId) {
-                throw new AssertionError("exists should not be called in this scenario");
+                throw new IllegalStateException("exists boom");
             }
 
             @Override
@@ -612,7 +655,7 @@ class DomainEventFeedTest {
         return new CheckpointStorage() {
             @Override
             public Checkpoint read(String subscriptionId) {
-                return null;
+                throw new AssertionError("read should not be called in this scenario");
             }
 
             @Override

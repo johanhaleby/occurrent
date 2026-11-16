@@ -112,7 +112,7 @@ public final class ReactiveHandover<T, K> {
          * Record that the catch-up completed. Subscribed after the replay and before the buffered live payloads are
          * drained. A source that stores where the next catch-up resumes stores the head it read before the replay,
          * not one read here
-         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-is-the-position-the-next-catch-up-resumes-after.md">ADR 179</a>).
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md">ADR 179</a>).
          */
         Mono<Void> markCaughtUp();
 

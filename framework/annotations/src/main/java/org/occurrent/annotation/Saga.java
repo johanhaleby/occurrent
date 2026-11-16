@@ -193,9 +193,8 @@ public @interface Saga {
      * the local event store holds none of those events.
      * <p>
      * Neither choice takes a start position, so {@link #startAt()}, {@link #startAtGlobalPosition()} and
-     * {@link #resumeBehavior()} are rejected rather than silently ignored. The replay starts at the beginning, or
-     * after the stored catch-up marker when there is one, and where the live feed resumes after a restart is the
-     * broker's business, not Occurrent's.
+     * {@link #resumeBehavior()} are rejected rather than silently ignored. The replay always starts at the beginning,
+     * and where the live feed resumes after a restart is the broker's business, not Occurrent's.
      * {@link #startupMode()} is the exception, and applies under the default {@link Catchup#FROM_EVENT_STORE}, where
      * {@link StartupMode#BACKGROUND} keeps the replay off the startup path. It is rejected with {@link Catchup#NONE},
      * where there is no replay to wait for.
@@ -211,10 +210,13 @@ public @interface Saga {
 
     /**
      * Whether a {@link Source#PUSH} saga is backfilled from the event store before it goes live.
-     * {@link Catchup#FROM_EVENT_STORE} (the default) replays history and hands over each time the saga starts, from
-     * the beginning, or after the stored catch-up marker when there is one,
+     * {@link Catchup#FROM_EVENT_STORE} (the default) replays history once and hands over,
      * {@link Catchup#NONE} goes straight to the live feed and needs no event store at all. Setting this on a
      * {@link Source#EVENT_STORE} saga is rejected, since that saga chooses its history with {@link #startAt()}.
+     * <p>
+     * A start that finds the stored catch-up marker skips the replay, so a rebuild needs a new {@link #id()}. That new
+     * id replays the whole history into the saga, and every instance its TTL removed is recreated from its start event
+     * and dispatches its commands again. Keep completed instances for as long as the history a rebuild replays.
      */
     Catchup catchup() default Catchup.FROM_EVENT_STORE;
 

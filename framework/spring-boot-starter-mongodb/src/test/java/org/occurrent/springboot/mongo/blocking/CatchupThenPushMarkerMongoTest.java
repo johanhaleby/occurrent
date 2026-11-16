@@ -26,13 +26,9 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.occurrent.eventstore.api.PositionRange;
-import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
-import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
@@ -51,20 +47,17 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The catch-up marker of {@code CatchupThenPushSubscriptionModel} is the position the next catch-up resumes after
- * (ADR 179), checked over the real MongoDB event store and checkpoint storage. Every start is a fresh model over the
- * same store and storage, which is what a restart is.
+ * The catch-up marker of {@code CatchupThenPushSubscriptionModel} means done on the blocking stack (ADR 179), checked over the real MongoDB event store and checkpoint storage.
+ * Every start is a fresh model over the same store and storage, which is what a restart is.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Testcontainers
 @Timeout(120)
-class CatchupThenPushResumePositionMongoTest {
+class CatchupThenPushMarkerMongoTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
@@ -93,96 +86,36 @@ class CatchupThenPushResumePositionMongoTest {
     }
 
     @Test
-    void a_restart_replays_only_the_events_after_the_stored_marker_and_stores_the_head_it_read_before_the_replay() throws Exception {
+    void a_restart_skips_the_replay_when_the_catchup_marker_exists() throws Exception {
         write("1", "2");
-        long head = eventStore.currentPosition();
-        start(new CopyOnWriteArrayList<>());
-        assertThat(GlobalCheckpoint.positionOf(marker.read("proj"))).isEqualTo(head);
-        write("3");
-        long headBeforeTheReplay = eventStore.currentPosition();
+        List<String> first = new CopyOnWriteArrayList<>();
+        start(first);
+        assertThat(first).as("the first start replays the history").containsExactly("1", "2");
+        assertThat(marker.exists("proj")).as("the first start stored the marker").isTrue();
 
-        // An event is written while the replay reads, so the head has moved by the time the marker is written.
-        AtomicBoolean written = new AtomicBoolean();
-        PositionOrderedReader writingWhileReading = new PositionOrderedReader() {
-            @Override
-            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
-                return eventStore.readInPositionOrder(filter, range).peek(e -> {
-                    if (written.compareAndSet(false, true)) {
-                        write("during");
-                    }
-                });
-            }
+        List<String> restarted = new CopyOnWriteArrayList<>();
+        start(restarted);
 
-            @Override
-            public long currentPosition() {
-                return eventStore.currentPosition();
-            }
-
-            @Override
-            public boolean writesPosition() {
-                return eventStore.writesPosition();
-            }
-        };
-        List<String> delivered = new CopyOnWriteArrayList<>();
-        start(writingWhileReading, delivered);
-
-        assertThat(delivered).as("replayed after the stored marker, nothing before it").startsWith("3").doesNotContain("1", "2");
-        assertThat(eventStore.currentPosition()).as("the head moved during the replay").isGreaterThan(headBeforeTheReplay);
-        assertThat(GlobalCheckpoint.positionOf(marker.read("proj"))).isEqualTo(headBeforeTheReplay);
-        List<String> afterRestart = new CopyOnWriteArrayList<>();
-        start(afterRestart);
-        assertThat(afterRestart).as("the event written during the replay is replayed by the next start").containsExactly("during");
+        assertThat(restarted).as("a restart over the same storage and id replays nothing").isEmpty();
     }
 
     @Test
-    void a_marker_that_is_written_after_a_cancel_deleted_it_makes_the_next_start_resume_after_it() throws Exception {
+    void a_cancel_deletes_the_marker_so_a_resubscribe_replays_the_whole_history() throws Exception {
         write("1", "2");
-        long head = eventStore.currentPosition();
         CatchupThenPushSubscriptionModel first = start(new CopyOnWriteArrayList<>());
+        assertThat(marker.exists("proj")).as("the first start stored the marker").isTrue();
+
         first.cancelSubscription("proj");
         assertThat(marker.exists("proj")).as("the cancel deleted the marker").isFalse();
-        marker.save("proj", GlobalCheckpoint.of(head));
-        write("3");
 
-        List<String> delivered = new CopyOnWriteArrayList<>();
-        start(delivered);
+        List<String> resubscribed = new CopyOnWriteArrayList<>();
+        start(resubscribed);
 
-        assertThat(delivered).as("resumed after the late marker, nothing lost and nothing before it").containsExactly("3");
-    }
-
-    @Test
-    void a_late_save_of_an_older_head_only_lengthens_the_next_replay() throws Exception {
-        write("1", "2");
-        long olderHead = eventStore.currentPosition();
-        start(new CopyOnWriteArrayList<>());
-        write("3");
-        start(new CopyOnWriteArrayList<>());
-        marker.save("proj", GlobalCheckpoint.of(olderHead));
-        write("4");
-
-        List<String> delivered = new CopyOnWriteArrayList<>();
-        start(delivered);
-
-        assertThat(delivered).as("events after the older head, replayed again and none skipped").containsExactly("3", "4");
-    }
-
-    @Test
-    void a_marker_stored_by_0_34_0_is_read_as_a_resume_position() throws Exception {
-        write("1", "2", "3");
-        marker.save("proj", GlobalCheckpoint.of(eventStore.currentPosition() - 1));
-
-        List<String> delivered = new CopyOnWriteArrayList<>();
-        start(delivered);
-
-        assertThat(delivered).containsExactly("3");
+        assertThat(resubscribed).as("a resubscribe of the cancelled id replays the whole history").containsExactly("1", "2");
     }
 
     private CatchupThenPushSubscriptionModel start(List<String> delivered) throws InterruptedException {
-        return start(eventStore, delivered);
-    }
-
-    private CatchupThenPushSubscriptionModel start(PositionOrderedReader reader, List<String> delivered) throws InterruptedException {
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, new PushSubscriptionModel(), marker);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(eventStore, new PushSubscriptionModel(), marker);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
         // The marker is written before the replay entry is removed, so a finished catch-up means the marker is stored.
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);

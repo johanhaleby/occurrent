@@ -20,8 +20,8 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 
 /**
- * Reads the position a catch-up resumes after out of the marker stored under its subscription id, for the blocking
- * and reactor projection feeds and push subscription models.
+ * Reads the position a catch-up resumes after out of the marker stored under its subscription id, for the reactor
+ * projection feed and push subscription model. The blocking ones read a stored marker as done and skip the replay.
  */
 public final class CatchupMarkers {
 

@@ -191,12 +191,12 @@ public final class HandoverMessages {
 
     /**
      * Rejects a non-default {@code StartAt} passed to a catch-up-then-push subscription model. The model replays a
-     * projection's history from the beginning, or after its stored catch-up marker, and then hands over to the live
-     * feed, so there is no position for a caller to choose.
+     * projection's history from the beginning, or on the reactor stack after its stored catch-up marker, and then
+     * hands over to the live feed, so there is no position for a caller to choose.
      */
     public static final String NON_DEFAULT_START_AT_NOT_SUPPORTED =
-            "This subscription model replays a projection's history from the beginning, or after its stored catch-up "
-                    + "marker, and then hands over to the live feed, so a caller-supplied startAt has no position to "
-                    + "apply to. "
+            "This subscription model replays a projection's history from the beginning, or on the reactor stack after "
+                    + "its stored catch-up marker, and then hands over to the live feed, so a caller-supplied startAt "
+                    + "has no position to apply to. "
                     + "Use StartAt.subscriptionModelDefault().";
 }

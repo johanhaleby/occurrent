@@ -97,10 +97,9 @@ public final class DomainEventFeed<E> {
      *                        {@link #acceptAndWaitCloudEvent(CloudEvent)} and
      *                        {@link #acceptOrDeferCloudEvent(CloudEvent)}, which do.
      * @param eventId         Extracts a stable id from a domain event, the replay-to-live de-dup key.
-     * @param catchupMarker Stores the head read before each projection's replay, so its next catch-up replays only
-     *                        the events after it, or {@code null} to replay the whole history on every catch-up. The
-     *                        marker is stored under the projection's id alone, so a projection whose filter or
-     *                        logic changes is registered under a new id.
+     * @param catchupMarker Records catch-up completion so a restart skips the replay, or {@code null}
+     *                        to always catch up. The marker is stored under the projection's id alone, so a
+     *                        projection whose filter or logic changes is registered under a new id.
      */
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
                            Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker) {
@@ -496,7 +495,7 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Run the catch-up of the registered projection (replay history, then go live). Call once, after the
+     * Run the one-time catch-up of the registered projection (replay history, then go live). Call once, after the
      * projection is registered and the live feed is wired.
      * <p>
      * A failure here is terminal for this feed, so let it reach the caller and do not start the application. The
@@ -520,7 +519,7 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Run the catch-up of the projection registered under {@code id}. Use this over {@link #catchUpAll()}
+     * Run the one-time catch-up of the projection registered under {@code id}. Use this over {@link #catchUpAll()}
      * when the caller knows which projection it means and wants a mismatch to fail rather than pass silently.
      * <p>
      * A call the projection makes while this feed is calling it returns once the catch-up has been asked for, without
@@ -539,11 +538,10 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Go live without a catch-up: skip the replay for the projection registered under
+     * Go live without a catch-up: skip straight past the one-time replay for the projection registered under
      * {@code id}, draining whatever live events it already buffered. Use this over {@link #catchUp(String)} when this
-     * feed's events are not in the local event store, so there is nothing to replay. No catch-up marker is written,
-     * so a later {@link #catchUp(String)} on the same projection replays from the marker stored before, or the whole
-     * history when none was stored.
+     * feed's events are not in the local event store, so there is nothing to replay. No completion marker is written,
+     * so a later {@link #catchUp(String)} on the same projection still replays the full history.
      * <p>
      * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection returns only
      * once the replay has ended, so {@link #acceptOrDeferCloudEvent(CloudEvent)} returns {@link RoutingOutcome#DELIVERED} for
@@ -568,7 +566,7 @@ public final class DomainEventFeed<E> {
     /**
      * Stop a catch-up replay that is still in flight, so a shutting-down application does not leave one folding into
      * a store that is closing with it. The replay notices at its next event and unwinds without writing the
-     * catch-up marker, so the next start replays again from where the stopped one started. An {@link #acceptAndWait(Object)} waiting on a
+     * completion marker, so the next start replays the whole history again. An {@link #acceptAndWait(Object)} waiting on a
      * replay that started before the feed went live throws rather than returning, so its listener does not
      * acknowledge the event, and so does one waiting on a catch-up that has not started yet. One waiting on a replay
      * started after {@link #goLive(String)} returns normally, since the feed still applies the events that arrived

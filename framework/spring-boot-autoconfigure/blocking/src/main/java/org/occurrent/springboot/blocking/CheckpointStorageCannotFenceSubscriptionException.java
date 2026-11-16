@@ -35,7 +35,7 @@ import java.util.List;
  * {@code @Saga} whose push feed catches up from nothing, or a {@code @Projection(source = PUSH)} fed by a
  * {@code DomainEventFeed}, whatever catchup says. That path resolves no {@code CheckpointStorage} at all, and a
  * domain-event feed's own optional catch-up marker, a separate bean the feed is built with directly, only ever
- * calls {@code read} and the unconditional two-argument {@code save}, never the conditional write this check is
+ * calls {@code exists} and the unconditional two-argument {@code save}, never the conditional write this check is
  * about. None of those ids are ever named here even when the storage would refuse them, with one exception. The
  * exclusion for a {@code DomainEventFeed}-fed push projection depends on reading the feed bean's type from Spring
  * bean metadata without creating it, and an id whose feed bean cannot be typed that way, an ambiguous or otherwise
