@@ -323,6 +323,24 @@ class DurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
+    void a_quiet_position_saver_obtained_before_shutdown_saves_nothing_when_it_is_called_after_it() throws InterruptedException {
+        // Given a saver the wrapped model obtained for a read that began before shutdown
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
+        subscribeFromTheStoredStart(model, storage, __ -> {
+        });
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        Consumer<Checkpoint> saverFromBeforeShutdown = wrapped.beforeReading("id");
+        assertThat(saverFromBeforeShutdown).as("saver").isNotNull();
+
+        // When shutdown returns and the saver is then called
+        model.shutdown();
+        saverFromBeforeShutdown.accept(QUIET);
+
+        // Then the checkpoint stored before is still the one stored
+        assertThat(storage.read("id")).isEqualTo(START);
+    }
+
+    @Test
     void nothing_is_saved_for_a_cancelled_subscription() throws InterruptedException {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
