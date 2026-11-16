@@ -48,11 +48,8 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Docker-based. The documents in {@code src/test/resources/saga-document-fixtures} are what {@link SpringMongoSagaStateStore}
- * wrote before the saga codec took over the mapping, and one written by hand the way 0.34.0 wrote it. For each, the
- * committed document read through the store and the codec must give the expected envelope, and the expected envelope
- * written through the codec and the store must give the committed document again, with its field order and value types,
- * compared as canonical extended JSON.
+ * Docker-based. Each committed document must decode to its envelope and that envelope must encode back to the same
+ * document, compared as canonical extended JSON.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)

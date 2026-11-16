@@ -37,9 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * A saga whose state is a {@link FlowState} that is not the flow executor's has no way to be stored, since the codec
- * reads a flow saga's state back field by field. It is refused the first time it is saved, and not left to be written
- * one way and read the other.
+ * A FlowState that is not the flow executor's cannot be read back field by field, so the first save refuses it.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaForeignFlowStateTest {

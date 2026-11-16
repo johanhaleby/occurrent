@@ -259,6 +259,11 @@ class SagaCodecTest {
         }
 
         @Test
+        void the_status_is_stored_under_the_field_name_status() {
+            assertThat(codec.encode(bare("s1", "state")).encoded().fields()).containsEntry("status", "ACTIVE");
+        }
+
+        @Test
         void an_active_instance_without_stream_marks_keeps_the_plain_status_name() {
             assertThat(codec.encode(bare("s1", "state")).encoded().fields()).containsEntry(SagaCodec.STATUS, "ACTIVE");
         }
@@ -622,8 +627,8 @@ class SagaCodecTest {
 
         @Test
         void encode_and_encodeWithoutState_refuse_a_null_envelope() {
-            assertThatNullPointerException().isThrownBy(() -> codec.encode(null)).withMessageContaining("envelope");
-            assertThatNullPointerException().isThrownBy(() -> codec.encodeWithoutState(null)).withMessageContaining("envelope");
+            assertThatNullPointerException().isThrownBy(() -> codec.encode(null)).withMessage("envelope cannot be null");
+            assertThatNullPointerException().isThrownBy(() -> codec.encodeWithoutState(null)).withMessage("envelope cannot be null");
         }
 
         @Test
