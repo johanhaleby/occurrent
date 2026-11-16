@@ -17,6 +17,7 @@
 package org.occurrent.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.AlreadyClosedException;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ShutdownSignalException;
@@ -282,7 +283,8 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
 
     /**
      * Closes the {@link Channel} this publisher created. Does not close the {@link Connection} it was built from. A
-     * publish after this throws {@link RabbitMqPublishException}.
+     * publish after this throws {@link RabbitMqPublishException}. Returns normally when the channel, or the
+     * connection under it, has already closed, including when it closes concurrently with this call.
      */
     @Override
     public void close() throws IOException, TimeoutException {
@@ -293,7 +295,14 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
         publishLock.lock();
         try {
             closed = true;
-            channel.close();
+            if (channel.isOpen()) {
+                try {
+                    channel.close();
+                } catch (AlreadyClosedException ignored) {
+                    // The connection or channel can close after isOpen() and before close(). It is already in the
+                    // state this method is trying to put it in, so there is nothing left to tear down.
+                }
+            }
         } finally {
             publishLock.unlock();
         }
