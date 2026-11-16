@@ -486,7 +486,7 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Run the one-time catch-up of the registered projection. The returned {@link Mono} completes once it has caught
+     * Run the catch-up of the registered projection. The returned {@link Mono} completes once it has caught
      * up and gone live, and fails with an {@link IllegalStateException} when nothing is registered. It used to complete
      * empty in that case, which meant a feed nobody registered on caught up "successfully" and then silently fed
      * nothing.
@@ -540,7 +540,7 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Run the one-time catch-up of the single projection registered under {@code id}. Use this instead of
+     * Run the catch-up of the single projection registered under {@code id}. Use this instead of
      * {@link #catchUpAll()} when a projection is registered well after the others on this feed already went live, so
      * that catching it up does not re-run the catch-up of a projection that already ran it.
      *
@@ -566,7 +566,7 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Go live without a catch-up: skip the one-time replay for the single projection registered under {@code id}.
+     * Go live without a catch-up: skip the replay for the single projection registered under {@code id}.
      * Use this instead of {@link #catchUp(String)} when this feed's events are not in the local event store, so
      * there is nothing to replay. No catch-up marker is written, so a later {@link #catchUp(String)} on the same
      * projection replays from the marker stored before, or the whole history when none was stored.

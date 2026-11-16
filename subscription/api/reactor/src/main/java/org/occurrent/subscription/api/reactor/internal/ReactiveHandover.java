@@ -1171,7 +1171,7 @@ public final class ReactiveHandover<T, K> {
     }
 
     /**
-     * Run the one-time catch-up: replay the source's history, record the completion marker, then start delivering the
+     * Run the catch-up: replay the source's history, record the catch-up marker, then start delivering the
      * live feed. The returned {@link Mono} completes when the replay and marker are done (see the class javadoc for
      * how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
      * {@code false} when {@link Source#keepReplaying()} stopped it partway. A failure errors it instead, and so does a

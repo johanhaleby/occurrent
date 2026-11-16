@@ -45,8 +45,8 @@ import java.util.function.Function;
 
 /**
  * The reactor counterpart of the blocking {@code CatchupProjectionFeed}: feeds a projection with
- * <strong>domain events</strong> and gives it a one-time <strong>catch-up</strong>, without the double
- * encode/decode of routing domain events through the CloudEvent push feed.
+ * <strong>domain events</strong> and gives it a <strong>catch-up</strong> from the event store, without the
+ * double encode/decode of routing domain events through the CloudEvent push feed.
  * <p>
  * The live path is conversion-free: {@link #acceptAndWait(Object)} folds a domain event straight into the read model. Only the
  * catch-up reads the event store (CloudEvents) and decodes each replayed event once with the {@link CloudEventConverter}.
@@ -348,7 +348,7 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
-     * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), store the
+     * Run the catch-up: replay the projection's history from the store (decoding each event once), store the
      * catch-up marker, then start delivering the live feed. The returned {@link Mono} completes when the replay and
      * marker are done. Call once, after wiring the live feed.
      * <p>
@@ -460,7 +460,7 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
-     * Go live without a catch-up: skip the one-time replay and start delivering buffered live events. Use this
+     * Go live without a catch-up: skip the replay and start delivering buffered live events. Use this
      * instead of {@link #catchUp()} for a feed whose events are not in the local event store, so there is nothing to
      * replay. No catch-up marker is written, since nothing was replayed, so a later {@link #catchUp()} replays from the
      * marker stored before, or the whole history when none was stored.

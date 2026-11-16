@@ -56,10 +56,10 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
- * The reactive counterpart of the blocking {@code CatchupThenPushSubscriptionModel}: a one-time <strong>catch-up</strong>
- * in front of a reactive {@link PushSubscriptionModel}. On first subscribe it replays a projection's
- * history from the event store, then hands over to the live push feed, so a brand-new or rebuilt projection is
- * backfilled before it consumes the broker.
+ * The reactive counterpart of the blocking {@code CatchupThenPushSubscriptionModel}: a <strong>catch-up</strong> in
+ * front of a reactive {@link PushSubscriptionModel}. Each time a subscription starts, it replays from the event store
+ * the events after the stored catch-up marker, or the whole history when none is stored, then hands over to the live
+ * push feed, so a projection is backfilled before it consumes the broker.
  * <p>
  * The catch-up applies the replayed events first, then the events a replayed handler wrote, and then stores the
  * catch-up marker. A live event fed through {@code accept(..)} during the replay waits in a bounded unicast
