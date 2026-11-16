@@ -415,9 +415,9 @@ The upgrade guide has the procedure for operators, in
   them.
 - A quarantined instance keeps a record of every input it skips, with no limit. The records take space in the store
   until a release replays them, a replayed input completes the instance, or the 0.35.0 store deletes the instance.
-  Records left under an earlier quarantine id, see points 2 and 3, stay until the instance is deleted, or until a
-  replayed input completes it, see point 2. A 0.34.0 `delete` after a
-  downgrade removes none of them.
+  Records left under an earlier quarantine id, see points 2 and 3, stay in the store, and nothing reads or deletes
+  them, since a release, a completion and a delete all go by the instance's current quarantine id. They take up
+  storage and nothing else. A 0.34.0 `delete` after a downgrade removes none of the records.
 - An instance whose K or recorded input refers to an event that was deleted from the store stays quarantined until the
   event is restored or the instance is deleted.
 - A 0.34.0 node, in a mixed cluster or after a downgrade, stalls the subscription of a saga with an instance that
