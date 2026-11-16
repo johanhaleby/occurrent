@@ -20,6 +20,10 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
+import io.cloudevents.CloudEvent;
+import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.dsl.projection.reactor.ResumePositionFixtures.Counted;
 import org.occurrent.dsl.projection.reactor.ResumePositionFixtures.InMemoryLog;
 import org.occurrent.dsl.projection.reactor.ResumePositionFixtures.RecordingReplayAwareView;
@@ -28,12 +32,17 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -238,6 +247,80 @@ class CatchupProjectionFeedResumePositionTest {
         Throwable failure = catchThrowable(() -> feed(new RecordingReplayAwareView()).catchUp().block(TIMEOUT));
 
         assertThat(failure).hasMessageContaining("\"counter\"").hasMessageContaining("subscribe under a new id");
+    }
+
+    @Test
+    void an_event_a_live_fold_fed_back_that_the_replay_does_not_read_is_delivered_by_the_next_start_when_its_fold_fails_and_the_marker_cannot_be_deleted() throws Exception {
+        log.append("1");
+        InMemoryCheckpointStorage undeletable = new InMemoryCheckpointStorage() {
+            @Override
+            public Mono<Void> delete(String subscriptionId) {
+                return Mono.defer(() -> {
+                    return Mono.error(new IllegalStateException("marker delete failed"));
+                });
+            }
+        };
+        AtomicBoolean secondCatchUp = new AtomicBoolean();
+        CountDownLatch aReadHead = new CountDownLatch(1);
+        // Hides W and X from the replay of the second catch-up only, as if both committed after that catch-up read the head.
+        PositionOrderedReader lateCommit = new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(org.occurrent.filter.Filter filter, PositionRange range) {
+                Flux<CloudEvent> read = log.readInPositionOrder(filter, range);
+                return secondCatchUp.get() ? read.filter(e -> !e.getId().equals("X") && !e.getId().equals("W")) : read;
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                Mono<Long> head = log.currentPosition();
+                return secondCatchUp.get() ? head.doAfterTerminate(aReadHead::countDown) : head;
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
+            }
+        };
+        CountDownLatch foldingW = new CountDownLatch(1);
+        CountDownLatch xFailed = new CountDownLatch(1);
+        AtomicBoolean wFed = new AtomicBoolean();
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feed = new AtomicReference<>();
+        java.util.function.BiFunction<EventMetadata, Counted, Mono<Void>> fold = (metadata, event) -> Mono.defer(() -> {
+            folded.add(event.eventId());
+            if (event.eventId().equals("X")) {
+                xFailed.countDown();
+                return Mono.error(new IllegalStateException("fold failed for X"));
+            }
+            if (event.eventId().equals("W") && wFed.compareAndSet(false, true)) {
+                log.append("X");
+                return feed.get().acceptAndWait(new Counted("X")).then(Mono.fromRunnable(() -> {
+                    foldingW.countDown();
+                    try {
+                        aReadHead.await(5, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }));
+            }
+            return Mono.empty();
+        });
+        feed.set(CatchupProjectionFeed.create("counter", fold, Filter.all(), lateCommit, converter, Counted::eventId, undeletable));
+        feed.get().catchUp().block(TIMEOUT);
+        log.append("W");
+        feed.get().acceptOrDefer(new Counted("W")).subscribeOn(Schedulers.boundedElastic()).subscribe(outcome -> { }, error -> { });
+        assertThat(foldingW.await(5, TimeUnit.SECONDS)).as("W is folding").isTrue();
+        secondCatchUp.set(true);
+        CompletableFuture<Void> a = feed.get().catchUp().toFuture();
+
+        assertThat(xFailed.await(5, TimeUnit.SECONDS)).as("X was folded and failed").isTrue();
+        assertThat(catchThrowable(() -> a.get(5, TimeUnit.SECONDS))).as("what the second catch-up ended with").isNull();
+        secondCatchUp.set(false);
+
+        RecordingReplayAwareView next = new RecordingReplayAwareView();
+        CatchupProjectionFeed.create("counter", next, Filter.all(), log, converter, Counted::eventId, undeletable).catchUp().block(TIMEOUT);
+
+        assertThat(next.updates()).as("delivered by the next start of the same id").contains("X");
     }
 
     // A stopped catch-up writes no marker, so a later one replays from where the stopped one started.

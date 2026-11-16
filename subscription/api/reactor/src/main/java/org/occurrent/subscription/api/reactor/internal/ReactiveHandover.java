@@ -298,6 +298,10 @@ public final class ReactiveHandover<T, K> {
     // when a replay starts rather than by every catchUp(Source), so a catch-up that replays nothing leaves it in
     // place, and cleared with replayedIds when a replay is abandoned.
     private final AtomicReference<@Nullable Source<T>> replaySource = new AtomicReference<>();
+    // Payloads fed from code this handover runs, with their de-dup keys, from when they are queued for the live sink
+    // until their delivery ends. A catch-up does not store its marker while one of them is queued and its replay did
+    // not deliver it, see unfoldedOwnCodePayloadQueued().
+    private final java.util.Map<LiveAck, K> fedByOwnCodeInLiveSink = new ConcurrentHashMap<>();
     // The live sink accepts one subscriber ever. A catch-up on a handover that is already live, a feed's goLive()
     // after its catchUp(), leaves the running pipeline alone instead of subscribing again, which the sink would
     // refuse and the error handler would record as a failed catch-up.
@@ -921,6 +925,7 @@ public final class ReactiveHandover<T, K> {
                 liveBacklog.incrementAndGet();
                 Item<K> stamped = item.withTurn(admitted.incrementAndGet());
                 ack.admittedAs(stamped.turn());
+                registerIfFedByOwnCode(ack, stamped);
                 pendingOffers.add(new PendingOffer<>(stamped, ack, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
             }
         }
@@ -1026,6 +1031,29 @@ public final class ReactiveHandover<T, K> {
     // The bookkeeping deliver(..) does in its doFinally, for a payload that never reaches it. Without it a drain that
     // counted the payload never reaches zero, so its source is never told its buffer drained and its replay turn is
     // never given back, which parks every later replay.
+    private void registerIfFedByOwnCode(LiveAck ack, Item<K> stamped) {
+        if (ack.answeredOnceQueued) {
+            fedByOwnCodeInLiveSink.put(ack, stamped.dedupKey());
+        }
+    }
+
+    // Whether a payload fed from code this handover runs is queued for the live sink and was not delivered by the
+    // replay that just ran. Its event can sit at or below the head that replay read without the replay having read it,
+    // when the write that stored it committed after the replay passed its position. Nobody delivers it again if its
+    // fold fails once the marker holds that head, so the marker waits. That holds whether or not the payload whose
+    // fold fed it waits for it, since that payload's answer can have gone out before this one is delivered. A payload
+    // the replay delivered was folded before the marker, whatever happens to its live copy. One a stop dropped is never
+    // delivered, so it no longer counts.
+    private boolean unfoldedOwnCodePayloadQueued() {
+        fedByOwnCodeInLiveSink.keySet().removeIf(LiveAck::dropped);
+        for (K key : fedByOwnCodeInLiveSink.values()) {
+            if (!replayedIds.contains(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void dropFromBacklogAndDrains(Item<K> item) {
         if (!settledHere(item)) {
             return;
@@ -1178,6 +1206,12 @@ public final class ReactiveHandover<T, K> {
      * call while this handover is failing, see {@link #acceptReportingDelivery(Object)}, without replaying or writing
      * the marker. Called from code this handover is running, it emits {@code true} without waiting for the replay, see
      * below.
+     * <p>
+     * The catch-up does not call {@link Source#markCaughtUp()} while a payload that code this handover runs fed is held
+     * back for the live feed and was not delivered by its replay. The marker stored before stays, so the next catch-up
+     * replays that payload's event if its fold fails. A fold that feeds a payload whenever it folds a live event can,
+     * under steady live traffic, keep this true at every catch-up. The marker then stays where an earlier catch-up
+     * stored it, and each start replays everything after that.
      * <p>
      * A replay waits for a live payload still being delivered and then holds the live payloads back until it ends,
      * which matters on a handover that is already live, a feed's {@code catchUp()} after its {@code goLive()}. They are
@@ -1379,6 +1413,12 @@ public final class ReactiveHandover<T, K> {
             if (before != null && before != failureBeforeWaiting) {
                 refusedForAnotherFailure.set(true);
                 return Mono.<Void>error(refusal(before));
+            }
+            // The marker already stored stays, so the next catch-up replays the event of such a payload, which lies
+            // after it. Live delivery is held back until after this point, so no payload reaches the sink or leaves
+            // it while this is checked and the marker is written.
+            if (unfoldedOwnCodePayloadQueued()) {
+                return Mono.<Void>empty();
             }
             markerMayBeWritten.set(true);
             return source.markCaughtUp().then(Mono.defer(() -> {
@@ -1661,6 +1701,10 @@ public final class ReactiveHandover<T, K> {
     private Mono<Void> deliver(Item<K> item, Object replayOwner) {
         Mono<Void> delivery = item.ack() == null ? deliverItem(item, replayOwner) : deliverWhenNoReplayRuns(item);
         return delivery.doFinally(signal -> {
+            LiveAck ack = item.ack();
+            if (ack != null) {
+                fedByOwnCodeInLiveSink.remove(ack);
+            }
             if (!settledHere(item)) {
                 return;
             }
@@ -1746,6 +1790,7 @@ public final class ReactiveHandover<T, K> {
                 Item<K> stamped = ((Item<K>) fed.item()).withTurn(admitted.incrementAndGet());
                 LiveAck ack = Objects.requireNonNull(stamped.ack());
                 ack.admittedAs(stamped.turn());
+                registerIfFedByOwnCode(ack, stamped);
                 pendingOffers.add(new PendingOffer<>(stamped, ack, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
             }
         }

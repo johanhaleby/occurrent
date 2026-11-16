@@ -3244,6 +3244,64 @@ class ReactiveHandoverTest {
         assertThatALaterPayloadIsRefusedFor(handover, "bad3");
     }
 
+    @Test
+    void a_payload_a_live_fold_fed_back_is_folded_once_and_before_the_marker_when_the_replay_reads_it() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("L1", self ->
+                self.acceptReportingDelivery("X").then(Mono.fromRunnable(() -> {
+                    foldingL1.countDown();
+                    awaitQuietly(releaseL1);
+                }))));
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        CompletableFuture<Void> l1 = handover.accept("L1").subscribeOn(Schedulers.boundedElastic()).toFuture();
+        assertThat(foldingL1.await(5, TimeUnit.SECONDS)).isTrue();
+        CountDownLatch replayWaiting = new CountDownLatch(1);
+        FakeSource replaying = source(List.of("X"), false);
+        replaying.onCaughtUpChecked = replayWaiting::countDown;
+        List<String> logWhenMarked = new CopyOnWriteArrayList<>();
+        replaying.onMarkCaughtUp = () -> logWhenMarked.addAll(log);
+        CompletableFuture<Boolean> replay = handover.catchUp(replaying).toFuture();
+        assertThat(replayWaiting.await(5, TimeUnit.SECONDS)).isTrue();
+
+        releaseL1.countDown();
+
+        assertThat(replay.get(5, TimeUnit.SECONDS)).isTrue();
+        l1.get(5, TimeUnit.SECONDS);
+        assertThat(logWhenMarked).containsExactly("L1", "X");
+        assertThat(replaying.markCaughtUpCallCount()).isEqualTo(1);
+        assertThat(log).containsExactly("L1", "X");
+    }
+
+    @Test
+    void a_payload_a_live_fold_fed_back_and_the_replay_does_not_read_keeps_the_marker_unwritten_until_it_is_folded() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("L1", self ->
+                self.acceptReportingDelivery("X").then(Mono.fromRunnable(() -> {
+                    foldingL1.countDown();
+                    awaitQuietly(releaseL1);
+                }))));
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        CompletableFuture<Void> l1 = handover.accept("L1").subscribeOn(Schedulers.boundedElastic()).toFuture();
+        assertThat(foldingL1.await(5, TimeUnit.SECONDS)).isTrue();
+        CountDownLatch replayWaiting = new CountDownLatch(1);
+        FakeSource replaying = source(List.of(), false);
+        replaying.onCaughtUpChecked = replayWaiting::countDown;
+        CompletableFuture<Boolean> replay = handover.catchUp(replaying).toFuture();
+        assertThat(replayWaiting.await(5, TimeUnit.SECONDS)).isTrue();
+
+        releaseL1.countDown();
+
+        assertThat(replay.get(5, TimeUnit.SECONDS)).isTrue();
+        l1.get(5, TimeUnit.SECONDS);
+        assertThat(replaying.markCaughtUpCallCount()).isZero();
+        awaitSize(log, 2);
+        assertThat(log).containsExactly("L1", "X");
+    }
+
     // The drain of the second catch-up counts L0, which is being folded, and L1, which waits behind it. The third
     // catch-up holds live delivery back once L0 is folded and fails to fold bad1, and that failure claims L1, which ends
     // the drain. Its liveDrained() throws what it is given without declaring it, as a source written in Kotlin can for
