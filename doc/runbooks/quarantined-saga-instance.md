@@ -89,9 +89,11 @@ Alert on an `ERROR` saying the instance was quarantined but its state store did 
 `SagaFailure.quarantineId` or `SagaEnvelope.quarantineSkipCount` too. The saga reads the instance back after the
 write that quarantines it, and logs this line when the store lost either field. It writes the instance back as it was
 before the quarantine, and the event goes back to whatever feeds the subscription instead of being acknowledged. Every
-delivery of the event fails the same way until the store persists both fields, so fix the store. When the line says the
-quarantine could not be undone, the instance is stored as `QUARANTINED` without them and skips every later input without
-recording it, so it can't be released with them.
+delivery of the event fails the same way until the store persists both fields, so fix the store. When another write
+changes the instance before that, the saga reads it again and writes it back again, up to
+`SagaRunnerConfig.maxCasAttempts` times. When the line says the quarantine could not be undone, something outside the saga wrote the instance on every
+attempt. The instance is then stored as `QUARANTINED` without them and skips every later input without recording it,
+so it can't be released with them.
 
 A release in step 5 logs lines of its own from the same logger. The one to alert on is an `ERROR` saying the instance
 is `QUARANTINED` again, and step 5 lists the others.
@@ -355,7 +357,8 @@ Three ways on from there:
 - The instance was quarantined by 0.34.0, which recorded none of the inputs it skipped.
 - The instance's state doesn't decode. The message names the decoding failure.
 - The runner has no `EventStoreQueries`. The message names `SagaRunner.eventStoreQueries(..)`.
-- The state store doesn't implement `SagaStateStoreSkippedInputs`. The message names the interface.
+- The state store doesn't implement `SagaStateStoreSkippedInputs`. The message names the interface. `release`
+  throws for it even when the store doesn't hold the saga id, instead of returning `NOT_FOUND`.
 
 The first can't be released at all. Its message names `SagaStateStore.delete(sagaId)`, and step 6 is what is left.
 For the second, fix how the state decodes, as in step 4, and release the instance again, or delete it in step 6.
@@ -491,7 +494,11 @@ back with it. Pass the event store with `SagaRunner.eventStoreQueries(..)`, or c
 them `@Primary`, fails at startup the same way, so define the event store as a bean, mark one `@Primary`, or set
 `occurrent.saga.quarantine-enabled=false`. It refuses to start in the same way when the saga's state store doesn't
 implement `SagaStateStoreSkippedInputs`, which records what a quarantined instance skips. The in-memory store and
-`SpringMongoSagaStateStore` implement it, so only a store of your own can hit this. On a
+`SpringMongoSagaStateStore` implement it, so only a store of your own can hit this. A decorator around one of them, for
+metrics or caching, hides the interface unless it implements `SagaStateStoreSkippedInputs` too and passes each call on,
+so make every decorator around such a store do that. Where the saga still starts, on a model that doesn't retain every
+event or with quarantine off, a decorator that doesn't makes `release` throw, and makes an instance quarantined before
+the decorator was put in place throw on each input it has to record as skipped. On a
 model that doesn't retain every event, or on a push feed, `SagaRunner` turns quarantine off and logs a `WARN` each time
 the saga starts, with the default configuration too. `SagaRunnerConfig.disableQuarantine()` or
 `occurrent.saga.quarantine-enabled=false` silences it.

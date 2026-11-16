@@ -35,6 +35,13 @@ import java.util.List;
  * instance back as it was before the quarantine and fails the input, so every delivery of that input fails until the
  * store persists both. When a release finds one of those members missing, it throws.
  * <p>
+ * The runner sees only the store it is given, so a decorator around a store that implements this has to implement it
+ * too and pass each call on. On a subscription model that holds every event, a saga with quarantine on and a decorator
+ * that does not refuses to start, as above. Otherwise it starts, and {@code SagaSubscription.release(sagaId)} then
+ * throws an {@link IllegalStateException} that names this interface, even for an instance the store does not hold,
+ * instead of returning {@code NOT_FOUND}. The delivery of an input that an instance quarantined before the decorator
+ * was put in place has to record as skipped throws the same exception.
+ * <p>
  * The interface takes no state type parameter, since no member reads or writes the state.
  */
 public interface SagaStateStoreSkippedInputs {
