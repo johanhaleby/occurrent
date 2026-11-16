@@ -66,6 +66,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -147,6 +148,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private final boolean ownsExecutor;
     private final boolean autoStartup;
     private final ChangeStreamSubscriptions subscriptions;
+    // The stillWanted of a two-argument canResumeFrom running on this thread, for the one-argument canResumeFrom it calls
+    private final ThreadLocal<BooleanSupplier> stillWantedOfTheCall = new ThreadLocal<>();
 
     /**
      * Create a blocking subscription using Spring. It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively
@@ -342,7 +345,30 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      */
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint) {
-        return subscriptions.canResumeFrom(eventCollection, checkpoint);
+        BooleanSupplier stillWanted = stillWantedOfTheCall.get();
+        return subscriptions.canResumeFrom(eventCollection, checkpoint, stillWanted == null ? () -> true : stillWanted);
+    }
+
+    /**
+     * {@link #canResumeFrom(Checkpoint)}, except that a transient failure is also thrown, instead of retried, once
+     * {@code stillWanted} answers {@code false}. A catch-up calls this overload from its replay thread. It calls
+     * {@link #canResumeFrom(Checkpoint)}, so a subclass that overrides only that method is still called, and
+     * {@code stillWanted} ends the retry when the override calls {@code super.canResumeFrom(checkpoint)} on the same
+     * thread.
+     */
+    @Override
+    public boolean canResumeFrom(Checkpoint checkpoint, BooleanSupplier stillWanted) {
+        BooleanSupplier outer = stillWantedOfTheCall.get();
+        stillWantedOfTheCall.set(stillWanted);
+        try {
+            return canResumeFrom(checkpoint);
+        } finally {
+            if (outer == null) {
+                stillWantedOfTheCall.remove();
+            } else {
+                stillWantedOfTheCall.set(outer);
+            }
+        }
     }
 
     // Life-cycle implementation
