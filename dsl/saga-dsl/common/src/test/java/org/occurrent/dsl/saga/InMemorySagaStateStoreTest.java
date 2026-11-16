@@ -437,6 +437,20 @@ class InMemorySagaStateStoreTest {
         }
 
         @Test
+        void lists_ids_in_string_order_whatever_order_the_backing_map_iterates_them_in() {
+            // The map iterates these as x10, x1, y, x2
+            for (String id : List.of("x1", "x10", "x2", "y")) {
+                store.compareAndSave(id, releasingEnvelope(id), 0);
+            }
+
+            assertAll(
+                    () -> assertThat(store.findReleasingSagaIds(null, 10)).containsExactly("x1", "x10", "x2", "y"),
+                    () -> assertThat(store.findReleasingSagaIds(null, 2)).containsExactly("x1", "x10"),
+                    () -> assertThat(store.findReleasingSagaIds("x1", 10)).containsExactly("x10", "x2", "y")
+            );
+        }
+
+        @Test
         void lists_the_ids_after_one_that_is_not_there_and_is_not_releasing() {
             store.compareAndSave("a", releasingEnvelope("a"), 0);
             store.compareAndSave("c", releasingEnvelope("c"), 0);

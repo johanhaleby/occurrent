@@ -295,6 +295,33 @@ class SagaRunnerConfigTest {
             assertThat(copies).extracting(SagaRunnerConfig::reorderWindow).containsOnly(17);
         }
 
+        @Test
+        void withReorderWindow_keeps_a_defaulted_quarantine_budget_defaulted() {
+            // When
+            SagaRunnerConfig config = SagaRunnerConfig.defaults().withReorderWindow(17);
+
+            // Then
+            assertThat(config.quarantineAfterDefaulted()).isTrue();
+        }
+
+        @Test
+        void withReorderWindow_keeps_an_explicit_quarantine_budget_explicit() {
+            // When
+            SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER).withReorderWindow(17);
+
+            // Then
+            assertThat(config.quarantineAfterDefaulted()).isFalse();
+        }
+
+        @Test
+        void a_configuration_that_never_quarantines_has_no_defaulted_budget_even_when_built_as_defaulted() {
+            // When
+            SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofSeconds(7), 13, 9, RedeliveryDetection.BEST_EFFORT, Optional.empty(), 256, true);
+
+            // Then
+            assertThat(config.quarantineAfterDefaulted()).isFalse();
+        }
+
         @ParameterizedTest
         @ValueSource(ints = {0, -1, Integer.MIN_VALUE})
         @DisplayName("throws IllegalArgumentException when withReorderWindow is given a window below 1")

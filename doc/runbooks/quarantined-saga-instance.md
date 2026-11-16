@@ -329,6 +329,17 @@ restart interrupted. It does either only once the instance has gone a whole `tim
 default, without a write, so it skips a release that is still running. You can call `release` again too, and it goes
 on where the release stands.
 
+The poller and a release can still replay the same input, and both dispatch its commands, in four cases:
+
+- The release takes longer than `timerPollInterval` over one input.
+- The poller's clock is `timerPollInterval` or more ahead of the clock of the node that wrote.
+- You call `release` while the poller is replaying the instance. Your call goes on beside the poller.
+- The release spends longer than `timerPollInterval` on inputs the stream marks show as applied. It deletes their
+  records without writing the instance, so the poller goes on beside it. Neither dispatches anything for those inputs,
+  so only the first input that isn't applied can have its commands dispatched twice.
+
+A receiver handles such a repeat the way it handles a live input delivered twice.
+
 The poller polls only while the saga's `timersEnabled` returns `true`, so a release that is under way waits with the
 timers while that gate is closed, only because the poller is what goes on with it. The gate exists for timers, which
 fire on the clock and can decide against state the subscription hasn't caught up to. A release applies only inputs the
@@ -591,4 +602,6 @@ released, so no step deletes it. The
 [0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#rolling-upgrades-from-0340-and-rolling-back-to-it) also
 covers a rolling upgrade from 0.34.0.
 
-Deleting an instance is not reversible from inside Occurrent. Take a backup of the collection first if you want one.
+Deleting an instance is not reversible from inside Occurrent. Take a backup first if you want one, of both the saga
+collection and `<sagaCollection>_skipped_inputs`. The delete removes the instance's skipped-input records too, and an
+instance restored without them releases as if it skipped nothing, so every input it skipped stays unapplied.

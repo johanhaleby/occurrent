@@ -85,8 +85,8 @@ import static java.util.Objects.requireNonNull;
  * @param releasedAt     when a release of the quarantined instance started, or {@code null} when none is running. An
  *                       instance that is {@link SagaStatus#QUARANTINED} with this set is releasing. It replays
  *                       {@code input} and then every input it skipped while quarantined, and turns
- *                       {@link SagaStatus#ACTIVE} in the write that applies the last of them. Cleared when the instance
- *                       is quarantined again
+ *                       {@link SagaStatus#ACTIVE} in a write after the last of them, once a read finds none left.
+ *                       Cleared when the instance is quarantined again
  * @param quarantineId   a random UUID that names the quarantine the instance is in, or {@code null} when it is not
  *                       quarantined, or was quarantined by 0.34.0, which cannot be released. Set by the write that
  *                       turns an {@link SagaStatus#ACTIVE} instance {@link SagaStatus#QUARANTINED}, kept when a

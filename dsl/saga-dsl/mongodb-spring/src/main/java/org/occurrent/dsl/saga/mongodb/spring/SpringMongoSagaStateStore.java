@@ -16,9 +16,14 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import com.mongodb.MongoServerException;
 import com.mongodb.ReadPreference;
+import com.mongodb.WriteConcern;
+import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.UpdateOptions;
+import com.mongodb.client.model.Updates;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
@@ -56,6 +61,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -104,6 +110,19 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
 
     private static final String SKIPPED_INPUTS_SUFFIX = "_skipped_inputs";
+    // How long each attempt of a skipped-input write waits for a journaled majority before it fails. A client timeoutMS
+    // above 0 bounds the attempt instead
+    private static final Duration SKIPPED_INPUT_WRITE_TIMEOUT = Duration.ofSeconds(10);
+    // With j: true a majority has the write in its on-disk journal before it acknowledges, whatever
+    // writeConcernMajorityJournalDefault says
+    private static final WriteConcern SKIPPED_INPUT_WRITE_CONCERN = WriteConcern.MAJORITY.withJournal(true)
+            .withWTimeout(SKIPPED_INPUT_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    // The refusal of j: true by a WiredTiger server that runs without journaling (BadValue). Other refusals share the
+    // code, so the message is matched too
+    private static final int JOURNAL_NOT_SUPPORTED_ERROR_CODE = 2;
+    private static final String JOURNAL_NOT_SUPPORTED_ERROR_MESSAGE = "cannot use 'j' option when a host does not have journaling enabled";
+    static final String JOURNALING_REQUIRED_MESSAGE = "SpringMongoSagaStateStore needs a MongoDB server with journaling to record the inputs a quarantined saga instance skips. "
+                                                      + "The server refused j: true because it runs without journaling, and a crash could then lose a recorded input that a release has to replay.";
     private static final String ID = "_id";
     private static final String STATE = "state";
     private static final String STATUS = "status";
@@ -505,19 +524,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
         Objects.requireNonNull(input, "input cannot be null");
-        Query query = skippedInputQuery(sagaId, quarantineId, input.key());
-        Update update = new Update().setOnInsert(SKIPPED_SEQ, input.seq());
-        // Two writers upserting one key at once can both miss and both insert, and the unique index refuses the second,
-        // which then finds the record the first stored, the outcome it wanted
-        Supplier<@Nullable Object> upsert = () -> {
-            try {
-                mongoOperations.upsert(query, update, skippedInputsCollectionName);
-            } catch (DuplicateKeyException recordedAlready) {
-                // Kept as it is
-            }
-            return null;
-        };
-        retryStrategy.execute(upsert);
+        Document filter = skippedInputFilter(sagaId, quarantineId, input.key());
+        // Two writers that upsert the same key race to insert it, and the server retries the loser's duplicate-key error
+        // itself, since the filter is an equality on exactly the fields of the unique index. The loser then finds the
+        // record the winner stored and keeps it, the outcome it wanted. This store opens no session or transaction of its
+        // own. Inside a transaction a caller opened, the server doesn't retry it, and the error ends that transaction, so
+        // catching it here couldn't save the write either.
+        writeSkippedInputs(collection -> collection.updateOne(filter, Updates.setOnInsert(SKIPPED_SEQ, input.seq()), new UpdateOptions().upsert(true)));
     }
 
     @Override
@@ -541,34 +554,62 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
         Objects.requireNonNull(head, "head cannot be null");
-        Query query = skippedInputQuery(sagaId, quarantineId, head.key());
-        Update update = new Update().set(SKIPPED_SEQ, head.seq());
-        // Two writers that upsert the same record race to insert it, and the server retries the loser's duplicate-key
-        // error itself, since the filter is an equality on exactly the fields of the unique index. This store opens no
-        // session or transaction of its own. Inside a transaction a caller opened, the server doesn't retry it, and the
-        // error ends that transaction, so catching it here couldn't save the write either.
-        retryStrategy.execute(() -> mongoOperations.upsert(query, update, skippedInputsCollectionName));
+        Document filter = skippedInputFilter(sagaId, quarantineId, head.key());
+        // A race to insert the same record is retried by the server, as recordSkippedInput says
+        writeSkippedInputs(collection -> collection.updateOne(filter, Updates.set(SKIPPED_SEQ, head.seq()), new UpdateOptions().upsert(true)));
     }
 
     @Override
     public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
         Objects.requireNonNull(input, "input cannot be null");
-        Query query = skippedInputQuery(sagaId, quarantineId, input.key());
-        query.addCriteria(where(SKIPPED_SEQ).is(input.seq()));
-        retryStrategy.execute(() -> mongoOperations.remove(query, skippedInputsCollectionName));
+        Document filter = skippedInputFilter(sagaId, quarantineId, input.key()).append(SKIPPED_SEQ, input.seq());
+        writeSkippedInputs(collection -> collection.deleteOne(filter));
     }
 
     @Override
     public void deleteSkippedInputs(String sagaId, String quarantineId) {
-        Query query = Query.query(where(SKIPPED_SAGA_ID).is(Objects.requireNonNull(sagaId, "sagaId cannot be null"))
-                .and(SKIPPED_QUARANTINE_ID).is(Objects.requireNonNull(quarantineId, "quarantineId cannot be null")));
-        retryStrategy.execute(() -> mongoOperations.remove(query, skippedInputsCollectionName));
+        Document filter = new Document(SKIPPED_SAGA_ID, Objects.requireNonNull(sagaId, "sagaId cannot be null"))
+                .append(SKIPPED_QUARANTINE_ID, Objects.requireNonNull(quarantineId, "quarantineId cannot be null"));
+        writeSkippedInputs(collection -> collection.deleteMany(filter));
     }
 
-    private static Query skippedInputQuery(String sagaId, String quarantineId, String key) {
-        return Query.query(where(SKIPPED_SAGA_ID).is(Objects.requireNonNull(sagaId, "sagaId cannot be null"))
-                .and(SKIPPED_QUARANTINE_ID).is(Objects.requireNonNull(quarantineId, "quarantineId cannot be null"))
-                .and(SKIPPED_KEY).is(Objects.requireNonNull(key, "key cannot be null")));
+    private static Document skippedInputFilter(String sagaId, String quarantineId, String key) {
+        return new Document(SKIPPED_SAGA_ID, Objects.requireNonNull(sagaId, "sagaId cannot be null"))
+                .append(SKIPPED_QUARANTINE_ID, Objects.requireNonNull(quarantineId, "quarantineId cannot be null"))
+                .append(SKIPPED_KEY, Objects.requireNonNull(key, "key cannot be null"));
+    }
+
+    // Every write and delete of a skipped-input record waits for a journaled majority, whatever write concern the
+    // caller's MongoOperations or collection has. A skip is acknowledged once its record is written, so a record a
+    // failover rolled back would leave a skipped input that no release replays. execute(..) still translates exceptions
+    private void writeSkippedInputs(java.util.function.Function<MongoCollection<Document>, ?> write) {
+        retryStrategy.execute(() -> {
+            try {
+                return mongoOperations.execute(skippedInputsCollectionName, collection -> write.apply(skippedInputWrites(collection)));
+            } catch (RuntimeException e) {
+                if (isJournalNotSupported(e)) {
+                    throw new IllegalStateException(JOURNALING_REQUIRED_MESSAGE, e);
+                }
+                throw e;
+            }
+        });
+    }
+
+    private static MongoCollection<Document> skippedInputWrites(MongoCollection<Document> collection) {
+        MongoCollection<Document> majority = collection.withWriteConcern(SKIPPED_INPUT_WRITE_CONCERN);
+        // A client timeoutMS makes the driver drop the wtimeout, and a timeoutMS of 0 waits forever
+        Long timeoutMillis = majority.getTimeout(TimeUnit.MILLISECONDS);
+        return timeoutMillis != null && timeoutMillis == 0 ? majority.withTimeout(SKIPPED_INPUT_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS) : majority;
+    }
+
+    private static boolean isJournalNotSupported(Throwable throwable) {
+        for (Throwable cause = throwable; cause != null; cause = cause.getCause()) {
+            if (cause instanceof MongoServerException serverException && serverException.getCode() == JOURNAL_NOT_SUPPORTED_ERROR_CODE
+                && serverException.getMessage() != null && serverException.getMessage().contains(JOURNAL_NOT_SUPPORTED_ERROR_MESSAGE)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // The fields backing SagaInstance, which is the whole observable surface of an instance: enough for both enumeration
