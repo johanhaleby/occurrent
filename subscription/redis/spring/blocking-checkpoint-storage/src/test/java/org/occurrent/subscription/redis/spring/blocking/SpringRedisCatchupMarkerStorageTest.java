@@ -155,6 +155,84 @@ class SpringRedisCatchupMarkerStorageTest {
         );
     }
 
+    @Test
+    void an_if_absent_marker_save_on_an_empty_id_returns_true_and_stores_the_marker_with_the_generation() {
+        // Given
+        SpringRedisCheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        long generation = storage.readCatchupMarker(subscriptionId).generation();
+
+        // When
+        boolean written = storage.saveCatchupMarker(subscriptionId, MARKER, generation, CheckpointWriteCondition.ifAbsent());
+
+        // Then
+        CatchupMarker marker = storage.readCatchupMarker(subscriptionId);
+        assertAll(
+                () -> assertThat(written).as("written").isTrue(),
+                () -> assertThat(marker.isPresent()).as("present").isTrue(),
+                () -> assertThat(marker.generation()).as("generation").isEqualTo(generation)
+        );
+    }
+
+    @Test
+    void an_if_absent_marker_save_whose_first_reply_is_lost_returns_true_when_the_retry_finds_its_own_marker() {
+        // Given, a first attempt that runs the save script on Redis and then fails, so the call retries
+        List<Integer> saveAttempts = new CopyOnWriteArrayList<>();
+        AtomicBoolean failNext = new AtomicBoolean(true);
+        StringRedisTemplate failingAfterTheFirstAttempt = new StringRedisTemplate(connectionFactory) {
+            @Override
+            public <T> T execute(RedisScript<T> script, RedisSerializer<?> argsSerializer, RedisSerializer<T> resultSerializer, List<String> keys, Object... args) {
+                // The marker save script is the only one called with three keys and four arguments
+                boolean save = keys.size() == 3 && args.length == 4;
+                T result = super.execute(script, argsSerializer, resultSerializer, keys, args);
+                if (save) {
+                    saveAttempts.add(saveAttempts.size() + 1);
+                    if (failNext.getAndSet(false)) {
+                        throw new RedisConnectionFailureException("Connection lost after the script ran");
+                    }
+                }
+                return result;
+            }
+        };
+        failingAfterTheFirstAttempt.afterPropertiesSet();
+        SpringRedisCheckpointStorage storage = new SpringRedisCheckpointStorage(failingAfterTheFirstAttempt, RetryStrategy.fixed(1L).maxAttempts(3));
+        long generation = storage.readCatchupMarker(subscriptionId).generation();
+
+        // When
+        boolean written = storage.saveCatchupMarker(subscriptionId, MARKER, generation, CheckpointWriteCondition.ifAbsent());
+
+        // Then
+        CatchupMarker marker = storage.readCatchupMarker(subscriptionId);
+        assertAll(
+                () -> assertThat(saveAttempts).as("attempts that reached Redis").hasSize(2),
+                () -> assertThat(written).as("written").isTrue(),
+                () -> assertThat(marker.isPresent()).as("present").isTrue(),
+                () -> assertThat(marker.generation()).as("generation").isEqualTo(generation)
+        );
+    }
+
+    @Test
+    void an_if_absent_marker_save_returns_false_over_a_marker_with_the_same_value_and_an_older_stamp() {
+        // Given, a marker that a forget removed and a late write of the same value put back with the old generation
+        SpringRedisCheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        long olderGeneration = storage.readCatchupMarker(subscriptionId).generation();
+        storage.saveCatchupMarker(subscriptionId, MARKER, olderGeneration, CheckpointWriteCondition.any());
+        storage.forgetCatchupMarker(subscriptionId);
+        storage.saveCatchupMarker(subscriptionId, MARKER, olderGeneration, CheckpointWriteCondition.any());
+        long currentGeneration = storage.readCatchupMarker(subscriptionId).generation();
+
+        // When
+        boolean written = storage.saveCatchupMarker(subscriptionId, MARKER, currentGeneration, CheckpointWriteCondition.ifAbsent());
+
+        // Then
+        CatchupMarker marker = storage.readCatchupMarker(subscriptionId);
+        assertAll(
+                () -> assertThat(currentGeneration).as("generation after the forget").isNotEqualTo(olderGeneration),
+                () -> assertThat(written).as("written").isFalse(),
+                () -> assertThat(marker.isPresent()).as("present").isFalse(),
+                () -> assertThat(marker.generation()).as("generation").isEqualTo(currentGeneration)
+        );
+    }
+
     // A failover lost the forget that raised the generation from 4 to 5, after an attempt had read 5
     @Test
     void a_late_save_stamped_with_a_generation_a_failover_lost_reads_absent_after_the_next_forget() {
