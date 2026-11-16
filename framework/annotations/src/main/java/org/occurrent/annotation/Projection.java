@@ -188,7 +188,8 @@ public @interface Projection {
 
     /**
      * Whether a {@link Source#PUSH} projection is backfilled from the event store before it goes live.
-     * {@link Catchup#FROM_EVENT_STORE} (the default) replays history once and hands over. {@link Catchup#NONE} takes
+     * {@link Catchup#FROM_EVENT_STORE} (the default) replays history and hands over each time the projection starts,
+     * from the beginning, or after the stored catch-up marker when there is one. {@link Catchup#NONE} takes
      * live events only and touches no event store at all, which is what a projection fed by another application's
      * broker needs, since the local event store holds none of those events. With a {@code PushSubscriptionModel} feed
      * that skips the catch-up wrapper entirely, and with a {@code DomainEventFeed} the projection registers and goes

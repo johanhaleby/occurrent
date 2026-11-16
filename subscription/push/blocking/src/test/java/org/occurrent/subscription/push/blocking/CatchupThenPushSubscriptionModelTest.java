@@ -384,7 +384,7 @@ class CatchupThenPushSubscriptionModelTest {
                 model.subscribe("proj", null, StartAt.now(), ce -> {
                 }));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("always replays a projection's history from the beginning");
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("replays a projection's history from the beginning, or after its stored catch-up marker");
     }
 
     @Test
