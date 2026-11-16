@@ -122,6 +122,24 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * This also assumes the {@link RedisOperations} passed in serializes a key to its own literal bytes, the same
  * assumption the checkpoint's plain {@code GET} already makes. A key serializer that reshapes the string changes
  * what Cluster actually hashes, and nothing in this class can see that reshaping to compensate for it.
+ * <p>
+ * <strong>Failover.</strong> Redis acknowledges a write before its replicas have it, and this class doesn't wait for a
+ * replica to catch up. When the primary fails and a replica takes its place, every write that replica hadn't received
+ * is gone, and so is a write the old primary still acknowledges after the replica took over. That holds for every
+ * write this class makes:
+ * <ul>
+ * <li>A lost {@link #save(String, Checkpoint) save}, under any condition, means the stored checkpoint is older than
+ * the position the subscription had reached. A subscription that restarts resumes from it and gets the events after it
+ * again, which a subscription already has to handle.</li>
+ * <li>A lost {@link #delete(String) delete} brings the checkpoint back. The next start of that subscription id resumes
+ * from it instead of from the start position it was given.</li>
+ * <li>A conditional {@link #save(String, Checkpoint, CheckpointWriteCondition) save}, {@code notOlderThan} or
+ * {@code ifAbsent}, is judged against the version key, and a failover can roll that key back too. A write the condition
+ * refused before the failover can then be accepted after it.</li>
+ * <li>A read can be stale. For a short while after a replica has taken its place, the old primary can still answer
+ * {@link #read(String)}, {@link #exists(String)} or {@link #writeVersion(String)} with a value the new primary doesn't
+ * have.</li>
+ * </ul>
  */
 @NullMarked
 public class SpringRedisCheckpointStorage implements CheckpointStorage {
@@ -134,68 +152,66 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     private static final long WRITE_SUCCEEDED = -1L;
 
     /**
-     * Returned by the write and read scripts below when no version is stored for the subscription id, which is
+     * Returned by the write and read scripts below, as a string, when no version is stored for the subscription id, which is
      * distinct from {@link #WRITE_SUCCEEDED} and from every version this storage ever writes, since a write version
      * is always the non-negative fencing token a competing-consumer strategy hands the caller.
      */
     private static final long NO_VERSION_STORED = -2L;
 
+    // Lua's tonumber turns a version into a double, which holds every integer only up to 2^53, so two versions above
+    // that can compare equal. Every version this storage writes is a non-negative long in plain decimal digits
+    // without leading zeros, so the longer string is the greater version, and two of the same length compare digit by
+    // digit. The digits are compared as bytes, since Lua compares strings with the server's collation locale.
+    private static final String VERSION_IS_GREATER = """
+            local function versionIsGreater(a, b)
+                if #a ~= #b then
+                    return #a > #b
+                end
+                for i = 1, #a do
+                    local x, y = string.byte(a, i), string.byte(b, i)
+                    if x ~= y then
+                        return x > y
+                    end
+                end
+                return false
+            end
+            """;
+
     // KEYS[1] = checkpoint key, KEYS[2] = version key. ARGV[1] = checkpoint value, ARGV[2] = write version as
     // plain decimal digits. Nothing is stored is accepted, since that is a checkpoint written before this
     // condition existed. Otherwise the write is accepted when the stored version is not greater than the one
-    // offered, and refused with the stored version otherwise.
-    private static final RedisScript<Long> NOT_OLDER_THAN_SCRIPT = RedisScript.of("""
-            local storedVersionRaw = redis.call('GET', KEYS[2])
-            if storedVersionRaw then
-                local storedVersion = tonumber(storedVersionRaw)
-                local writeVersion = tonumber(ARGV[2])
-                if storedVersion > writeVersion then
-                    return storedVersion
-                end
+    // offered, and refused with the stored version otherwise. Returns a string, see READ_VERSION_SCRIPT.
+    private static final RedisScript<String> NOT_OLDER_THAN_SCRIPT = RedisScript.of(VERSION_IS_GREATER + """
+            local storedVersion = redis.call('GET', KEYS[2])
+            if storedVersion and versionIsGreater(storedVersion, ARGV[2]) then
+                return storedVersion
             end
             redis.call('SET', KEYS[1], ARGV[1])
             redis.call('SET', KEYS[2], ARGV[2])
-            return -1
-            """, Long.class);
+            return '-1'
+            """, String.class);
 
     // KEYS[1] = checkpoint key, KEYS[2] = version key. ARGV[1] = checkpoint value. Accepted only when the
     // checkpoint key does not exist yet, whatever version would be stored. The version key is left untouched
-    // either way, since ifAbsent is about whether a checkpoint is stored, not a version.
-    private static final RedisScript<Long> IF_ABSENT_SCRIPT = RedisScript.of("""
+    // either way, since ifAbsent is about whether a checkpoint is stored, not a version. A stored checkpoint equal to
+    // ARGV[1] counts as written, since a retry whose first attempt wrote and lost its reply finds it, and the MongoDB
+    // storages answer the same. Returns a string, see READ_VERSION_SCRIPT.
+    private static final RedisScript<String> IF_ABSENT_SCRIPT = RedisScript.of("""
             if redis.call('EXISTS', KEYS[1]) == 1 then
-                local storedVersionRaw = redis.call('GET', KEYS[2])
-                if storedVersionRaw then
-                    return tonumber(storedVersionRaw)
+                if redis.call('GET', KEYS[1]) == ARGV[1] then
+                    return '-1'
                 end
-                return -2
+                return redis.call('GET', KEYS[2]) or '-2'
             end
             redis.call('SET', KEYS[1], ARGV[1])
-            return -1
-            """, Long.class);
+            return '-1'
+            """, String.class);
 
-    // KEYS[1] = version key. No ARGV.
-    private static final RedisScript<Long> READ_VERSION_SCRIPT = RedisScript.of("""
-            local storedVersionRaw = redis.call('GET', KEYS[1])
-            if storedVersionRaw then
-                return tonumber(storedVersionRaw)
-            end
-            return -2
-            """, Long.class);
-
-    // The three scripts above only ever return a Long, and this is never asked to deserialize one, since a Long
-    // reply comes back from the driver as a Long already. It exists because the execute overload that takes
-    // explicit serializers demands one of the right type.
-    private static final RedisSerializer<Long> RESULT_SERIALIZER = new RedisSerializer<Long>() {
-        @Override
-        public byte @Nullable [] serialize(@Nullable Long value) {
-            return value == null ? null : Long.toString(value).getBytes(StandardCharsets.UTF_8);
-        }
-
-        @Override
-        public @Nullable Long deserialize(byte @Nullable [] bytes) {
-            return bytes == null ? null : Long.parseLong(new String(bytes, StandardCharsets.UTF_8));
-        }
-    };
+    // KEYS[1] = version key. No ARGV. Returns the stored version as the string it is stored as, since an integer
+    // reply would go through a Lua number and lose precision above 2^53.
+    private static final RedisScript<String> READ_VERSION_SCRIPT = RedisScript.of("""
+            return redis.call('GET', KEYS[1]) or '-2'
+            """, String.class);
 
     private final RedisOperations<String, String> redis;
     private final RetryStrategy retryStrategy;
@@ -203,7 +219,7 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     // Encodes a script's ARGV. A checkpoint value is handed to the RedisOperations' own value serializer, the same
     // one opsForValue().set(..) uses, since a byte-identical encoding there is what keeps a plain GET reading it
     // correctly. Everything else this storage passes as a script argument is already-encoded plain digits, handed
-    // through unchanged, since the script parses them with Lua's tonumber and nothing requires the value serializer
+    // through unchanged, since the scripts compare them as decimal strings and nothing requires the value serializer
     // to produce a decimal string.
     private final RedisSerializer<Object> conditionArgsSerializer;
 
@@ -359,7 +375,7 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
      * retried on the path that threw it", and a slot mismatch is the same kind of failure, just reported by Cluster
      * instead of by this class.
      */
-    private Checkpoint saveConditionally(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition, RedisScript<Long> script, byte[]... extraArgs) {
+    private Checkpoint saveConditionally(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition, RedisScript<String> script, byte[]... extraArgs) {
         // Standalone mode has no slot to protect, so it skips this restriction entirely rather than narrowing it.
         if (!standalone) {
             requireClusterSlotAlignable(subscriptionId);
@@ -369,8 +385,8 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
             args[0] = checkpoint.asString();
             System.arraycopy(extraArgs, 0, args, 1, extraArgs.length);
 
-            long outcome = requireNonNull(redis.execute(script, conditionArgsSerializer, RESULT_SERIALIZER,
-                    List.of(subscriptionId, versionKey(subscriptionId)), args));
+            long outcome = Long.parseLong(requireNonNull(redis.execute(script, conditionArgsSerializer, RedisSerializer.string(),
+                    List.of(subscriptionId, versionKey(subscriptionId)), args)));
             if (outcome == WRITE_SUCCEEDED) {
                 return checkpoint;
             }
@@ -457,10 +473,11 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     @Override
     public OptionalLong writeVersion(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        Supplier<@Nullable Long> read = () -> redis.execute(READ_VERSION_SCRIPT, RedisSerializer.string(), RESULT_SERIALIZER,
+        Supplier<@Nullable String> read = () -> redis.execute(READ_VERSION_SCRIPT, RedisSerializer.string(), RedisSerializer.string(),
                 List.of(versionKey(subscriptionId)));
-        Long storedVersion = executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
-        return storedVersion == null || storedVersion == NO_VERSION_STORED ? OptionalLong.empty() : OptionalLong.of(storedVersion);
+        String reply = executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
+        long storedVersion = reply == null ? NO_VERSION_STORED : Long.parseLong(reply);
+        return storedVersion == NO_VERSION_STORED ? OptionalLong.empty() : OptionalLong.of(storedVersion);
     }
 
     /**
@@ -571,7 +588,7 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
             @Override
             public byte @Nullable [] serialize(@Nullable Object value) {
                 // A write version arrives pre-encoded as plain decimal digits, passed through unchanged so the
-                // script's tonumber can read it. Anything else is a checkpoint value, encoded the same way
+                // scripts can compare it as a decimal string. Anything else is a checkpoint value, encoded the same way
                 // opsForValue().set(..) would encode it.
                 return value instanceof byte[] alreadyEncoded ? alreadyEncoded : checkpointValueSerializer.serialize(value);
             }
