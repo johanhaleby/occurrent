@@ -776,7 +776,8 @@ public class OccurrentProperties {
          * before the saga can work out which instance it belongs to is never let past, because acknowledging it would
          * lose it. It is refused on every redelivery, and this only sets how often that is logged.
          * <p>
-         * Zero and negative values stop the application from starting when it has at least one {@code @Saga},
+         * Zero and negative values stop the application from starting when it has at least one {@code @Saga} and
+         * quarantine is enabled,
          * because a reader can take zero to mean "never" or "immediately". Even when quarantine is on, it is switched
          * off on its own,
          * with a warning at startup, unless the subscription model guarantees that it holds every event it delivers,

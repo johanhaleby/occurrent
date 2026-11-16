@@ -43,6 +43,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Objects.requireNonNull;
@@ -357,14 +362,60 @@ class SpringMongoSagaStateStoreReleaseTest {
     }
 
     @Test
-    void a_record_is_deleted_by_its_key_and_leaves_the_others() {
+    void a_record_is_inserted_when_the_key_has_none_and_it_is_recorded_at_the_head() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
-        store.recordSkippedInput("order-12", "q-1", new SkippedInput(0, "a@1"));
-        store.recordSkippedInput("order-12", "q-1", new SkippedInput(1, "b@2"));
+        store.recordSkippedInput("order-12", "q-1", new SkippedInput(0, "b@2"));
 
-        store.deleteSkippedInputByKey("order-12", "q-1", "a@1");
+        store.recordSkippedInputAtHead("order-12", "q-1", new SkippedInput(-1, "a@1"));
 
-        assertThat(store.findSkippedInputs("order-12", "q-1", 10)).containsExactly(new SkippedInput(1, "b@2"));
+        assertThat(store.findSkippedInputs("order-12", "q-1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(0, "b@2"));
+    }
+
+    @Test
+    void the_record_of_a_key_moves_to_the_seq_it_is_recorded_at_the_head_with_and_stays_one_record() {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        store.recordSkippedInput("order-moved", "q-1", new SkippedInput(4, "a@1"));
+        store.recordSkippedInput("order-moved", "q-1", new SkippedInput(5, "b@2"));
+
+        store.recordSkippedInputAtHead("order-moved", "q-1", new SkippedInput(-1, "a@1"));
+
+        assertThat(store.findSkippedInputs("order-moved", "q-1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(5, "b@2"));
+    }
+
+    @Test
+    void one_record_of_a_key_is_left_when_two_concurrent_callers_record_it_at_the_head() throws Exception {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 100; round++) {
+                String sagaId = "order-race-" + round;
+                CountDownLatch bothReady = new CountDownLatch(2);
+                CountDownLatch go = new CountDownLatch(1);
+                List<Future<?>> writers = List.of(
+                        executor.submit(() -> {
+                            bothReady.countDown();
+                            go.await();
+                            store.recordSkippedInputAtHead(sagaId, "q-1", new SkippedInput(-1, "a@1"));
+                            return null;
+                        }),
+                        executor.submit(() -> {
+                            bothReady.countDown();
+                            go.await();
+                            store.recordSkippedInputAtHead(sagaId, "q-1", new SkippedInput(7, "a@1"));
+                            return null;
+                        }));
+                assertThat(bothReady.await(10, TimeUnit.SECONDS)).isTrue();
+                go.countDown();
+                for (Future<?> writer : writers) {
+                    writer.get(20, TimeUnit.SECONDS);
+                }
+
+                assertThat(store.findSkippedInputs(sagaId, "q-1", 10)).hasSize(1).singleElement()
+                        .isIn(new SkippedInput(-1, "a@1"), new SkippedInput(7, "a@1"));
+            }
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test

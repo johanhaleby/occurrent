@@ -1929,8 +1929,8 @@ class SagaQuarantineTest {
         }
 
         @Override
-        public void deleteSkippedInputByKey(String sagaId, String quarantineId, String key) {
-            delegate.deleteSkippedInputByKey(sagaId, quarantineId, key);
+        public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
+            delegate.recordSkippedInputAtHead(sagaId, quarantineId, head);
         }
 
         @Override

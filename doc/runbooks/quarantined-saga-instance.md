@@ -191,7 +191,9 @@ SagaFailure failure = instance.failure();
 //                          saga or its command dispatcher threw, and it can also be a store or
 //                          converter failure, since the runner catches the whole path including the
 //                          read that decodes the state. EventMissingFromStore when a release in
-//                          step 5 found the event missing from the event store
+//                          step 5 found the event missing from the event store, and
+//                          EventWithoutStreamKey when it got the event back without a stream id
+//                          and stream version
 // failure.failureMessage() that exception's message, or null when it had none. Cut to the first
 //                          1000 characters with "... (truncated)" appended when it was longer,
 //                          so the log lines are where a long message survives whole
@@ -398,8 +400,8 @@ A key is `<streamId>@<streamVersion>` for an event from a stream.
 
 - `INFO` when the release starts, with the event it replays first.
 - `WARN` when an input fails again and the instance stays releasing.
-- `ERROR` when the instance is `QUARANTINED` again, either because an input ran out of budget or because an event is
-  missing from the event store.
+- `ERROR` when the instance is `QUARANTINED` again, because an input ran out of budget, because an event is missing
+  from the event store, or because the event store handed an event back without a stream id and stream version.
 
 ### 6. [you] Delete the instance, once you have decided not to recover it
 
@@ -520,7 +522,7 @@ by path. On the annotation path set `occurrent.saga.quarantine-enabled=false`, a
 `SagaRunnerConfig.disableQuarantine()`. Removing `occurrent.saga.quarantine-after`, or leaving it blank, gives the
 default of 5 minutes, not off. Zero is refused on both paths,
 because a reader can take it to mean "never" or "immediately". The property stops the application from starting when
-it has at least one `@Saga`, and `withQuarantineAfter(Duration.ZERO)` throws an `IllegalArgumentException`.
+it has at least one `@Saga` while quarantine is enabled, and `withQuarantineAfter(Duration.ZERO)` throws an `IllegalArgumentException`.
 
 Either way this stops the next instance being quarantined. It does not bring back one you already have, and step 5
 still can.
