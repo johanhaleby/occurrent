@@ -122,8 +122,9 @@ On MongoDB:
   already is, with `generation` added to the new document. It never reads the generation document, and it uses the
   write concern of the collection the application gave the store.
 * `forgetCatchupMarker` raises the generation with an upserting `$inc`, then deletes the plain document. Both writes
-  use `WriteConcern.MAJORITY` with a `wtimeout`, whatever write concern the application set on its collection. Without
-  the `wtimeout`, a forget would wait forever while no majority is reachable. The delete is there for 0.34.0 nodes.
+  use `WriteConcern.MAJORITY` with `j: true` and a `wtimeout`, whatever write concern the application set on its
+  collection. Without the `wtimeout`, a forget would wait forever while no majority is reachable. The delete is there
+  for 0.34.0 nodes.
   When it fails after the `$inc`, a 0.35.0 node still reads the marker as absent. When the `$inc` fails, or its
   `wtimeout` passes, the store's `RetryStrategy` sends it again, and the delete waits until an `$inc` succeeds. The
   default `RetryStrategy` has no attempt limit, so the forget returns only once a majority has the raise. Under a
@@ -144,7 +145,9 @@ On Redis each call is one Lua script over the plain key, its version key and the
 Cluster slot. The save writes the plain key and its version key the way a conditional save does today, and sets the
 stamp only when that write happens. The forget sets the generation to a token, removes the stamp, and deletes the plain
 key and its version key, as `delete` does. The store draws the token in Java with `SecureRandom`, as a `long` other
-than 0, and passes it to the script. In memory each call is one step under the lock.
+than 0, and passes it to the script. It draws a new token for each attempt of a forget. A retry that sent the token of
+an attempt whose reply was lost could put back a token that another forget had replaced in between, and a marker saved
+with that token would read present again. In memory each call is one step under the lock.
 
 On Redis every call of the store, plain or marker, refuses a subscription id that starts with
 `occurrent:catchup-marker:`, the way plain calls already refuse the version key's prefix. Otherwise a plain `save` of
@@ -181,7 +184,7 @@ says it does not make Redis a strongly consistent store, and that a failover can
 replicas received. The other Redis alternatives under "Alternatives not chosen", a counter with the replication id, a
 time-based token and a write-time check, only change how the generation is formed, so none of them brings a lost forget
 back. An application that cannot accept a lost forget keeps its catch-up markers in MongoDB, where the forget is written
-with `WriteConcern.MAJORITY`.
+with `WriteConcern.MAJORITY` and `j: true`.
 
 In a mixed cluster:
 
@@ -237,8 +240,8 @@ across a failover too:
   A node that has lost an election and does not know it yet cannot get a majority to confirm the read, so it fails the
   read instead of answering from old data. `MAJORITY` alone does not give the second guarantee. A primary that a newer
   election has replaced can keep serving majority reads from its last commit point until it steps down.
-* The forget is written with `WriteConcern.MAJORITY`. A forget the store acknowledged is committed and never rolls
-  back.
+* The forget is written with `WriteConcern.MAJORITY` and `j: true`. A forget the store acknowledged is in the on-disk
+  journal of a majority and never rolls back.
 * Generation documents are never removed, and the generation only grows through `$inc`. A removed
   generation document puts the generation back at 0, and a late 0.35.0 save applied after that writes a stamp above
   it. A later forget can then raise the generation to that stamp, and the forgotten marker reads present until the
@@ -251,13 +254,20 @@ The first, second and fourth rules keep condition 1. The second and fourth keep 
 read reflect a committed instant, which the proof needs. The third makes an acknowledged forget a committed one, so the
 generation read of a `readCatchupMarker` that starts after it sees it, and the marker reads absent.
 
-One precondition comes from MongoDB itself. A majority write is durable only with `writeConcernMajorityJournalDefault`
-set to `true` in the replica set configuration, which is MongoDB's default, and no `j: false` on the write. The forget
-sets no `j`. With the setting at `false`, a majority-committed `$inc` can still roll back, according to the
+The forget asks for `j: true` because of `writeConcernMajorityJournalDefault`. With that setting at `false` in the
+replica set configuration, a majority acknowledges a write before the write is in their on-disk journals, and a
+majority-committed `$inc` can still roll back, according to the
 [write concern](https://www.mongodb.com/docs/manual/reference/write-concern/) documentation, as ADR 148 reads it too.
-The generation can then go from 1 to 0 and back to 1, and an attempt that read 1 before the rollback has its late save
-read present after the second forget. That is the repeated value the Redis token is there to rule out, and the
-MongoDB fence needs the setting at `true` to rule it out.
+The generation could then go from 1 to 0 and back to 1, and an attempt that read 1 before the rollback would have its
+late save read present after the second forget. With `j: true` a majority has an acknowledged forget in its journals
+whatever the setting says. With the setting at `false`, an `$inc` the store has no acknowledgement for yet can still
+roll back. The store then sends it again, and the generation comes back to the value an attempt may have read during
+the forget. That attempt read the generation after the forget raised it, so its marker reads present after the forget
+with or without the rollback.
+
+A standalone server started without journaling refuses `j: true` with error code 2 (checked on 4.4.5). The store then
+sends the forget without `j` and keeps doing so for its lifetime. Such a server loses its latest writes when it
+crashes, forgets included, the way it loses any other write.
 
 Without these concerns the fence would break on a failover. With MongoDB's default `local` read concern a primary can
 return an `$inc` that is not committed yet. The attempt reads generation 1 from it, the primary loses an election and
@@ -377,8 +387,8 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   `readCatchupMarker` applies the fence.
 * A marker save is one write. A forget is two writes on MongoDB and one script on Redis. A read is two finds on MongoDB
   and one script on Redis.
-* On a replica set or a sharded cluster, a forget waits until a majority has its two writes, and a `readCatchupMarker`
-  waits for the round trip a `LINEARIZABLE` read makes to a majority. A standalone server answers as before. When no
+* On a replica set or a sharded cluster, a forget waits until a majority has its two writes in their journals, and a
+  `readCatchupMarker` waits for the round trip a `LINEARIZABLE` read makes to a majority. A standalone server answers as before. When no
   majority is reachable, each forget attempt fails after its `wtimeout` and each read attempt after its `maxTimeMS`,
   or after the client's `timeoutMS` when that is above 0.
   The default `RetryStrategy` then keeps trying, so the call returns once a majority is back, and only a
