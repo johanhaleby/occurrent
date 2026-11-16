@@ -539,7 +539,7 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Go live without a catch-up: skip straight past the one-time replay for the projection registered under
+     * Go live without a catch-up: skip the replay for the projection registered under
      * {@code id}, draining whatever live events it already buffered. Use this over {@link #catchUp(String)} when this
      * feed's events are not in the local event store, so there is nothing to replay. No catch-up marker is written,
      * so a later {@link #catchUp(String)} on the same projection replays from the marker stored before, or the whole
