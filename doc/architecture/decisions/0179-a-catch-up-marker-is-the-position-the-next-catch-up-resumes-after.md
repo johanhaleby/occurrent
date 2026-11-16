@@ -114,10 +114,14 @@ the broker would deliver them again.
 
 ### Markers that 0.34.0 stored
 
-A 0.34.0 marker holds the head read at mark time, which is at or above that start's H, and every event after its live
-registration reached the broker. So it is a valid resume position, and a 0.35.0 start resumes after it. Stored markers
-need no migration, and the rolling upgrade has no precondition on either stack. A 0.34.0 node that reads a marker a
-0.35.0 node wrote skips its replay, as 0.34.0 always did.
+A 0.34.0 marker holds the head read at mark time, which is at or above that start's H. 0.34.0 read it as a finished
+catch-up and skipped the replay, so a 0.35.0 start that resumes after it replays at least as much as 0.34.0 did, and the
+upgrade loses no event that 0.34.0 had not lost already. On the reactor stack, an event a handler fed back can sit at or
+below that head without having been applied, when its delivery failed and the delete that follows was lost, or the
+process stopped before it delivered the event. No broker delivers such an event again, see "Fed-back events on the
+reactor stack", so 0.34.0 had lost it, and a 0.35.0 start that resumes after the marker does not bring it back. Stored
+markers need no migration, and the rolling upgrade has no precondition on either stack. A 0.34.0 node that reads a
+marker a 0.35.0 node wrote skips its replay, as 0.34.0 always did.
 
 The marker was written by the first catch-up of the id, since a 0.34.0 start that found it skipped its replay and
 never wrote it again. So the first 0.35.0 start replays every event written since the id first caught up, which for
