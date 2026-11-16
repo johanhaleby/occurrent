@@ -33,7 +33,9 @@ import java.util.List;
  * back after the write that quarantines it and after a release starts, because an instance without a quarantine id or
  * a skip count records nothing it skips. When the quarantine id or the skip count did not persist, it writes the
  * instance back as it was before the quarantine and fails the input, so every delivery of that input fails until the
- * store persists both. When a release finds one of those members missing, it throws.
+ * store persists both. When something outside the saga writes the instance before each attempt of that undo, the
+ * instance stays quarantined without them and skips later inputs unrecorded. When a release finds one of those members
+ * missing, it throws.
  * <p>
  * The runner sees only the store it is given, so a decorator around a store that implements this has to implement it
  * too and pass each call on. On a subscription model that holds every event, a saga with quarantine on and a decorator
