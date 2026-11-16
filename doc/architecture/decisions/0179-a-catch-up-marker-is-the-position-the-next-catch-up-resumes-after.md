@@ -4,7 +4,7 @@ Date: 2026-11-16
 
 ## Status
 
-Accepted. Fixes [#1150](https://github.com/johanhaleby/occurrent/issues/1150) and
+Accepted. Decides [#1150](https://github.com/johanhaleby/occurrent/issues/1150) and
 [#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 23. Amends
 [ADR 62](0062-pluggable-projection-event-source.md) and
 [ADR 133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md), keeps the marker order of
@@ -259,7 +259,8 @@ cost a longer replay, the API is unchanged, and the upgrade needs nothing.
   the changelog, and the 0.35.0 migration guide has to tell users to take a new subscription id for a rebuild.
 * `CheckpointStorage` is unchanged. 0.34.0 only asked whether a marker was there, and 0.35.0 reads back the
   `GlobalCheckpoint` it saved, so a third-party storage keeps working as a marker store as long as `read` returns what
-  `save` stored. A store that loses or reorders writes costs replays, not events.
+  `save` stored. A store that loses or reorders writes costs replays, not events. A checkpoint under the id that is
+  not a position now fails the catch-up, which is a breaking change for the changelog.
 * MongoDB's in-memory storage engine and a Redis failover are no longer a reason a marker can lose events. They can
   still lose a delete, which makes a subscribe after a cancel resume instead of rebuild.
 * The reactor stack writes no marker while an event a handler fed back waits in the live feed and was not replayed. A
