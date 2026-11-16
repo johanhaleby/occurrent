@@ -55,9 +55,10 @@ Every catch-up start does this:
 
 A catch-up that fails before its marker write writes nothing, so P stays and the next start replays from P again. On
 the reactor stack the write comes before the live drain, so a catch-up whose drain fails has already stored H, and the
-handover then deletes it, as "The reactor failure forget stays" below says. The events that drain did not deliver were
-handed in by calls that have not completed, so their listeners don't acknowledge them and the broker delivers them
-again. The write is a plain `save`.
+handover then deletes it, as "Fed-back events on the reactor stack" below says. The events that drain did not deliver
+were handed in by calls that have not completed, so their listeners don't acknowledge them and the broker delivers them
+again. An event a handler fed back is the exception, and the same section says why the reactor stack does not write H
+while one waits in the drain. The write is a plain `save`.
 The blocking push model keeps passing `writeConditionFor(id)`, so a lease that has moved on is still refused as
 ADR 116 says. There is no other condition on it, and no fence.
 
@@ -138,24 +139,29 @@ An application that needs a guaranteed rebuild, or that changes the filter or th
 subscription id. The blocking push model still
 deletes first and cancels nothing when the delete throws.
 
-### The reactor failure forget stays
-
-`ReactiveHandover` keeps deleting the marker through `Source.forgetCaughtUp()` when a delivery or a catch-up fails, as
-in 0.34.0. It tries the delete four times and then logs. Only the reactor push model's `markersNotYetDeleted` is
-removed, and it is private, so no public API changes.
+### Fed-back events on the reactor stack
 
 A handler or a view can write an event to the event store and feed it back, and `ReactiveHandover` answers such an
-event as taken in once it is queued, so no broker delivers it again. Take an event X like that, at a position at or
-below H, whose delivery to the view started before this catch-up held live delivery back. That delivery keeps running
-while the reactor stack writes H, so it can fail after the check that runs before the write. Without the delete, H
-stays stored, the next start resumes after it, and nothing delivers X again. With the delete, the next start replays
-from the beginning, which this decision makes safe in every case, and delivers X.
+event as taken in once it is queued, so no broker delivers it again. Say the live delivery of an event W is running
+when a catch-up A reads H. A holds live delivery back and waits for W's delivery to end before it replays, so that
+delivery is over before A writes H. What W's handler fed back is not. Take an event X that W's handler wrote and fed
+back, at a position at or below H, whose write committed after A's replay read past that position. A's replay does not
+read X, X waits in the live feed behind A's hold, and it is delivered only after A writes H. If that delivery fails, H
+is stored, the next start resumes after it, and nothing delivers X again.
 
-The delete still loses X when the process crashes before it runs, when all four attempts fail, or when the store
-applies the marker write after it, as in 0.34.0.
-[#1552](https://github.com/johanhaleby/occurrent/issues/1552) closes that window by having `ReactiveHandover` wait for
-the deliveries that started before the catch-up held live delivery back before it writes the marker. The delete is then
-no longer needed for X.
+So `ReactiveHandover` does not write H while an event its own code fed, and that A's replay did not deliver, waits in
+the live feed. That holds whether or not W's caller still waits for W, since W's answer can have gone out before X is
+delivered. P stays stored and the next start replays after P. X lies after P, because an X written before the catch-up
+that stored P read its head would have been replayed by that catch-up or kept it from storing P. An event A's replay did
+read is delivered before H is written, and its live copy is skipped as a repeat. A handler that feeds back an event
+whenever it handles one, under steady live traffic, can keep the marker at P on every start, and each start then replays
+everything after P.
+
+`ReactiveHandover` also keeps deleting the marker through `Source.forgetCaughtUp()` when a delivery or a catch-up
+fails, as in 0.34.0, as a backstop behind that rule. It tries the delete four times and then logs. Only the reactor
+push model's `markersNotYetDeleted` is removed, and it is private, so no public API changes.
+[#1552](https://github.com/johanhaleby/occurrent/issues/1552) tracks delivering the fed-back events before the marker
+is written, as `BlockingHandover` does, which would let the marker move on for a handler like that.
 
 ### The replay callbacks
 
@@ -231,9 +237,12 @@ cost a longer replay, the API is unchanged, and the upgrade needs nothing.
   reorders writes costs replays, not events.
 * MongoDB's in-memory storage engine and a Redis failover are no longer a reason a marker can lose events. They can
   still lose a delete, which makes a subscribe after a cancel resume instead of rebuild.
-* The reactor stack still deletes the marker when a delivery fails, so an event a handler fed back and whose delivery
-  failed is lost when that delete is lost, as in 0.34.0, until
-  [#1552](https://github.com/johanhaleby/occurrent/issues/1552) is fixed.
+* The reactor stack writes no marker while an event a handler fed back waits in the live feed and was not replayed. A
+  handler that feeds back an event whenever it handles one, under steady live traffic, can keep the marker where an
+  earlier catch-up stored it, so each start replays everything after it, until
+  [#1552](https://github.com/johanhaleby/occurrent/issues/1552) delivers those events before the marker as the
+  blocking stack does.
+* The reactor stack still deletes the marker when a delivery fails, as in 0.34.0, as a backstop.
 * The ADR 177 order is unchanged. Step 1 reads the marker as a position, and step 4 writes H.
 * The reactor push model still takes no `CheckpointWriteVersionSource`
   ([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 29), so its marker writes pass `any()`. Nothing

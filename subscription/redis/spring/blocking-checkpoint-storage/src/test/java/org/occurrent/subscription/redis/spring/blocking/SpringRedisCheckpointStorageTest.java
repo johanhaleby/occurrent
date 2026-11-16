@@ -37,6 +37,7 @@ import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -51,10 +52,12 @@ import org.occurrent.time.TimeConversion;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.RedisSystemException;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.serializer.RedisSerializer;
 import org.testcontainers.containers.GenericContainer;
@@ -69,6 +72,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.time.ZoneOffset.UTC;
@@ -78,9 +82,11 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -265,6 +271,129 @@ class SpringRedisCheckpointStorageTest {
                 assertThatThrownBy(() -> storage.save(subscriptionId, new StringBasedCheckpoint("stale"), CheckpointWriteCondition.notOlderThan(1)))
                         .as("a version below the stored one must be refused immediately, not queued behind a 30 second backoff")
                         .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class));
+    }
+
+    private static final long ABOVE_2_POW_53 = 9007199254740993L;
+    private static final long TWO_POW_53 = 9007199254740992L;
+
+    @Test
+    void a_not_older_than_write_below_the_stored_version_is_refused_when_both_versions_are_above_2_pow_53_and_adjacent() {
+        // Given
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String subscriptionId = UUID.randomUUID().toString();
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(ABOVE_2_POW_53));
+
+        // When
+        Throwable refusal = catchThrowable(() -> storage.save(subscriptionId, new StringBasedCheckpoint("stale"), CheckpointWriteCondition.notOlderThan(TWO_POW_53)));
+
+        // Then
+        assertAll(
+                () -> assertThat(refusal).isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(((CheckpointWriteConditionNotFulfilledException) refusal).storedVersion).as("stored version in the refusal").hasValue(ABOVE_2_POW_53),
+                () -> assertThat(storage.read(subscriptionId)).as("checkpoint").isEqualTo(new StringBasedCheckpoint("first")),
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("write version").hasValue(ABOVE_2_POW_53)
+        );
+    }
+
+    @Test
+    void a_not_older_than_write_above_the_stored_version_is_accepted_when_both_versions_are_above_2_pow_53_and_adjacent() {
+        // Given
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String subscriptionId = UUID.randomUUID().toString();
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(TWO_POW_53));
+
+        // When
+        storage.save(subscriptionId, new StringBasedCheckpoint("second"), CheckpointWriteCondition.notOlderThan(ABOVE_2_POW_53));
+
+        // Then
+        assertAll(
+                () -> assertThat(storage.read(subscriptionId)).as("checkpoint").isEqualTo(new StringBasedCheckpoint("second")),
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("write version").hasValue(ABOVE_2_POW_53)
+        );
+    }
+
+    @Test
+    void write_version_returns_the_exact_stored_version_above_2_pow_53() {
+        // Given
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String subscriptionId = UUID.randomUUID().toString();
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(ABOVE_2_POW_53));
+
+        // When
+        var writeVersion = storage.writeVersion(subscriptionId);
+
+        // Then
+        assertThat(writeVersion).hasValue(ABOVE_2_POW_53);
+    }
+
+    @Test
+    void an_if_absent_refusal_reports_the_exact_stored_version_above_2_pow_53() {
+        // Given
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String subscriptionId = UUID.randomUUID().toString();
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(ABOVE_2_POW_53));
+
+        // When
+        Throwable refusal = catchThrowable(() -> storage.save(subscriptionId, new StringBasedCheckpoint("second"), CheckpointWriteCondition.ifAbsent()));
+
+        // Then
+        assertAll(
+                () -> assertThat(refusal).isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(((CheckpointWriteConditionNotFulfilledException) refusal).storedVersion).as("stored version in the refusal").hasValue(ABOVE_2_POW_53)
+        );
+    }
+
+    @Test
+    void an_if_absent_save_whose_first_reply_is_lost_returns_the_checkpoint_when_the_retry_finds_its_own() {
+        // Given, a first attempt that runs the save script on Redis and then fails, so the call retries
+        List<Integer> saveAttempts = new CopyOnWriteArrayList<>();
+        AtomicBoolean failNext = new AtomicBoolean(true);
+        StringRedisTemplate failingAfterTheFirstAttempt = new StringRedisTemplate(lettuceConnectionFactory) {
+            @Override
+            public <T> T execute(RedisScript<T> script, RedisSerializer<?> argsSerializer, RedisSerializer<T> resultSerializer, List<String> keys, Object... args) {
+                // The ifAbsent save script is the only one called with two keys and one argument
+                boolean save = keys.size() == 2 && args.length == 1;
+                T result = super.execute(script, argsSerializer, resultSerializer, keys, args);
+                if (save) {
+                    saveAttempts.add(saveAttempts.size() + 1);
+                    if (failNext.getAndSet(false)) {
+                        throw new RedisConnectionFailureException("Connection lost after the script ran");
+                    }
+                }
+                return result;
+            }
+        };
+        failingAfterTheFirstAttempt.afterPropertiesSet();
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(failingAfterTheFirstAttempt, RetryStrategy.fixed(1L).maxAttempts(3));
+        String subscriptionId = UUID.randomUUID().toString();
+        Checkpoint checkpoint = new StringBasedCheckpoint("first");
+
+        // When
+        Throwable failure = catchThrowable(() -> storage.save(subscriptionId, checkpoint, CheckpointWriteCondition.ifAbsent()));
+
+        // Then
+        assertAll(
+                () -> assertThat(saveAttempts).as("attempts that reached Redis").hasSize(2),
+                () -> assertThat(failure).as("failure").isNull(),
+                () -> assertThat(storage.read(subscriptionId)).as("checkpoint").isEqualTo(checkpoint)
+        );
+    }
+
+    @Test
+    void an_if_absent_save_is_refused_when_the_stored_checkpoint_is_a_different_one() {
+        // Given
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String subscriptionId = UUID.randomUUID().toString();
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.ifAbsent());
+
+        // When
+        Throwable refusal = catchThrowable(() -> storage.save(subscriptionId, new StringBasedCheckpoint("second"), CheckpointWriteCondition.ifAbsent()));
+
+        // Then
+        assertAll(
+                () -> assertThat(refusal).isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(storage.read(subscriptionId)).as("checkpoint").isEqualTo(new StringBasedCheckpoint("first"))
+        );
     }
 
     @Test
