@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import com.mongodb.ReadPreference;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
@@ -360,7 +361,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         // Decoding happens outside the retried supplier, so a stored state that no longer reads back throws once
         // instead of being attempted ten times.
-        Supplier<@Nullable Document> read = () -> mongoOperations.findById(sagaId, Document.class, collectionName);
+        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(primary(Query.query(where(ID).is(sagaId))), Document.class, collectionName);
         return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
     }
 
@@ -402,7 +403,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // record it writes carries them over untouched, so projecting them away would quarantine the instance and
         // drop them at the same time.
         query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK).include(STREAM_MARKS);
-        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(query, Document.class, collectionName);
+        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(primary(query), Document.class, collectionName);
         return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
     }
 
@@ -450,7 +451,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // SagaInstance, and every member of that view must be populated on any envelope a store hands back. They are
         // three longs and a string, and decode no state, so the cost the exclusion above protects against is untouched.
         projectEverySagaInstanceMember(query);
-        Supplier<List<Document>> read = () -> mongoOperations.find(query, Document.class, collectionName);
+        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, collectionName);
         return retryStrategy.execute(read).stream().map(this::toEnvelope).toList();
     }
 
@@ -470,7 +471,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // field, so observing a flow saga never decodes its received log. That also means this query cannot fail on an
         // instance whose state no longer decodes, because it never decodes any.
         projectEverySagaInstanceMember(query);
-        Supplier<List<Document>> read = () -> mongoOperations.find(query, Document.class, collectionName);
+        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, collectionName);
         return retryStrategy.execute(read).stream().map(this::toEnvelope).toList();
     }
 
@@ -488,7 +489,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 .with(Sort.by(Sort.Direction.ASC, ID))
                 .limit(limit);
         query.fields().include(ID);
-        Supplier<List<Document>> read = () -> mongoOperations.find(query, Document.class, collectionName);
+        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, collectionName);
         return retryStrategy.execute(read).stream().map(document -> document.getString(ID)).toList();
     }
 
@@ -529,7 +530,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                         .and(SKIPPED_QUARANTINE_ID).is(Objects.requireNonNull(quarantineId, "quarantineId cannot be null")))
                 .with(Sort.by(Sort.Direction.ASC, SKIPPED_SEQ, SKIPPED_KEY))
                 .limit(limit);
-        Supplier<List<Document>> read = () -> mongoOperations.find(query, Document.class, skippedInputsCollectionName);
+        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, skippedInputsCollectionName);
         return retryStrategy.execute(read).stream().map(SpringMongoSagaStateStore::toSkippedInput).toList();
     }
 
@@ -951,5 +952,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private static @Nullable Instant readInstant(Document document, String field) {
         return document.containsKey(field) ? Instant.ofEpochMilli(document.getLong(field)) : null;
+    }
+
+    // Every read is from the primary, whatever read preference the MongoOperations has. A release turns an instance
+    // ACTIVE once its read of the skipped-input records finds none, and a secondary that lags can find none while a
+    // record is written, so that input, acknowledged when it was skipped, would never be applied. The instance is read
+    // from the primary too, so it and its records come from the same server
+    private static Query primary(Query query) {
+        return query.withReadPreference(ReadPreference.primary());
     }
 }

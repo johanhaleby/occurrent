@@ -325,7 +325,9 @@ What `release` returns, and what to do next:
 and returns `STILL_RELEASING`. After every poll the timer poller goes
 on with each instance that is releasing, which with a competing-consumer strategy happens only on the node that holds
 the saga's timer lease, and without one on every node. The poller also goes on with a release that a crash or a
-restart interrupted. You can call `release` again too, and it goes on where the release stands.
+restart interrupted. It does either only once the instance has gone a whole `timerPollInterval`, 15 seconds by
+default, without a write, so it skips a release that is still running. You can call `release` again too, and it goes
+on where the release stands.
 
 The poller polls only while the saga's `timersEnabled` returns `true`, so a release that is under way waits with the
 timers while that gate is closed, only because the poller is what goes on with it. The gate exists for timers, which
