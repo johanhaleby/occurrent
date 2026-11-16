@@ -58,9 +58,10 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.random.RandomGenerator;
 
 import static com.mongodb.client.model.Filters.eq;
-import static com.mongodb.client.model.Updates.inc;
+import static com.mongodb.client.model.Updates.set;
 import static java.util.Arrays.asList;
 import static java.util.Objects.requireNonNull;
 
@@ -526,18 +527,12 @@ public class MongoCommons {
     public static final Duration CATCHUP_MARKER_READ_MAX_TIME = Duration.ofSeconds(10);
 
     /**
-     * {@link #CATCHUP_MARKER_FORGET_WRITE_CONCERN} without {@code j}, for a server that runs without journaling and
-     * refuses {@code j: true}, such as a standalone server started with {@code --nojournal}. Such a server has no
-     * journal to wait for.
-     */
-    public static final WriteConcern CATCHUP_MARKER_FORGET_WRITE_CONCERN_WITHOUT_JOURNAL = WriteConcern.MAJORITY.withWTimeout(CATCHUP_MARKER_FORGET_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-
-    /**
      * The write concern of both writes of a forget, whatever write concern the application set on its collection. With
      * {@code j: true} a majority has the write in its on-disk journal before it acknowledges, whatever
-     * {@code writeConcernMajorityJournalDefault} says, so an acknowledged forget never rolls back.
+     * {@code writeConcernMajorityJournalDefault} says, so an acknowledged forget never rolls back. A server that runs
+     * without journaling refuses it, and {@link CatchupMarkerForgetWrites} then fails the forget.
      */
-    public static final WriteConcern CATCHUP_MARKER_FORGET_WRITE_CONCERN = CATCHUP_MARKER_FORGET_WRITE_CONCERN_WITHOUT_JOURNAL.withJournal(true);
+    public static final WriteConcern CATCHUP_MARKER_FORGET_WRITE_CONCERN = WriteConcern.MAJORITY.withWTimeout(CATCHUP_MARKER_FORGET_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).withJournal(true);
 
     /**
      * The operation timeout a forget write or a find of a marker read needs on a collection whose timeout is
@@ -586,10 +581,23 @@ public class MongoCommons {
     }
 
     /**
-     * Raises the generation by one, for an upserting update of the generation document.
+     * A new generation for one attempt of a forget, a random {@code long} other than 0. A counter that a rollback took
+     * back would repeat a generation an attempt read, while a random one repeats it with a probability of about
+     * 2^-64. 0 is the generation of an id that was never forgotten. See ADR 179.
      */
-    public static Bson raiseCatchupMarkerGeneration() {
-        return inc(CATCHUP_MARKER_GENERATION, 1L);
+    public static long newCatchupMarkerGeneration(RandomGenerator random) {
+        long generation;
+        do {
+            generation = random.nextLong();
+        } while (generation == 0);
+        return generation;
+    }
+
+    /**
+     * Sets the generation to {@code generation}, for an upserting update of the generation document.
+     */
+    public static Bson setCatchupMarkerGeneration(long generation) {
+        return set(CATCHUP_MARKER_GENERATION, generation);
     }
 
     /**

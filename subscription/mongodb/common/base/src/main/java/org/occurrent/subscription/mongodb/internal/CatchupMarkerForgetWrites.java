@@ -16,49 +16,46 @@
 
 package org.occurrent.subscription.mongodb.internal;
 
-import com.mongodb.WriteConcern;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.function.Consumer;
-
-import static org.occurrent.subscription.mongodb.internal.MongoCommons.CATCHUP_MARKER_FORGET_WRITE_CONCERN;
-import static org.occurrent.subscription.mongodb.internal.MongoCommons.CATCHUP_MARKER_FORGET_WRITE_CONCERN_WITHOUT_JOURNAL;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.isJournalNotSupported;
 
 /**
- * Sends a write of a catch-up marker forget with {@link MongoCommons#CATCHUP_MARKER_FORGET_WRITE_CONCERN}, and with
- * {@link MongoCommons#CATCHUP_MARKER_FORGET_WRITE_CONCERN_WITHOUT_JOURNAL} from the first time the server refuses
- * {@code j: true} because it runs without journaling. One instance per checkpoint storage, so the storage asks for
- * {@code j: true} only until that first refusal.
- * <p>
- * A server without journaling cannot journal a forget, so from that refusal on an acknowledged forget is not in any
- * on-disk journal and is lost if the server crashes. The guarantee that an acknowledged forget never rolls back holds
- * only on a server with journaling. The first refusal is logged as a warning.
+ * Sends a write of a catch-up marker forget, which asks for {@code j: true} with
+ * {@link MongoCommons#CATCHUP_MARKER_FORGET_WRITE_CONCERN}. A server that runs without journaling refuses it, and the
+ * forget then fails with an {@link IllegalStateException} that says catch-up marker storage needs journaling. A crash
+ * of that server could lose an acknowledged forget, the marker would come back, and the next catch-up would skip the
+ * replay the forget asked for. The refusal repeats on every attempt, so {@link #isRetryable(Throwable)} answers
+ * {@code false} for it. See ADR 179.
  */
 public final class CatchupMarkerForgetWrites {
-    private static final Logger log = LoggerFactory.getLogger(CatchupMarkerForgetWrites.class);
-
-    private volatile boolean journalNotSupported = false;
 
     /**
-     * @param write sends the write with the write concern it is given
+     * The message of the {@link IllegalStateException} a forget fails with on a server that runs without journaling.
      */
-    public void write(Consumer<WriteConcern> write) {
-        if (!journalNotSupported) {
-            try {
-                write.accept(CATCHUP_MARKER_FORGET_WRITE_CONCERN);
-                return;
-            } catch (RuntimeException e) {
-                if (!isJournalNotSupported(e)) {
-                    throw e;
-                }
-                if (!journalNotSupported) {
-                    journalNotSupported = true;
-                    log.warn("The MongoDB server refused j: true because it runs without journaling. Catch-up marker forgets are sent without j from now on, so an acknowledged forget is lost if the server crashes.");
-                }
+    public static final String JOURNALING_REQUIRED_MESSAGE = "Catch-up marker storage needs a MongoDB server with journaling. The server refused j: true for a catch-up marker forget because it runs without journaling, and a crash could then lose an acknowledged forget and make the next catch-up skip the replay that forget asked for.";
+
+    private CatchupMarkerForgetWrites() {
+    }
+
+    /**
+     * @param write sends the write with {@link MongoCommons#CATCHUP_MARKER_FORGET_WRITE_CONCERN}
+     * @throws IllegalStateException when the server refuses {@code j: true} because it runs without journaling
+     */
+    public static void write(Runnable write) {
+        try {
+            write.run();
+        } catch (RuntimeException e) {
+            if (isJournalNotSupported(e)) {
+                throw new IllegalStateException(JOURNALING_REQUIRED_MESSAGE, e);
             }
+            throw e;
         }
-        write.accept(CATCHUP_MARKER_FORGET_WRITE_CONCERN_WITHOUT_JOURNAL);
+    }
+
+    /**
+     * Whether a forget write that failed with {@code throwable} is worth another attempt. The refusal of a server that
+     * runs without journaling is not, since every later attempt gets it too.
+     */
+    public static boolean isRetryable(Throwable throwable) {
+        return !isJournalNotSupported(throwable);
     }
 }

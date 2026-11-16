@@ -1699,7 +1699,7 @@ has the design.
 
 | Store | Where the generation is kept | What a forget writes |
 | --- | --- | --- |
-| MongoDB | A document in the checkpoint collection with the `_id` `{catchupMarker: "<subscription id>"}` | Raises the generation by one, then deletes the checkpoint |
+| MongoDB | A document in the checkpoint collection with the `_id` `{catchupMarker: "<subscription id>"}` | Replaces the generation with a random number, then deletes the checkpoint |
 | Redis | A hash under `occurrent:catchup-marker:` | Replaces the generation with a random number and deletes the checkpoint, in one script |
 | In memory | A map in the storage | Raises the generation by one and deletes the checkpoint |
 
@@ -1715,8 +1715,10 @@ Plain `read(id)` and `exists(id)` still find a marker saved with a generation th
   0, that `timeoutMS` bounds each attempt instead. A `timeoutMS` of 0 waits forever, so there the storage still gives
   each attempt 10 seconds. A standalone server refuses
   `LINEARIZABLE`, and the storage then reads with `MAJORITY`. A server that runs without journaling refuses
-  `j: true`, and the storage then sends the forget without it and logs a warning. That server can't journal a forget,
-  so a crash loses an acknowledged one.
+  `j: true`, and `forgetCatchupMarker(id)` then throws an `IllegalStateException` that says catch-up marker storage
+  needs journaling. A forget that a crash lost would make the next catch-up skip its replay. MongoDB has journaling on
+  at all times since 6.1, so only an older server started with `--nojournal` is affected. Keep the checkpoint
+  collection on a server with journaling.
 - You clean up the checkpoint collection or the Redis key space with a job of your own. Leave the generation documents
   and hashes in place. Removing one puts the generation of that subscription id back at 0, and a marker saved before
   an earlier forget can then read as present again.
