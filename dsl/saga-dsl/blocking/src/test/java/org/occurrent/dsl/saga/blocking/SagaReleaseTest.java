@@ -1600,6 +1600,29 @@ class SagaReleaseTest {
         }
 
         @Test
+        void a_skip_whose_last_write_loses_to_a_release_that_found_no_record_deletes_its_record_and_applies_the_input_live() {
+            deliver(placed());
+            failing.add("poison");
+            quarantineOn(added("poison"));
+            String quarantineId = instance().quarantineId();
+            failing.clear();
+            CloudEvent live = added("live");
+            AtomicReference<@Nullable ReleaseResult> released = new AtomicReference<>();
+            // The release reads the instance after the skip's count and finds no record, then the record is written
+            store.beforeNextRecord(() -> released.set(execution.release(ORDER)));
+
+            deliver(live);
+
+            assertAll(
+                    () -> assertThat(released.get()).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(recordedKeysOf(quarantineId)).isEmpty(),
+                    () -> assertThat(items()).containsExactly("poison", "live"),
+                    () -> assertThat(packed()).extracting(Pack::item).containsExactly("poison", "live")
+            );
+        }
+
+        @Test
         void a_write_lost_only_to_such_a_skip_is_written_again_and_the_reaction_is_dispatched_once() {
             deliver(placed());
             failing.add("poison");
@@ -1655,9 +1678,9 @@ class SagaReleaseTest {
         }
 
         @Test
-        void the_records_still_left_are_deleted_under_every_quarantine_id() {
+        void the_records_still_left_are_deleted_under_its_quarantine_id_only() {
             String quarantineId = quarantinedWithDoneAndLateSkipped();
-            store.delegate.recordSkippedInput(ORDER, "earlier", new SkippedInput(0, "ghost@1"));
+            store.delegate.recordSkippedInput(ORDER, "later", new SkippedInput(0, "ghost@1"));
 
             ReleaseResult result = execution.release(ORDER);
 
@@ -1666,7 +1689,7 @@ class SagaReleaseTest {
                     () -> assertThat(instance().status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(items()).containsExactly("poison", "done"),
                     () -> assertThat(store.delegate.findSkippedInputs(ORDER, quarantineId, 10)).isEmpty(),
-                    () -> assertThat(store.delegate.findSkippedInputs(ORDER, "earlier", 10)).isEmpty()
+                    () -> assertThat(store.delegate.findSkippedInputs(ORDER, "later", 10)).containsExactly(new SkippedInput(0, "ghost@1"))
             );
         }
 
@@ -2386,8 +2409,8 @@ class SagaReleaseTest {
         }
 
         @Override
-        public void deleteSkippedInputs(String sagaId) {
-            delegate.deleteSkippedInputs(sagaId);
+        public void deleteSkippedInputs(String sagaId, String quarantineId) {
+            delegate.deleteSkippedInputs(sagaId, quarantineId);
         }
 
         @Override

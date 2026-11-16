@@ -474,8 +474,10 @@ public final class SagaExecutionSupport {
     /**
      * The releasing instance {@code current} released, {@link SagaStatus#ACTIVE} with no failure record, no quarantine
      * id and no skip count. Save it with {@code compareAndSaveWithoutState(..., current.version())},
-     * and only when {@code current} was read before a read of its records that found none. A record written after that
-     * read comes with a write that raises the version, so this write loses and the release reads the records again.
+     * and only when {@code current} was read before a read of its records that found none. A skip writes its record
+     * between two writes that each raise the version. When the first came after {@code current} was read, this write
+     * loses and the release reads the records again. When it came before, this write wins, the skip's second write
+     * loses, and the skip deletes its record again and applies its input to the active instance.
      *
      * @throws IllegalStateException when the instance is not releasing
      */

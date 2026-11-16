@@ -37,10 +37,13 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -402,7 +405,7 @@ class SpringMongoSagaStateStoreReleaseTest {
     }
 
     @Test
-    void delete_removes_the_instance_and_its_records_under_every_quarantine_id_and_no_other_instance_records() {
+    void delete_removes_the_instance_and_its_records_under_its_quarantine_id_only_and_no_other_instance_records() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         store.compareAndSave("order-13", releasing("order-13"), 0);
         store.recordSkippedInput("order-13", "q-1", new SkippedInput(0, "a@1"));
@@ -414,22 +417,61 @@ class SpringMongoSagaStateStoreReleaseTest {
         assertAll(
                 () -> assertThat(store.find("order-13")).isEmpty(),
                 () -> assertThat(store.findSkippedInputs("order-13", "q-1", 10)).isEmpty(),
-                () -> assertThat(store.findSkippedInputs("order-13", "q-2", 10)).isEmpty(),
+                () -> assertThat(store.findSkippedInputs("order-13", "q-2", 10)).containsExactly(new SkippedInput(0, "b@1")),
                 () -> assertThat(store.findSkippedInputs("order-14", "q-1", 10)).containsExactly(new SkippedInput(0, "c@1"))
         );
     }
 
     @Test
-    void the_bulk_delete_removes_the_records_of_every_quarantine_id() {
+    void delete_keeps_the_records_of_an_instance_created_with_the_same_id_between_the_removal_of_the_instance_and_the_delete_of_its_records() {
+        MongoOperations mongoOperations = mongoOperations();
+        SpringMongoSagaStateStore<Payment> direct = store(mongoOperations);
+        direct.compareAndSave("order-20", releasing("order-20"), 0);
+        direct.recordSkippedInput("order-20", "q-1", new SkippedInput(0, "a@1"));
+        MongoOperations recreatingAfterTheRemoval = afterTheFirstFindAndRemove(mongoOperations, () -> {
+            direct.compareAndSave("order-20", envelope("order-20", SagaStatus.QUARANTINED, 1, failure(null, "q-2"), 1L), 0);
+            direct.recordSkippedInput("order-20", "q-2", new SkippedInput(0, "b@1"));
+        });
+
+        store(recreatingAfterTheRemoval).delete("order-20");
+
+        assertAll(
+                () -> assertThat(direct.find("order-20")).hasValueSatisfying(recreated -> assertThat(recreated.quarantineId()).isEqualTo("q-2")),
+                () -> assertThat(direct.findSkippedInputs("order-20", "q-1", 10)).isEmpty(),
+                () -> assertThat(direct.findSkippedInputs("order-20", "q-2", 10)).containsExactly(new SkippedInput(0, "b@1"))
+        );
+    }
+
+    // Runs the hook once, right after the instance was removed and before the caller goes on to the records
+    private static MongoOperations afterTheFirstFindAndRemove(MongoOperations delegate, Runnable hook) {
+        AtomicBoolean ran = new AtomicBoolean();
+        return (MongoOperations) Proxy.newProxyInstance(MongoOperations.class.getClassLoader(), new Class<?>[]{MongoOperations.class}, (proxy, method, args) -> {
+            Object result;
+            try {
+                result = method.invoke(delegate, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+            if (method.getName().equals("findAndRemove") && ran.compareAndSet(false, true)) {
+                hook.run();
+            }
+            return result;
+        });
+    }
+
+    @Test
+    void the_bulk_delete_removes_the_records_of_one_quarantine_id_only() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         store.recordSkippedInput("order-15", "q-1", new SkippedInput(0, "a@1"));
         store.recordSkippedInput("order-15", "q-2", new SkippedInput(0, "b@1"));
+        store.recordSkippedInput("order-16", "q-1", new SkippedInput(0, "c@1"));
 
-        store.deleteSkippedInputs("order-15");
+        store.deleteSkippedInputs("order-15", "q-1");
 
         assertAll(
                 () -> assertThat(store.findSkippedInputs("order-15", "q-1", 10)).isEmpty(),
-                () -> assertThat(store.findSkippedInputs("order-15", "q-2", 10)).isEmpty()
+                () -> assertThat(store.findSkippedInputs("order-15", "q-2", 10)).containsExactly(new SkippedInput(0, "b@1")),
+                () -> assertThat(store.findSkippedInputs("order-16", "q-1", 10)).containsExactly(new SkippedInput(0, "c@1"))
         );
     }
 

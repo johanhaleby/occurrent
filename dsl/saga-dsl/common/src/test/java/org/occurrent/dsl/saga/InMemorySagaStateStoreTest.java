@@ -550,8 +550,8 @@ class InMemorySagaStateStoreTest {
         }
 
         @Test
-        void are_deleted_with_the_instance_under_every_quarantine_id_and_only_for_that_instance() {
-            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+        void are_deleted_with_the_instance_under_its_quarantine_id_only_and_only_for_that_instance() {
+            store.compareAndSave("s1", releasingEnvelope("s1"), 0);
             store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
             store.recordSkippedInput("s1", "q2", new SkippedInput(0, "b@1"));
             store.recordSkippedInput("s2", "q1", new SkippedInput(0, "c@1"));
@@ -559,22 +559,39 @@ class InMemorySagaStateStoreTest {
             store.delete("s1");
 
             assertAll(
+                    () -> assertThat(store.find("s1")).isEmpty(),
                     () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
-                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).isEmpty(),
+                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1")),
                     () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "c@1"))
             );
         }
 
         @Test
-        void are_deleted_for_every_quarantine_id_by_the_bulk_delete() {
+        void are_kept_when_the_instance_deleted_has_no_quarantine_id_or_there_is_none() {
+            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+
+            store.delete("s1");
+            store.delete("missing");
+
+            assertAll(
+                    () -> assertThat(store.find("s1")).isEmpty(),
+                    () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(0, "a@1"))
+            );
+        }
+
+        @Test
+        void are_deleted_for_one_quarantine_id_only_by_the_bulk_delete() {
             store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
             store.recordSkippedInput("s1", "q2", new SkippedInput(0, "b@1"));
+            store.recordSkippedInput("s2", "q1", new SkippedInput(0, "c@1"));
 
-            store.deleteSkippedInputs("s1");
+            store.deleteSkippedInputs("s1", "q1");
 
             assertAll(
                     () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
-                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).isEmpty()
+                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1")),
+                    () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "c@1"))
             );
         }
     }
