@@ -1708,17 +1708,22 @@ Plain `read(id)` and `exists(id)` still find a marker saved with a generation th
 
 ### Who is affected
 
-- You run MongoDB as a replica set or a sharded cluster. Both writes of a forget wait for `w: "majority"` and
-  `j: true`, whatever write concern your collection or `MongoOperations` has. `readCatchupMarker(id)` reads the generation with
-  `LINEARIZABLE` read concern, which a majority has to confirm. When no majority answers within 10 seconds, the
-  attempt fails, and the storage's `RetryStrategy` decides whether to try again. On a client with a `timeoutMS` above
-  0, that `timeoutMS` bounds each attempt instead. A `timeoutMS` of 0 waits forever, so there the storage still gives
-  each attempt 10 seconds. A standalone server refuses
-  `LINEARIZABLE`, and the storage then reads with `MAJORITY`. A server that runs without journaling refuses
-  `j: true`, and `forgetCatchupMarker(id)` then throws an `IllegalStateException` that says catch-up marker storage
-  needs journaling. A forget that a crash lost would make the next catch-up skip its replay. MongoDB has journaling on
-  at all times since 6.1, so only an older server started with `--nojournal` is affected. Keep the checkpoint
-  collection on a server with journaling.
+- You run MongoDB as a replica set or a sharded cluster. Both writes of a forget wait for `w: "majority"` and `j: true`,
+  whatever write concern your collection or `MongoOperations` has. `readCatchupMarker(id)` reads the generation with
+  `LINEARIZABLE` read concern, which a majority has to confirm. When no majority answers within 10 seconds, the attempt
+  fails, and the storage's `RetryStrategy` decides whether to try again. On a client with a `timeoutMS` above 0, that
+  `timeoutMS` bounds each attempt instead. A `timeoutMS` of 0 waits forever, so there the storage still gives each
+  attempt 10 seconds. A standalone server refuses `LINEARIZABLE`, and the storage then reads with `MAJORITY`. A
+  WiredTiger server that runs without journaling refuses `j: true`, and `forgetCatchupMarker(id)` then throws an
+  `IllegalStateException` that says catch-up marker storage needs journaling. A forget that a crash lost would make the
+  next catch-up skip its replay. MongoDB has journaling on at all times since 6.1, so only an older server started with
+  `--nojournal` is affected. Keep the checkpoint collection on a server with journaling. The in-memory storage engine of
+  MongoDB Enterprise is not supported for the checkpoint collection either. Its
+  [documentation](https://www.mongodb.com/docs/manual/core/inmemory/) says that it acknowledges a `j: true` write at
+  once, and that a replica set with an in-memory voting member must set `writeConcernMajorityJournalDefault` to `false`,
+  under which a majority write can roll back when a majority of the members crash and restart. A forget there succeeds
+  instead of throwing, a rollback can undo it, and the next catch-up then skips its replay. The storage doesn't check
+  which engine the server runs, so keep the checkpoint collection on WiredTiger.
 - You clean up the checkpoint collection or the Redis key space with a job of your own. Leave the generation documents
   and hashes in place. Removing one puts the generation of that subscription id back at 0, and a marker saved before
   an earlier forget can then read as present again.

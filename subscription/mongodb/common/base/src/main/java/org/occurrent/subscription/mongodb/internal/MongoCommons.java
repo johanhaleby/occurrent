@@ -528,9 +528,10 @@ public class MongoCommons {
 
     /**
      * The write concern of both writes of a forget, whatever write concern the application set on its collection. With
-     * {@code j: true} a majority has the write in its on-disk journal before it acknowledges, whatever
-     * {@code writeConcernMajorityJournalDefault} says, so an acknowledged forget never rolls back. A server that runs
-     * without journaling refuses it, and {@link CatchupMarkerForgetWrites} then fails the forget.
+     * {@code j: true} a majority of WiredTiger servers with journaling has the write in its on-disk journal before it
+     * acknowledges, whatever {@code writeConcernMajorityJournalDefault} says, so an acknowledged forget never rolls back.
+     * A WiredTiger server that runs without journaling refuses it, and {@link CatchupMarkerForgetWrites} then fails the
+     * forget. The in-memory storage engine acknowledges it without a journal.
      */
     public static final WriteConcern CATCHUP_MARKER_FORGET_WRITE_CONCERN = WriteConcern.MAJORITY.withWTimeout(CATCHUP_MARKER_FORGET_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).withJournal(true);
 

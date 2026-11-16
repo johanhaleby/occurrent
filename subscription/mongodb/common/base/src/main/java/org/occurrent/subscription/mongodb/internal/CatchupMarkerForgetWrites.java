@@ -20,11 +20,11 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.isJournal
 
 /**
  * Sends a write of a catch-up marker forget, which asks for {@code j: true} with
- * {@link MongoCommons#CATCHUP_MARKER_FORGET_WRITE_CONCERN}. A server that runs without journaling refuses it, and the
- * forget then fails with an {@link IllegalStateException} that says catch-up marker storage needs journaling. A crash
- * of that server could lose an acknowledged forget, the marker would come back, and the next catch-up would skip the
- * replay the forget asked for. The refusal repeats on every attempt, so {@link #isRetryable(Throwable)} answers
- * {@code false} for it. See ADR 179.
+ * {@link MongoCommons#CATCHUP_MARKER_FORGET_WRITE_CONCERN}. A WiredTiger server that runs without journaling refuses
+ * it, and the forget then fails with an {@link IllegalStateException} that says catch-up marker storage needs
+ * journaling. A crash of that server could lose an acknowledged forget, the marker would come back, and the next
+ * catch-up would skip the replay the forget asked for. The refusal repeats on every attempt, so
+ * {@link #isRetryable(Throwable)} answers {@code false} for it. See ADR 179.
  */
 public final class CatchupMarkerForgetWrites {
 

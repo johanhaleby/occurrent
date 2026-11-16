@@ -65,11 +65,13 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.*;
  * isn't a replica set member refuses {@link ReadConcern#LINEARIZABLE}, and this storage then reads the generation
  * with {@link ReadConcern#MAJORITY} for the rest of its life.
  * <p>
- * Both writes of a forget ask for {@code j: true}, so a majority has them in its on-disk journal before acknowledging
- * them, whatever {@code writeConcernMajorityJournalDefault} says, and an acknowledged forget never rolls back. A server
- * that runs without journaling refuses {@code j: true}, and the forget then fails at once with an
- * {@link IllegalStateException} that says catch-up marker storage needs journaling. A crash of that server could lose
- * an acknowledged forget, and the next catch-up would skip the replay the forget asked for.
+ * Both writes of a forget ask for {@code j: true}, so on a WiredTiger server with journaling a majority has them in
+ * its on-disk journal before acknowledging them, whatever {@code writeConcernMajorityJournalDefault} says, and an
+ * acknowledged forget never rolls back. A WiredTiger server that runs without journaling refuses {@code j: true},
+ * and the forget then fails at once with an {@link IllegalStateException} that says catch-up marker storage needs
+ * journaling. A crash of that server could lose an acknowledged forget, and the next catch-up would skip the replay
+ * the forget asked for. The in-memory storage engine of MongoDB Enterprise acknowledges {@code j: true} without a
+ * journal, so a rollback there can undo an acknowledged forget, and this storage doesn't support it.
  * <p>
  * Each attempt of a forget sets the generation to a new random {@code long} other than 0. A rollback can take back a
  * generation that an attempt read, and a counter would then repeat it, while a random generation repeats it with a
