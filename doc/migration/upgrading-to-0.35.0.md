@@ -663,7 +663,16 @@ and reads it back as `SagaStatus.ACTIVE`. Every event with a stream version adds
 status with `SagaStatus.valueOf` and throws on `ACTIVE_MARKED`, so a 0.34.0 node fails on such an instance and retries
 instead of saving it.
 
-During a rolling upgrade a 0.34.0 node therefore stalls on the first event for an instance a 0.35.0 node has handled,
+A saga fed from a Kafka or RabbitMQ source gets that failure in its handler on a 0.34.0 node, and the source's
+`DeliveryFailurePolicy` decides what happens to the message. With `REDELIVER`, the default, the source delivers the
+message again once per poll for as long as a 0.34.0 node consumes it, and the messages behind it on that partition or
+queue wait. With `PARK`, the source publishes the message to its parking topic or exchange and acknowledges it, so the
+instance never gets it. Occurrent has no tool that moves a parked message back. Once every saga node runs 0.35.0,
+publish each parked message again to the topic or exchange the saga consumes, with the headers and body it was parked
+with. A message with a stream id and version that the instance applied already is skipped, as on any
+redelivery.
+
+During a rolling upgrade a 0.34.0 node stalls on the first event for an instance a 0.35.0 node has handled,
 the same way it stalls on a quarantined instance, as
 [Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it) describes.
 Its timer poller asks for `ACTIVE` instances only, so the timers of an `ACTIVE_MARKED` instance wait while a 0.34.0 node
@@ -678,8 +687,9 @@ db.getCollection("saga-order-fulfilment")
 ```
 
 To go back to 0.34.0, stop every 0.35.0 node. Then list the `ACTIVE_MARKED` instances that hold a version that failed
-and waits to be applied again, in `pending` or `legacyFailed`. 0.34.0 never applies such a version, as the paragraph
-after the update says:
+and waits to be applied again, in `pending` or `legacyFailed`. 0.34.0 skips every version at or below the stream's
+watermark, so it never applies such a version once a later version of its stream was applied. The query lists every
+instance that holds such a version, so it lists more instances than the ones that lose one:
 
 ```javascript
 db.getCollection("saga-order-fulfilment")
@@ -696,8 +706,8 @@ db.getCollection("saga-order-fulfilment")
 ```
 
 0.34.0 ignores the marks and its first save of each instance drops them. A version that failed and waits to be applied
-again is then never applied, and a late version below the stream's watermark is skipped, as on 0.34.0. Upgrading again
-reads such an instance as an old document.
+again is then skipped when a later version of its stream was applied, and a late version below the stream's watermark
+is skipped too, as on 0.34.0. Upgrading again reads such an instance as an old document.
 
 ### A record pattern over `SagaEnvelope` or `SagaRunnerConfig` stops compiling
 
@@ -969,7 +979,7 @@ subscription goes live. To downgrade without that stall, do steps 1 to 4 on 0.35
 5. Repeat steps 2 to 4 until step 2 lists no instance with a quarantine id. Then stop every 0.35.0 node, and set every
    `ACTIVE_MARKED` instance back to `ACTIVE` with the `updateMany` in
    [the stored saga state for late versions](#stored-saga-state-1). A released instance is one of them. That section
-   first lists the instances that hold a version 0.34.0 never applies, and says what else 0.34.0 loses.
+   first lists the instances that hold a version 0.34.0 may never apply, and says what else 0.34.0 loses.
 6. Start the 0.34.0 nodes.
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already

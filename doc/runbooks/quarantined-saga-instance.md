@@ -569,7 +569,7 @@ instance is deleted. To downgrade without that stall, do steps 1 to 4 on 0.35.0:
 5. Repeat steps 2 to 4 until step 2 lists no instance with a quarantine id. Then stop every 0.35.0 node, and set every
    `ACTIVE_MARKED` instance back to `ACTIVE`, released ones included, as
    [the 0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#stored-saga-state-1) describes. It first lists the
-   instances that hold a version 0.34.0 never applies, and says what else 0.34.0 loses.
+   instances that hold a version 0.34.0 may never apply, and says what else 0.34.0 loses.
 6. Start the 0.34.0 nodes.
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `NOT_QUARANTINED` is already
