@@ -113,12 +113,17 @@ of that key only when its sequence number is the one release read. So a delete n
 under the same key in the meantime. `deleteSkippedInputByKey` deletes by key alone, and release uses it only when it
 starts, to make the input it starts from the first record it replays, in point 3 step 1.
 
-`SagaStateStore.delete(sagaId)` also deletes the instance's records. It deletes the instance first and the records after
-it. When a delete fails between the two, what remains is records that no instance reads, never a quarantined instance
-without the records of what it skipped. When a replayed input completes the instance, release deletes every record of
-the instance, under every quarantine id, with `deleteSkippedInputs(sagaId)`, since a completed instance skips every
-input and none of them can be replayed. After a crash between the write that completes the instance and that delete, the records stay
-until `SagaStateStore.delete(sagaId)`.
+`SagaStateStore.delete(sagaId)` also deletes the records under the quarantine id the instance had. It deletes the
+instance first and those records after it. When a delete fails between the two, what remains is records that no
+instance reads, never a quarantined instance without the records of what it skipped. It deletes by that quarantine id
+and not by saga id, because an event can start a new instance with the same saga id between the two deletes. Once that
+instance is quarantined, it records under a quarantine id of its own, and a delete by saga id would remove records of
+inputs that were acknowledged. When a replayed input completes the instance, release deletes the records under its
+quarantine id with `deleteSkippedInputs(sagaId, quarantineId)`, since a completed instance skips every input and none of
+them can be replayed. After a crash between the write that completes the instance and that delete, the records stay,
+and nothing reads or deletes them, since a completed instance has no quarantine id. The same holds for a skip's record
+after a crash between its write and the delete that follows a lost second compare-and-set. Such records take up storage
+and nothing else.
 
 ### 3. Release replays the input the instance stopped on, then the records
 
@@ -137,7 +142,10 @@ until `SagaStateStore.delete(sagaId)`.
    delete or behind another node's release, is deleted without being applied again.
 3. The instance becomes `ACTIVE`, with the failure record and the skip counter cleared, only in a compare-and-set that
    expects the version release read before it found no records left. Release reads the instance first and the records
-   after it, so a skip that finishes between the two reads has changed the version, and the write loses.
+   after it, so a skip that finishes between the two reads has changed the version, and the write loses. A skip that
+   raised the skip counter before release read the instance, and writes its record after release found none, loses its
+   second compare-and-set to this write instead. It deletes its own record again, by its sequence number, and its input,
+   which was never acknowledged, is applied to the `ACTIVE` instance like any live input.
 
 Release applies the event it read back by that event's stream id and version, with the same budget, failure record and
 stream marks as any other input. A record's CloudEvent key is used only to find the event. Every event the MongoDB event
