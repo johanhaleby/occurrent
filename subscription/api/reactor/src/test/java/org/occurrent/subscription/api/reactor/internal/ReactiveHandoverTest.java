@@ -2329,9 +2329,12 @@ class ReactiveHandoverTest {
         };
         ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> {
             delivered.add(payload);
-            return payload.equals("R2") ? Mono.defer(() -> self.get().catchUp(nested)).doFinally(signal -> nestedDone.countDown()).then() : Mono.<Void>empty();
+            return payload.equals("R2") ? Mono.defer(() -> self.get().catchUp(nested)).then() : Mono.<Void>empty();
         }, payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
         self.set(handover);
+        // Counted down from historyDone(), since the fold gets its answer before the nested catch-up reads its marker
+        // again on its turn
+        nested.onHistoryDone = nestedDone::countDown;
         FakeSource outer = source(List.of("R1", "R2", "R3"), false);
         outer.onMarkCaughtUp = () -> {
             order.add("outer marks caught up");
