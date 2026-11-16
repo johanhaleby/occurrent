@@ -38,6 +38,7 @@ import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
+import org.occurrent.subscription.api.blocking.RedeliveringSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
@@ -65,6 +66,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -79,7 +81,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, StartRefusalReportingSubscriptions, CommitOrderedSubscriptions, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, StartRefusalReportingSubscriptions, CommitOrderedSubscriptions, RedeliveringSubscriptions, SmartLifecycle {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -124,6 +126,18 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         return subscriptions.deliversEveryEventInCommitOrder();
     }
 
+    /**
+     * {@code true}. A subscription's position moves past an event only once its action has returned normally, and an
+     * action that throws {@code AttemptNotMade} is neither retried nor reported to the retry strategy's listeners. A
+     * resume opens the change stream at the subscription's position, so the event is delivered again. Asking about a
+     * subscription and starting the model never wait for an action, and a pause or a stop waits at most a second for a
+     * running one.
+     */
+    @Override
+    public boolean redeliversAnAttemptNotMade() {
+        return true;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
 
     private final String eventCollection;
@@ -134,6 +148,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private final boolean ownsExecutor;
     private final boolean autoStartup;
     private final ChangeStreamSubscriptions subscriptions;
+    // The stillWanted of a two-argument canResumeFrom running on this thread, for the one-argument canResumeFrom it calls
+    private final ThreadLocal<BooleanSupplier> stillWantedOfTheCall = new ThreadLocal<>();
 
     /**
      * Create a blocking subscription using Spring. It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively
@@ -329,7 +345,30 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      */
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint) {
-        return subscriptions.canResumeFrom(eventCollection, checkpoint);
+        BooleanSupplier stillWanted = stillWantedOfTheCall.get();
+        return subscriptions.canResumeFrom(eventCollection, checkpoint, stillWanted == null ? () -> true : stillWanted);
+    }
+
+    /**
+     * {@link #canResumeFrom(Checkpoint)}, except that a transient failure is also thrown, instead of retried, once
+     * {@code stillWanted} answers {@code false}. A catch-up calls this overload from its replay thread. It calls
+     * {@link #canResumeFrom(Checkpoint)}, so a subclass that overrides only that method is still called, and
+     * {@code stillWanted} ends the retry when the override calls {@code super.canResumeFrom(checkpoint)} on the same
+     * thread.
+     */
+    @Override
+    public boolean canResumeFrom(Checkpoint checkpoint, BooleanSupplier stillWanted) {
+        BooleanSupplier outer = stillWantedOfTheCall.get();
+        stillWantedOfTheCall.set(stillWanted);
+        try {
+            return canResumeFrom(checkpoint);
+        } finally {
+            if (outer == null) {
+                stillWantedOfTheCall.remove();
+            } else {
+                stillWantedOfTheCall.set(outer);
+            }
+        }
     }
 
     // Life-cycle implementation

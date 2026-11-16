@@ -34,6 +34,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -120,13 +121,14 @@ class MongoLeaseLateProhibitionTest {
         scheduledRefresh.get().run();
         assertThat(listener.busy.await(10, TimeUnit.SECONDS)).as("the listener is busy pausing the first subscription").isTrue();
 
+        OptionalLong lost = node.fencingToken(REGAINED);
         expireLeaseFor(REGAINED);
         assertThat(rival.registerCompetingConsumer(locks, REGAINED, "the-rival")).isTrue();
         scheduledRefresh.get().run();
         assertThat(node.hasLock(REGAINED, "the-node")).as("the node found out it lost the lease").isFalse();
         rival.unregisterCompetingConsumer(locks, REGAINED, "the-rival");
         scheduledRefresh.get().run();
-        assertThat(node.hasLock(REGAINED, "the-node")).as("the node won the lease back while the prohibition waited").isTrue();
+        assertThat(node.fencingToken(REGAINED)).as("the node won the lease back under a new token while the prohibition waited").isNotEqualTo(lost).isPresent();
         listener.unblock.countDown();
 
         listener.awaitCalls(3);

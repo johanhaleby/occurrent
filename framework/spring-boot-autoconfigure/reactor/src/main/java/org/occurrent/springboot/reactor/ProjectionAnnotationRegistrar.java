@@ -35,14 +35,14 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
-import org.occurrent.springboot.common.AppliedAppendRecordingRegistry;
-import org.occurrent.springboot.common.PolledCatchupSignals;
-import org.occurrent.springboot.common.AsynchronousSubscribables;
-import org.occurrent.springboot.common.PushCatchupStatusImpl;
+import org.occurrent.springboot.common.internal.AppliedAppendRecordingRegistry;
+import org.occurrent.springboot.common.internal.PolledCatchupSignals;
+import org.occurrent.springboot.common.internal.AsynchronousSubscribables;
+import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OccurrentProperties.ProjectionProperties.AppliedAppendProperties.ReplayPollProperties;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.common.OccurrentProperties;
-import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.SubscriptionResumePoints;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
@@ -80,8 +80,8 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
-import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
-import static org.occurrent.springboot.common.SubscriptionAnnotations.subscriptionsStartOnTheirOwn;
+import static org.occurrent.springboot.common.internal.SubscriptionAnnotations.shouldWaitUntilStarted;
+import static org.occurrent.springboot.common.internal.SubscriptionAnnotations.subscriptionsStartOnTheirOwn;
 
 /**
  * Scans a bean for {@link org.occurrent.annotation.Projection} factory methods in

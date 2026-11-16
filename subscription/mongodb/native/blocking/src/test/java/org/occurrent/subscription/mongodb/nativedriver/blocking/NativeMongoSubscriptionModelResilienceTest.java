@@ -38,6 +38,7 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
@@ -61,6 +62,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
+import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -1711,6 +1713,40 @@ public class NativeMongoSubscriptionModelResilienceTest {
 
             // Then
             assertThat(shutdownTook).isLessThan(Duration.ofSeconds(2));
+        }
+
+        @Test
+        void a_cancel_that_comes_while_the_retry_strategy_runs_its_listeners_with_no_backoff_stops_the_request_for_the_operation_time_before_it_asks_mongodb_again() throws Exception {
+            // Given a request for the operation time whose first attempt fails and whose retry strategy cancels the subscription before it retries
+            ExecutorService singleThread = Executors.newSingleThreadExecutor();
+            try {
+                AtomicInteger requests = new AtomicInteger();
+                AtomicReference<NativeMongoSubscriptionModel> model = new AtomicReference<>();
+                String subscriptionId = UUID.randomUUID().toString();
+                MongoDatabase databaseFailingTheFirstRequest = spy(database);
+                doAnswer(invocation -> {
+                    if (MongoCommons.CURRENT_OPERATION_TIME_COMMAND.equals(invocation.getArgument(0)) && requests.incrementAndGet() == 1) {
+                        throw new MongoSocketReadException("Prematurely reached end of stream", new ServerAddress(), new IOException("connection reset"));
+                    }
+                    return invocation.callRealMethod();
+                }).when(databaseFailingTheFirstRequest).runCommand(any(Bson.class));
+                subscriptionModel = new NativeMongoSubscriptionModel(databaseFailingTheFirstRequest, realEventCollection, TimeRepresentation.RFC_3339_STRING, singleThread,
+                        NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.retry().backoff(Backoff.none()).onBeforeRetry(error -> model.get().cancelSubscription(subscriptionId))));
+                model.set(subscriptionModel);
+                subscriptionModel.stop();
+
+                // When
+                subscriptionModel.subscribe(subscriptionId, __ -> {
+                });
+                // Runs after the request, which is on the only thread, so a request that follows the cancel has been made by now
+                singleThread.submit(() -> {
+                }).get(10, SECONDS);
+
+                // Then
+                assertThat(requests).hasValue(1);
+            } finally {
+                singleThread.shutdownNow();
+            }
         }
     }
 

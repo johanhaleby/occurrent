@@ -38,8 +38,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * What {@link DurableSubscriptionModel} answers to {@link CommitOrderedSubscriptions#deliversEveryEventInCommitOrder()}.
- * It answers {@code false} whatever the wrapped model answers, since a plain resume of a subscription started at a
- * position of its own can skip to a later checkpoint an earlier run stored.
+ * It answers {@code false} whatever the wrapped model answers, since a resume goes to the checkpoint stored for the id,
+ * and another process can store one there that lies after events this model never delivered.
  */
 @DisplayName("DurableSubscriptionModelCommitOrder")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -62,6 +62,18 @@ class DurableSubscriptionModelCommitOrderTest {
         // Given
         DurableSubscriptionModelConfig config = new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true);
         DurableSubscriptionModel model = new DurableSubscriptionModel(new DeclaringModel(true), new InMemoryCheckpointStorage(), config);
+
+        // When
+        boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();
+
+        // Then
+        assertThat(deliversInCommitOrder).isFalse();
+    }
+
+    @Test
+    void does_not_deliver_every_event_in_commit_order_when_the_wrapped_model_declares_that_it_does_not() {
+        // Given
+        DurableSubscriptionModel model = new DurableSubscriptionModel(new DeclaringModel(false), new InMemoryCheckpointStorage());
 
         // When
         boolean deliversInCommitOrder = model.deliversEveryEventInCommitOrder();

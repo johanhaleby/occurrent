@@ -38,6 +38,12 @@ other sections compile fine and behave differently, so read them first.
 - [`ComposedDefaultStartPosition` and its bean are removed](#composeddefaultstartposition-and-its-bean-are-removed).
   **Breaks the build** if you inject the `occurrentComposedDefaultStartPosition` bean, name the type, or call or
   override `occurrentCompetingDurableSubscriptionModel(..)`.
+- [Five types the Spring Boot starters share move to an internal package](#five-types-the-spring-boot-starters-share-move-to-an-internal-package).
+  **Breaks the build** if you refer to `SubscriptionAnnotations`, `PushCatchupStatusImpl`, `AsynchronousSubscribables`,
+  `AppliedAppendRecordingRegistry` or `PolledCatchupSignals`, and `UpgradeToOccurrent_0_35` rewrites the references.
+- [A held event is withdrawn instead of delivered without the lease](#a-held-event-is-withdrawn-instead-of-delivered-without-the-lease).
+  `AttemptNotMade` moves from the nested `org.occurrent.retry.internal.RetryExecution.AttemptNotMade` to
+  `org.occurrent.retry.AttemptNotMade`. **Breaks the build** if you name the nested class.
 
 ### Sagas
 
@@ -90,6 +96,10 @@ other sections compile fine and behave differently, so read them first.
 - [A `CompetingConsumerListener` can be told the same thing twice, and after the call returns](#a-competingconsumerlistener-can-be-told-the-same-thing-twice-and-after-the-call-returns).
   A listener of your own on a MongoDB lease strategy can hear the same answer twice, a prohibition with no grant
   before it, and the change of a register, release or unregister after that call returned. Compiles unchanged.
+- [A held event is withdrawn instead of delivered without the lease](#a-held-event-is-withdrawn-instead-of-delivered-without-the-lease).
+  A competing consumer over a MongoDB subscription model makes the action throw `AttemptNotMade` for an event that
+  waits for the lease, where 0.34.0 ran it without the lease. A subscription model, a wrapper or a
+  `CompetingConsumerStrategy` of your own needs a look. **Breaks the build** if you name `RetryExecution.AttemptNotMade`.
 - [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). Call `acceptAndWait(..)` instead, which
   `accept(..)` already forwarded to. `UpgradeToOccurrent_0_34` renames the calls, but only while the project still
   depends on 0.33.0 or 0.34.0. Breaks the build.
@@ -198,9 +208,11 @@ other sections compile fine and behave differently, so read them first.
   static method that hides an annotated static factory method of a superclass fails at startup the same way. A
   handler declared with a type variable gets only the type the bean's class gives it, which can narrow a handler that
   ran in 0.34.0, one of the bridge kind or one on a JDK proxy that can't be unwrapped. Compiles unchanged.
-- [`SubscriptionAnnotations` reads handlers as the bean's class sees them](#subscriptionannotations-reads-handlers-as-the-beans-class-sees-them).
-  Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly sees the changes
-  the starters make to find inherited handlers. Compiles unchanged.
+- [Five types the Spring Boot starters share move to an internal package](#five-types-the-spring-boot-starters-share-move-to-an-internal-package).
+  `SubscriptionAnnotations`, `PushCatchupStatusImpl`, `AsynchronousSubscribables`, `AppliedAppendRecordingRegistry`
+  and `PolledCatchupSignals` move to `org.occurrent.springboot.common.internal`, and `UpgradeToOccurrent_0_35` rewrites
+  the references. Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly
+  sees the changes the starters make to find inherited handlers. **Breaks the build** if you refer to one of the five.
 
 ### Brokers
 
@@ -229,6 +241,10 @@ other sections compile fine and behave differently, so read them first.
 
 ### The rewrite recipe
 
+Run `UpgradeToOccurrent_0_35` while the project still depends on 0.34.0, and then move the dependency to 0.35.0.
+`MoveAttemptNotMade_0_35` and `MoveSpringBootCommonTypesToInternal_0_35` look for each type at its old name, and once
+the dependency is 0.35.0 no type has that name, so they change nothing.
+
 - `org.occurrent.MigrateDcbMarkerVersionsRecordPattern_0_35` adds the new bindings to a record pattern over
   `DcbAppendResult`, `DcbEventStream`, `DcbReadOptions` or `Snapshot`. See
   [DCB reads can resume from marker versions](#dcb-reads-can-resume-from-marker-versions) and
@@ -236,6 +252,13 @@ other sections compile fine and behave differently, so read them first.
 - `org.occurrent.MigrateNativeMongoSubscriptionRecordPattern_0_35` adds the new binding to a record pattern over
   `NativeMongoSubscription`. See
   [A record pattern over `NativeMongoSubscription` stops compiling](#a-record-pattern-over-nativemongosubscription-stops-compiling).
+- `org.occurrent.MoveAttemptNotMade_0_35` changes each reference to `RetryExecution.AttemptNotMade` to
+  `org.occurrent.retry.AttemptNotMade`. See
+  [A held event is withdrawn instead of delivered without the lease](#a-held-event-is-withdrawn-instead-of-delivered-without-the-lease).
+- `org.occurrent.MoveSpringBootCommonTypesToInternal_0_35` changes each reference to `SubscriptionAnnotations` and its
+  nested types, `PushCatchupStatusImpl`, `AsynchronousSubscribables`, `AppliedAppendRecordingRegistry` and
+  `PolledCatchupSignals` to the package `org.occurrent.springboot.common.internal`. See
+  [Five types the Spring Boot starters share move to an internal package](#five-types-the-spring-boot-starters-share-move-to-an-internal-package).
 - No recipe rewrites a `DcbConsistencyToken` or the streams that create one. See
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
 
@@ -383,7 +406,9 @@ Every other capability is found only on a model that implements it. That is `Rep
 * `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
   `ManualStartSubscriptionModel` answers empty. There is no way to resume a competing subscription at a position yet.
   Pause and resume it through the `CompetingConsumerSubscriptionModel`. Over a `DurableSubscriptionModel` the resume
-  starts from the stored checkpoint. [#1304](https://github.com/johanhaleby/occurrent/issues/1304) decides how a resume at
+  starts from the stored checkpoint. The exception is a subscription subscribed at a `StartAt.checkpoint(..)` of its own
+  that has stored no checkpoint yet, while the checkpoint and write version stored for the id are the ones read when it
+  was subscribed, or that read failed. Its resume goes on from the position the model it wraps has read to. [#1304](https://github.com/johanhaleby/occurrent/issues/1304) decides how a resume at
   a position through a competing consumer should work.
 * `capability(CheckpointAwareSubscriptionModel.class)`, or another model type, on a wrapper that doesn't implement it
   answers empty where it used to answer the model beneath. On the stack the Spring Boot starter builds, a
@@ -439,13 +464,111 @@ everything below, so a competing consumer built on it needs no change.
   unless the subscriber already does. On `onConsumeProhibited`, stop unless it has already stopped. A second call with
   the same answer then does nothing.
 * Don't expect the listener to have been called once `registerCompetingConsumer`, `releaseCompetingConsumer` or
-  `unregisterCompetingConsumer` returns. Use the `boolean` that `registerCompetingConsumer` returns, or ask
-  `hasLock(subscriptionId, subscriberId)`, when the caller needs the answer at once.
+  `unregisterCompetingConsumer` returns. Use the `boolean` that `registerCompetingConsumer` returns when the caller
+  needs to know at once whether it got the lease, and ask `hasLock(subscriptionId, subscriberId)` before it consumes.
+  `hasLock` answers `false` while the listeners are still owed a prohibition for that consumer, so right after a
+  register that returned `true` it can answer `false` until they have heard it. See
+  [A held event is withdrawn instead of delivered without the lease](#a-held-event-is-withdrawn-instead-of-delivered-without-the-lease).
 * Don't count on catching what the listener throws around one of those calls. Handle the failure inside the listener,
   since on a notifier thread the strategy only logs it.
 
 The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
 See [ADR 156](../architecture/decisions/0156-a-refresh-round-tells-the-listeners-what-they-have-not-heard.md).
+
+## A held event is withdrawn instead of delivered without the lease
+
+`CompetingConsumerSubscriptionModel` asks `CompetingConsumerStrategy.hasLock` before it runs the action of a competing
+subscription for an event, and holds the event while the answer is no. In 0.34.0 a pause on the loss of the lease, a
+cancel, a stop, a shutdown, or a call that only asked whether the wrapped model ran the subscription let the held event
+through to the action. The node that held the lease could run the same event, so it reached the handler on two nodes.
+[#1195](https://github.com/johanhaleby/occurrent/issues/1195) fixes that.
+
+### Who is affected
+
+* A subscription model of your own that a `CompetingConsumerSubscriptionModel` wraps, directly or under
+  `DurableSubscriptionModel`, a blocking catch-up model or `ManualStartSubscriptionModel`.
+* A `SubscriptionModelWrapper` of your own between a `CompetingConsumerSubscriptionModel` and a MongoDB subscription
+  model.
+* A `CompetingConsumerStrategy` of your own.
+* Code that names `org.occurrent.retry.internal.RetryExecution.AttemptNotMade`.
+
+A competing consumer built only from Occurrent's own blocking models over MongoDB, with one of the MongoDB lease
+strategies, needs no change. The Spring Boot starter builds one.
+
+### What changes
+
+* Over a wrapped model that declares the new `RedeliveringSubscriptions` capability with `true`, a held event is
+  withdrawn instead of let through. The action throws `org.occurrent.retry.AttemptNotMade`, and the wrapped model moves
+  no position past the event and delivers it again on a later resume or start. That happens once a pause or cancel of
+  the subscription, or a stop of the wrapped model, has returned, once the shutdown of the wrapped model has begun, and
+  when an interrupt ends the wait once `shutdown()` has begun. A call that only asks about a subscription, or starts the
+  wrapped model, leaves the event waiting for the lease.
+* `NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel` declare it. `DurableSubscriptionModel`, the blocking
+  catch-up models and `ManualStartSubscriptionModel` answer what the model they wrap answers.
+  `InMemorySubscriptionModel` doesn't declare it.
+* Over such a model, three rare cases still let the event through without the lease, and log a WARN each time. They are a subscription
+  the competing consumer has forgotten, an interrupt before `shutdown()` has begun, and an event delivered on a thread
+  that is inside a call the competing consumer makes into the wrapped model.
+* Over a wrapped model that doesn't declare it, the event is let through as in 0.34.0, and the competing consumer logs a
+  WARN that names `RedeliveringSubscriptions` the first time it does that.
+* `hasLock` on `SpringMongoLeaseCompetingConsumerStrategy` and `NativeMongoLeaseCompetingConsumerStrategy` answers
+  `false` while the strategy still owes its listeners a prohibition for that consumer, also when the node holds the
+  lease again by then. The `CompetingConsumerStrategy.hasLock` contract asks the same of every strategy.
+* A blocking catch-up replay that a subscribe started, and whose action withdrew an event, runs again from the last
+  position it stored once the subscription is resumed or `start(true)` is called.
+* `AttemptNotMade` moves from the nested `RetryExecution.AttemptNotMade` to `org.occurrent.retry.AttemptNotMade`.
+
+The event is delivered again from the stored checkpoint only on a stack with a `DurableSubscriptionModel`, directly or
+under a catch-up model. Over a bare MongoDB subscription model the node delivers again from its own position in memory.
+
+Delivery stays at-least-once in these cases:
+
+* A node that stalls after `hasLock` answered `true`, for example in a long GC pause, runs the action once it wakes up,
+  also when its lease expired meanwhile.
+* A MongoDB clock that runs ahead of the node's can make `hasLock` answer `true` after another node took the lease, as
+  the `CompetingConsumerStrategy.hasLock` javadoc describes.
+* An action still running when the lease is given up runs on, since the pause of a MongoDB subscription waits at most a
+  second for it. See [#1513](https://github.com/johanhaleby/occurrent/issues/1513).
+* A catch-up replay that loses the lease while it reads history can run an event on two nodes. A pause during a
+  replay that a subscribe started takes effect only at the handover, so the replay hands the next event to the action
+  after the pause has returned, and that event runs once the node gets the lease back. 0.34.0 did the same. See
+  [#1528](https://github.com/johanhaleby/occurrent/issues/1528).
+* A catch-up replay that runs again starts from this node's own last stored position, not the stored checkpoint, so
+  after a failover it delivers again what another node delivered meanwhile. See
+  [#1514](https://github.com/johanhaleby/occurrent/issues/1514). Without a failover, the node also delivers again the
+  events it replayed since it last stored a position, up to 999 with the Spring Boot starter, which stores one every
+  1,000 events.
+* A catch-up replay built with `dontUseCheckpointStorage()` has stored no position, so when it runs again after a
+  withdrawn event it starts from where the subscription asked to start, and this node delivers again the events it
+  replayed before the withdrawn one.
+
+With checkpoint fencing on, `occurrent.subscription.competing-consumer.fence-checkpoints` in Spring Boot, a checkpoint
+write from the node that lost the lease is refused, so the stored checkpoint doesn't move backwards. The fencing
+doesn't stop the action.
+
+### What to do
+
+* For a subscription model of your own, implement `RedeliveringSubscriptions` and answer `true` from
+  `redeliversAnAttemptNotMade()` only when the model honours the contract in its javadoc. When the action throws
+  `AttemptNotMade`, the model moves no position past the event, doesn't retry it or report it as a failure, and
+  delivers it again when the subscription is resumed or started. It waits for the delivering thread only in a pause,
+  cancel, stop or shutdown, and there only for a limited time. It never waits for it in any other call, a subscribe, a
+  resume and a start included, since the competing consumer waits for such a call to return before it shuts the model
+  down. If the model can't do that, leave the capability out. The competing consumer then lets the held
+  event through as in 0.34.0 and logs a WARN.
+* For a `SubscriptionModelWrapper` of your own, implement `RedeliveringSubscriptions` and answer what the model beneath
+  answers, as `DurableSubscriptionModel` does, as long as the wrapper stores no position past an event whose action
+  threw `AttemptNotMade`. `findIn` doesn't look past a wrapper for this capability, so without it the competing
+  consumer treats the whole stack as one that doesn't deliver the event again.
+* For a `CompetingConsumerStrategy` of your own, answer `false` from `hasLock` while the strategy still owes its
+  listeners an `onConsumeProhibited` for a lock the subscriber lost, also when it holds the lock again by then. A
+  strategy that answers `true` then lets the held event run under the new lock, although another node may have
+  delivered it in between.
+* Change a reference to `org.occurrent.retry.internal.RetryExecution.AttemptNotMade` to
+  `org.occurrent.retry.AttemptNotMade`. `UpgradeToOccurrent_0_35` does that for you.
+
+The code compiles unchanged unless it names `RetryExecution.AttemptNotMade`. Nothing stored changes. See
+[ADR 161](../architecture/decisions/0161-a-held-event-is-withdrawn-instead-of-delivered-without-the-lease.md).
 
 ## A saga applies a stream version that arrives after a higher one
 
@@ -2523,17 +2646,25 @@ checkpoint and, for a `@Projection`, `@Snapshot` or `@Saga`, its state. There is
 says whether an inherited handler was meant to run. See
 [ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md).
 
-## `SubscriptionAnnotations` reads handlers as the bean's class sees them
+## Five types the Spring Boot starters share move to an internal package
 
-Both Spring Boot starters read a bean's handlers through `SubscriptionAnnotations`, in the module they share. Three of
-its public methods change so that the starters find inherited handlers, see
-[A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered).
+Both Spring Boot starters read a bean's handlers through `SubscriptionAnnotations`, in the module they share. It moves
+from `org.occurrent.springboot.common` to `org.occurrent.springboot.common.internal`, and so do four other types the
+starters share, `PushCatchupStatusImpl`, `AsynchronousSubscribables`, `AppliedAppendRecordingRegistry` and
+`PolledCatchupSignals`. That package isn't part of the public API, so these types can change in any release.
+`PushCatchupStatus`, the interface an application injects to read where each push projection and saga is in its
+catch-up, stays in `org.occurrent.springboot.common`. Three methods of `SubscriptionAnnotations` also change so that the
+starters find inherited handlers, see [A handler method the bean inherits is registered](#a-handler-method-the-bean-inherits-is-registered).
 
 ### Who is affected
 
-Code outside the starters that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter`.
+Code outside the starters that refers to one of the five types, or to a nested type of `SubscriptionAnnotations`, stops
+compiling. Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` also gets the
+changes below.
 
 ### What changes
+
+The four other types move unchanged. Three methods of `SubscriptionAnnotations` change.
 
 - `invokeDescriptorFactory` runs a factory method that the class of the unwrapped bean inherits unchanged, where
   0.34.0 refused every factory method that class didn't declare itself. Behind a CGLIB proxy whose target can't be
@@ -2551,9 +2682,12 @@ Code outside the starters that calls `invokeDescriptorFactory`, `runsImplementat
 
 ### What to do
 
-The code compiles unchanged. Where you call one of the three methods, check what your code does with the new answer
-for an inherited factory method, a package-private method declared again in another package, or a handler declared
-with a type variable.
+`UpgradeToOccurrent_0_35` rewrites the imports and fully qualified names to the new package. A later release can change
+these types with no recipe and no section in an upgrade guide, so code that keeps calling them can stop compiling or
+behave differently on any upgrade. Code that injects `PushCatchupStatusImpl` to read catch-up progress can inject
+`PushCatchupStatus` instead. Where you call one of the three methods, check what your code does with the new
+answer for an inherited factory method, a package-private method declared again in another package, or a handler
+declared with a type variable.
 
 ## `ComposedDefaultStartPosition` and its bean are removed
 

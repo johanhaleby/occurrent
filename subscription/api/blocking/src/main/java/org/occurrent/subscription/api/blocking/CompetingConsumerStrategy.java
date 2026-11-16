@@ -36,7 +36,10 @@ public interface CompetingConsumerStrategy {
      *
      * @param subscriptionId The subscription if to consume from
      * @param subscriberId   The unique of of the subscriber
-     * @return <code>true</code> if the registered competing consumer has access (lock) to consume events, <code>false</code> otherwise.
+     * @return <code>true</code> if the registered competing consumer holds the lock once registered, <code>false</code>
+     * otherwise. Whether it may consume an event is answered by {@link #hasLock(String, String)}, which answers
+     * {@code false} while the listeners are still owed an {@code onConsumeProhibited} for a lost lock, also when this
+     * returned {@code true}.
      */
     boolean registerCompetingConsumer(String subscriptionId, String subscriberId);
 
@@ -83,8 +86,10 @@ public interface CompetingConsumerStrategy {
      * {@code CompetingConsumerSubscriptionModel} calls this before it hands each event of a competing subscription to
      * the action, and holds the event while this returns {@code false} or throws, until it returns {@code true} or the
      * model calls the wrapped subscription model for the subscription, for instance to pause it, which lets the event
-     * through. Answer from what this strategy keeps in memory rather than by asking a database, and answer
-     * {@code false} once the lock could have expired.
+     * through or withdraws it. Answer from what this strategy keeps in memory rather than by asking a database, and
+     * answer {@code false} once the lock could have expired. A strategy answers {@code false} while it still owes its
+     * listeners an {@code onConsumeProhibited} for a lock the subscriber lost, also when the subscriber holds the lock
+     * again by then.
      * <p>
      * The MongoDB lease strategies answer {@code false} three quarters of the lease time after the request that last
      * set the lease was sent, timed by this node's monotonic clock, while MongoDB expires the lease by its own clock.
@@ -155,7 +160,8 @@ public interface CompetingConsumerStrategy {
      * returned, and then that call does not throw what the listener throws.
      * <p>
      * Registering a listener is optional. A consumer that would rather ask than be told uses
-     * {@link CompetingConsumerStrategy#hasLock(String, String)}, which answers the same thing.
+     * {@link CompetingConsumerStrategy#hasLock(String, String)}, which answers the same thing, and
+     * also answers {@code false} while the listeners are still owed an {@code onConsumeProhibited} for a lost lock.
      */
     interface CompetingConsumerListener {
 

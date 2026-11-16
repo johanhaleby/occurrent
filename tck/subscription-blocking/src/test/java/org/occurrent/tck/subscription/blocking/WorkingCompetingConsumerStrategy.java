@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -137,12 +138,26 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
     private final Storage storage;
     private final Map<String, Candidate> mine = new ConcurrentHashMap<>();
     private final Map<String, Boolean> lastReported = new ConcurrentHashMap<>();
+    // Prohibitions whose listeners have not all returned yet, per key
+    private final Map<String, Integer> prohibitionsBeingTold = new ConcurrentHashMap<>();
     private final Set<CompetingConsumerListener> listeners = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final ScheduledExecutorService coordinator =
             Executors.newSingleThreadScheduledExecutor(runnable -> Thread.ofPlatform().daemon().unstarted(runnable));
 
+    // Null when listeners are told on the thread that caused the change. Otherwise the one thread that tells them, a
+    // round later, so a register, release or unregister has returned before a listener hears about it, as the contract
+    // allows.
+    private final ScheduledExecutorService listenerThread;
+
     WorkingCompetingConsumerStrategy(Storage storage) {
+        this(storage, false);
+    }
+
+    WorkingCompetingConsumerStrategy(Storage storage, boolean tellListenersOnAnotherThread) {
         this.storage = storage;
+        this.listenerThread = tellListenersOnAnotherThread
+                ? Executors.newSingleThreadScheduledExecutor(runnable -> Thread.ofPlatform().daemon().unstarted(runnable))
+                : null;
         coordinator.scheduleWithFixedDelay(this::coordinate, ROUND.toMillis(), ROUND.toMillis(), TimeUnit.MILLISECONDS);
     }
 
@@ -189,7 +204,8 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
     @Override
     public boolean hasLock(String subscriptionId, String subscriberId) {
         Candidate candidate = mine.get(key(subscriptionId, subscriberId));
-        return candidate != null && storage.holds(candidate, System.nanoTime());
+        return candidate != null && !prohibitionsBeingTold.containsKey(key(subscriptionId, subscriberId))
+                && storage.holds(candidate, System.nanoTime());
     }
 
     @Override
@@ -209,6 +225,9 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
     @Override
     public void shutdown() {
         coordinator.shutdownNow();
+        if (listenerThread != null) {
+            listenerThread.shutdownNow();
+        }
     }
 
     private void coordinate() {
@@ -226,6 +245,27 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
         boolean holdsIt = storage.holds(candidate, System.nanoTime());
         Boolean reported = lastReported.put(key(candidate.subscriptionId, candidate.subscriberId), holdsIt);
         if (reported == null || reported != holdsIt) {
+            String key = key(candidate.subscriptionId, candidate.subscriberId);
+            if (!holdsIt) {
+                prohibitionsBeingTold.merge(key, 1, Integer::sum);
+            }
+            if (listenerThread == null) {
+                tellListeners(candidate, holdsIt, key);
+            } else {
+                try {
+                    listenerThread.schedule(() -> tellListeners(candidate, holdsIt, key), ROUND.toMillis(), TimeUnit.MILLISECONDS);
+                } catch (RejectedExecutionException shutDown) {
+                    if (!holdsIt) {
+                        prohibitionsBeingTold.computeIfPresent(key, (__, telling) -> telling == 1 ? null : telling - 1);
+                    }
+                }
+            }
+        }
+        return holdsIt;
+    }
+
+    private void tellListeners(Candidate candidate, boolean holdsIt, String key) {
+        try {
             listeners.forEach(listener -> {
                 if (holdsIt) {
                     listener.onConsumeGranted(candidate.subscriptionId, candidate.subscriberId);
@@ -233,8 +273,11 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
                     listener.onConsumeProhibited(candidate.subscriptionId, candidate.subscriberId);
                 }
             });
+        } finally {
+            if (!holdsIt) {
+                prohibitionsBeingTold.computeIfPresent(key, (__, telling) -> telling == 1 ? null : telling - 1);
+            }
         }
-        return holdsIt;
     }
 
     private static String key(String subscriptionId, String subscriberId) {

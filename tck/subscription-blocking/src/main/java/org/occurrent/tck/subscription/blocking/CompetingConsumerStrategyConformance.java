@@ -22,6 +22,7 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.tck.FailureNamesTheTestClass;
 import org.occurrent.tck.subscription.blocking.RecordedLockChanges.Kind;
 import org.occurrent.tck.subscription.blocking.RecordedLockChanges.LockChange;
@@ -30,6 +31,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 import static java.util.Objects.requireNonNull;
@@ -51,9 +56,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * timing is a property of the implementation, and Occurrent covers it separately, in deterministic tests against
  * the MongoDB support class with a clock the test moves itself.
  * <p>
- * Every wait here is for something that must arrive, capped by {@link CompetingConsumerStrategyFixture#timeToConverge()}.
- * There is no wait for a quiet period, because it would pass just as well against a strategy that coordinates with
- * nobody, and any constant short enough to keep the suite quick is short enough to flake on a loaded machine.
+ * Every wait here is for something that must arrive, capped by {@link CompetingConsumerStrategyFixture#timeToConverge()},
+ * apart from one. The test that asks {@code hasLock} while a listener is told that the consumer lost the lock asserts
+ * that no {@code true} comes, so against a working strategy it waits out the whole of {@code timeToConverge()}. It
+ * waits up to twice that for the listener to return, since a strategy may tell its listeners on another thread after
+ * the call that changed the lock has returned. It also
+ * asserts that the lock was granted, lost and granted again, so a strategy that coordinates with nobody fails it, and a
+ * slow machine can only make it ask fewer times, never fail a working strategy. No other test waits for a quiet period,
+ * because such a wait would pass just as well against a strategy that coordinates with nobody, and any constant short
+ * enough to keep the suite quick is short enough to flake on a loaded machine.
  */
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -132,8 +143,9 @@ public abstract class CompetingConsumerStrategyConformance {
 
         assertThat(acquired).as("nothing else has registered, so there is nobody to lose to").isTrue();
         assertThat(strategy().hasLock(subscription, HOLDER))
-                .as("hasLock has to agree with what registering just returned, since a consumer polling for the lock "
-                        + "and a consumer reading the return value must not get different answers")
+                .as("for a fresh registration that no listener was told it lost, hasLock has to agree with what "
+                        + "registering just returned, since a consumer polling for the lock and a consumer reading the "
+                        + "return value must not get different answers")
                 .isTrue();
     }
 
@@ -343,6 +355,53 @@ public abstract class CompetingConsumerStrategyConformance {
     }
 
     @Test
+    void a_consumer_does_not_have_the_lock_while_a_listener_is_told_it_lost_it_even_once_it_holds_it_again() {
+        String subscription = subscriptionId();
+        RecordedLockChanges changes = new RecordedLockChanges();
+        List<Boolean> answersWhileTold = new CopyOnWriteArrayList<>();
+        AtomicBoolean asked = new AtomicBoolean();
+        CountDownLatch listenerReturned = new CountDownLatch(1);
+        strategy().addListener(new CompetingConsumerListener() {
+            @Override
+            public void onConsumeGranted(String subscriptionId, String subscriberId) {
+                changes.onConsumeGranted(subscriptionId, subscriberId);
+            }
+
+            @Override
+            public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+                changes.onConsumeProhibited(subscriptionId, subscriberId);
+                if (subscriptionId.equals(subscription) && subscriberId.equals(HOLDER) && asked.compareAndSet(false, true)) {
+                    try {
+                        askUntilYes(() -> strategy().hasLock(subscription, HOLDER), answersWhileTold);
+                    } finally {
+                        listenerReturned.countDown();
+                    }
+                }
+            }
+        });
+        strategy().registerCompetingConsumer(subscription, HOLDER);
+
+        strategy().releaseCompetingConsumer(subscription, HOLDER);
+
+        // The listener holds the strategy's attention for up to timeToConverge(), and a strategy may tell it on another
+        // thread after release returned. The wait for the regrant therefore starts once the listener has returned,
+        // so it is the same wait whichever thread the listener was called on.
+        assertThat(awaitReturned(listenerReturned))
+                .as("the listener has to be told the consumer lost the lock for the answers below to be about anything")
+                .isTrue();
+        assertThat(changes.awaitAtLeast(3, fixture().timeToConverge()))
+                .as("nobody else is competing for this subscription, so the consumer that released the lock takes it "
+                        + "back, which is what the answers below were given against")
+                .startsWith(granted(subscription, HOLDER), prohibited(subscription, HOLDER), granted(subscription, HOLDER));
+        assertThat(answersWhileTold)
+                .as("a consumer driven by callbacks holds back what it delivers while hasLock answers no, and goes on "
+                        + "once it answers yes. A yes before the listener has heard of the loss lets it deliver under "
+                        + "the lock it took back what another consumer may have delivered while it did not hold it")
+                .isNotEmpty()
+                .containsOnly(false);
+    }
+
+    @Test
     void a_removed_listener_is_told_nothing_further() {
         String subscription = subscriptionId();
         RecordedLockChanges removed = new RecordedLockChanges();
@@ -402,6 +461,30 @@ public abstract class CompetingConsumerStrategyConformance {
             }
             sleep(POLL_INTERVAL);
         }
+    }
+
+    // The listener spends up to timeToConverge() asking, and may start a little after the call that caused it returned
+    private boolean awaitReturned(CountDownLatch listenerReturned) {
+        try {
+            return listenerReturned.await(fixture().timeToConverge().multipliedBy(2).toNanos(), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    // Records each answer until a yes or until timeToConverge() runs out. A wait for a period, whose length bounds what
+    // a broken strategy shows and never fails a working one
+    private void askUntilYes(BooleanSupplier question, List<Boolean> answers) {
+        long deadline = System.nanoTime() + fixture().timeToConverge().toNanos();
+        do {
+            boolean answer = question.getAsBoolean();
+            answers.add(answer);
+            if (answer) {
+                return;
+            }
+            sleep(POLL_INTERVAL);
+        } while (System.nanoTime() < deadline);
     }
 
     private static final Duration POLL_INTERVAL = Duration.ofMillis(20);

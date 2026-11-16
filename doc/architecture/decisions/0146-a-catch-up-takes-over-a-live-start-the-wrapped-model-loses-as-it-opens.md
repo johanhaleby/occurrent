@@ -15,6 +15,8 @@ history loss does. Amended by
 [ADR 168](0168-a-reactor-catch-up-registers-a-takeover-replay-when-it-answers-the-loss.md), under which a reactor
 catch-up registers the takeover's replay when it answers the loss, so the paragraph on what the catch-up answers
 between the wrapped model's pause and `afterPause` holds for the blocking stack only.
+Amended by [ADR 177](0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md), under which a takeover that the wrapped model holds paused again takes
+over again, up to 3 times, instead of failing the resume.
 
 ## Context
 
