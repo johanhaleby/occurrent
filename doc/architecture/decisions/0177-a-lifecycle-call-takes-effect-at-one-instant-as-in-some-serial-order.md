@@ -126,12 +126,14 @@ Four more rows decide what a failure means:
   its live start. This replaces the ADR 146 rule that the resume fails at once
   ([#1269](https://github.com/johanhaleby/occurrent/issues/1269)).
 
-A `cancelSubscription(X)` or `stop()` that takes effect while the replay thread retries `canResumeFrom` or
-`globalCheckpoint` ends the retry, and the replay ends as cancelled or parked. For that the two methods on the blocking
-`CheckpointAwareSubscriptionModel` get an overload that takes a `BooleanSupplier stillWanted`. Its default
+A `cancelSubscription(X)` or `stop()` that takes effect while the replay thread retries `canResumeFrom` ends the
+retry, and the replay ends as cancelled or parked. For that the two methods on the blocking
+`CheckpointAwareSubscriptionModel` get an overload that takes a `BooleanSupplier stillWanted`. Each default
 implementation calls the existing method, so a model written outside Occurrent keeps compiling and gets no early end.
-The MongoDB models check `stillWanted` before each new attempt
-([#1266](https://github.com/johanhaleby/occurrent/issues/1266) item 1).
+The MongoDB models check `stillWanted` before each new attempt of `canResumeFrom`. Their `globalCheckpoint` doesn't
+retry, so its overload exists for a model written outside Occurrent that does. The MongoDB models pass `stillWanted` to
+their one-argument `canResumeFrom` through a `ThreadLocal`, so a subclass that overrides only that method is still
+called ([#1266](https://github.com/johanhaleby/occurrent/issues/1266) item 1).
 
 ```java
 default boolean canResumeFrom(Checkpoint checkpoint, BooleanSupplier stillWanted) {
