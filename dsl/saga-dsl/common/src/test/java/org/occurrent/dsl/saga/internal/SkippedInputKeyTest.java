@@ -26,6 +26,7 @@ import org.occurrent.dsl.saga.internal.SkippedInputKey.StreamKey;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayName("The key a quarantined saga instance records a skipped input under")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -46,6 +47,23 @@ class SkippedInputKeyTest {
         String key = SkippedInputKey.cloudEventKey("e1", "urn:orders");
 
         assertThat(SkippedInputKey.parse(key)).isEqualTo(new CloudEventKey("e1", "urn:orders"));
+    }
+
+    @Test
+    void writes_a_cloud_event_key_as_the_documented_literal_and_reads_it_back_as_the_same_id_and_source() {
+        String key = SkippedInputKey.cloudEventKey("e1", "urn:orders");
+
+        assertAll(
+                () -> assertThat(key).isEqualTo("cloudevent:2:e1:urn:orders@cloudevent"),
+                () -> assertThat(SkippedInputKey.parse("cloudevent:2:e1:urn:orders@cloudevent")).isEqualTo(new CloudEventKey("e1", "urn:orders"))
+        );
+    }
+
+    @Test
+    void refuses_a_cloud_event_key_whose_length_is_near_the_largest_int_instead_of_overflowing_the_bounds_check() {
+        assertThatThrownBy(() -> SkippedInputKey.parse("cloudevent:2147483647:e1:urn:orders@cloudevent"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("neither a stream key");
     }
 
     @Test

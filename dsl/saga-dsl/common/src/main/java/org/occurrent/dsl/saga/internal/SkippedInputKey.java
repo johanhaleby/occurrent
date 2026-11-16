@@ -68,8 +68,9 @@ public sealed interface SkippedInputKey {
             if (colon > 0) {
                 try {
                     int idLength = Integer.parseInt(body.substring(0, colon));
-                    int idEnd = colon + 1 + idLength;
-                    if (idLength >= 0 && idEnd < body.length() && body.charAt(idEnd) == ':') {
+                    // Compared before adding, so a length near Integer.MAX_VALUE cannot overflow past the bounds check
+                    if (idLength >= 0 && idLength < body.length() - colon - 1 && body.charAt(colon + 1 + idLength) == ':') {
+                        int idEnd = colon + 1 + idLength;
                         return new CloudEventKey(body.substring(colon + 1, idEnd), body.substring(idEnd + 1));
                     }
                 } catch (NumberFormatException notALength) {

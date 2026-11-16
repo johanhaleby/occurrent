@@ -28,6 +28,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -525,13 +530,53 @@ class InMemorySagaStateStoreTest {
         }
 
         @Test
-        void are_deleted_one_key_at_a_time() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(1, "b@2"));
+        void get_a_record_of_a_key_that_has_none_when_recorded_at_the_head() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "b@2"));
 
-            store.deleteSkippedInputByKey("s1", "q1", "a@1");
+            store.recordSkippedInputAtHead("s1", "q1", new SkippedInput(-1, "a@1"));
 
-            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(1, "b@2"));
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(0, "b@2"));
+        }
+
+        @Test
+        void move_the_record_of_a_key_to_the_seq_it_is_recorded_at_the_head_with_and_keep_one_record_of_it() {
+            store.recordSkippedInput("s1", "q1", new SkippedInput(4, "a@1"));
+            store.recordSkippedInput("s1", "q1", new SkippedInput(5, "b@2"));
+
+            store.recordSkippedInputAtHead("s1", "q1", new SkippedInput(-1, "a@1"));
+
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(5, "b@2"));
+        }
+
+        @Test
+        void keep_one_record_of_a_key_recorded_at_the_head_by_two_concurrent_callers() throws Exception {
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+            try {
+                for (int round = 0; round < 50; round++) {
+                    String sagaId = "s" + round;
+                    CountDownLatch go = new CountDownLatch(1);
+                    List<Future<?>> writers = List.of(
+                            executor.submit(() -> {
+                                go.await();
+                                store.recordSkippedInputAtHead(sagaId, "q1", new SkippedInput(-1, "a@1"));
+                                return null;
+                            }),
+                            executor.submit(() -> {
+                                go.await();
+                                store.recordSkippedInputAtHead(sagaId, "q1", new SkippedInput(7, "a@1"));
+                                return null;
+                            }));
+                    go.countDown();
+                    for (Future<?> writer : writers) {
+                        writer.get(10, TimeUnit.SECONDS);
+                    }
+
+                    assertThat(store.findSkippedInputs(sagaId, "q1", 10)).hasSize(1).singleElement()
+                            .isIn(new SkippedInput(-1, "a@1"), new SkippedInput(7, "a@1"));
+                }
+            } finally {
+                executor.shutdownNow();
+            }
         }
 
         @Test

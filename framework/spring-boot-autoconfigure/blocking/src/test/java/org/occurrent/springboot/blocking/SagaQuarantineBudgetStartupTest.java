@@ -177,6 +177,21 @@ class SagaQuarantineBudgetStartupTest {
     }
 
     @Test
+    void refuses_to_start_a_saga_that_quarantines_on_a_model_that_holds_every_event_when_its_state_store_cannot_record_skipped_inputs_naming_the_capability_and_the_way_out() {
+        retainingContextRunnerOn(StoreThatDoesNotRecordSkippedInputs.class).withBean(EventStoreQueries.class, () -> mock(EventStoreQueries.class))
+                .run(context -> assertThat(context).getFailure()
+                        .hasStackTraceContaining("@Saga 'saga-quarantine-budget'")
+                        .hasStackTraceContaining("SagaStateStoreSkippedInputs")
+                        .hasStackTraceContaining("occurrent.saga.quarantine-enabled=false"));
+    }
+
+    @Test
+    void starts_a_saga_whose_state_store_cannot_record_skipped_inputs_when_quarantine_is_off() {
+        retainingContextRunnerOn(StoreThatDoesNotRecordSkippedInputs.class).withPropertyValues("occurrent.saga.quarantine-enabled=false")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
     void starts_on_a_model_that_holds_every_event_when_quarantine_is_off_without_an_event_store_queries_bean() {
         retainingContextRunner().withPropertyValues("occurrent.saga.quarantine-enabled=false").run(context -> assertThat(context).hasNotFailed());
     }
@@ -220,13 +235,17 @@ class SagaQuarantineBudgetStartupTest {
     private static ApplicationContextRunner contextRunner() {
         return new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(SagaConfiguration.class, PlainModel.class);
+                .withUserConfiguration(SagaConfiguration.class, StoreThatRecordsSkippedInputs.class, PlainModel.class);
     }
 
     private static ApplicationContextRunner retainingContextRunner() {
+        return retainingContextRunnerOn(StoreThatRecordsSkippedInputs.class);
+    }
+
+    private static ApplicationContextRunner retainingContextRunnerOn(Class<?> storeConfiguration) {
         return new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(SagaConfiguration.class, RetainingModel.class);
+                .withUserConfiguration(SagaConfiguration.class, storeConfiguration, RetainingModel.class);
     }
 
     private List<String> quarantineSwitchedOffWarnings() {
@@ -268,14 +287,6 @@ class SagaQuarantineBudgetStartupTest {
             };
         }
 
-        @SuppressWarnings("unchecked")
-        @Bean
-        SagaStateStore<TestState> sagaStateStore() {
-            SagaStateStore<TestState> store = mock(SagaStateStore.class, withSettings().extraInterfaces(SagaStateStoreSkippedInputs.class));
-            when(store.stateCodec()).thenReturn(SagaStateCodec.identity());
-            return store;
-        }
-
         @Bean
         CommandDispatcher<TestCommand> commandDispatcher() {
             return command -> {
@@ -285,6 +296,30 @@ class SagaQuarantineBudgetStartupTest {
         @Bean
         QuarantineBudgetSaga quarantineBudgetSaga() {
             return new QuarantineBudgetSaga();
+        }
+    }
+
+    // The store of a saga that can record the inputs it skips and be released, as the in-memory and MongoDB stores are
+    @Configuration(proxyBeanMethods = false)
+    static class StoreThatRecordsSkippedInputs {
+        @SuppressWarnings("unchecked")
+        @Bean
+        SagaStateStore<TestState> sagaStateStore() {
+            SagaStateStore<TestState> store = mock(SagaStateStore.class, withSettings().extraInterfaces(SagaStateStoreSkippedInputs.class));
+            when(store.stateCodec()).thenReturn(SagaStateCodec.identity());
+            return store;
+        }
+    }
+
+    // A store of some other implementation, which cannot record the inputs a quarantined instance skips
+    @Configuration(proxyBeanMethods = false)
+    static class StoreThatDoesNotRecordSkippedInputs {
+        @SuppressWarnings("unchecked")
+        @Bean
+        SagaStateStore<TestState> sagaStateStore() {
+            SagaStateStore<TestState> store = mock(SagaStateStore.class);
+            when(store.stateCodec()).thenReturn(SagaStateCodec.identity());
+            return store;
         }
     }
 

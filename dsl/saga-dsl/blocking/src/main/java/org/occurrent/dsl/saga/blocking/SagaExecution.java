@@ -653,11 +653,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             String quarantineId = Objects.requireNonNull(current.quarantineId());
             SkippedInput head = SagaExecutionSupport.releaseHead(current);
-            // Deleted and written again rather than kept, so the record an earlier release left when it was
-            // quarantined again on this input moves to the head, whatever its seq. Written before the release starts,
-            // so a release that has started always finds it
-            records.deleteSkippedInputByKey(sagaId, quarantineId, head.key());
-            records.recordSkippedInput(sagaId, quarantineId, head);
+            // Moved to the head in one write rather than kept, so the record an earlier release left when it was
+            // quarantined again on this input moves to the head, whatever its seq, and no other call finds the key
+            // without a record in between. Written before the release starts, so a release that has started always finds it
+            records.recordSkippedInputAtHead(sagaId, quarantineId, head);
             if (!envelopes.compareAndSaveWithoutState(sagaId, releasing, current.version())) {
                 continue;
             }
@@ -751,6 +750,19 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (replayed >= maxRecords) {
                 return null;
             }
+            // Read again after the record, so the replay sees every earlier record another call applied. A release saves
+            // the instance before it deletes the record it applied, so the read before the record can miss that save, and
+            // a start event applied in between would leave the next record skipped as an input to an instance that never
+            // started. The read before the record serves only the write that turns the instance active
+            SagaEnvelope<S> afterRecord = envelopes.find(sagaId).orElse(null);
+            if (resultUnlessReleasing(afterRecord) != null) {
+                continue;
+            }
+            afterRecord = Objects.requireNonNull(afterRecord);
+            if (!quarantineId.equals(afterRecord.quarantineId())) {
+                continue;
+            }
+            current = afterRecord;
             SkippedInput record = first.getFirst();
             CloudEvent cloudEvent = readSkippedInput(queries, record.key());
             EventMeta meta = cloudEvent == null ? EventMeta.NONE : extractMeta(cloudEvent).meta();

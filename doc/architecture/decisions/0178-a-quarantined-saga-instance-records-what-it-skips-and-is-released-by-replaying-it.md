@@ -107,8 +107,8 @@ input the instance never applied.
 
 Release deletes a record it replayed with `deleteSkippedInput(sagaId, quarantineId, record)`, which deletes the record
 of that key only when its sequence number is the one release read. So a delete never removes another record written
-under the same key in the meantime. `deleteSkippedInputByKey` deletes by key alone, and release uses it only when it
-starts, to make the input it starts from the first record it replays, in point 3 step 1.
+under the same key in the meantime. The one write that moves a record is `recordSkippedInputAtHead`, which release
+makes when it starts, to make the input it starts from the first record it replays, in point 3 step 1.
 
 `SagaStateStore.delete(sagaId)` also deletes the records under the quarantine id the instance had. It deletes the
 instance first and those records after it. When a delete fails between the two, what remains is records that no
@@ -119,19 +119,22 @@ inputs that were acknowledged. When a replayed input completes the instance, rel
 quarantine id with `deleteSkippedInputs(sagaId, quarantineId)`, since a completed instance skips every input and none of
 them can be replayed. After a crash between the write that completes the instance and that delete, the records stay,
 and nothing reads or deletes them, since a completed instance has no quarantine id. Records also stay where nothing
-reads them in three other cases. The first is a skip's record after a crash between its write and the delete that
+reads them in four other cases. The first is a skip's record after a crash between its write and the delete that
 follows a lost second compare-and-set. The second is a skip's record when the skip read the instance as still
 quarantined just before a release turned it active, see point 3. The third is every record of an instance whose delete
 `SpringMongoSagaStateStore` retried after the first attempt had removed the instance, since the retry finds no instance
-to read the quarantine id from. Such records take up storage and nothing else.
+to read the quarantine id from. The fourth is K's record when a release that lost the start compare-and-set wrote it
+after the winning release had replayed K, deleted its record and turned the instance active. Such records take up
+storage and nothing else.
 
 ### 3. Release replays the input the instance stopped on, then the records
 
 `SagaSubscription.release(String sagaId)` releases one instance. K is the input the instance was quarantined on.
 
-1. Release records K first, as a record with the sequence number -1, below every other record's. A record of K's key
-   left from an earlier attempt is deleted by its key before that, whatever its number, so K's record moves to the
-   head, the first record a release replays. Then release sets `releasedAt` on the failure record in one
+1. Release records K first, as a record with the sequence number -1, below every other record's. It does that with
+   `recordSkippedInputAtHead`, which in one write per key sets the number of a record of K's key left from an earlier
+   attempt to -1, whatever it was, or writes the record when there is none. So K's record moves to the head, the first
+   record a release replays, and a release that reads the records in between never finds K without one. Then release sets `releasedAt` on the failure record in one
    compare-and-set. The same write restarts K's quarantine budget at the release instant, on the failure record, and
    on K's pending entry when K is a stream key with one, so K gets a full budget again before it can quarantine the
    instance again. An instance with `releasedAt` set is releasing.
@@ -255,9 +258,9 @@ To go on, give release an `EventStoreQueries` that returns the event with them a
 the instance.
 
 In all three cases the instance keeps the record of the input that failed, since neither the write for a used-up
-budget nor the write for an event that can't be replayed deletes it. The next release starts by deleting the record of
-the input the failure record names, by key alone, and writing it again with the sequence number -1. So that record
-moves to the head whatever its number was.
+budget nor the write for an event that can't be replayed deletes it. The next release starts by setting the number of
+the record of the input the failure record names to -1, in one write. So that record moves to the head whatever its
+number was.
 
 The record that stays does no harm:
 

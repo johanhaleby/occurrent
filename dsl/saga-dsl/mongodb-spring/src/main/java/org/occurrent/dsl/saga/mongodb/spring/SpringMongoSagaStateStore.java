@@ -204,8 +204,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             throw new IllegalArgumentException("a CloudEventConverter is required to store a flow saga's FlowState; use the four-argument constructor and pass the application's CloudEventConverter");
         }
         // Retried like every other call this store makes, so a MongoDB error that a second attempt would clear does not
-        // fail the saga's registration while an application is starting. Neither index has options, so nothing a user
-        // configures can make MongoDB refuse one permanently, and an index an operator has already created with
+        // fail the saga's registration while an application is starting. Only the unique index has an option, and no
+        // setting a user configures changes it, so nothing a user configures can make MongoDB refuse one permanently, and an index an operator has already created with
         // different options fails the constructor after the attempt limit rather than being retried forever. The unique
         // index on the skipped inputs is what makes recording a key twice store one document.
         retryStrategy.execute(() -> {
@@ -395,9 +395,21 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     @Override
-    public void deleteSkippedInputByKey(String sagaId, String quarantineId, String key) {
-        Query query = skippedInputQuery(sagaId, quarantineId, key);
-        retryStrategy.execute(() -> mongoOperations.remove(query, skippedInputsCollectionName));
+    public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
+        Objects.requireNonNull(head, "head cannot be null");
+        Query query = skippedInputQuery(sagaId, quarantineId, head.key());
+        Update update = new Update().set(SKIPPED_SEQ, head.seq());
+        // Two writers upserting one key at once can both miss and both insert, and the unique index refuses the second,
+        // which then sets the seq on the record the first stored
+        Supplier<@Nullable Object> upsert = () -> {
+            try {
+                mongoOperations.upsert(query, update, skippedInputsCollectionName);
+            } catch (DuplicateKeyException insertedInBetween) {
+                mongoOperations.updateFirst(query, update, skippedInputsCollectionName);
+            }
+            return null;
+        };
+        retryStrategy.execute(upsert);
     }
 
     @Override

@@ -681,6 +681,22 @@ class SagaReleaseTest {
             );
         }
 
+        @Test
+        void leaves_the_instances_after_one_that_runs_out_of_memory_to_the_next_poll() {
+            releasingOn("o1", "a1");
+            releasingOn("o2", "b1");
+            failing.clear();
+            store.findRunsOutOfMemoryFor = "o1";
+
+            execution.pollTimers();
+
+            assertAll(
+                    () -> assertThat(warnings()).anyMatch(m -> m.contains("could not go on with the release of instance 'o1'")),
+                    () -> assertThat(store.envelopes.find("o2").orElseThrow().isReleasing()).isTrue(),
+                    () -> assertThat(store.envelopes.find("o2").orElseThrow().state().items()).isEmpty()
+            );
+        }
+
         private List<String> warnings() {
             return appender.list.stream().filter(e -> e.getLevel() == Level.WARN).map(ILoggingEvent::getFormattedMessage).toList();
         }
@@ -808,6 +824,164 @@ class SagaReleaseTest {
             assertAll(
                     () -> assertThat(thrown).isNull(),
                     () -> assertThat(result).hasValue(ReleaseResult.QUARANTINED_AGAIN),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(instance().isReleasing()).isFalse()
+            );
+        }
+    }
+
+    @Nested
+    class TheExitsOfARelease {
+
+        private SagaRunnerConfig withCasAttempts(int attempts) {
+            return new SagaRunnerConfig(CONFIG.timerPollInterval(), CONFIG.timerBatchLimit(), attempts, CONFIG.redeliveryDetection(), CONFIG.quarantineAfter(), CONFIG.reorderWindow());
+        }
+
+        // A write from outside the release that leaves the instance as it is and moves its version on, so the write of a
+        // release that read the instance before it loses
+        private void anotherWriteMovesTheVersionOn() {
+            SagaEnvelope<Order> stored = instance();
+            SagaEnvelope<Order> next = new SagaEnvelope<>(stored.sagaId(), stored.state(), stored.status(), stored.version() + 1, stored.timers(),
+                    stored.streamWatermarks(), stored.positionWatermark(), stored.createdAt(), stored.updatedAt(), stored.completedAt(),
+                    stored.currentStep(), stored.started(), stored.failure(), stored.streamMarks(), stored.quarantineSkipCount());
+            assertThat(store.envelopes.compareAndSave(ORDER, next, stored.version())).isTrue();
+        }
+
+        private void anotherWriteBeforeEachOfTheNextActiveWrites(int count) {
+            anotherWriteMovesTheVersionOn();
+            if (count > 1) {
+                store.beforeNextActiveWrite(() -> anotherWriteBeforeEachOfTheNextActiveWrites(count - 1));
+            }
+        }
+
+        private void anotherWriteBeforeEachOfTheNextWritesWithoutState(int count) {
+            anotherWriteMovesTheVersionOn();
+            if (count > 1) {
+                store.beforeNextWriteWithoutState(() -> anotherWriteBeforeEachOfTheNextWritesWithoutState(count - 1));
+            }
+        }
+
+        @Test
+        void a_release_whose_write_that_turns_the_instance_active_loses_on_every_attempt_throws_and_leaves_the_instance_releasing() {
+            quarantinedOnPoisonWithTwoStreamKeyedSkipped();
+            failing.clear();
+            execution = execution(withCasAttempts(3));
+            store.beforeNextActiveWrite(() -> anotherWriteBeforeEachOfTheNextActiveWrites(3));
+
+            Throwable thrown = catchThrowable(() -> execution.release(ORDER));
+
+            assertAll(
+                    () -> assertThat(thrown).isInstanceOf(SagaConcurrencyException.class)
+                            .hasMessageContaining("Failed to go on with the release of saga 'o1' after 3 attempts"),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(instance().isReleasing()).isTrue(),
+                    () -> assertThat(items()).containsExactly("poison", "a", "b")
+            );
+        }
+
+        @Test
+        void a_release_whose_start_write_loses_on_every_attempt_throws_and_leaves_the_instance_quarantined_and_not_releasing() {
+            quarantinedOnPoisonWithTwoStreamKeyedSkipped();
+            failing.clear();
+            execution = execution(withCasAttempts(3));
+            store.beforeNextWriteWithoutState(() -> anotherWriteBeforeEachOfTheNextWritesWithoutState(3));
+
+            Throwable thrown = catchThrowable(() -> execution.release(ORDER));
+
+            assertAll(
+                    () -> assertThat(thrown).isInstanceOf(SagaConcurrencyException.class)
+                            .hasMessageContaining("Failed to start the release of saga 'o1' after 3 attempts"),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(instance().isReleasing()).isFalse(),
+                    () -> assertThat(items()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_failure_of_a_replayed_input_is_recorded_again_when_the_write_that_records_it_loses() {
+            Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
+            now.set(start.plus(Duration.ofHours(1)));
+            failing.clear();
+            failing.add("a");
+            beforeTheNextFailure.set(() -> store.beforeNextWriteWithoutState(this::anotherWriteMovesTheVersionOn));
+
+            ReleaseResult result = execution.release(ORDER);
+
+            SagaEnvelope<Order> after = instance();
+            assertAll(
+                    () -> assertThat(result).isEqualTo(ReleaseResult.STILL_RELEASING),
+                    () -> assertThat(after.isReleasing()).isTrue(),
+                    () -> assertThat(after.failure().input()).isEqualTo(streamKey(quarantined.a())),
+                    () -> assertThat(after.failure().failureMessage()).isEqualTo("cannot pack a"),
+                    () -> assertThat(after.state().items()).containsExactly("poison")
+            );
+        }
+
+        @Test
+        void a_release_of_an_instance_with_quarantine_turned_off_stays_on_a_failing_input_however_long_it_has_failed() {
+            quarantinedOnPoisonWithTwoStreamKeyedSkipped();
+            SagaExecution<OrderEvent, Order, OrderCommand> withoutQuarantine = execution(CONFIG.disableQuarantine());
+            Instant releasedAt = start.plus(Duration.ofHours(1));
+            now.set(releasedAt);
+            ReleaseResult first = withoutQuarantine.release(ORDER);
+            now.set(releasedAt.plus(Duration.ofDays(365)));
+
+            ReleaseResult longAfter = withoutQuarantine.release(ORDER);
+
+            assertAll(
+                    () -> assertThat(first).isEqualTo(ReleaseResult.STILL_RELEASING),
+                    () -> assertThat(longAfter).isEqualTo(ReleaseResult.STILL_RELEASING),
+                    () -> assertThat(instance().isReleasing()).isTrue(),
+                    () -> assertThat(items()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_failure_of_an_input_that_another_call_applied_in_between_is_not_recorded_and_the_release_stays_as_that_call_left_it() {
+            Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
+            now.set(start.plus(Duration.ofHours(1)));
+            failing.clear();
+            failing.add("a");
+            SagaExecution<OrderEvent, Order, OrderCommand> otherNode = execution(CONFIG);
+            // The other call applies "a" and crashes before it deletes the record, which is how the record is still there
+            beforeTheNextFailure.set(() -> {
+                failing.clear();
+                store.beforeNextDeleteOfARecord(() -> {
+                    throw new IllegalStateException("crash after the write and before the delete");
+                });
+                catchThrowable(() -> otherNode.release(ORDER));
+            });
+
+            ReleaseResult result = execution.release(ORDER);
+
+            SagaEnvelope<Order> after = instance();
+            assertAll(
+                    () -> assertThat(result).isEqualTo(ReleaseResult.STILL_RELEASING),
+                    () -> assertThat(after.isReleasing()).isTrue(),
+                    () -> assertThat(after.state().items()).containsExactly("poison", "a"),
+                    () -> assertThat(after.failure().input()).isEqualTo(streamKey(quarantined.k())),
+                    () -> assertThat(after.failure().failureMessage()).isEqualTo("cannot pack poison"),
+                    () -> assertThat(recordedKeys()).containsExactly(streamKey(quarantined.a()), streamKey(quarantined.b()))
+            );
+        }
+
+        @Test
+        void a_release_that_finds_the_instance_quarantined_again_on_a_missing_event_by_another_call_returns_that_result() {
+            Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
+            failing.clear();
+            now.set(start.plus(Duration.ofHours(1)));
+            SagaExecution<OrderEvent, Order, OrderCommand> otherNode = execution(CONFIG);
+            AtomicReference<@Nullable ReleaseResult> otherResult = new AtomicReference<>();
+            store.afterNextWriteWithoutState(() -> {
+                queries.hide(quarantined.k());
+                otherResult.set(otherNode.release(ORDER));
+            });
+
+            ReleaseResult result = execution.release(ORDER);
+
+            assertAll(
+                    () -> assertThat(otherResult).hasValue(ReleaseResult.QUARANTINED_EVENT_MISSING),
+                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_EVENT_MISSING),
                     () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
                     () -> assertThat(instance().isReleasing()).isFalse()
             );
@@ -951,7 +1125,7 @@ class SagaReleaseTest {
         return envelope -> !envelope.isReleasing() && key.equals(envelope.failure().input());
     }
 
-    // The next release starts by deleting the head's record by key, which would run a hook still armed, so it is disarmed
+    // A hook still armed from the first release is disarmed, so the next release does not run it at its first delete
     private void assertEveryInputIsAppliedByTheNextRelease(SagaExecution<OrderEvent, Order, OrderCommand> node, ReleaseResult firstResult, ReleaseResult expectedFirst, CloudEvent... hidden) {
         store.beforeNextDeleteOfARecord(() -> {
         });
@@ -2026,6 +2200,7 @@ class SagaReleaseTest {
         final List<SagaEnvelope<Order>> accepted = new CopyOnWriteArrayList<>();
         private final AtomicReference<@Nullable Runnable> beforeNextStateWrite = new AtomicReference<>();
         private final AtomicReference<@Nullable Runnable> beforeNextWriteWithoutState = new AtomicReference<>();
+        private final AtomicReference<@Nullable Runnable> afterNextWriteWithoutState = new AtomicReference<>();
         final AtomicInteger writesWithoutState = new AtomicInteger();
         private static final int MAX_RECORD_READS = 500;
         private final AtomicInteger recordReads = new AtomicInteger();
@@ -2039,6 +2214,7 @@ class SagaReleaseTest {
         volatile @Nullable RuntimeException findWithoutStateFailure;
         volatile @Nullable RuntimeException listFailure;
         volatile @Nullable String findFailsFor;
+        volatile @Nullable String findRunsOutOfMemoryFor;
         private final AtomicReference<@Nullable Runnable> beforeNextFindWithoutState = new AtomicReference<>();
         volatile boolean listsEveryReleasingInstanceWhateverTheLimit;
 
@@ -2081,6 +2257,10 @@ class SagaReleaseTest {
             beforeNextWriteWithoutState.set(hook);
         }
 
+        void afterNextWriteWithoutState(Runnable hook) {
+            afterNextWriteWithoutState.set(hook);
+        }
+
         @Override
         public SagaStateCodec<Order> stateCodec() {
             return delegate.stateCodec();
@@ -2097,6 +2277,9 @@ class SagaReleaseTest {
             }
             if (sagaId.equals(findFailsFor)) {
                 throw new IllegalStateException("cannot read " + sagaId);
+            }
+            if (sagaId.equals(findRunsOutOfMemoryFor)) {
+                throw new OutOfMemoryError("Java heap space");
             }
             return delegate.find(sagaId);
         }
@@ -2135,6 +2318,7 @@ class SagaReleaseTest {
             boolean saved = delegate.compareAndSaveWithoutState(saga, expectedVersion);
             if (saved) {
                 accepted.add(envelope);
+                run(afterNextWriteWithoutState);
             }
             return saved;
         }
@@ -2174,9 +2358,10 @@ class SagaReleaseTest {
         }
 
         @Override
-        public void deleteSkippedInputByKey(String sagaId, String quarantineId, String key) {
-            run(beforeNextDeleteOfARecord);
-            delegate.deleteSkippedInputByKey(sagaId, quarantineId, key);
+        public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
+            run(beforeNextRecord);
+            delegate.recordSkippedInputAtHead(sagaId, quarantineId, head);
+            run(afterNextRecord);
         }
 
         @Override

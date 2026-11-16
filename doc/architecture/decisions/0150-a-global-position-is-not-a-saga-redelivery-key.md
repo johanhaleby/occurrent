@@ -46,7 +46,8 @@ cause, and it is never quarantined, since quarantine needs a key to identify the
 
 It writes `null` instead of keeping the old value. If a deployment goes back to 0.34.0, that version would otherwise
 read a watermark that 0.35.0 stopped updating and skip events below it. A 0.34.0 node reads a document without the
-field as `null`, and a 0.35.0 node reads one with the field, so a rolling upgrade and a return to 0.34.0 both work.
+field as `null`, and a 0.35.0 node reads one with the field, so a rolling upgrade and a return to 0.34.0 both work
+for this field. An instance 0.35.0 stores as `ACTIVE_MARKED` is the exception, which 0.34.0 can't read, see ADR 154.
 
 **A stored failure record whose input is `position:N` counts as no failure record.** ADR 134 identified a failing input
 by its redelivery key, and for a position-only event that key was `position:N`. No event has that key any more. Keeping
