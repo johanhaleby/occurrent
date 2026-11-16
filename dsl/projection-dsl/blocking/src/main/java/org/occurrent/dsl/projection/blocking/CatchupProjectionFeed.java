@@ -51,7 +51,9 @@ import java.util.stream.Stream;
  * projection's history from the store in position order, folds each replayed event, then drains the buffer and goes
  * live, de-duplicating the replay-to-live overlap by an event-id extracted from the <em>domain</em> event (so the
  * de-dup does not depend on the CloudEvent id). A catch-up marker (an optional {@link CheckpointStorage}) stores the
- * head read before each replay, and the next catch-up replays only the events after it.
+ * head read before each replay, and the next catch-up replays only the events after it. The marker is stored under the
+ * feed's id alone, so a feed whose projection or replay filter changes takes a new id. Under the old id it would skip
+ * the events at or below the stored position that only the new filter matches.
  * <p>
  * A replayed event has a CloudEvent behind it, so the replay always folds with real {@link EventMetadata}. A live event
  * does not, so metadata on the live path is something the source supplies. Use {@link #acceptAndWait(EventMetadata, Object)}
