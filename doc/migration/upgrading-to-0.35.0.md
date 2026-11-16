@@ -3019,8 +3019,9 @@ What you see:
   that delete holds. The blocking push model deletes it before it cancels, and the reactor one after, and the `Mono`
   that the reactor `cancelSubscription(id)` returns completes once the delete is done. A delete that a Redis failover
   loses, or a marker write that the store applies after the delete, makes that subscribe resume after the old marker
-  instead. So does a reactor delete that fails, where 0.34.0 replayed from the beginning in the same process until a
-  later delete succeeded. Subscribe under a new subscription id when you need a rebuild.
+  instead. A reactor delete that fails makes the next subscribe of the id in the same process replay from the
+  beginning, as in 0.34.0, but a subscribe after a restart resumes after the marker that is still stored. Subscribe
+  under a new subscription id when you need a rebuild.
 - The marker is stored under the subscription id alone. When you change the filter or the projection, subscribe under
   a new id. A start under the old id resumes after a position its earlier filter stored, and skips the events at or
   below it that the new filter matches. 0.34.0 skipped the whole replay in that case.
@@ -3028,8 +3029,8 @@ What you see:
   catch-up stored it, such as a durable subscription that used the id before it moved to `source = PUSH`, and it is
   not a position, the catch-up fails with an `IllegalStateException` that names the id. 0.34.0 took any stored
   checkpoint as a finished catch-up and skipped the replay. Delete that checkpoint so the catch-up replays the whole
-  history, or subscribe under a new id. A durable checkpoint that is a position is read as a marker, and the catch-up
-  resumes after it.
+  history, or subscribe under a new id. A failed catch-up does not delete that checkpoint, but a push model's
+  `cancelSubscription(id)` does. A durable checkpoint that is a position is read as a marker, and the catch-up resumes after it.
 - `ReplayAware` and `ReactiveReplayAware` hear `replayStarted()`, `replayCompleted()` and `replayAbandoned()` only for
   a replay from the beginning, as in 0.34.0. A replay after a marker delivers its events the way the live feed does,
   without those calls. A `CatchupListener` on the push model still hears `catchupStarted` and `historyRead` on every

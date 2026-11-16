@@ -250,6 +250,18 @@ class CatchupProjectionFeedResumePositionTest {
     }
 
     @Test
+    void a_stored_checkpoint_that_is_not_a_catch_up_marker_is_still_stored_unchanged_after_the_catch_up_refused_it() {
+        log.append("1");
+        StringBasedCheckpoint foreign = new StringBasedCheckpoint("resume-token-xyz");
+        marker.save("counter", foreign).block(TIMEOUT);
+
+        // The failure is reported after the forget attempts have run, so nothing is left in flight to wait for.
+        assertThat(catchThrowable(() -> feed(new RecordingReplayAwareView()).catchUp().block(TIMEOUT))).as("the refused catch-up").isNotNull();
+
+        assertThat(marker.read("counter").block(TIMEOUT)).as("checkpoint of another subscription under the same id").isEqualTo(foreign);
+    }
+
+    @Test
     void an_event_a_live_fold_fed_back_that_the_replay_does_not_read_is_delivered_by_the_next_start_when_its_fold_fails_and_the_marker_cannot_be_deleted() throws Exception {
         log.append("1");
         InMemoryCheckpointStorage undeletable = new InMemoryCheckpointStorage() {

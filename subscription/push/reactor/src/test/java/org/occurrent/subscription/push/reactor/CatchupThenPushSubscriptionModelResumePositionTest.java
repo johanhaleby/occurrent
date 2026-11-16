@@ -204,6 +204,20 @@ class CatchupThenPushSubscriptionModelResumePositionTest {
         assertThat(failure).hasMessageContaining("\"proj\"").hasMessageContaining("subscribe under a new id");
     }
 
+    @Test
+    void a_stored_checkpoint_that_is_not_a_catch_up_marker_is_still_stored_unchanged_after_the_catch_up_refused_it() {
+        append("1");
+        StringBasedCheckpoint foreign = new StringBasedCheckpoint("resume-token-xyz");
+        marker.save("proj", foreign).block(Duration.ofSeconds(5));
+
+        // The failure is reported after the forget attempts have run, so nothing is left in flight to wait for.
+        assertThat(catchThrowable(() -> new CatchupThenPushSubscriptionModel(store, new PushSubscriptionModel(), marker)
+                .subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.empty())
+                .waitUntilStarted().block(Duration.ofSeconds(5)))).as("the refused start").isNotNull();
+
+        assertThat(marker.read("proj").block(Duration.ofSeconds(5))).as("checkpoint of another subscription under the same id").isEqualTo(foreign);
+    }
+
     private List<String> start(PositionOrderedReader reader) {
         List<String> delivered = new CopyOnWriteArrayList<>();
         subscribe(reader, new PushSubscriptionModel(), delivered);
