@@ -265,9 +265,12 @@ roll back. The store then sends it again, and the generation comes back to the v
 the forget. That attempt read the generation after the forget raised it, so its marker reads present after the forget
 with or without the rollback.
 
-A standalone server started without journaling refuses `j: true` with error code 2 (checked on 4.4.5). The store then
-sends the forget without `j` and keeps doing so for its lifetime. Such a server loses its latest writes when it
-crashes, forgets included, the way it loses any other write.
+A server that runs without journaling, such as a standalone server started with `--nojournal`, refuses `j: true` with
+error code 2 and the message `cannot use 'j' option when a host does not have journaling enabled` (checked on 4.4.5).
+The store matches the code and the message, since other mistakes also give code 2, and a fallback started by one of
+them would drop `j` from every later forget. It then sends the forget without `j` for its lifetime and logs a warning
+the first time. That server can't journal a forget, so a crash loses an acknowledged one the way it loses any other
+recent write. The guarantee that an acknowledged forget never rolls back holds only on a server with journaling.
 
 Without these concerns the fence would break on a failover. With MongoDB's default `local` read concern a primary can
 return an `$inc` that is not committed yet. The attempt reads generation 1 from it, the primary loses an election and
