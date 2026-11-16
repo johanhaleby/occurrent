@@ -146,6 +146,15 @@ stamp only when that write happens. The forget sets the generation to a token, r
 key and its version key, as `delete` does. The store draws the token in Java with `SecureRandom`, as a `long` other
 than 0, and passes it to the script. In memory each call is one step under the lock.
 
+On Redis every call of the store, plain or marker, refuses a subscription id that starts with
+`occurrent:catchup-marker:`, the way plain calls already refuse the version key's prefix. Otherwise a plain `save` of
+an id equal to another id's generation hash key would write a string over that hash, and every marker script on the
+other id would then fail with `WRONGTYPE`. A plain `delete` of it would remove the hash, which puts the generation back
+at 0, so a late marker that an attempt saved with stamp 0 after the forget would read present again. An id with that prefix works in
+0.34.0, so the refusal is a breaking change. A 0.34.0 node, or a client that writes the key directly, can still write a
+string there. A call that then gets `WRONGTYPE` throws at once instead of retrying, since every later attempt would get
+it too, and the default `RetryStrategy` has no attempt limit.
+
 A counter does not work on Redis. Redis replicates to its replicas asynchronously, so a failover can lose an increment
 the old master acknowledged, and the counter then repeats a value:
 
@@ -181,13 +190,15 @@ In a mixed cluster:
 * A 0.34.0 save on MongoDB replaces the whole document, and the only field it can keep from the old one is `version`, so
   a marker it writes has no stamp and counts as generation 0. Once a 0.35.0 node has forgotten the id, the generation is
   at least 1, and a late 0.34.0 write reads absent on 0.35.0 nodes.
-* A 0.34.0 forget deletes the plain checkpoint, and 0.35.0 nodes then read the marker as absent. It does not raise the
-  generation, so a late write after a 0.34.0 forget is not fenced, as in 0.34.0.
+* A 0.34.0 forget deletes the plain checkpoint, and 0.35.0 nodes then read the marker as absent. A cancel forgets the
+  marker, and on the reactor stack so does a catch-up that fails. A 0.34.0 forget does not raise the generation, so a
+  late write after it is not fenced, as in 0.34.0, whichever node sends the write.
 * On Redis a 0.34.0 save does not touch the hash, so the stamp stays. After a 0.34.0 delete and a 0.34.0 write, a
   0.35.0 node reads that marker as present when the stamp from the last 0.35.0 save equals the current generation. That
   is the unfenced 0.34.0 forget from the previous point.
 
-Plain `read`, `exists`, `save` and `delete` keep their meaning and never touch the generation.
+Plain `read`, `exists`, `save` and `delete` keep their meaning and never touch the generation. On Redis they refuse an
+id with the generation hash's prefix.
 
 On a sharded checkpoint collection the generation document's `_id` is an embedded document. MongoDB accepts an `_id` of
 any type other than an array, a regular expression or undefined, and a hashed index hashes an embedded document as one
@@ -239,6 +250,14 @@ across a failover too:
 The first, second and fourth rules keep condition 1. The second and fourth keep condition 2. The fifth makes the first
 read reflect a committed instant, which the proof needs. The third makes an acknowledged forget a committed one, so the
 generation read of a `readCatchupMarker` that starts after it sees it, and the marker reads absent.
+
+One precondition comes from MongoDB itself. A majority write is durable only with `writeConcernMajorityJournalDefault`
+set to `true` in the replica set configuration, which is MongoDB's default, and no `j: false` on the write. The forget
+sets no `j`. With the setting at `false`, a majority-committed `$inc` can still roll back, according to the
+[write concern](https://www.mongodb.com/docs/manual/reference/write-concern/) documentation, as ADR 148 reads it too.
+The generation can then go from 1 to 0 and back to 1, and an attempt that read 1 before the rollback has its late save
+read present after the second forget. That is the repeated value the Redis token is there to rule out, and the
+MongoDB fence needs the setting at `true` to rule it out.
 
 Without these concerns the fence would break on a failover. With MongoDB's default `local` read concern a primary can
 return an `$inc` that is not committed yet. The attempt reads generation 1 from it, the primary loses an election and
@@ -371,14 +390,21 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   generation in between has its marker fenced, and each of them costs one more replay.
 * During a rolling upgrade a forgotten marker can come back. The fence covers every forget a 0.35.0 node makes, but a
   forget made on a 0.34.0 node, and a read on a 0.34.0 node, behave as in 0.34.0 until every node runs 0.35.0. A
-  0.34.0 forget does not change the generation, so a late write after it brings the marker back as it does today. It
-  affects an application that cancels a catch-up subscription on a 0.34.0 node during the rollout, while a marker
-  write for the same id is still on its way to the store. On MongoDB the 0.35.0 nodes read that marker as present only
-  for an id no 0.35.0 node has forgotten, since a 0.34.0 save drops the stamp and any generation above 0 then fences
-  the marker. On Redis they read it as present unless the last marker call a 0.35.0 node made on the id was a forget,
-  because the stamp sits in the generation hash, which a 0.34.0 save and a 0.34.0 delete leave alone. Where the marker
-  reads as present, the next subscribe of that id skips the replay it needed. No new case starts once the last 0.34.0
-  node is gone, but a marker that came back stays present until a 0.35.0 node forgets the id. A 0.34.0 node's late
+  0.34.0 forget does not change the generation, so a late write after it brings the marker back as it does today. A
+  0.34.0 node forgets a marker when a catch-up subscription is cancelled on it, and on the reactor stack also when a
+  catch-up fails on it. It affects an application where either happens during the rollout while a marker write for
+  the same id is still on its way to the store. Which ids it reaches depends on the node that sent the late write. A
+  late write from a 0.35.0 node stamps the generation it read, which the 0.34.0 forget left as it was, so on both
+  stores the 0.35.0 nodes read that marker as present on any id. A late write from a 0.34.0 node has no stamp. On
+  MongoDB the 0.35.0 nodes read it as present only for an id no 0.35.0 node has forgotten, since the missing stamp
+  counts as 0 and any generation above 0 fences the marker. On Redis they read it as present unless the last marker
+  call a 0.35.0 node made on the id was a forget, because the stamp sits in the generation hash, which a 0.34.0 save
+  and a 0.34.0 delete leave alone. Where the marker reads as present, the next subscribe of that id skips the replay
+  it needed. No new case starts once the last 0.34.0 node is gone, but a marker that came back stays present until a
+  0.35.0 node forgets the id. So the upgrade has a precondition. Don't cancel catch-up subscriptions on 0.34.0 nodes
+  during the rollout. An application that did, or whose reactor catch-up failed on a 0.34.0 node, cancels each of
+  those subscriptions once more after the last 0.34.0 node is gone, and that 0.35.0 forget fences the marker. The
+  migration guide gives the precondition and the remedy. A 0.34.0 node's late
   write after a 0.35.0 forget still brings the marker back for the 0.34.0 nodes. No mixed order makes a node read a
   marker as present where an all-0.34.0 deployment would read it absent. A 0.35.0 node saves and deletes the plain
   checkpoint under the same conditions as 0.34.0, and on read it only adds the stamp check, which can turn present
@@ -391,6 +417,8 @@ A `null` marker storage keeps its meaning, and every catch-up replays the histor
   MongoDB a late 0.35.0 save applied afterwards writes a stamp above it, which breaks condition 1 under "The ordered
   reads on MongoDB", and on Redis a late save from an attempt that read 0 reads present. On Redis the generation hashes
   are the keys under `occurrent:catchup-marker:`.
+* On Redis every call refuses a subscription id that starts with `occurrent:catchup-marker:`, and a call that gets
+  `WRONGTYPE` throws without retrying. The changelog lists the refusal as breaking.
 * The checkpoint collection, or the Redis key space, gains one generation document or hash for every subscription id
   that was ever forgotten, and a cancel does not remove it.
 * The ADR 177 order is unchanged. Step 1 now reads the generation with the marker, and step 4 can be refused.
