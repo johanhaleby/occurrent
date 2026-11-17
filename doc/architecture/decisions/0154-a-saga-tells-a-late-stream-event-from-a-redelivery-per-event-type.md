@@ -112,8 +112,8 @@ by 0.34.0 or by the 0.35.0 build of ADR 150 has no `streamMarks`, and it reads a
 watermark and no marks. `streamWatermarks` is still written with the highest version of the stream across types.
 
 **An instance with marks is stored with a status 0.34.0 can't read.** 0.34.0 knows
-nothing of `streamMarks`, and a 0.34.0 save that applies an event replaces the whole document, so such a save during a
-rolling upgrade would drop the marks, and the next
+nothing of `streamMarks`, and a 0.34.0 save that applies an event replaces the whole document, so such a save by a 0.34.0
+node that runs next to a 0.35.0 node would drop the marks, and the next
 0.35.0 node would skip a pending or late version as applied already. `SpringMongoSagaStateStore` therefore stores an
 `ACTIVE` instance whose `streamMarks` are not empty with the status `ACTIVE_MARKED`, and reads it back as `ACTIVE`. Its
 queries for `ACTIVE`, `findByStatus` and the timer poll, match both strings. 0.34.0 decodes the status with
@@ -149,17 +149,20 @@ defect), a listener that delivers from several threads, a Kafka topic whose part
 produced, and a RabbitMQ `prefetchCount` or a number of concurrent publishers of one stream that is larger than the
 window.
 
-During a rolling upgrade a 0.34.0 node throws on every event for an `ACTIVE` instance that holds stream marks, which a
-0.35.0 node adds for every event with a stream version it handles, a failed one included. What then happens to the
-event depends on what feeds the saga. An Occurrent subscription, or a Kafka or RabbitMQ source with `REDELIVER`,
-delivers it again, so the subscription, partition or queue stalls until a 0.35.0 node gets the event, which
-without competing consumers means until the 0.34.0 node is upgraded. A source with
-`PARK` parks and acknowledges it, and once a Kafka rebalance hands a partition to a 0.34.0 consumer, that consumer
-parks every event of such an instance. The parked messages have to be published again after the rollout, and one
-`reorderWindow` or more behind the instance is skipped with a warning, so the upgrade guide advises `REDELIVER` on the
-0.34.0 nodes for the rollout. A `PushSubscriptionModel` throws the exception back to the code that pushed the event,
-and the instance never gets the event unless that code pushes it again. The timers of such an instance wait while a
-0.34.0 node holds the timer lease. Saga nodes have to be rolled in one rollout, without a long canary. A query written by hand for `status: "ACTIVE"` misses the instances stored as `ACTIVE_MARKED`.
+Every 0.34.0 node that runs sagas stops before any 0.35.0 node starts, which takes the service that hosts the sagas
+down for the deploy. `ACTIVE_MARKED` makes a deploy that breaks that rule fail loudly, but it doesn't make that deploy
+safe. A 0.34.0 node that runs next to a 0.35.0 node throws on every event for an `ACTIVE` instance that holds stream
+marks, which a 0.35.0 node adds for every event with a stream version it handles, a failed one included. What then
+happens to the event depends on what feeds the saga. An Occurrent subscription, or a Kafka or RabbitMQ source with
+`REDELIVER`, delivers it again, so the subscription, partition or queue stalls until a 0.35.0 node gets the event,
+which without competing consumers means until the 0.34.0 node stops. A source with `PARK` parks and acknowledges it,
+and once a Kafka rebalance hands a partition to a 0.34.0 consumer, that consumer parks every event of such an
+instance. The parked messages have to be published again once every saga node runs 0.35.0, and one `reorderWindow` or
+more behind the instance is skipped with a warning. A `PushSubscriptionModel` throws the exception back to the code
+that pushed the event, and the instance never gets the event unless that code pushes it again. Nothing a 0.35.0 node
+does brings back a parked or lost event, which is why the two versions don't run side by side. The timers of such an
+instance wait while a 0.34.0 node holds the timer lease. A query written by hand for `status: "ACTIVE"` misses the
+instances stored as `ACTIVE_MARKED`.
 
 Going back to 0.34.0 is an explicit step. Once every 0.35.0 node has stopped, a query lists the `ACTIVE_MARKED`
 instances whose marks hold a version in `pending` or `legacyFailed`, which 0.34.0 never applies once a later version of

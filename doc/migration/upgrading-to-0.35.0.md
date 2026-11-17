@@ -56,9 +56,8 @@ other sections compile fine and behave differently, so read them first.
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
   A saga keeps the highest applied version per stream and event type, and applies a late version instead of skipping
   it. Saga instances store a new `streamMarks` field, and an `ACTIVE` instance that holds it is stored as
-  `ACTIVE_MARKED`, which 0.34.0 can't read and a query of your own for `status: "ACTIVE"` doesn't find. Roll every
-  saga node in one rollout, and run one update before going back
-  to 0.34.0. Breaks the build only for a record pattern over `SagaEnvelope` or `SagaRunnerConfig`.
+  `ACTIVE_MARKED`, which 0.34.0 can't read and a query of your own for `status: "ACTIVE"` doesn't find. Stop every
+  0.34.0 node that runs sagas before any 0.35.0 node starts, and run one update before going back to 0.34.0. Breaks the build only for a record pattern over `SagaEnvelope` or `SagaRunnerConfig`.
 - [A saga's quarantine budget runs per failing event](#a-sagas-quarantine-budget-runs-per-failing-event). Each failing
   event keeps its own clock. Compiles unchanged.
 - [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
@@ -599,8 +598,8 @@ report is [#1305](https://github.com/johanhaleby/occurrent/issues/1305).
 
 A saga fed through a broker or a partitioner that does not keep a stream's events in version order. A saga fed straight
 from an Occurrent event store, in order, applies events as before. Every saga on `SpringMongoSagaStateStore` is
-affected by how 0.35.0 stores its instances, whatever feeds it. Roll every saga node in one rollout, and run an
-`updateMany` before you go back to 0.34.0, as [the stored saga state for late versions](#stored-saga-state-1) describes.
+affected by how 0.35.0 stores its instances, whatever feeds it. Stop every 0.34.0 node that runs sagas before any
+0.35.0 node starts, and run an `updateMany` before you go back to 0.34.0, as [the stored saga state for late versions](#stored-saga-state-1) describes.
 
 ### What changes
 
@@ -665,10 +664,15 @@ an `ACTIVE` instance that holds `streamMarks` with the status `ACTIVE_MARKED` (`
 and reads it back as `SagaStatus.ACTIVE`. Every event with a stream version adds marks, so that is every instance a
 0.35.0 node has handled such an event for, and the instance keeps the status while it holds marks. 0.34.0 decodes the
 status with `SagaStatus.valueOf` and throws on `ACTIVE_MARKED`, so a 0.34.0 node fails on such an instance instead of
-saving it. The subscription, or the source's delivery failure policy, decides what then happens to the event, and the
-next paragraph says what that is for a broker source.
+saving it. The subscription, or the source's delivery failure policy, decides what then happens to the event.
 
-A saga fed from a Kafka or RabbitMQ source gets that failure in its handler on a 0.34.0 node, and the source's
+`ACTIVE_MARKED` is there so that a deploy that runs a 0.34.0 node next to a 0.35.0 node fails loudly instead of
+dropping the marks, and it doesn't make that deploy safe. A 0.34.0 node can park or lose the event, as the rest of
+this section describes, and nothing a 0.35.0 node does stops that. So stop every 0.34.0 node that runs sagas before any
+0.35.0 node starts, which takes the service that hosts the sagas down between the two, as
+[Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) says.
+
+If a 0.34.0 node runs anyway, a saga fed from a Kafka or RabbitMQ source gets that failure in its handler on that node, and the source's
 `DeliveryFailurePolicy` decides what happens to the message. With `REDELIVER`, the default, the source delivers the
 message again once per poll for as long as a 0.34.0 node consumes it, and the messages behind it on that partition or
 queue wait. With `PARK`, the source publishes the message to its parking topic or exchange and acknowledges it, so the
@@ -678,33 +682,31 @@ with. A message with a stream id and version that the instance applied already i
 redelivery. A 0.34.0 node recorded nothing for a message it parked, so 0.35.0 handles the republished message like any
 late version. When its version is `reorderWindow` (256 by default) or more behind what the instance has applied of
 that stream and event type, the saga skips it and logs a warning once per stream. So republish soon after the
-rollout. An event that a 0.35.0 node parked after it failed in the saga is different, since that failure recorded it
+deploy. An event that a 0.35.0 node parked after it failed in the saga is different, since that failure recorded it
 as pending, and the saga applies it whenever it arrives again.
 
-During a rolling upgrade, what a 0.34.0 node does with an event for an `ACTIVE_MARKED` instance depends on what feeds
-the saga:
+What a 0.34.0 node that runs next to a 0.35.0 node does with an event for an `ACTIVE_MARKED` instance depends on what
+feeds the saga:
 
 - An Occurrent subscription, or a Kafka or RabbitMQ source with `REDELIVER`, delivers the event again and again, so the
   saga's subscription, or the partition or queue, stalls on it, the same way it stalls on a quarantined instance, as
-  [Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it) describes.
+  [Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) describes.
   With a competing-consumer strategy, or a partition or queue that a 0.35.0 consumer takes over, the stall ends once a
   0.35.0 node gets the event. Without competing consumers every node gets every event, so the 0.34.0 node's own
-  subscription stalls until that node is upgraded. Finishing the rollout ends it either way.
+  subscription stalls until that node stops. Stopping every 0.34.0 node ends it either way.
 - A Kafka or RabbitMQ source with `PARK` parks the event and acknowledges it, as the previous paragraph says. It parks
   every event it gets for such an instance, which is every instance a 0.35.0 node has handled an event with a stream
-  version for. In a Kafka rollout each restart rebalances the partitions, so a partition a 0.35.0 node consumed can
-  move to a 0.34.0 consumer, which then parks every event for the instances that 0.35.0 node handled. Publish the
-  parked messages again after the rollout. A message whose version is `reorderWindow` or more behind what the instance
-  has applied is skipped with a warning. To avoid that, set the source's
-  `onDeliveryFailure` to `REDELIVER` on the 0.34.0 nodes before the rollout, so they stall instead of parking, and set
-  it back to `PARK` after it.
+  version for. In a Kafka consumer group each restart rebalances the partitions, so a partition a 0.35.0 node consumed
+  can move to a 0.34.0 consumer, which then parks every event for the instances that 0.35.0 node handled. Publish the
+  parked messages again once every saga node runs 0.35.0. A message whose version is `reorderWindow` or more behind
+  what the instance has applied is skipped with a warning.
 - A `PushSubscriptionModel` that your own code pushes events into throws the exception back to that code. When your
   code doesn't push the event again, the instance never gets it. Push each event that failed again once every saga
   node runs 0.35.0. One whose version is `reorderWindow` or more behind what the instance has applied is skipped with a
   warning.
 
 A 0.34.0 node's timer poller asks for `ACTIVE` instances only, so the timers of an `ACTIVE_MARKED` instance wait while a 0.34.0 node
-holds the timer lease. Roll every saga node to 0.35.0 in one rollout, without a long canary.
+holds the timer lease.
 
 `findByStatus(ACTIVE, ..)` matches both strings. A query you wrote by hand for `status: "ACTIVE"`, and an alert built
 on one, doesn't find an `ACTIVE_MARKED` instance, so match both strings:
@@ -716,7 +718,7 @@ db.getCollection("saga-order-fulfilment")
 
 With quarantine on, which is the default, an instance may be stored as `QUARANTINED_RECORDING` too, so go back to
 0.34.0 with the steps in
-[Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it), which include
+[Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it), which include
 the ones here. To go back to 0.34.0, stop every 0.35.0 node. Then list the `ACTIVE_MARKED` instances that hold a version
 that failed and waits to be applied again, in `pending` or `legacyFailed`. 0.34.0 skips every version at or below the
 stream's watermark, so it never applies such a version once a later version of its stream was applied. The query lists
