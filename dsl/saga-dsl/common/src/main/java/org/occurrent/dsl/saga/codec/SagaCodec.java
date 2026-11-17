@@ -121,10 +121,12 @@ public final class SagaCodec<S extends @Nullable Object> {
     /**
      * The status an instance is stored with when it is quarantined with a quarantine id, which is every instance 0.35.0
      * or later quarantines. It reads back as {@link SagaStatus#QUARANTINED}. 0.34.0 decodes the status with
-     * {@code SagaStatus.valueOf} and throws on a string it does not know, so a 0.34.0 node that meets such an instance
-     * during a rolling upgrade fails on it instead of skipping its inputs without recording them, which would leave a
-     * release with inputs it never replays. The subscription, or the source's delivery failure policy, decides what then
-     * happens to the input.
+     * {@code SagaStatus.valueOf} and throws on a string it does not know, so a 0.34.0 node that meets such an instance,
+     * next to a 0.35.0 node or after a rollback, fails on it instead of skipping its inputs without recording them,
+     * which would leave a release with inputs it never replays. The subscription, or the source's delivery failure
+     * policy, decides what then happens to the input. A source that parks it acknowledges it without a record, so no
+     * release replays it either. Every 0.34.0 node that runs sagas therefore stops before any 0.35.0 node starts, as the
+     * upgrade guide says.
      */
     public static final String QUARANTINED_RECORDING = "QUARANTINED_RECORDING";
 
@@ -133,9 +135,10 @@ public final class SagaCodec<S extends @Nullable Object> {
      * with a stream version adds. It reads back as {@link SagaStatus#ACTIVE}. 0.34.0 knows nothing of the
      * marks, and a 0.34.0 save that applies an input replaces the whole document and drops them, so 0.35.0 then skips a
      * pending or late input as applied already. 0.34.0 throws on this string the same way it does on
-     * {@link #QUARANTINED_RECORDING}, so a 0.34.0 node that meets such an instance during a rolling upgrade fails on it
-     * instead of saving it. The subscription, or the source's delivery failure policy, decides what then happens to the
-     * input.
+     * {@link #QUARANTINED_RECORDING}, so a 0.34.0 node that meets such an instance, next to a 0.35.0 node or before the
+     * rollback sets it back to {@code ACTIVE}, fails on it instead of saving it. The subscription, or the source's
+     * delivery failure policy, decides what then happens to the input, and a source that parks it acknowledges it, which
+     * is why every 0.34.0 node that runs sagas stops before any 0.35.0 node starts.
      * A 0.34.0 node's timer poller matches only {@code ACTIVE}, so the timers of such an instance wait for a 0.35.0 node.
      */
     public static final String ACTIVE_MARKED = "ACTIVE_MARKED";

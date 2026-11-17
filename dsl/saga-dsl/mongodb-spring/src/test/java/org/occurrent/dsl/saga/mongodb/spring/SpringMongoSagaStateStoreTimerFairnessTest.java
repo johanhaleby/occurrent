@@ -55,7 +55,8 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * Docker-based. Since 0.35.0 a timer records the instant of its last failed fire, and {@code nextTimerFiresAt} is the
  * earliest of the timers' effective due times, so {@code findWithDueTimers} can order by what it filters on and a
  * failing instance does not hold up the ones behind it (#1003). The timer subdocument stays readable by 0.34.0 and a
- * 0.34.0 document stays readable here, because a rolling deploy runs both versions against one collection.
+ * 0.34.0 document stays readable here, because 0.35.0 reads the documents 0.34.0 wrote after an upgrade, and 0.34.0
+ * reads them again after a rollback.
  */
 @Testcontainers
 @DisplayName("SpringMongoSagaStateStore timer fairness")
