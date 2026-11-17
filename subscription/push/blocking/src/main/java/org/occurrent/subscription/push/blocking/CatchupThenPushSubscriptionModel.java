@@ -106,12 +106,16 @@ import java.util.stream.Stream;
  *       </ul></li>
  *   <li>A one-shot <strong>catch-up-complete marker</strong> (an optional {@link CheckpointStorage}) records that the
  *       replay finished, so a restart skips it and lets the broker resume. The stored value marks completion, it is not
- *       a live resume position. ADR 179 records why the reactor stack resumes after its marker instead. Correctness
- *       across a restart then depends on the broker retaining the backlog for an offline consumer (a durable queue with
- *       a preserved offset). If the marker is lost or absent, the projection is caught up again.
- *       {@link #cancelSubscription(String)} deletes the marker, so subscribing the same id again replays the history,
- *       as the first subscribe did. It deletes the marker before anything else, so a delete that throws cancels
- *       nothing, and the cancel can be tried again.</li>
+ *       a live resume position. Correctness across a restart then depends on the broker retaining the backlog for an
+ *       offline consumer (a durable queue with a preserved offset). If the marker is lost or absent, the projection is
+ *       caught up again. The marker is stored under the subscription id alone, and any checkpoint stored under that id
+ *       counts as the marker, a durable subscription's for example, so do not give a durable subscription and this
+ *       model the same id in the same storage.
+ *       {@link #cancelSubscription(String)} deletes the marker, as clean-up. It deletes the marker before anything
+ *       else, so a delete that throws cancels nothing, and the cancel can be tried again. A delete the store loses, or
+ *       a marker write it applies after the delete, leaves a marker stored, and the next subscribe of the id then skips
+ *       its replay. So a projection that has to be rebuilt, or whose filter changes, subscribes under a new id. ADR 179
+ *       decides that the reactor stack resumes after its marker instead of reading it as done.</li>
  * </ul>
  * Only stream and capability-agnostic subscription filters can be replayed (their plain {@link Filter} drives the
  * position-ordered read). A DCB subscription filter is rejected, since a DCB boundary needs a different replay read.
@@ -269,7 +273,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      *                        {@code accept(...)}, and a broker listener through
      *                        {@link PushSubscriptionModel#acceptOrDefer(CloudEvent)}.
      * @param catchupMarker Records that the one-time catch-up finished so a restart skips it, or {@code null} to
-     *                        catch up on every subscribe.
+     *                        catch up on every subscribe. Any checkpoint stored under the subscription id counts as
+     *                        the marker, so do not share an id with a durable subscription that uses this storage.
      */
     public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker) {
         this(reader, liveFeed, catchupMarker, CatchupThenLiveOptions.defaults());
@@ -284,7 +289,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     /**
      * @param catchupMarker      Records that the one-time catch-up finished so a restart skips it, or {@code null} to
-     *                           catch up on every subscribe.
+     *                           catch up on every subscribe. Any checkpoint stored under the subscription id counts as
+     *                           the marker, so do not share an id with a durable subscription that uses this storage.
      * @param writeVersionSource Asked for a version before the one-shot marker write and every checkpoint write this
      *                           model makes. A version stamps the write {@code notOlderThan} it, an empty answer or
      *                           no source at all stamps it {@code any()}.
