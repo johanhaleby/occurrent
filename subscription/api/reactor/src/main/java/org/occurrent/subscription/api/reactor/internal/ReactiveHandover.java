@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.BoundedIdCache;
+import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
@@ -101,7 +102,8 @@ public final class ReactiveHandover<T, K> {
          * Whether this catch-up skips its replay and goes straight to live. Subscribed when the catch-up is asked for,
          * and again once its turn to replay has come when another catch-up went live in between, both before
          * {@link #replayStarted()} and {@link #replay()}. So a source that replays after a stored position reads the
-         * position the latest catch-up stored here.
+         * position the latest catch-up stored here. Only the first answer decides the skip. The second read is there
+         * for the position it stores, and its answer is ignored.
          */
         Mono<Boolean> isAlreadyCaughtUp();
 
@@ -1294,14 +1296,11 @@ public final class ReactiveHandover<T, K> {
     private Mono<Boolean> startCountedCatchUp(Source<T> source, Throwable failedForGoodBefore, AtomicBoolean counted) {
         Sinks.One<Boolean> catchupDone = Sinks.one();
 
+        // Taken before the read below, so a catch-up that goes live after it is known to have written a newer marker
+        long goneLiveWhenAsked = latestReplayGoneLive.get();
         // Read once when the catch-up is asked and reused, so the replay and the marker write agree, and the marker is
         // written only when the replay ran. Read again only on this catch-up's turn, below.
         Mono<Boolean> alreadyDone = source.isAlreadyCaughtUp().cache();
-        // Taken before that read, so a catch-up that goes live after it is known to have written a newer marker
-        long goneLiveWhenAsked = latestReplayGoneLive.get();
-        // Set when the read again on this catch-up's turn says it is caught up, so it replays nothing and writes no
-        // marker
-        AtomicBoolean caughtUpOnItsTurn = new AtomicBoolean();
         // Tracks whether replayStarted() ran and replayCompleted() has not yet closed it out, so the error handler
         // below knows whether there is a replay lifecycle left open to abandon, rather than calling replayAbandoned()
         // after a clean replayCompleted() has already told the view its batch is durable (ADR 110).
@@ -1380,20 +1379,14 @@ public final class ReactiveHandover<T, K> {
                     }
                     // A catch-up went live after this one read the marker, so the stored marker can be newer than
                     // the one read. Read again, so this replay starts from that one and a catch-up a fold asked for
-                    // does not replay what the catch-up that asked already delivered.
-                    return source.isAlreadyCaughtUp().defaultIfEmpty(false).flatMap(caughtUp -> {
-                        if (!caughtUp) {
-                            return pauseLiveDelivery(pause);
-                        }
-                        caughtUpOnItsTurn.set(true);
-                        releaseReplayTurn(holdsReplayTurn);
-                        return Mono.<Void>empty();
-                    });
+                    // does not replay what the catch-up that asked already delivered. Only the position the read
+                    // stores in the source matters here, not its answer.
+                    return source.isAlreadyCaughtUp().then(Mono.defer(() -> pauseLiveDelivery(pause)));
                 }
                 refusedForAnotherFailure.set(true);
                 return Mono.<Void>error(refusal(failed));
             })).publishOn(Schedulers.boundedElastic()).then(Mono.defer(() -> {
-                if (answeredByAnotherReplay.get() || caughtUpOnItsTurn.get()) {
+                if (answeredByAnotherReplay.get()) {
                     return Mono.<Void>empty();
                 }
                 // Cleared again here, not only when this call was made, because the catch-up it waited for can have
@@ -1431,7 +1424,7 @@ public final class ReactiveHandover<T, K> {
         // while it was being written, since the failure's own forget can have run first. A failure marks its start
         // before it forgets.
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> {
-            if (done || answeredByAnotherReplay.get() || caughtUpOnItsTurn.get()) {
+            if (done || answeredByAnotherReplay.get()) {
                 return Mono.<Void>empty();
             }
             Throwable before = failure();
@@ -1440,8 +1433,8 @@ public final class ReactiveHandover<T, K> {
                 return Mono.<Void>error(refusal(before));
             }
             // The marker already stored stays, so the next catch-up replays the event of such a payload, which lies
-            // after it. Live delivery is held back until after this point, so no payload reaches the sink or leaves
-            // it while this is checked and the marker is written.
+            // after it. Live delivery is held back until after this point, and no fold of this handover runs while
+            // this is checked and the marker is written, so no payload fed from its own code reaches the sink then.
             if (unfoldedOwnCodePayloadQueued()) {
                 return Mono.<Void>empty();
             }
@@ -2174,11 +2167,21 @@ public final class ReactiveHandover<T, K> {
             });
             return;
         }
-        log.error("A catch-up of this {} failed. The {} refuses every event that does not come from its own handler "
-                + "from now on, delivers the events its handler fed it, and then fails for good. Fix the cause, then "
-                + "replace it, a subscription by cancelling it and subscribing again, a projection feed by building a "
-                + "new one. Its catch-up replays from the beginning once the catch-up marker is gone.", noun, noun,
-                error);
+        if (CatchupMarkers.refusedANonMarker(error)) {
+            // Advises against the cancel the other message suggests, since a cancel deletes what is stored under
+            // the id, and here that is another component's checkpoint
+            log.error("A catch-up of this {} failed, since the checkpoint stored under its id is not a catch-up "
+                    + "marker. The {} refuses every event that does not come from its own handler from now on, "
+                    + "delivers the events its handler fed it, and then fails for good. Replace it with one under a new "
+                    + "id. Cancelling a subscription deletes the checkpoint stored under its id, so cancel it only when "
+                    + "nothing else uses that checkpoint.", noun, noun, error);
+        } else {
+            log.error("A catch-up of this {} failed. The {} refuses every event that does not come from its own handler "
+                    + "from now on, delivers the events its handler fed it, and then fails for good. Fix the cause, then "
+                    + "replace it, a subscription by cancelling it and subscribing again, a projection feed by building a "
+                    + "new one. Its catch-up replays from the beginning once the catch-up marker is gone.", noun, noun,
+                    error);
+        }
         Source<T> live = liveSource.get();
         List<Source<T>> sources = live == null || live == source ? List.of(source) : List.of(source, live);
         // The pause and the replay turn stay held until this handover is failing, so a catch-up waiting for either

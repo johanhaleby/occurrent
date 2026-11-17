@@ -33,14 +33,36 @@ public final class CatchupMarkers {
      *
      * @param subscriptionId The id the marker is stored under, named in the failure
      * @param stored         The checkpoint stored under {@code subscriptionId}
-     * @throws IllegalStateException when {@code stored} is not a catch-up marker, such as a checkpoint a durable
-     *                               subscription stored under the same id
+     * @throws NotACatchupMarkerException when {@code stored} is not a catch-up marker, such as a checkpoint a durable
+     *                                    subscription stored under the same id
      */
     public static long positionOf(String subscriptionId, Checkpoint stored) {
         try {
             return GlobalCheckpoint.positionOf(stored);
         } catch (IllegalArgumentException e) {
-            throw new IllegalStateException(notACatchupMarker(subscriptionId, stored.asString()), e);
+            throw new NotACatchupMarkerException(notACatchupMarker(subscriptionId, stored.asString()), e);
+        }
+    }
+
+    /**
+     * Whether {@code error}, or one of its causes, is a refusal of a checkpoint that is not a catch-up marker.
+     */
+    public static boolean refusedANonMarker(Throwable error) {
+        for (Throwable t = error; t != null; t = t.getCause()) {
+            if (t instanceof NotACatchupMarkerException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Thrown when the checkpoint stored under a subscription id is not a catch-up marker. An
+     * {@link IllegalStateException}, as the refusal was before it had a type of its own.
+     */
+    public static final class NotACatchupMarkerException extends IllegalStateException {
+        NotACatchupMarkerException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 

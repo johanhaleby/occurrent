@@ -47,6 +47,11 @@ public interface CancellableSubscriptions extends SubscriptionModelCapability {
      * does not resume from where the cancelled one got to. It is cached, so subscribing to it more than once waits for
      * the same deletes rather than running them again.
      * <p>
+     * A store can still lose a delete it acknowledged, for example when a MongoDB member with the in-memory storage
+     * engine rolls back, and a write still in flight can reach the store after the delete. For a catch-up marker the
+     * delete is therefore clean-up and not a promise that a later subscribe under the same id replays from the
+     * beginning. Subscribe under a new id when the subscription has to be rebuilt.
+     * <p>
      * Each model Occurrent ships that stores such state also logs a failed delete as a warning, whether or not
      * anything subscribes to the {@code Mono}, since a caller that ignores it has no other way to learn that the state
      * is still stored. A caller that handles the error therefore sees the failure twice, once in its handler and once

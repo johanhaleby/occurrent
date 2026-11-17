@@ -382,7 +382,10 @@ public final class CatchupProjectionFeed<E> {
      * event again. Each of those catch-ups runs once the one that asked has stored its marker, and replays only the
      * events after that marker. So it does not deliver that event again when the event is at or below the head the
      * asking catch-up read, and delivers it at most once more otherwise, since the catch-up that delivers it again
-     * stores a head at or above it. A feed built without a
+     * stores a head at or above it. That bound holds only when the asking catch-up stores its marker. While an event
+     * the view's fold fed back waits to be folded and its replay did not read it, the asking catch-up keeps the marker
+     * it found, so the catch-up it asked for replays after that older marker and delivers the event again. That
+     * repeats for as long as such fed-back events keep arriving. A feed built without a
      * {@link CheckpointStorage} for the marker replays the whole history each time, and so without end.
      *
      * @return A {@link Mono} that completes when the catch-up replay has finished, the events fed from it have been
@@ -578,7 +581,7 @@ public final class CatchupProjectionFeed<E> {
     private long storedPosition(Checkpoint stored) {
         try {
             return CatchupMarkers.positionOf(id, stored);
-        } catch (IllegalStateException notAMarker) {
+        } catch (CatchupMarkers.NotACatchupMarkerException notAMarker) {
             storedIsNotAMarker = true;
             throw notAMarker;
         }

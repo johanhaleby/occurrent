@@ -52,6 +52,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -123,9 +124,11 @@ import java.util.function.Supplier;
  * failed catch-up starts it failing the same way, and also refuses each event from anywhere else that is still
  * waiting, and does not apply it. Cancel the subscription and subscribe again, and once the marker is gone its
  * catch-up replays from the beginning. When deleting the marker still fails after 3 retries, the subscription logs an
- * error naming the subscription id. The cancel deletes the marker again, and when that delete fails too, the marker
- * has to be deleted by hand before subscribing again, or the catch-up resumes after it and does not apply a failed
- * event at or below it again. A written event that no replay can bring back and nothing waits for is
+ * error naming the subscription id. The cancel deletes the marker again, and when that delete fails too, subscribing
+ * again in this process deletes it once more and replays from the beginning. After a restart the catch-up resumes
+ * after a marker that is still stored and does not apply a failed event at or below it again, so delete it by hand
+ * before subscribing again. A delete the store loses in a failover has the same effect, so a subscription that has
+ * to be rebuilt subscribes under a new id. A written event that no replay can bring back and nothing waits for is
  * lost when applying it fails, or when the process stops before it is applied.
  * <p>
  * Nothing records which live events the subscription has handled, and a crash before the handler has run
@@ -209,9 +212,6 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // only duplicates, and resuming can skip an event whose delivery failed. Cleared by a delete that succeeds and by
     // a marker write.
     private final Set<String> markersNotYetDeleted = ConcurrentHashMap.newKeySet();
-    // Ids whose last marker read refused a checkpoint that is not a catch-up marker. Something else stored it under
-    // the id, such as a durable subscription's resume token, so a failed catch-up does not delete it.
-    private final Set<String> storedIsNotAMarker = ConcurrentHashMap.newKeySet();
     // Runs at the start of a successful catch-up's completion, where the replaying entry is already released and
     // the launcher is not yet. Exists so a test can stand in that window, which nothing else can reach.
     private volatile Runnable beforeCompletingCatchup = () -> {
@@ -298,27 +298,33 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // isRunning(id) and keepReplaying() therefore answer for this subscription from the moment subscribe returns,
         // rather than from whenever that pipeline happens to get scheduled.
         Sinks.One<Boolean> replayDone = Sinks.one();
-        // Both maps and the start signal in one step under the monitor cancelSubscription also takes, so a cancel
-        // and a fresh subscribe cannot slip between taking the id and sending. An attempt that no longer owns the
-        // id sends nothing, or its start would arrive after its replacement's and the recorder would adopt a
-        // catch-up that is already over. The replay itself is the episode, so a later attempt starts its own.
+        // Both maps in one step under the monitor cancelSubscription also takes, so a cancel and a fresh subscribe
+        // cannot slip between them.
         synchronized (this) {
             replayingSubscriptions.put(subscriptionId, replayDone);
             catchupOwners.put(subscriptionId, replayDone);
-            CatchupListener startListener = catchupListeners.get(subscriptionId);
-            if (startListener != null) {
-                startListener.catchupStarted(replayDone);
-            }
         }
 
         // Set in isAlreadyCaughtUp(), which the handover calls before replay() and markCaughtUp() (ADR 179)
         AtomicReference<ReplayStart> attemptStart = new AtomicReference<>(ReplayStart.FROM_BEGINNING_UNMARKED);
+        // Whether this attempt's last marker read refused a checkpoint that is not a catch-up marker. Something else
+        // stored it under the id, such as a durable subscription's resume token, so a failed catch-up does not delete
+        // it. Kept per attempt, so a refusal that an earlier attempt or a cancel saw cannot spare a marker this
+        // attempt wrote.
+        AtomicBoolean storedIsNotAMarker = new AtomicBoolean();
         Mono<Boolean> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
             @Override
             public Mono<Boolean> isAlreadyCaughtUp() {
                 // Reads the stored marker and the head here, so the replay resumes after the marker and the head is
                 // what markCaughtUp() stores. Every attempt replays, possibly nothing.
-                return readReplayStart(subscriptionId).doOnNext(attemptStart::set).thenReturn(false);
+                return readReplayStart(subscriptionId, storedIsNotAMarker)
+                        .doOnNext(start -> {
+                            attemptStart.set(start);
+                            if (start.fromBeginning()) {
+                                announceCatchupStart(subscriptionId, replayDone);
+                            }
+                        })
+                        .thenReturn(false);
             }
 
             @Override
@@ -346,7 +352,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // still running cannot put the marker back after it
                 // Does not delete a checkpoint the last read refused, since it is not this model's to delete.
                 CheckpointStorage marker = catchupMarker;
-                return marker == null ? Mono.empty() : Mono.defer(() -> storedIsNotAMarker.contains(subscriptionId) ? Mono.<Void>empty() : deleteMarker(subscriptionId, marker))
+                return marker == null ? Mono.empty() : Mono.defer(() -> storedIsNotAMarker.get() ? Mono.<Void>empty() : deleteMarker(subscriptionId, marker))
                         .onErrorMap(error -> new IllegalStateException("Could not delete the catch-up marker of "
                                 + "subscription " + subscriptionId + ".", error));
             }
@@ -364,7 +370,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // The replay itself is the episode, so a listener a later attempt for this id has since started
                 // ignores this and no lock is needed to keep this attempt from speaking for that one.
                 CatchupListener listener = catchupListeners.get(subscriptionId);
-                if (listener != null) {
+                if (listener != null && attemptStart.get().fromBeginning()) {
                     listener.historyRead(replayDone);
                 }
             }
@@ -378,7 +384,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // block.
                 return Mono.<Void>fromRunnable(() -> {
                     CatchupListener listener = catchupListeners.get(subscriptionId);
-                    if (listener != null) {
+                    if (listener != null && attemptStart.get().fromBeginning()) {
                         listener.alreadyDeliveredByReplay(event);
                     }
                 }).subscribeOn(Schedulers.boundedElastic());
@@ -607,9 +613,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     /**
-     * Whether {@code subscriptionId} is still replaying history and has not yet handed over to the live feed. Here
-     * {@link #isRunning(String)} is {@code true} throughout the replay, matching what an event-store catch-up model
-     * reports, which is why the handover needs an answer of its own.
+     * The listener hears a catch-up only when it replays from the beginning, which is when no catch-up marker is
+     * stored. A catch-up that resumes after a stored marker delivers its events the way the live feed does and sends
+     * the listener nothing, so a recording projection keeps what it recorded before the restart (ADR 179). The
+     * blocking push model still tells its listener about every start.
      */
     @Override
     public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
@@ -619,6 +626,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         return true;
     }
 
+    /**
+     * Whether {@code subscriptionId} is still replaying history and has not yet handed over to the live feed. Here
+     * {@link #isRunning(String)} is {@code true} throughout the replay, matching what an event-store catch-up model
+     * reports, which is why the handover needs an answer of its own.
+     */
     @Override
     public boolean isCatchingUp(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
@@ -688,9 +700,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * deleted and fails when deleting it fails.
      * <p>
      * Subscribing the same id again replays from the beginning when the delete reached the store and no marker write
-     * reached it later. A delete that fails, one the store loses in a failover, or a marker write the store applies
-     * after the delete, makes that subscribe resume after the old marker instead. To rebuild the projection for
-     * certain, subscribe under a new subscription id.
+     * reached it later. A delete the store loses in a failover, or a marker write the store applies after the delete,
+     * makes that subscribe resume after the old marker instead. A delete that fails makes a subscribe in this process
+     * delete the marker again and replay from the beginning, and a subscribe after a restart resume after the old
+     * marker. To rebuild the projection for certain, subscribe under a new subscription id.
      * <p>
      * The cancel happens when you call this, whether or not anything subscribes to the returned {@code Mono}. When the
      * delete fails, the subscription stays cancelled and the marker stays stored. It deletes the marker for an id this
@@ -719,7 +732,6 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Started here rather than by whoever subscribes, so the delete runs even when nobody waits for it. Cached,
         // so a caller that waits does not delete a second time. A subscribe after the cancel reads the marker only
         // once the delete ends.
-        storedIsNotAMarker.remove(subscriptionId);
         Mono<Void> delete = deleteMarker(subscriptionId, catchupMarker);
         delete.subscribe(unused -> {
         }, error -> log.warn("Could not delete the catch-up marker of cancelled subscription {}. Subscribing it again in this process replays its history, but after a restart it resumes after that marker unless the subscription is cancelled again first.", subscriptionId, error));
@@ -781,17 +793,34 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         this.betweenPauseCheckAndPause = Objects.requireNonNull(hook, "hook cannot be null");
     }
 
+    // Tells the listener that a replay from the beginning starts, which a recorder takes as the view being rebuilt.
+    // A replay after a stored position is plain delivery, so it sends nothing, or the recorder would drop the records
+    // of appends the view still holds (ADR 179). Under the monitor cancelSubscription also takes, so a cancel and a
+    // fresh subscribe cannot slip between the ownership check and the signal. An attempt that no longer owns the id
+    // sends nothing, or its start would arrive after its replacement's and the recorder would adopt a catch-up that is
+    // already over. The replay itself is the episode, so a later attempt starts its own.
+    private synchronized void announceCatchupStart(String subscriptionId, Sinks.One<Boolean> replayDone) {
+        if (catchupOwners.get(subscriptionId) != replayDone) {
+            return;
+        }
+        CatchupListener startListener = catchupListeners.get(subscriptionId);
+        if (startListener != null) {
+            startListener.catchupStarted(replayDone);
+        }
+    }
+
     // Waits for the last marker operation for the id, so a subscribe after a cancel reads the marker after the
     // cancel's delete. The head is read after the live feed was registered, which ADR 179 relies on. A marker whose
     // delete has not succeeded reads as absent, after the delete is tried again. One that fails once more keeps the
     // marker untrusted, and the history is replayed anyway.
-    private Mono<ReplayStart> readReplayStart(String subscriptionId) {
+    private Mono<ReplayStart> readReplayStart(String subscriptionId, AtomicBoolean storedIsNotAMarker) {
         CheckpointStorage marker = catchupMarker;
         if (marker == null) {
             return Mono.just(ReplayStart.FROM_BEGINNING_UNMARKED);
         }
         return Mono.defer(() -> markerOperations.getOrDefault(subscriptionId, Mono.empty()))
                 .onErrorResume(__ -> Mono.empty())
+                .doOnSuccess(__ -> storedIsNotAMarker.set(false))
                 .then(Mono.defer(() -> markersNotYetDeleted.contains(subscriptionId)
                         ? deleteMarker(subscriptionId, marker)
                         .onErrorResume(error -> {
@@ -800,18 +829,17 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                         })
                         .then(Mono.just(Optional.<Long>empty()))
                         : marker.read(subscriptionId)
-                        .map(stored -> Optional.of(storedPosition(subscriptionId, stored)))
-                        .defaultIfEmpty(Optional.empty())
-                        .doOnNext(__ -> storedIsNotAMarker.remove(subscriptionId))))
+                        .map(stored -> Optional.of(storedPosition(subscriptionId, stored, storedIsNotAMarker)))
+                        .defaultIfEmpty(Optional.empty())))
                 .flatMap(storedPosition -> reader.currentPosition()
                         .map(head -> new ReplayStart(storedPosition.orElse(null), head)));
     }
 
-    private long storedPosition(String subscriptionId, Checkpoint stored) {
+    private static long storedPosition(String subscriptionId, Checkpoint stored, AtomicBoolean storedIsNotAMarker) {
         try {
             return CatchupMarkers.positionOf(subscriptionId, stored);
-        } catch (IllegalStateException notAMarker) {
-            storedIsNotAMarker.add(subscriptionId);
+        } catch (CatchupMarkers.NotACatchupMarkerException notAMarker) {
+            storedIsNotAMarker.set(true);
             throw notAMarker;
         }
     }
@@ -838,6 +866,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
         PositionRange range() {
             return storedPosition == null ? PositionRange.fromBeginning() : PositionRange.afterPosition(storedPosition);
+        }
+
+        boolean fromBeginning() {
+            return storedPosition == null;
         }
     }
 
