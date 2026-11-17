@@ -557,9 +557,12 @@ throws `IllegalArgumentException` on the string `QUARANTINED`, so every read of 
 subscription blocks on it exactly as it did before quarantine existed. Delete the quarantined instances before you
 downgrade, under the same rule as step 6, or accept that.
 
-A 0.34.0 node throws on every event addressed to an instance that 0.35.0 stored as `QUARANTINED_RECORDING`, and
-`findByStatus(QUARANTINED, ..)` on 0.34.0 doesn't find such an instance. The node stores no position past that event,
-so no input is lost. On a live subscription it retries the event in place and keeps the saga's competing-consumer
+Stop every 0.34.0 node that runs sagas before any 0.35.0 node starts, as the
+[0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#upgrading-from-0340-and-rolling-back-to-it) says. A 0.34.0
+node throws on every event addressed to an instance that 0.35.0 stored as `QUARANTINED_RECORDING`, and
+`findByStatus(QUARANTINED, ..)` on 0.34.0 doesn't find such an instance. A broker source that parks that event
+acknowledges it, and a push feed loses it unless its caller pushes it again. The 0.34.0 node records nothing, so a
+release doesn't replay such an event. A subscription model stores no position past that event. On a live subscription it retries the event in place and keeps the saga's competing-consumer
 lease while it does, so the saga's subscription stalls. The stall holds up every later event of that saga
 subscription, not only the events of the quarantined instance. It ends when a 0.35.0 node takes the lease, or when a
 0.35.0 node deletes the instance. A release doesn't end it, because a released instance is stored as `ACTIVE_MARKED`
@@ -599,8 +602,8 @@ since the 0.34.0 node reads the instance again on every retry and no 0.35.0 node
 
 An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `RELEASED` or `NOT_QUARANTINED` is
 released, so no step deletes it. The
-[0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#rolling-upgrades-from-0340-and-rolling-back-to-it) also
-covers a rolling upgrade from 0.34.0.
+[0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#upgrading-from-0340-and-rolling-back-to-it) also
+covers the upgrade from 0.34.0.
 
 Deleting an instance is not reversible from inside Occurrent. Take a backup first if you want one, of both the saga
 collection and `<sagaCollection>_skipped_inputs`. The delete removes the instance's skipped-input records too, and an
