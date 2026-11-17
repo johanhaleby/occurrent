@@ -14,7 +14,7 @@ It refers to three things that later changes in 0.35.0 add. They are
 [ADR 180](0180-occurrent-owns-the-stored-form-of-a-saga-instance.md), which moves the stored form of an instance into
 Occurrent, the `ACTIVE_MARKED` status in
 [ADR 154](0154-a-saga-tells-a-late-stream-event-from-a-redelivery-per-event-type.md), and the upgrade guide's section
-on rolling upgrades from 0.34.0 and rolling back to it.
+on upgrading from 0.34.0 and rolling back to it.
 
 ## Context
 
@@ -403,11 +403,17 @@ Nothing outside the 0.35.0 store matches the new string. A query written by hand
 one the runbook gives for 0.34.0, doesn't find an instance that 0.35.0 quarantined, and neither does an alert built on
 such a query or `findByStatus` in the 0.34.0 store. A query by hand has to match both strings, with `$in`.
 
-So a 0.34.0 node in a mixed cluster throws on every event addressed to an instance that 0.35.0 quarantined, instead of
-skipping the input without a record. Quarantine is on by default during a rolling upgrade too, so a cluster upgraded
-one node at a time can meet such an instance. Every subscription model a saga can quarantine on writes its position or
-checkpoint only after the action returns, so the event the 0.34.0 node fails on, and everything after it, is delivered
-again. No input is lost.
+So a 0.34.0 node throws on every event addressed to an instance that 0.35.0 quarantined, instead of skipping the input
+without a record. That makes a deploy that runs a 0.34.0 node next to a 0.35.0 node fail loudly, but it doesn't make
+that deploy safe. When the instance gets its events from a broker source that parks an event a 0.34.0 node fails on,
+the source acknowledges the event, and a push feed whose caller doesn't push the event again loses it. No node records
+such an input, so a release never replays it, and nothing a 0.35.0 node does can stop that. Every 0.34.0 node that
+runs sagas therefore stops before any 0.35.0 node starts, which takes the service that hosts the sagas down for the
+deploy, as the upgrade guide says.
+
+On a subscription model that writes its position or checkpoint only after the action returns, which every model a
+saga can quarantine on does, the event the 0.34.0 node fails on, and everything after it, is delivered again. The next
+paragraphs say how a 0.34.0 node that runs anyway stalls on it.
 
 On a live MongoDB subscription the 0.34.0 node retries the event in place with the subscription model's retry
 strategy, which by default backs off from 100 ms to 2 s and never gives up. In a catch-up replay that a subscribe
@@ -461,7 +467,7 @@ instance has it after these steps. ADR 154 stores an instance with stream marks 
 this record stores `QUARANTINED_RECORDING`, and says what step 7 loses.
 
 The upgrade guide has the procedure for operators, in
-[Rolling upgrades from 0.34.0 and rolling back to it](../../migration/upgrading-to-0.35.0.md#rolling-upgrades-from-0340-and-rolling-back-to-it).
+[Upgrading from 0.34.0 and rolling back to it](../../migration/upgrading-to-0.35.0.md#upgrading-from-0340-and-rolling-back-to-it).
 
 ### 9. Three corrections to ADR 134
 
@@ -491,11 +497,15 @@ The upgrade guide has the procedure for operators, in
   storage and nothing else. A 0.34.0 `delete` after a downgrade removes none of the records.
 - An instance whose K or recorded input refers to an event that was deleted from the store stays quarantined until the
   event is restored or the instance is deleted.
-- A 0.34.0 node, in a mixed cluster or after a downgrade, stalls the subscription of a saga with an instance that
-  0.35.0 quarantined, for every later event of that subscription. It loses no input. In a mixed cluster the stall ends
-  once a 0.35.0 node holds the saga's competing-consumer lease, or once a 0.35.0 node deletes the instance. A release
-  doesn't end it, since a released instance is stored as `ACTIVE_MARKED` (ADR 154). Without competing consumers it
-  ends when the 0.34.0 node is upgraded. After a downgrade only a delete ends it.
+- Every 0.34.0 node that runs sagas stops before any 0.35.0 node starts, so the service that hosts the sagas is down
+  for the deploy.
+- A 0.34.0 node that runs next to a 0.35.0 node anyway, or after a downgrade, fails on every event for an instance
+  that 0.35.0 quarantined. A broker source that parks such an event acknowledges it, a push feed whose caller doesn't
+  push it again loses it, and a release never replays either. On a subscription model that delivers the event again,
+  the node stalls the saga's subscription for every later event. In a mixed cluster the stall ends once a 0.35.0 node
+  holds the saga's competing-consumer lease, or once a 0.35.0 node deletes the instance. A release doesn't end it,
+  since a released instance is stored as `ACTIVE_MARKED` (ADR 154). Without competing consumers it ends when the
+  0.34.0 node stops. After a downgrade only a delete ends it.
   A downgrade that first turns quarantine off on every node and releases those instances, then stops every 0.35.0
   node, deletes the ones that stay quarantined and sets `ACTIVE_MARKED` back to `ACTIVE`, stalls nothing.
 - An application that never configured quarantine starts quarantining on upgrade. One that set

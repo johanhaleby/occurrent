@@ -757,7 +757,7 @@ report is [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
 ### Stored saga state
 
 Nothing to migrate. A 0.34.0 document has no `nextAttemptAtEpochMilli`, which reads as a timer that has not failed,
-and its `nextTimerFiresAt` is already the earliest due time. During a rolling deploy 0.34.0 reads only `name` and
+and its `nextTimerFiresAt` is already the earliest due time. 0.34.0 reads only `name` and
 `firesAtEpochMilli` from a timer subdocument, so it ignores the new field, and a 0.34.0 write drops it, which gives
 that instance the 0.34.0 order again.
 
