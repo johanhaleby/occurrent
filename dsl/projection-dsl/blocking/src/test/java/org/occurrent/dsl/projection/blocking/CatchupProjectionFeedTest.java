@@ -1170,7 +1170,7 @@ class CatchupProjectionFeedTest {
         feed.catchUp();
 
         assertThat(folded).containsExactly("1", "2");
-        assertThat(markerStoredWhenAsked).as("the marker is stored after the replay and the drain, so it is not there when the fold asks").isFalse();
+        assertThat(markerStoredWhenAsked).as("the marker is stored after the replay, so it is not there when the fold asks").isFalse();
         assertThat(replays).as("one replay read, so the catch-up the fold asked for found the marker and skipped").hasValue(1);
         assertThat(marker.exists("counter")).as("marker stored once the replay finished").isTrue();
     }
