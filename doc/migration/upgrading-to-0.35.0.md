@@ -62,8 +62,8 @@ other sections compile fine and behave differently, so read them first.
 - [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
   A saga quarantines an instance after 5 minutes unless you turn quarantine off, and `SagaSubscription.release(sagaId)`
   brings a quarantined instance back. A `SagaRunner` with quarantine on and no `EventStoreQueries` fails at startup
-  until you pass it one or call `disableQuarantine()`. During a rolling upgrade from 0.34.0, or after a rollback to it, a
-  0.34.0 node stalls a saga's subscription on an event for an instance that 0.35.0 quarantined. On MongoDB such an
+  until you pass it one or call `disableQuarantine()`. Stop every 0.34.0 node that runs sagas before any 0.35.0 node
+  starts, since a 0.34.0 node fails on every event for an instance that 0.35.0 quarantined. On MongoDB such an
   instance is stored as `QUARANTINED_RECORDING`, so a query of your own for `status: "QUARANTINED"`, such as the
   0.34.0 runbook's, no longer finds it. Breaks the build only for a record pattern over `SagaFailure` or `SagaEnvelope`.
 - [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due). A failed
@@ -752,16 +752,17 @@ and the issue is [#1259](https://github.com/johanhaleby/occurrent/issues/1259).
 - A `SagaStateStore` of your own.
 - An instance that 0.34.0 quarantined.
 - A record pattern over `SagaFailure` or `SagaEnvelope`.
-- A cluster upgraded from 0.34.0 one node at a time, or rolled back to 0.34.0, as
-  [Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it) describes.
+- An upgrade from 0.34.0, which stops every 0.34.0 node that runs sagas before any 0.35.0 node starts, and a rollback
+  to 0.34.0, as [Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) describes.
 
 ### What changes
 
 `SagaRunnerConfig.defaults()` quarantines an instance once one event has kept failing for 5 minutes. The Spring Boot
 starter does the same when `occurrent.saga.quarantine-after` is left out, and
 `occurrent.saga.quarantine-enabled=false` turns it off. In 0.34.0 both left quarantine off. The 3- and 4-argument
-`SagaRunnerConfig` constructors still never quarantine. With quarantine on, a rolling upgrade from 0.34.0 can stall a
-saga's subscription, as [Rolling upgrades from 0.34.0 and rolling back to it](#rolling-upgrades-from-0340-and-rolling-back-to-it) describes.
+`SagaRunnerConfig` constructors still never quarantine. With quarantine on, a 0.34.0 node that runs next to a 0.35.0
+node can stall a saga's subscription or lose an event, so every 0.34.0 node that runs sagas stops before any 0.35.0
+node starts, as [Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) describes.
 
 A blank `occurrent.saga.quarantine-after` kept quarantine off in 0.34.0. In 0.35.0 the application fails at startup
 on one, and the message says to set `occurrent.saga.quarantine-enabled=false` to keep quarantine off.
@@ -890,16 +891,25 @@ describes, once you have decided not to recover it.
 
 Add the new bindings to a record pattern over `SagaFailure` or `SagaEnvelope`. No recipe does it.
 
-### Rolling upgrades from 0.34.0 and rolling back to it
+### Upgrading from 0.34.0 and rolling back to it
 
-During a rolling upgrade, a 0.35.0 node can quarantine an instance while 0.34.0 nodes still run. A 0.34.0 node throws
-on every event addressed to an instance that 0.35.0 stored as `QUARANTINED_RECORDING`, because it decodes the status
-with `SagaStatus.valueOf`. Its timer poller never selects such an instance, since it asks for `ACTIVE` ones only, and
-`findByStatus` on 0.34.0 never returns one, while `SagaInstances.find(sagaId)` throws for it.
+Upgrade the nodes that run sagas with a stop-then-start deploy. Stop every 0.34.0 node that runs sagas before any
+0.35.0 node starts. That takes the service that hosts the sagas down between the two.
 
+A 0.35.0 node can quarantine an instance and store it as `QUARANTINED_RECORDING`. A 0.34.0 node throws on every event
+addressed to such an instance, because it decodes the status with `SagaStatus.valueOf`. Its timer poller never selects
+such an instance, since it asks for `ACTIVE` ones only, and `findByStatus` on 0.34.0 never returns one, while
+`SagaInstances.find(sagaId)` throws for it. The status is there so that a deploy that breaks the rule fails loudly on
+the 0.34.0 node instead of skipping the input without a record, but it doesn't keep the input. When the instance gets
+its events from a Kafka or RabbitMQ source with `PARK`, the source parks the event the 0.34.0 node fails on and
+acknowledges it. A `PushSubscriptionModel` throws the failure back to the code that pushed the event, and the instance
+never gets it unless that code pushes it again. The 0.34.0 node records nothing, so a release doesn't replay such an
+event. Publish each parked message again, or push each event that failed again, once every saga node runs 0.35.0.
+
+The rest of this section says what happens when a 0.34.0 node runs next to a 0.35.0 node anyway, and after a rollback.
 Every subscription model a saga can quarantine on writes its position or checkpoint only after the action returns, so
 the event the 0.34.0 node fails on, and everything after it, is still ahead of the stored position and is delivered
-again. No input is lost.
+again.
 
 On a live MongoDB subscription the 0.34.0 node retries the event in place with the subscription model's retry
 strategy, which by default backs off from 100 ms to 2 s and never gives up. In a catch-up replay that a subscribe
