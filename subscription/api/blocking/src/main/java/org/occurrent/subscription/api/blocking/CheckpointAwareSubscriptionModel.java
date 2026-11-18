@@ -28,6 +28,11 @@ import java.util.function.BooleanSupplier;
  * A {@link SubscriptionModel} that produces {@link CheckpointAwareCloudEvent} compatible {@link CloudEvent}'s.
  * This is useful for subscribers that want to persist the checkpoint for a given subscription if the event store doesn't
  * maintain the position for subscriptions.
+ * <p>
+ * A catch-up model that wraps this model can make a subscription's action wait on its delivery thread. The wait lasts
+ * until the action of a replay that a cancel or a stop ended for the same subscription id has returned. An
+ * implementation that calls the actions of several subscriptions on one thread therefore lets one subscription hold
+ * back the others.
  */
 public interface CheckpointAwareSubscriptionModel extends SubscriptionModel, GlobalCheckpointSource<@Nullable Checkpoint> {
 

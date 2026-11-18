@@ -494,6 +494,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * @throws org.occurrent.subscription.SubscriptionAlreadyRunningException if a catch-up of this model made the
      *         subscription and it runs, as that description says. In 0.34.0 the wrapped model was asked to resume it and
      *         threw its own exception.
+     * @throws IllegalStateException if a replay in the way, or a position store a stopped replay began, doesn't return
+     *         within ten seconds, as that description says. Nothing is stored then, so the caller can call this again.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {

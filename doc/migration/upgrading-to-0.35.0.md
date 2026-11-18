@@ -2838,9 +2838,21 @@ only makes the call wait until it has returned.
 * `cancelSubscription(id)` waits up to a second for a call to the action that the replay of `id` already started,
   before it cancels the subscription in the live delegate and deletes the stored position. When a `stop()` has
   already parked that replay, the cancel doesn't wait again.
+* With `PersistCheckpointDuringCatchupPhase` configured, `cancelSubscription(id)` also waits for a position store the
+  replay began before the cancel took effect, so that store has returned before the cancel deletes the stored
+  position. That wait has no time limit, since only the wait for the action ends after a second. A slow or stuck
+  checkpoint storage holds the cancel back for as long as the store runs. A pause or a stop doesn't wait for the
+  store. A `resumeSubscription(id, startAt)` that comes after the stop waits up to 10 seconds for that
+  store before it stores the position it was given, and throws `IllegalStateException` when the store takes longer.
 * `stop()` waits up to a second in all for the replays it parks, before the live delegate stops.
-* Past the second, the call returns all the same and logs a `WARN` naming the subscription, and the replay hands the
-  action no further event.
+* The public `cancelRunningCatchup(id)` and `stopReplay()` of `StreamCatchupSubscriptionModel` wait the same way.
+* Past the second, the call returns all the same and logs a `WARN` naming the subscription. After a cancel the replay
+  hands the action no further event. After a stop it hands it none until `start(true)` or `resumeSubscription(id)`
+  runs the replay again.
+* A cancel holds the subscription's claim while it waits. A `pauseSubscription(id)`, `cancelSubscription(id)`,
+  `resumeSubscription(id)` or `stop()` that the action of `id` makes on the replay thread while another thread holds
+  that claim throws `IllegalStateException` at once, as in 0.34.0. That can now happen for up to a second longer per
+  cancel.
 * A cancel or a stop made from inside a replay's action doesn't wait for that action. `shutdown()` doesn't wait.
 * A subscribe of an id right after a cancel of it returns at once, as in 0.34.0. Its replay waits on its own thread
   until the cancelled replay's call to the action has returned, also when a `stop()` came between the cancel and the
@@ -2850,6 +2862,8 @@ only makes the call wait until it has returned.
 
 Nothing, unless the action waits for the cancel or the stop to return. Then the call takes a second longer and logs
 the `WARN`. Release what the action waits for before you cancel or stop, or don't make the action wait for the call.
+With `PersistCheckpointDuringCatchupPhase` configured, a cancel also waits for as long as a position store under way
+runs, so give a checkpoint storage that can block a timeout of its own.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 
