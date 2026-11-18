@@ -2931,8 +2931,9 @@ When that read returns neither an event nor a resume token, the subscription can
 * With `restartSubscriptionsOnChangeStreamHistoryLost` on, a restart from the present after the history was lost that
   gets neither holds the subscription paused. `isPaused(id)` answers `true`, an error in the log names it, the
   listeners are told through `handleHeldPaused(..)`, and `resumeSubscription(id)` reads the change stream again.
-  `waitUntilStarted(..)` on the handle `subscribe(..)` returned then throws the `UnsupportedStartAtException`, also
-  when it answered earlier that the subscription started, until a resume starts it.
+  `waitUntilStarted(..)` on every handle returned up to the held run, the one `subscribe(..)` returned and each one a
+  resume returned, then throws the `UnsupportedStartAtException`, also when it answered earlier that the subscription
+  started, until a resume starts it.
 * Under a `CompetingConsumerSubscriptionModel` the node that holds a subscription paused this way holds it as if the
   user had paused it. It gives the lease back, so another node can get it, and doesn't compete for the lease again
   until `resumeSubscription(id)` is called on that node. A handle that waits for the held start throws once the lease
