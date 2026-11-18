@@ -1558,6 +1558,197 @@ public class NativeMongoSubscriptionModelResilienceTest {
             assertThat(subscription.waitUntilStarted(Duration.ofSeconds(2))).isTrue();
         }
 
+        // Three windows in which the run a first resume made is paused before it counts as started. R1 is the handle that
+        // resume returned, and R2 the handle of a second resume that starts the subscription
+        @Test
+        @Timeout(60)
+        void window_B_the_handle_of_a_resume_whose_run_was_paused_before_its_change_stream_opened_answers_once_a_later_resume_starts_the_subscription() {
+            // Given
+            AtomicBoolean unreachable = new AtomicBoolean();
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsWhile(unreachable, refused, () -> new MongoTimeoutException("MongoDB cannot be reached")), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            Subscription subscribed = subscriptionModel.subscribe("a", __ -> {
+            });
+            assertThat(subscribed.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+            subscriptionModel.pauseSubscription("a");
+            unreachable.set(true);
+            Subscription r1 = subscriptionModel.resumeSubscription("a");
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 2);
+            subscriptionModel.pauseSubscription("a");
+            unreachable.set(false);
+
+            // When
+            Subscription r2 = subscriptionModel.resumeSubscription("a");
+            boolean r2Started = r2.waitUntilStarted(Duration.ofSeconds(10));
+
+            // Then
+            assertThat(r2Started).isTrue();
+            assertR1AnswersOnceR2Started(r1);
+        }
+
+        @Test
+        @Timeout(60)
+        void window_B_the_handle_of_a_resume_whose_run_was_paused_while_its_change_stream_opened_answers_once_a_later_resume_starts_the_subscription() throws InterruptedException {
+            // Given
+            OpenHeld openHeld = new OpenHeld();
+            try {
+                subscriptionModel = new NativeMongoSubscriptionModel(database, openHeld.collection(), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                        NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+                Subscription subscribed = subscriptionModel.subscribe("a", __ -> {
+                });
+                assertThat(subscribed.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+                subscriptionModel.pauseSubscription("a");
+                openHeld.armed.set(true);
+                Subscription r1 = subscriptionModel.resumeSubscription("a");
+                assertThat(openHeld.opened.await(10, TimeUnit.SECONDS)).as("R1's run has opened its change stream on the server and holds before recording it").isTrue();
+                subscriptionModel.pauseSubscription("a");
+                openHeld.released.countDown();
+                Thread.sleep(500);
+
+                // When
+                Subscription r2 = subscriptionModel.resumeSubscription("a");
+                boolean r2Started = r2.waitUntilStarted(Duration.ofSeconds(10));
+
+                // Then
+                assertThat(r2Started).isTrue();
+                assertR1AnswersOnceR2Started(r1);
+            } finally {
+                openHeld.released.countDown();
+            }
+        }
+
+        @Test
+        @Timeout(60)
+        void window_A_the_handle_of_a_resume_whose_run_was_paused_after_its_change_stream_opened_and_before_it_started_answers_once_a_later_resume_starts_the_subscription() throws Exception {
+            // Given
+            OpenHeld openHeld = new OpenHeld();
+            ParksAtStarted parksAtStarted = null;
+            try {
+                subscriptionModel = new NativeMongoSubscriptionModel(database, openHeld.collection(), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                        NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+                Subscription subscribed = subscriptionModel.subscribe("a", __ -> {
+                });
+                assertThat(subscribed.waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+                subscriptionModel.pauseSubscription("a");
+                openHeld.armed.set(true);
+                Subscription r1 = subscriptionModel.resumeSubscription("a");
+                assertThat(openHeld.opened.await(10, TimeUnit.SECONDS)).as("R1's run has opened its change stream on the server").isTrue();
+                Object run = runOf("a");
+                parksAtStarted = new ParksAtStarted(openHeld.runThread);
+                install(run, parksAtStarted);
+                openHeld.released.countDown();
+                assertThat(parksAtStarted.reached.await(10, TimeUnit.SECONDS)).as("R1's run recorded its cursor and is about to call started()").isTrue();
+                Object cursorBeforePause = fieldOf(run, "cursor");
+                boolean closedBeforePause = (boolean) fieldOf(run, "intentionallyClosed");
+                long startedBeforePause = ((CountDownLatch) fieldOf(run, "startedLatch")).getCount();
+
+                // When R1's run is paused in that window, and a second resume starts the subscription
+                subscriptionModel.pauseSubscription("a");
+                boolean closedAfterPause = (boolean) fieldOf(run, "intentionallyClosed");
+                long startedAfterPause = ((CountDownLatch) fieldOf(run, "startedLatch")).getCount();
+                parksAtStarted.release.countDown();
+                Thread.sleep(500);
+                Subscription r2 = subscriptionModel.resumeSubscription("a");
+                boolean r2Started = r2.waitUntilStarted(Duration.ofSeconds(10));
+
+                // Then the pause came after the change stream opened and before started()
+                assertThat(parksAtStarted.parkedIn).isEqualTo("started");
+                assertThat(cursorBeforePause).isNotNull();
+                assertThat(closedBeforePause).isFalse();
+                assertThat(closedAfterPause).isTrue();
+                assertThat(startedAfterPause).isEqualTo(1);
+                assertThat(r2Started).isTrue();
+                assertR1AnswersOnceR2Started(r1);
+            } finally {
+                openHeld.released.countDown();
+                if (parksAtStarted != null) {
+                    parksAtStarted.release.countDown();
+                }
+            }
+        }
+
+        private static void assertR1AnswersOnceR2Started(Subscription r1) {
+            // The untimed wait returns instead of hanging, and the timed wait then answers true
+            assertTimeoutPreemptively(Duration.ofSeconds(15), () -> r1.waitUntilStarted());
+            boolean r1Started = assertTimeoutPreemptively(Duration.ofSeconds(15), () -> r1.waitUntilStarted(Duration.ofSeconds(10)));
+            assertThat(r1Started).isTrue();
+        }
+
+        private Object runOf(String subscriptionId) throws Exception {
+            Object subscriptions = fieldOf(subscriptionModel, "subscriptions");
+            return ((java.util.Map<?, ?>) fieldOf(subscriptions, "runningSubscriptions")).get(subscriptionId);
+        }
+
+        private static Object fieldOf(Object target, String name) throws Exception {
+            java.lang.reflect.Field field = target.getClass().getDeclaredField(name);
+            field.setAccessible(true);
+            return field.get(target);
+        }
+
+        private static void install(Object run, ParksAtStarted lock) throws Exception {
+            java.lang.reflect.Field lockField = run.getClass().getDeclaredField("lock");
+            lockField.setAccessible(true);
+            lockField.set(run, lock);
+            java.lang.reflect.Field condition = run.getClass().getDeclaredField("stoppedDelivering");
+            condition.setAccessible(true);
+            condition.set(run, lock.newCondition());
+        }
+
+        // Holds the run's second call of lock(), which is started()'s, since opened()'s is its first
+        private static final class ParksAtStarted extends java.util.concurrent.locks.ReentrantLock {
+            final Thread runThread;
+            final AtomicInteger calls = new AtomicInteger();
+            final CountDownLatch reached = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            volatile String parkedIn;
+
+            ParksAtStarted(Thread runThread) {
+                this.runThread = runThread;
+            }
+
+            @Override
+            public void lock() {
+                if (Thread.currentThread() == runThread && calls.incrementAndGet() == 2) {
+                    parkedIn = java.util.Arrays.stream(new Throwable().getStackTrace()).map(StackTraceElement::getMethodName).filter(n -> n.equals("started") || n.equals("opened")).findFirst().orElse("?");
+                    reached.countDown();
+                    try {
+                        release.await(20, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                super.lock();
+            }
+        }
+
+        // Holds the next change stream open, once armed, after MongoDB has opened it and before the model records its cursor
+        private final class OpenHeld {
+            final AtomicBoolean armed = new AtomicBoolean();
+            final CountDownLatch opened = new CountDownLatch(1);
+            final CountDownLatch released = new CountDownLatch(1);
+            volatile Thread runThread;
+
+            @SuppressWarnings("unchecked")
+            MongoCollection<Document> collection() {
+                MongoCollection<Document> collection = mock(MongoCollection.class);
+                when(collection.watch(anyList(), eq(Document.class))).thenAnswer(invocation -> {
+                    ChangeStreamIterable<Document> iterable = spy(realEventCollection.watch((List<? extends Bson>) invocation.getArgument(0), Document.class));
+                    doAnswer(open -> {
+                        Object cursor = open.callRealMethod();
+                        if (armed.compareAndSet(true, false)) {
+                            runThread = Thread.currentThread();
+                            opened.countDown();
+                            released.await(20, TimeUnit.SECONDS);
+                        }
+                        return cursor;
+                    }).when(iterable).cursor();
+                    return iterable;
+                });
+                return collection;
+            }
+        }
+
         @Test
         void start_does_not_hold_up_other_calls_while_a_change_stream_cannot_open() {
             // Given

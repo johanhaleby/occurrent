@@ -71,7 +71,8 @@ public class SpringMongoSubscription implements Subscription {
      * its refusal the same way. A refusal reaches every handle of the subscription, the one {@code subscribe(..)}
      * returned and each one a resume returned. A hold reaches the handles returned up to the held run, so a handle a
      * later resume returned answers for that later run, and each stops throwing a hold once a resume starts the
-     * subscription again.
+     * subscription again. A handle a resume returned for a run that was paused before it started answers for the next
+     * run that starts, is refused or is held, as the handle {@code subscribe(..)} returned does.
      * <p>
      * It answers {@code true} also for a resumed subscription that waits for an action call from before its pause to
      * return, so a caller isn't held back by a call that doesn't return. A refusal of that subscription is thrown from

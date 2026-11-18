@@ -42,7 +42,9 @@ handle reports as not started.
 * A refusal reaches every handle of the subscription, the one `subscribe(..)` returned and each one a resume returned,
   whichever run it was returned for. A hold reaches the handles returned up to the held run, also one a resume returned
   for an earlier run, and a later run that starts ends the hold for all of them. A handle a later resume returned
-  answers for that later run, so while it opens the handle answers `false` rather than throwing the hold it ends.
+  answers for that later run, so while it opens the handle answers `false` rather than throwing the hold it ends. A
+  handle a resume returned for a run that was paused before it started answers for the next run that starts, is refused
+  or is held, as the handle `subscribe(..)` returned does. Before, its wait with no timeout never returned.
 * A pause, a stop or a lost lock race still keeps the answer `true`, as ADR 105 decided, since the subscription stays
   known and the application or the model can start it again without changing it.
 * A cancel or a shutdown ends a hold and frees the id, so a `subscribe(..)` with the same id works again. A handle of

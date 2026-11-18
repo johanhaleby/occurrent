@@ -1650,6 +1650,41 @@ class NativeMongoSubscriptionModelNoOperationTimeTest {
     }
 
     @Test
+    void a_hold_of_a_later_run_makes_the_wait_of_a_handle_a_resume_returned_for_a_run_paused_before_it_started_throw_instead_of_hang() throws InterruptedException {
+        // Given: a subscription whose first run is held right after its first reply, and a resume whose run is held there too and then paused
+        HoldsTheFirstReply firstRunReply = new HoldsTheFirstReply();
+        holdsTheFirstReply.set(firstRunReply);
+        subscriptionModel = modelOver(databaseThatSendsNoOperationTimeAndCannotSayWhetherItIsAMongos(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, filter(), StartAt.checkpoint(new MongoResumeTokenCheckpoint(realResumeToken())), cloudEvent -> {
+        });
+        assertThat(firstRunReply.replied.await(10, TimeUnit.SECONDS)).as("the first reply of the first run came").isTrue();
+        subscriptionModel.pauseSubscription(subscriptionId);
+        HoldsTheFirstReply resumedRunReply = new HoldsTheFirstReply();
+        holdsTheFirstReply.set(resumedRunReply);
+        Subscription earlier = subscriptionModel.resumeSubscription(subscriptionId);
+        assertThat(resumedRunReply.replied.await(10, TimeUnit.SECONDS)).as("the first reply of the resumed run came, before it counted as started").isTrue();
+        subscriptionModel.pauseSubscription(subscriptionId);
+
+        try {
+            // When: a later resume is held paused, since the server gives no position
+            presentRead.set(() -> cursorReading(null, null));
+            Subscription later = subscriptionModel.resumeSubscription(subscriptionId, StartAt.now());
+            Throwable thrownByLater = catchThrowable(() -> later.waitUntilStarted(Duration.ofSeconds(10)));
+            assertThat(thrownByLater).as("thrown by the later resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class);
+
+            // Then: the untimed wait of the earlier handle throws the same refusal instead of hanging
+            Throwable thrownByEarlier = assertTimeoutPreemptively(Duration.ofSeconds(15), () -> catchThrowable(() -> earlier.waitUntilStarted()));
+            assertThat(thrownByEarlier).as("thrown by the earlier resume handle").isExactlyInstanceOf(UnsupportedStartAtException.class)
+                    .hasMessage(thrownByLater.getMessage());
+            assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused").isTrue();
+        } finally {
+            firstRunReply.release.countDown();
+            resumedRunReply.release.countDown();
+        }
+    }
+
+    @Test
     void a_later_run_that_starts_makes_every_handle_of_a_held_subscription_answer_started_again() {
         // Given: a subscription held paused by a resume, with the handles subscribe, an earlier resume and the held resume returned
         subscriptionModel = modelOver(databaseThatSendsNoOperationTime(), collectionThatAnswersThePresentRead(), RetryStrategy.fixed(100));

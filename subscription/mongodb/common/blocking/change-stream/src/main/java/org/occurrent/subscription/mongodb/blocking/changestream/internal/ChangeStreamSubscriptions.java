@@ -60,7 +60,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -1599,16 +1601,37 @@ public final class ChangeStreamSubscriptions {
         private volatile @Nullable Hold hold;
         // Set once a cancel or a shutdown replaced the hold of a subscription that never started
         private boolean cancelledWhileHeld;
+        // The started latch of each run a resume made, until that run or a later one starts or fails. A run paused
+        // before it started never releases its own latch, so the handle the resume returned for it waits for a later
+        // run, as the handle subscribe returned does
+        private final NavigableMap<Integer, CountDownLatch> runsNotYetAnswered = new TreeMap<>();
+
+        synchronized void resumed(int run, CountDownLatch startedLatch) {
+            runsNotYetAnswered.put(run, startedLatch);
+        }
 
         // A run that recorded a failure releases the waiters itself, once the id is free. So a run that starts after
         // that, such as an older run a resume replaced, releases nobody, and the monitor makes that one decision with
         // recordFailure
-        synchronized void started() {
+        synchronized void started(int run) {
             hold = null;
             started = true;
             if (refusal.get() == null) {
                 latch.countDown();
+                answerRunsUpTo(run);
             }
+        }
+
+        // The waiters of each released run then find the failure, or the hold when it is for that run or a later one
+        synchronized void failed(int run) {
+            latch.countDown();
+            answerRunsUpTo(run);
+        }
+
+        private void answerRunsUpTo(int run) {
+            NavigableMap<Integer, CountDownLatch> answered = runsNotYetAnswered.headMap(run, true);
+            answered.values().forEach(CountDownLatch::countDown);
+            answered.clear();
         }
 
         synchronized void recordFailure(UnsupportedStartAtException failure) {
@@ -1729,6 +1752,7 @@ public final class ChangeStreamSubscriptions {
                 }
                 InternalSubscription next = new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStart, number + 1);
                 next.previous = this;
+                firstStart.resumed(next.number, next.startedLatch);
                 return next;
             } finally {
                 lock.unlock();
@@ -1903,14 +1927,15 @@ public final class ChangeStreamSubscriptions {
 
         // Under the lock close() takes, so a run is either closed before it counts as started or counts as started
         // before it is closed. A closed run doesn't count, since a pause, a resume or a cancel decides what follows. So
-        // only the run a subscribe or the last resume made clears a hold, since a resume replaces a closed run only
+        // only the run a subscribe or the last resume made clears a hold, since a resume replaces a closed run only. It
+        // also answers the handles a resume returned for the runs before it that were closed before they started
         void started() {
             lock.lock();
             try {
                 if (intentionallyClosed) {
                     return;
                 }
-                firstStart.started();
+                firstStart.started(number);
                 startedLatch.countDown();
             } finally {
                 lock.unlock();
@@ -1944,7 +1969,7 @@ public final class ChangeStreamSubscriptions {
         void releaseWaitersOfAFailedStart() {
             if (startFailure != null) {
                 startedLatch.countDown();
-                firstStart.latch.countDown();
+                firstStart.failed(number);
             }
         }
 
