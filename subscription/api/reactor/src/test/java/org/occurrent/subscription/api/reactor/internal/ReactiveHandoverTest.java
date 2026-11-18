@@ -2316,7 +2316,7 @@ class ReactiveHandoverTest {
     }
 
     @Test
-    void a_catch_up_composed_into_the_running_replays_fold_reads_its_marker_last_after_the_running_catch_up_marked_caught_up_and_replays_nothing() throws Exception {
+    void a_catch_up_composed_into_the_running_replays_fold_reads_its_marker_again_after_the_running_catch_up_marked_caught_up_and_replays_anyway() throws Exception {
         List<String> order = new CopyOnWriteArrayList<>();
         List<String> delivered = new CopyOnWriteArrayList<>();
         AtomicBoolean outerMarked = new AtomicBoolean();
@@ -2333,7 +2333,7 @@ class ReactiveHandoverTest {
         }, payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
         self.set(handover);
         // Counted down from historyDone(), since the fold gets its answer before the nested catch-up reads its marker
-        // again on its turn
+        // again on its turn. That read says caught up, and only the position it stores matters, so the replay runs.
         nested.onHistoryDone = nestedDone::countDown;
         FakeSource outer = source(List.of("R1", "R2", "R3"), false);
         outer.onMarkCaughtUp = () -> {
@@ -2344,10 +2344,11 @@ class ReactiveHandoverTest {
         StepVerifier.create(handover.catchUp(outer)).expectNext(true).expectComplete().verify(Duration.ofSeconds(5));
 
         assertThat(nestedDone.await(5, TimeUnit.SECONDS)).as("the nested catch-up finished").isTrue();
-        assertThat(order.lastIndexOf("nested reads its marker")).as("the nested catch-up read its marker after the outer marked caught up")
+        assertThat(order.lastIndexOf("nested reads its marker")).as("the nested catch-up read its marker again after the outer marked caught up")
                 .isGreaterThan(order.indexOf("outer marks caught up"));
-        assertThat(nested.replayCallCount).as("the nested catch-up replays nothing").isZero();
-        assertThat(delivered).as("the nested history is not delivered").doesNotContain("N1");
+        assertThat(nested.replayCallCount).as("the nested catch-up replays although the read on its turn said it was caught up").isEqualTo(1);
+        assertThat(delivered).as("the nested history is delivered").contains("N1");
+        assertThat(nested.markCaughtUpCallCount()).as("the nested catch-up marks caught up, since it replayed").isEqualTo(1);
     }
 
     // R2 waits for the live fold before it replays, so a live fold that blocks on a catch-up with nothing to replay

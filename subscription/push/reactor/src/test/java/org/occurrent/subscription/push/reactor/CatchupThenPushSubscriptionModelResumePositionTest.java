@@ -119,8 +119,8 @@ class CatchupThenPushSubscriptionModelResumePositionTest {
 
         assertThat(failure).hasMessageContaining("replay boom");
         assertThat(marker.read("proj").map(GlobalCheckpoint::positionOf).blockOptional(Duration.ofSeconds(5)))
-                .as("position stored after the failed catch-up, which is empty or the one stored before it, never its head").isNotEqualTo(java.util.Optional.of(4L));
-        assertThat(start(store)).as("replayed again, the events of the failed catch-up among them").contains("3", "4");
+                .as("marker after the failed catch-up, which deleted it").isEmpty();
+        assertThat(start(store)).as("replayed again from the beginning, the events of the failed catch-up among them").containsExactly("1", "2", "3", "4");
     }
 
     @Test
@@ -139,6 +139,28 @@ class CatchupThenPushSubscriptionModelResumePositionTest {
         subscribe(overlapping, feed, delivered);
 
         assertThat(delivered).containsExactly("3", "4");
+    }
+
+    @Test
+    void an_event_committed_after_the_head_the_replay_read_is_delivered_by_the_live_path_and_the_marker_stores_that_head() {
+        append("1", "2");
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        boolean[] committed = {false};
+        // Committed and offered to the live feed while the replay reads, which is after the head was read
+        PositionOrderedReader committingWhileReading = decorated(store, replay -> replay.doOnNext(e -> {
+            if (!committed[0]) {
+                committed[0] = true;
+                append("after-the-head");
+                feed.accept(event("after-the-head")).subscribe();
+            }
+        }));
+        List<String> delivered = new CopyOnWriteArrayList<>();
+
+        subscribe(committingWhileReading, feed, delivered);
+
+        assertThat(store.currentPosition().block()).as("the head moved during the replay").isEqualTo(3L);
+        assertThat(delivered).as("the replay, then the event the live path delivered").containsExactly("1", "2", "after-the-head");
+        assertThat(storedPosition()).as("the head read before the replay").isEqualTo(2L);
     }
 
     @Test

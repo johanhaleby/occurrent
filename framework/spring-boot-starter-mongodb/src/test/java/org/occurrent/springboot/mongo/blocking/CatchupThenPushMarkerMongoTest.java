@@ -93,10 +93,11 @@ class CatchupThenPushMarkerMongoTest {
         assertThat(first).as("the first start replays the history").containsExactly("1", "2");
         assertThat(marker.exists("proj")).as("the first start stored the marker").isTrue();
 
+        write("3");
         List<String> restarted = new CopyOnWriteArrayList<>();
         start(restarted);
 
-        assertThat(restarted).as("a restart over the same storage and id replays nothing").isEmpty();
+        assertThat(restarted).as("a restart over the same storage and id replays nothing, not even an event written after the marker").isEmpty();
     }
 
     @Test

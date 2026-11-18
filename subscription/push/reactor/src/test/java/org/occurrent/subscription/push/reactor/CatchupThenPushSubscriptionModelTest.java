@@ -355,11 +355,9 @@ class CatchupThenPushSubscriptionModelTest {
                 .waitUntilStarted().block();
         assertThat(secondRun).as("events replayed on the restart, none of them from before the stored marker").containsExactly("3");
 
-        // Both signals on every start, whether the replay is from the beginning or after a stored marker.
-        await().untilAsserted(() -> assertThat(log.signals()).containsExactly("started:0", "historyRead:0"));
-
         feed2.accept(cloudEvent("4", "Updated")).block();
         assertThat(secondRun).containsExactly("3", "4");
+        assertThat(log.signals()).as("a replay after a stored marker is plain delivery, so the listener hears nothing").isEmpty();
     }
 
     @Test

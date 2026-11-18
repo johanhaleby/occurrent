@@ -129,8 +129,8 @@ class CatchupProjectionFeedResumePositionTest {
         })).catchUp().block(TIMEOUT));
 
         assertThat(failure).hasStackTraceContaining("fold boom");
-        assertThat(storedPosition()).as("position stored after the failed catch-up, which is empty or the one stored before it, never its head").isNotEqualTo(Optional.of(4L));
-        assertThat(catchUp().updates()).as("replayed again, the events of the failed catch-up among them").contains("3", "4");
+        assertThat(storedPosition()).as("marker after the failed catch-up, which deleted it").isEmpty();
+        assertThat(catchUp().updates()).as("replayed again from the beginning, the events of the failed catch-up among them").containsExactly("1", "2", "3", "4");
     }
 
     @Test
