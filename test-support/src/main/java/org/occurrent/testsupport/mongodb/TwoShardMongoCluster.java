@@ -75,7 +75,9 @@ public final class TwoShardMongoCluster implements AutoCloseable {
 
     /**
      * Starts the cluster as {@link #start()} does, with an oplog of the given size on the second shard, so a test can
-     * make that oplog forget a position by writing a little more than that. The first shard keeps the default size.
+     * make that oplog forget a position by writing a little more than that. The first shard keeps the default size. The
+     * second shard also takes a checkpoint every second instead of every 60, as the replica set of
+     * {@link ChangeStreamHistory} does, which shortened the drop there from 69 seconds to under one.
      *
      * @param secondShardOplogSizeMegabytes The size of the oplog of the second shard, in megabytes
      */
@@ -191,7 +193,7 @@ public final class TwoShardMongoCluster implements AutoCloseable {
     private void addSecondShard(@Nullable Integer oplogSizeMegabytes) {
         shell(container, "mkdir -p /tmp/" + SECOND_SHARD + " && mongod --bind_ip_all --shardsvr --replSet " + SECOND_SHARD + " --port " + SECOND_SHARD_PORT
                 + " --dbpath /tmp/" + SECOND_SHARD + " --fork --logpath /tmp/" + SECOND_SHARD + ".log --wiredTigerCacheSizeGB 0.25 --setParameter enableTestCommands=1"
-                + (oplogSizeMegabytes == null ? "" : " --oplogSize " + oplogSizeMegabytes));
+                + (oplogSizeMegabytes == null ? "" : " --oplogSize " + oplogSizeMegabytes + " --syncdelay 1"));
         mongosh(SECOND_SHARD_PORT, "ok(rs.initiate({_id: '" + SECOND_SHARD + "', members: [{_id: 0, host: '" + hostname + ":" + SECOND_SHARD_PORT + "'}]}));");
         awaitSecondShardPrimary();
         mongosh(MONGOS_PORT, "ok(sh.addShard('" + SECOND_SHARD + "/" + hostname + ":" + SECOND_SHARD_PORT + "'));");
