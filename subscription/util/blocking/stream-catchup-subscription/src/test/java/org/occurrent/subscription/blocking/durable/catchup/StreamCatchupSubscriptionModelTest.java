@@ -2868,6 +2868,84 @@ class StreamCatchupSubscriptionModelTest {
         }
     }
 
+    /**
+     * A cancel of the subscription that the live delegate's cancel fails keeps the subscription, so the live event the
+     * action waited for behind a replay that a cancel ended still has to reach the action once that replay returns.
+     */
+    @Test
+    @Timeout(30)
+    void a_live_event_that_waits_for_an_ended_replays_call_reaches_the_action_once_when_a_cancel_of_the_subscription_fails_meanwhile() throws InterruptedException {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("history"));
+        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(liveModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        AtomicInteger entered = new AtomicInteger();
+        CountDownLatch replayCallEntered = new CountDownLatch(1);
+        CountDownLatch liveCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplayCall = new CountDownLatch(1);
+        CountDownLatch delegateCancelEntered = new CountDownLatch(1);
+        CountDownLatch releaseDelegateCancel = new CountDownLatch(1);
+        Consumer<CloudEvent> action = cloudEvent -> {
+            if (entered.incrementAndGet() == 1) {
+                replayCallEntered.countDown();
+                awaitLatch(releaseReplayCall);
+            } else {
+                liveCallEntered.countDown();
+            }
+        };
+        Call subscribeLive = null;
+        Call failingCancel = null;
+
+        try {
+            subscription.subscribe("subscription", StartAtTime.beginningOfTime(), action);
+            assertThat(replayCallEntered.await(5, TimeUnit.SECONDS)).as("the replay's call is in the action").isTrue();
+            subscription.cancelSubscription("subscription");
+            subscribeLive = Call.start(() -> subscription.subscribe("subscription", StartAt.now(), action));
+            assertThat(subscribeLive.returnsWithin(Duration.ofSeconds(5))).as("the live subscribe returned").isTrue();
+            write(eventStore, nameDefined("live"));
+            await().atMost(Duration.ofSeconds(5)).until(() -> Thread.getAllStackTraces().entrySet().stream()
+                    .anyMatch(thread -> thread.getKey().getState() != Thread.State.RUNNABLE && Arrays.stream(thread.getValue()).anyMatch(frame -> frame.getMethodName().equals("awaitEndedReplays"))));
+
+            // When a cancel of the subscription is under way and the live delegate's cancel fails
+            liveModel.beforeCancel(() -> {
+                delegateCancelEntered.countDown();
+                awaitLatch(releaseDelegateCancel);
+                throw new IllegalStateException("the live delegate could not cancel");
+            });
+            failingCancel = Call.start(() -> subscription.cancelSubscription("subscription"));
+            assertThat(delegateCancelEntered.await(5, TimeUnit.SECONDS)).as("the cancel is in the live delegate's cancel").isTrue();
+            // The wrapper polls every 100 ms, so it has looked at the cancel under way many times by now. It never delivers early, so the wait costs a correct implementation nothing
+            Thread.sleep(600);
+            releaseDelegateCancel.countDown();
+            assertThat(failingCancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned").isTrue();
+
+            // Then
+            assertThat(failingCancel.failure()).as("what the cancel threw").isInstanceOf(IllegalStateException.class).hasMessage("the live delegate could not cancel");
+            assertThat(entered.get()).as("the calls to the action while the replay's call is still in it").isEqualTo(1);
+
+            // When the replay's call is released
+            releaseReplayCall.countDown();
+
+            // Then
+            assertThat(liveCallEntered.await(5, TimeUnit.SECONDS)).as("the live event reached the action once the replay's call returned").isTrue();
+            assertThat(entered.get()).as("the calls to the action, the replay's and the live event's").isEqualTo(2);
+        } finally {
+            releaseReplayCall.countDown();
+            releaseDelegateCancel.countDown();
+            if (subscribeLive != null) {
+                subscribeLive.join();
+            }
+            if (failingCancel != null) {
+                failingCancel.join();
+            }
+            liveModel.beforeCancel(null);
+            subscription.shutdown();
+        }
+    }
+
     private static Stream<Arguments> startsThatGoStraightToLive() {
         return Stream.of(
                 Arguments.of(Named.of("the default start, which finds no stored position", StartAt.subscriptionModelDefault())),
@@ -3623,6 +3701,8 @@ class StreamCatchupSubscriptionModelTest {
         private final List<Checkpoint> resumeProbes = new CopyOnWriteArrayList<>();
         private final List<String> liveStarts = new CopyOnWriteArrayList<>();
         private final AtomicInteger globalCheckpointReads = new AtomicInteger();
+        // Run by cancelSubscription before it cancels in the delegate, so a test can hold the cancel or make it fail
+        private volatile @Nullable Runnable beforeCancel;
 
         private CheckpointAwareInMemorySubscriptionModel(InMemorySubscriptionModel delegate) {
             this(delegate, new StringBasedCheckpoint("in-memory-global-position"));
@@ -3700,7 +3780,15 @@ class StreamCatchupSubscriptionModelTest {
 
         @Override
         public void cancelSubscription(String subscriptionId) {
+            Runnable hook = beforeCancel;
+            if (hook != null) {
+                hook.run();
+            }
             delegate.cancelSubscription(subscriptionId);
+        }
+
+        private void beforeCancel(@Nullable Runnable hook) {
+            this.beforeCancel = hook;
         }
     }
 }

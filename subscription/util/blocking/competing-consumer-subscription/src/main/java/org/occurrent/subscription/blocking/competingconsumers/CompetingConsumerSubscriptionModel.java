@@ -2922,7 +2922,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * <p>
      * Over any wrapped model, it also throws {@link AttemptNotMade} once the wrapped model tells it through
      * {@link UnwantedDelivery} that it no longer wants the event, as a catch-up model does when a cancel or a stop ends
-     * the replay that delivered the event. That catch-up model reads the event again when it runs the replay again.
+     * the replay that delivered the event. It throws then even when the wrapped model tells it while the lease strategy is
+     * asked and the lease strategy answers that this node holds the lease. That catch-up model reads the event again when
+     * it runs the replay again.
      * <p>
      * Over any other wrapped model it also returns without the lease strategy reporting the lease held, and the event is
      * then delivered as it would be without the lease strategy. It is never dropped, but the node that holds the lease
@@ -2995,11 +2997,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     }
                     return false;
                 }
-                if (mayDeliver(key, delivery, failedLooks)) {
-                    return false;
-                }
+                boolean leaseHeld = mayDeliver(key, delivery, failedLooks);
+                // Read after the lease strategy answers, so a cancel or a stop that withdraws the event while the
+                // lease strategy is asked withdraws it even when the answer is that this node holds the lease
                 if (unwanted.getAsBoolean()) {
                     throw withdrawn(key, UNWANTED_BY_THE_WRAPPED_MODEL);
+                }
+                if (leaseHeld) {
+                    return false;
                 }
                 if (!waited) {
                     logWhileWaiting(() -> logDebug("Holding an event until this node may deliver it (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId()));

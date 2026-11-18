@@ -51,14 +51,17 @@ import org.slf4j.LoggerFactory;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -126,6 +129,30 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
                 () -> assertThat(received).as("the events the action received").isEmpty());
     }
 
+    @Test
+    void a_cancel_that_withdraws_the_event_while_the_lease_is_looked_for_keeps_it_from_the_action_although_the_look_finds_the_lease_held() throws InterruptedException {
+        // Given the look for the lease is under way
+        strategy.blockTheNextLook.set(true);
+        assertThat(strategy.lookInFlight.await(5, TimeUnit.SECONDS)).as("a look for the lease is under way for the replay event").isTrue();
+        Thread cancel = new Thread(() -> competing.cancelSubscription(ID));
+
+        try {
+            // When the cancel has withdrawn the event and waits for the action, and the look then finds the lease held
+            cancel.start();
+            await().atMost(Duration.ofSeconds(5)).until(() -> cancel.getState() != Thread.State.RUNNABLE && Arrays.stream(cancel.getStackTrace())
+                    .anyMatch(frame -> frame.getMethodName().equals("completesWithin") || frame.getMethodName().equals("awaitTheAdmittedActions")));
+            strategy.releaseTheLook.countDown();
+            cancel.join(5000);
+
+            // Then
+            assertThat(cancel.isAlive()).as("the cancel returned").isFalse();
+            assertThat(received).as("the events the action received").isEmpty();
+        } finally {
+            strategy.releaseTheLook.countDown();
+            cancel.join(5000);
+        }
+    }
+
     private List<String> stillRanWarnings() {
         synchronized (logged) {
             return new ArrayList<>(logged.list).stream()
@@ -141,6 +168,9 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
     // when a thread other than the test's asks without the lease.
     private static final class NeverTheLeaseHolder implements CompetingConsumerStrategy {
         final CountDownLatch askedWithoutTheLease = new CountDownLatch(1);
+        final CountDownLatch lookInFlight = new CountDownLatch(1);
+        final CountDownLatch releaseTheLook = new CountDownLatch(1);
+        final AtomicBoolean blockTheNextLook = new AtomicBoolean();
         volatile boolean fenced;
         private final Thread testThread = Thread.currentThread();
 
@@ -161,8 +191,21 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
         public boolean hasLock(String subscriptionId, String subscriberId) {
             if (fenced && Thread.currentThread() != testThread) {
                 askedWithoutTheLease.countDown();
+                if (blockTheNextLook.compareAndSet(true, false)) {
+                    lookInFlight.countDown();
+                    awaitTheRelease();
+                    return true;
+                }
             }
             return !fenced;
+        }
+
+        private void awaitTheRelease() {
+            try {
+                releaseTheLook.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         @Override

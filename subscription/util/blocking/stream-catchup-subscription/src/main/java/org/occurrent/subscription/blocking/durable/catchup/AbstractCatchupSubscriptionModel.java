@@ -572,9 +572,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     // The action, or, while a replay a cancel or a stop ended for subscriptionId can still be in it, the action called
-    // only once that replay has returned. The wait ends early when a cancel of the id is under way or the subscription
-    // is gone, and the event is then not handed to the action, since nothing wants it any more. Called with the
-    // handover lock held.
+    // only once that replay has returned. The wait ends early once the subscription is gone, and the event is then not
+    // handed to the action, since nothing wants it any more. Called with the handover lock held.
     private Consumer<CloudEvent> afterEndedReplaysReturned(String subscriptionId, Consumer<CloudEvent> action) {
         CompletableFuture<Void> endedReplaysReturned = endedReplaysReturned(subscriptionId, null);
         if (endedReplaysReturned.isDone()) {
@@ -590,7 +589,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // Whether the wait ended because the replays returned, rather than because the subscription is no longer wanted
     private boolean awaitEndedReplays(String subscriptionId, CompletableFuture<Void> endedReplaysReturned) {
         while (!endedReplaysReturned.isDone()) {
-            if (cancelsUnderWay.containsKey(subscriptionId) || !subscribed.containsKey(subscriptionId)) {
+            // A cancel under way doesn't end the wait, since a cancel that throws keeps the subscription, and a live
+            // delegate that stores its position once the action returns would then store one past an event the action
+            // never got. The in-memory, MongoDB and durable models don't wait for a running action when they cancel, so
+            // over them this wait doesn't hold up the cancel it waits for.
+            if (!subscribed.containsKey(subscriptionId)) {
                 return false;
             }
             try {
