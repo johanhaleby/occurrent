@@ -231,9 +231,10 @@ is written and the catch-up ends as stopped, not as done (#1293 item 32). A fail
 handover failing is permanent, and `ReactiveHandover` then asks the source to delete the marker, as ADR 179's
 "Fed-back events on the reactor stack" lists. A failed delivery that only fails the answer a caller waits for does
 neither. A marker write that the store applies after that delete is
-[#1150](https://github.com/johanhaleby/occurrent/issues/1150), and ADR 179 decides it. The late write stores a head
-the next reactor start resumes after, so a start that reads it does not replay from the beginning, and it skips an event at or
-below that head that nothing delivers again. ADR 179 says which fed-back events need a durable path for that.
+[#1150](https://github.com/johanhaleby/occurrent/issues/1150), and ADR 179 decides it. The late write stores a head,
+and a reactor start that reads it resumes after it, so that start does not replay from the beginning and skips an
+event at or below that head that nothing delivers again. A start of the reactor push model in the same process can
+instead replay from the beginning without reading it. ADR 179 says when, and which fed-back events need a durable path.
 
 Every accepted payload gets an answer. The replay turn, which lets one catch-up at a time replay on an engine, is
 given back on every path. That includes a JVM-fatal error
