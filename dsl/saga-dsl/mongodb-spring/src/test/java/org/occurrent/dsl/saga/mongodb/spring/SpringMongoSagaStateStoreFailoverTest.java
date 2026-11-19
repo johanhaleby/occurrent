@@ -74,9 +74,11 @@ class SpringMongoSagaStateStoreFailoverTest {
     @BeforeAll
     static void startAThreeMemberReplicaSet() {
         network = Network.newNetwork();
-        String image = ReplicaSetReadyMongoDBContainer.withDefaultVersion().getDockerImageName();
+        // The members take the image and the environment of the shared container, since MongoDB 8.0 does not start on Linux 6.19 or newer without the GLIBC_TUNABLES it sets (SERVER-121912)
+        ReplicaSetReadyMongoDBContainer template = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
+        String image = template.getDockerImageName();
         for (int i = 0; i < 3; i++) {
-            GenericContainer<?> member = new GenericContainer<>(image).withNetwork(network).withNetworkAliases("member" + i).withExposedPorts(27017)
+            GenericContainer<?> member = new GenericContainer<>(image).withNetwork(network).withNetworkAliases("member" + i).withExposedPorts(27017).withEnv(template.getEnvMap())
                     .withCommand("mongod", "--replSet", "rs", "--bind_ip_all")
                     .waitingFor(Wait.forLogMessage(".*Waiting for connections.*", 1));
             member.start();
