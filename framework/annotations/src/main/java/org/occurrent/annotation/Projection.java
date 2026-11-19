@@ -130,7 +130,8 @@ public @interface Projection {
      * {@link StartupMode#WAIT_UNTIL_STARTED}).
      * <p>
      * A {@link Source#PUSH} projection is the exception: its catch-up replays from the beginning when no catch-up
-     * marker is stored, and on the reactor stack after the stored marker on every later start, so reading
+     * marker is stored, and on the reactor stack every later start replays too, after the stored marker when it reads
+     * one, so reading
      * {@link StartupMode#DEFAULT} as "background because it replays history" would move every push projection off the
      * startup path. {@code DEFAULT} therefore waits there, and only
      * an explicit {@link StartupMode#BACKGROUND} does not.

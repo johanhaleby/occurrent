@@ -156,7 +156,7 @@ other sections compile fine and behave differently, so read them first.
   `resumeSubscription(id, startAt)` throws `SubscriptionAlreadyRunningException` itself, where 0.34.0 passed the resume
   on to the live model and the MongoDB models threw `UnknownSubscriptionException` while the `subscribe(..)` replay ran.
   Compiles unchanged.
-- [A catch-up marker on the reactor stack is the position the next catch-up resumes after](#a-catch-up-marker-on-the-reactor-stack-is-the-position-the-next-catch-up-resumes-after).
+- [A catch-up marker on the reactor stack is a position to resume after](#a-catch-up-marker-on-the-reactor-stack-is-a-position-to-resume-after).
   A restart of the reactor `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` replays
   the events since the previous start, and a cancel no longer promises a rebuild. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
@@ -3021,7 +3021,7 @@ while its `subscribe(..)` replay runs isn't refused this way. The live model doe
 over, so a resume at a position before then still throws `UnknownSubscriptionException` from a MongoDB model, as in
 0.34.0.
 
-## A catch-up marker on the reactor stack is the position the next catch-up resumes after
+## A catch-up marker on the reactor stack is a position to resume after
 
 This applies to the reactor `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` and `DomainEventFeed` when you
 give them a `CheckpointStorage` for the catch-up marker. It also applies to every `@Projection` with `source = PUSH` in
@@ -3032,10 +3032,14 @@ finished, and a start that finds it skips its replay. Their cancel changes too, 
 [A blocking cancel no longer promises a rebuild](#a-blocking-cancel-no-longer-promises-a-rebuild).
 
 In 0.34.0 a stored marker meant that the history had been read in full, and a catch-up that found it went live without
-a replay. In 0.35.0 every reactor start reads the stored marker, reads the head of the event store with
+a replay. In 0.35.0 a reactor catch-up reads the stored marker, reads the head of the event store with
 `currentPosition()`, replays the events after the marker, or the whole history when there is none, and stores the head
-it read. After a lost or late marker write an older position is stored, so the next start replays more, and never
-skips an event. ADR 179 has the reasoning, and why the blocking stack keeps the 0.34.0 marker.
+it read. The reactor push model has one exception. After a delete of the marker failed, a catch-up of the id in the
+same process deletes it again and replays from the beginning without reading it, until a delete or a marker write of
+that model succeeds. A marker write the store loses keeps an older position stored, so a catch-up that reads it
+replays more. A marker write the store applies after a delete stores a head again, and a catch-up that reads it skips
+a failed event at or below that head unless something delivers that event again. ADR 179 has the reasoning, which
+events have such a path, and why the blocking stack keeps the 0.34.0 marker.
 
 What you see:
 

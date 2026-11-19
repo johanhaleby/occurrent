@@ -61,7 +61,9 @@ import java.util.function.Supplier;
  * The reactive counterpart of the blocking {@code CatchupThenPushSubscriptionModel}: a <strong>catch-up</strong> in
  * front of a reactive {@link PushSubscriptionModel}. Each time a subscription starts, it replays from the event store
  * the events after the stored catch-up marker, or the whole history when none is stored, then hands over to the live
- * push feed, so a projection is backfilled before it consumes the broker.
+ * push feed, so a projection is backfilled before it consumes the broker. After a failed delete of the marker, a
+ * subscribe of the id in this process deletes it again and replays the whole history without reading it, until a
+ * delete or a marker write of this model succeeds.
  * <p>
  * The catch-up applies the replayed events first, then the events a replayed handler wrote, and then stores the
  * catch-up marker. A live event fed through {@code accept(..)} during the replay waits in a bounded unicast
@@ -133,8 +135,8 @@ import java.util.function.Supplier;
  * waiting, and does not apply it. Cancel the subscription and subscribe again, and once the marker is gone its
  * catch-up replays from the beginning. When deleting the marker still fails after 3 retries, the subscription logs an
  * error naming the subscription id. The cancel deletes the marker again, and when that delete fails too, subscribing
- * again in this process deletes it once more and replays from the beginning. After a restart the catch-up resumes
- * after a marker that is still stored and does not apply a failed event at or below it again, so delete it by hand
+ * again in this process deletes it once more and replays from the beginning. After a restart a catch-up that reads a
+ * marker the store still holds resumes after it and does not replay a failed event at or below it, so delete it by hand
  * before subscribing again. A delete the store loses in a failover has the same effect, so a subscription that has
  * to be rebuilt subscribes under a new id. A written event that no replay can bring back and nothing waits for is
  * lost when applying it fails, or when the process stops before it is applied.
@@ -327,7 +329,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         Mono<Boolean> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
             @Override
             public Mono<Boolean> isAlreadyCaughtUp() {
-                // Reads the stored marker and the head here, so the replay resumes after the marker and the head is
+                // Reads the stored marker and the head here, so the replay resumes after a marker it reads and the head is
                 // what markCaughtUp() stores. Every attempt replays, possibly nothing.
                 return readReplayStart(subscriptionId, storedIsNotAMarker)
                         .doOnNext(start -> {
