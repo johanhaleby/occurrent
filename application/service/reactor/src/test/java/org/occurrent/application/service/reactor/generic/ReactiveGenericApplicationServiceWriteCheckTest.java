@@ -39,7 +39,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The check {@code beforeWrite()} hands out makes a pause or a stop wait until it is closed, so a command that fails
- * while its pipeline is built must still close it. Container-free, since nothing reaches the event store.
+ * while its pipeline is built must still close it. A write asks {@code beforeWrite()}
+ * also when the dispatcher has no subscriptions. Container-free, since nothing reaches the event store.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactiveGenericApplicationServiceWriteCheckTest {
@@ -75,6 +76,21 @@ class ReactiveGenericApplicationServiceWriteCheckTest {
         assertThat(check.closes).as("[times the write check was closed]").hasValue(1);
     }
 
+    @Test
+    void a_write_is_refused_by_before_write_before_the_event_store_is_reached_when_the_dispatcher_has_no_subscriptions() {
+        IllegalStateException refusal = new IllegalStateException("write refused");
+        RefusingDispatcher dispatcher = new RefusingDispatcher(refusal);
+        ApplicationService<String> applicationService = GenericApplicationService.builder(unreachableEventStore(), new UnusedConverter())
+                .synchronousSubscriptions(dispatcher)
+                .build();
+
+        StepVerifier.create(applicationService.execute("stream", events -> List.of("event")))
+                .expectErrorSatisfies(error -> assertThat(error).as("[error the Mono failed with]").isSameAs(refusal))
+                .verify();
+
+        assertThat(dispatcher.dispatches).as("[times dispatch was called]").hasValue(0);
+    }
+
     private static EventStore unreachableEventStore() {
         return (EventStore) Proxy.newProxyInstance(EventStore.class.getClassLoader(), new Class<?>[]{EventStore.class}, (proxy, method, args) -> {
             throw new AssertionError("The event store is not reached, but " + method.getName() + " was called");
@@ -91,6 +107,31 @@ class ReactiveGenericApplicationServiceWriteCheckTest {
         @Override
         public void close() {
             closes.incrementAndGet();
+        }
+    }
+
+    private static final class RefusingDispatcher implements ReactiveSynchronousEventDispatcher {
+        final AtomicInteger dispatches = new AtomicInteger();
+        private final RuntimeException refusal;
+
+        RefusingDispatcher(RuntimeException refusal) {
+            this.refusal = refusal;
+        }
+
+        @Override
+        public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+            dispatches.incrementAndGet();
+            return Mono.empty();
+        }
+
+        @Override
+        public boolean hasSubscriptions() {
+            return false;
+        }
+
+        @Override
+        public WriteCheck beforeWrite() {
+            throw refusal;
         }
     }
 
