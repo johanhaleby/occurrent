@@ -24,6 +24,10 @@ import org.junit.jupiter.api.Timeout;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.StartAt;
 
+import java.lang.management.LockInfo;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -74,7 +78,8 @@ class StreamCatchupSubscribeDuringShutdownSweepTest {
         // When an id is subscribed meanwhile, and the shutdown then goes on
         Thread subscribe = new Thread(() -> catchup.subscribe(ID, null, StartAt.now(), event -> received.add(event.getId())));
         subscribe.start();
-        await().atMost(Duration.ofSeconds(5)).until(() -> !subscribe.isAlive() || subscribe.getState() == Thread.State.BLOCKED);
+        // Ends when the subscribe waits for the records' monitor, or has finished without waiting for it
+        await().atMost(Duration.ofSeconds(5)).until(() -> !subscribe.isAlive() || isBlockedOn(subscribe, theRecords()));
         releaseTheSweep.countDown();
         subscribe.join(5000);
         shutdown.join(5000);
@@ -84,5 +89,21 @@ class StreamCatchupSubscribeDuringShutdownSweepTest {
         assertAll(
                 () -> assertThat(live.thrownByTheAction()).as("what the live call threw").isEmpty(),
                 () -> assertThat(received).as("the events the action received").containsExactly("live1"));
+    }
+
+    private Object theRecords() {
+        try {
+            Field field = AbstractCatchupSubscriptionModel.class.getDeclaredField("subscribed");
+            field.setAccessible(true);
+            return field.get(catchup);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static boolean isBlockedOn(Thread thread, Object monitor) {
+        ThreadInfo info = ManagementFactory.getThreadMXBean().getThreadInfo(thread.getId());
+        LockInfo lock = info == null ? null : info.getLockInfo();
+        return thread.getState() == Thread.State.BLOCKED && lock != null && lock.getIdentityHashCode() == System.identityHashCode(monitor);
     }
 }

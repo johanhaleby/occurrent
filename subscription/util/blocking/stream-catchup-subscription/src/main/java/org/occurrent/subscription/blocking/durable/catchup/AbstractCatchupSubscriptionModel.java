@@ -223,8 +223,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // monitor, as does markShuttingDown while it marks and forgets the records, so a record is put either before that,
     // and gets marked and forgotten, or after, and is never forgotten by the shutdown without the mark.
     private final ConcurrentMap<String, Subscribed> subscribed;
-    // Run by markShuttingDown between marking the records and forgetting them, a no-op outside tests, so a test can hold
-    // the shutdown there while a subscribe runs
+    // Run by markShuttingDown between marking the records and forgetting them, so a test can hold the shutdown there
+    // while a subscribe runs. Only StreamCatchupSubscribeDuringShutdownSweepTest sets it, and it is a no-op otherwise
     volatile Runnable betweenShutdownMarksAndClear = () -> {
     };
     // The replays a cancel that hasn't returned yet ended for each id. Kept from before the cancel takes them away until
