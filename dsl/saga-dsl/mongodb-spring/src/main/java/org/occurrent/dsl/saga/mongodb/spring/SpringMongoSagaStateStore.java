@@ -22,6 +22,7 @@ import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
+import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
@@ -65,7 +66,6 @@ import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.TransactionDefinition;
-import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -124,18 +124,27 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * {@link RetryStrategy#retry()}, as the default is, any other failure of such a transaction is thrown at once, and so is
  * a server's refusal of a transaction or of journaling on any call.
  * <p>
- * Called inside a Spring transaction on the same {@link MongoDatabaseFactory}, those writes join it and are not retried.
- * The commit of that transaction then decides whether they survive a failover, with the write concern it commits with.
+ * Called inside a MongoDB transaction of the caller's on the same {@link MongoDatabaseFactory}, those writes join it and
+ * are not retried. That is a Spring transaction that synchronizes its resources, as a {@link MongoTransactionManager}
+ * does by default, a Spring transaction of another resource in which a template with
+ * {@code SessionSynchronization.ALWAYS} has started a MongoDB transaction, or a transaction on the session of a template
+ * from {@link MongoTemplate#withSession}. The commit of that transaction then decides whether they survive a failover,
+ * with the write concern it commits with. When a write fails inside it, abort the transaction, since a commit after the
+ * failure may keep what the store wrote before it. A {@code MongoTransactionManager} with
+ * {@code SYNCHRONIZATION_NEVER} binds its transaction with synchronization off, so a template hands out a database bound
+ * to no session. In such a transaction each call of the store takes part in it with the store's own transaction, which
+ * turns synchronization on for the call, so the call reads and writes in that transaction too.
  * <p>
- * Inside such a transaction, or one on the session of a template from {@link MongoTemplate#withSession}, {@link #find}
- * and {@link #findWithoutState} read at the transaction's snapshot, which misses an instance written after the snapshot
- * began. When the read finds no instance, the store inserts a document with the saga's id and deletes it again in the
- * same transaction, and the server decides whether that insert conflicts. An instance another writer wrote after the
- * snapshot began makes the insert fail with a {@code WriteConflict} that has the {@code TransientTransactionError}
- * label, and a caller that runs its transaction again on that label reads the instance. An instance the transaction
- * deleted itself reads as absent. The two writes leave no document behind when the transaction commits, and a change
- * stream on the collection may see them. In a Spring transaction that doesn't synchronize its resources, the store binds
- * no session, reads as it does outside a transaction and writes nothing.
+ * Inside a transaction of the caller's, {@link #find} and {@link #findWithoutState} read at the transaction's snapshot,
+ * which misses an instance written after the snapshot began. When the read finds no instance, the store inserts a
+ * document that holds only the saga's id and deletes it again in the same transaction, and the server decides whether
+ * that insert conflicts. An instance another writer wrote after the snapshot began makes the insert fail with a
+ * {@code WriteConflict} that has the {@code TransientTransactionError} label, and a caller that runs its transaction
+ * again on that label reads the instance. An instance the transaction deleted itself reads as absent. The two writes
+ * leave no document behind when the transaction commits, and a change stream on the collection may see them. The
+ * collection must accept a document that holds only {@code _id}, so a validator that requires other fields makes such a
+ * read of an absent instance fail. In a Spring transaction of another resource where no MongoDB transaction has started,
+ * the two methods read as they do outside a transaction.
  * <p>
  * {@link #findReleasingSagaIds(String, int)} finds the instances that have {@code failureReleasedAt} set. The inputs a
  * quarantined instance skips are stored one document each, in a collection next to the instances named after it with
@@ -349,10 +358,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     @Override
     public Optional<StoredSaga> find(String sagaId) {
-        Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        // Decoding happens outside the retried supplier, and in the caller, so a stored state that no longer reads back
-        // throws once instead of being attempted ten times.
-        return Optional.ofNullable(findInstance(sagaId, () -> Query.query(where(ID).is(sagaId)))).map(this::toStoredSaga);
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(sagaId, "sagaId cannot be null");
+            // Decoding happens outside the retried supplier, and in the caller, so a stored state that no longer reads back
+            // throws once instead of being attempted ten times.
+            return Optional.ofNullable(findInstance(sagaId, () -> Query.query(where(ID).is(sagaId)))).map(this::toStoredSaga);
+        });
     }
 
     // An instance found at read concern majority is acted on through a compare-and-set on its version, which a stale
@@ -363,11 +374,25 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // started, see
     // https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/
     private @Nullable Document findInstance(String sagaId, Supplier<Query> query) {
-        if (inCallersTransaction()) {
+        if (joinsCallersTransaction()) {
             return findInCallersTransaction(sagaId, query.get());
         }
-        Document found = retryStrategy.execute(() -> mongoOperations.findOne(majorityRead(query.get()), Document.class, collectionName));
-        return found != null ? found : retryStrategy.execute(() -> mongoOperations.findOne(linearizableRead(query.get()), Document.class, collectionName));
+        Document found = retryStrategy.execute(() -> readInstance(query.get(), ReadConcern.MAJORITY));
+        return found != null ? found : retryStrategy.execute(() -> readInstance(query.get(), ReadConcern.LINEARIZABLE));
+    }
+
+    // From the primary, on the database MongoDatabaseUtils hands out, which is bound to no session here. A template with
+    // SessionSynchronization.ALWAYS would start a transaction for the read in a Spring transaction of another resource,
+    // and the read would see that transaction's snapshot. A linearizable read waits at most the write timeout, as MongoDB
+    // advises, since it can't complete without a majority
+    private @Nullable Document readInstance(Query query, ReadConcern readConcern) {
+        try {
+            FindIterable<Document> found = instances(MongoDatabaseUtils.getDatabase(databaseFactory)).withReadConcern(readConcern).withReadPreference(ReadPreference.primary())
+                    .find(query.getQueryObject()).projection(query.getFieldsObject());
+            return (readConcern == ReadConcern.LINEARIZABLE ? found.maxTime(WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS) : found).first();
+        } catch (RuntimeException e) {
+            throw translated(e);
+        }
     }
 
     // Inside a transaction the caller started, a read sees the transaction's snapshot, and no read in the transaction
@@ -393,60 +418,79 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
     }
 
-    // True only when MongoDatabaseUtils hands out a database bound to a session with an active transaction. That holds
+    // True exactly when MongoDatabaseUtils hands out a database bound to a session with an active transaction. That holds
     // for a factory bound to such a session, as MongoTemplate.withSession gives, and for a Spring transaction that
-    // synchronizes its resources. In a Spring transaction without synchronization the database is bound to no session, and the
-    // inserted document would be visible to every reader until its delete
-    private boolean inCallersTransaction() {
+    // synchronizes its resources, a MongoDB one or another that a template with SessionSynchronization.ALWAYS has
+    // already started a MongoDB transaction in
+    private boolean joinsCallersTransaction() {
         return databaseFactory.isTransactionActive()
                || TransactionSynchronizationManager.isSynchronizationActive() && MongoDatabaseUtils.isTransactionActive(databaseFactory);
     }
 
+    // A MongoDB transaction bound to the factory while synchronization is off, as a MongoTransactionManager with
+    // SYNCHRONIZATION_NEVER runs it, hands out a database bound to no session, so an operation would read and write
+    // outside that transaction. The store's own transaction then takes part in the caller's and turns synchronization
+    // on for the operation, so every database it takes, the template's too, is bound to the caller's session, and a
+    // failure marks the caller's transaction rollback-only
+    private <T extends @Nullable Object> T joiningCallersTransaction(Supplier<T> operation) {
+        if (databaseFactory.isTransactionActive() || TransactionSynchronizationManager.isSynchronizationActive()
+            || !MongoDatabaseUtils.isTransactionActive(databaseFactory)) {
+            return operation.get();
+        }
+        return transactions.execute(status -> operation.get());
+    }
+
     @Override
     public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
-        Objects.requireNonNull(saga, "saga cannot be null");
-        Document document = toDocument(saga);
-        if (expectedVersion == 0) {
-            // Caught inside the retried supplier, because another writer getting there first is an outcome and
-            // retrying it would lose the same race nine more times. A failure arriving after MongoDB already stored
-            // the document hits this catch on the next attempt and reports the save as lost. The caller reads again,
-            // and find reads an absence again at read concern linearizable. MongoDB documents that such a read may wait
-            // for writes in progress to reach a majority before it returns, and the maxTimeMS bounds that wait. With
-            // the document read back, the caller skips an input its watermarks already cover. A failover that rolls the
-            // document back lets the next insert through. An input that has no redelivery key has no watermark, so it
-            // re-dispatches, which is the multiplicity a lost compare-and-set already has.
-            Supplier<Boolean> insert = () -> {
-                try {
-                    writeDurably(collectionName, collection -> collection.insertOne(document));
-                    return true;
-                } catch (DuplicateKeyException e) {
-                    return false;
-                }
-            };
-            return retryStrategy.execute(insert);
-        }
-        // A lost compare-and-set matches nothing rather than throwing, so the retry never sees it
-        return retryStrategy.execute(() -> writeDurably(collectionName, collection -> collection.replaceOne(versionIs(saga.sagaId(), expectedVersion), document)).getMatchedCount() > 0);
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Document document = toDocument(saga);
+            if (expectedVersion == 0) {
+                // Caught inside the retried supplier, because another writer getting there first is an outcome and
+                // retrying it would lose the same race nine more times. A failure arriving after MongoDB already stored
+                // the document hits this catch on the next attempt and reports the save as lost. The caller reads again,
+                // and find reads an absence again at read concern linearizable. MongoDB documents that such a read may wait
+                // for writes in progress to reach a majority before it returns, and the maxTimeMS bounds that wait. With
+                // the document read back, the caller skips an input its watermarks already cover. A failover that rolls the
+                // document back lets the next insert through. An input that has no redelivery key has no watermark, so it
+                // re-dispatches, which is the multiplicity a lost compare-and-set already has.
+                Supplier<Boolean> insert = () -> {
+                    try {
+                        writeDurably(collectionName, collection -> collection.insertOne(document));
+                        return true;
+                    } catch (DuplicateKeyException e) {
+                        return false;
+                    }
+                };
+                return retryStrategy.execute(insert);
+            }
+            // A lost compare-and-set matches nothing rather than throwing, so the retry never sees it
+            return retryStrategy.execute(() -> writeDurably(collectionName, collection -> collection.replaceOne(versionIs(saga.sagaId(), expectedVersion), document)).getMatchedCount() > 0);
+        });
     }
 
     @Override
     public Optional<StoredSaga> findWithoutState(String sagaId) {
-        Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        return Optional.ofNullable(findInstance(sagaId, () -> {
-            Query query = Query.query(where(ID).is(sagaId));
-            project(query, SagaCodec.fieldsWithoutState());
-            return query;
-        })).map(this::toStoredSaga);
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(sagaId, "sagaId cannot be null");
+            return Optional.ofNullable(findInstance(sagaId, () -> {
+                Query query = Query.query(where(ID).is(sagaId));
+                project(query, SagaCodec.fieldsWithoutState());
+                return query;
+            })).map(this::toStoredSaga);
+        });
     }
 
     @Override
     public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
-        Objects.requireNonNull(saga, "saga cannot be null");
-        if (expectedVersion == 0) {
-            throw new IllegalArgumentException("compareAndSaveWithoutState cannot insert saga " + saga.sagaId() + ", since it holds no state. Insert it with compareAndSave.");
-        }
-        Bson update = withoutState(saga);
-        return retryStrategy.execute(() -> writeDurably(collectionName, collection -> collection.updateOne(versionIs(saga.sagaId(), expectedVersion), update)).getMatchedCount() > 0);
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            if (expectedVersion == 0) {
+                throw new IllegalArgumentException("compareAndSaveWithoutState cannot insert saga " + saga.sagaId() + ", since it holds no state. Insert it with compareAndSave.");
+            }
+            Bson update = withoutState(saga);
+            return retryStrategy.execute(() -> writeDurably(collectionName, collection -> collection.updateOne(versionIs(saga.sagaId(), expectedVersion), update)).getMatchedCount() > 0);
+        });
     }
 
     private static Bson withoutState(StoredSaga saga) {
@@ -467,54 +511,60 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     @Override
     public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
-        Objects.requireNonNull(now, "now cannot be null");
-        // Sorted on the field it filters on, so the (status, nextTimerFiresAt) index serves the order as well as the match.
-        // ACTIVE is two strings, and Mongo merges the two index ranges in nextTimerFiresAt order.
-        Query query = Query.query(statusIs(SagaStatus.ACTIVE).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
-                .with(Sort.by(Sort.Direction.ASC, NEXT_TIMER_FIRES_AT))
-                .limit(limit);
-        // Project only the fields every enumeration needs. This deliberately excludes the state (a flow saga's received
-        // log can be large), so the poll never pays to read it. The executor re-loads the full document with find(sagaId)
-        // before it processes a timer, which is the authoritative read the fire acts on.
-        project(query, SagaCodec.instanceFields());
-        Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
-        return retryStrategy.execute(read).stream().map(this::toStoredSaga).toList();
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(now, "now cannot be null");
+            // Sorted on the field it filters on, so the (status, nextTimerFiresAt) index serves the order as well as the match.
+            // ACTIVE is two strings, and Mongo merges the two index ranges in nextTimerFiresAt order.
+            Query query = Query.query(statusIs(SagaStatus.ACTIVE).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
+                    .with(Sort.by(Sort.Direction.ASC, NEXT_TIMER_FIRES_AT))
+                    .limit(limit);
+            // Project only the fields every enumeration needs. This deliberately excludes the state (a flow saga's received
+            // log can be large), so the poll never pays to read it. The executor re-loads the full document with find(sagaId)
+            // before it processes a timer, which is the authoritative read the fire acts on.
+            project(query, SagaCodec.instanceFields());
+            Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
+            return retryStrategy.execute(read).stream().map(this::toStoredSaga).toList();
+        });
     }
 
     @Override
     public List<StoredSaga> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
-        Objects.requireNonNull(status, "status cannot be null");
-        Objects.requireNonNull(updatedBefore, "updatedBefore cannot be null");
-        if (limit < 1) {
-            // A Mongo limit of 0 means "no limit", so a caller passing 0 would get the whole collection instead of
-            // nothing. Reject it here rather than let that through as a surprise full scan.
-            throw new IllegalArgumentException("limit must be positive, was " + limit);
-        }
-        Query query = Query.query(statusIs(status).and(UPDATED_AT).lt(updatedBefore.toEpochMilli()))
-                .with(Sort.by(Sort.Direction.ASC, UPDATED_AT))
-                .limit(limit);
-        // Projected like the due-timer query, so a page doesn't read the state of every instance it lists
-        project(query, SagaCodec.instanceFields());
-        Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
-        return retryStrategy.execute(read).stream().map(this::toStoredSaga).toList();
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(status, "status cannot be null");
+            Objects.requireNonNull(updatedBefore, "updatedBefore cannot be null");
+            if (limit < 1) {
+                // A Mongo limit of 0 means "no limit", so a caller passing 0 would get the whole collection instead of
+                // nothing. Reject it here rather than let that through as a surprise full scan.
+                throw new IllegalArgumentException("limit must be positive, was " + limit);
+            }
+            Query query = Query.query(statusIs(status).and(UPDATED_AT).lt(updatedBefore.toEpochMilli()))
+                    .with(Sort.by(Sort.Direction.ASC, UPDATED_AT))
+                    .limit(limit);
+            // Projected like the due-timer query, so a page doesn't read the state of every instance it lists
+            project(query, SagaCodec.instanceFields());
+            Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
+            return retryStrategy.execute(read).stream().map(this::toStoredSaga).toList();
+        });
     }
 
     @Override
     public List<String> findReleasingSagaIds(@Nullable String after, int limit) {
-        if (limit < 1) {
-            // A Mongo limit of 0 means no limit
-            throw new IllegalArgumentException("limit must be positive, was " + limit);
-        }
-        Criteria releasing = statusIs(SagaStatus.QUARANTINED).and(FAILURE_RELEASED_AT).exists(true);
-        if (after != null) {
-            releasing = releasing.and(ID).gt(after);
-        }
-        Query query = Query.query(releasing)
-                .with(Sort.by(Sort.Direction.ASC, ID))
-                .limit(limit);
-        query.fields().include(ID);
-        Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
-        return retryStrategy.execute(read).stream().map(document -> document.getString(ID)).toList();
+        return joiningCallersTransaction(() -> {
+            if (limit < 1) {
+                // A Mongo limit of 0 means no limit
+                throw new IllegalArgumentException("limit must be positive, was " + limit);
+            }
+            Criteria releasing = statusIs(SagaStatus.QUARANTINED).and(FAILURE_RELEASED_AT).exists(true);
+            if (after != null) {
+                releasing = releasing.and(ID).gt(after);
+            }
+            Query query = Query.query(releasing)
+                    .with(Sort.by(Sort.Direction.ASC, ID))
+                    .limit(limit);
+            query.fields().include(ID);
+            Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
+            return retryStrategy.execute(read).stream().map(document -> document.getString(ID)).toList();
+        });
     }
 
     // ACTIVE and QUARANTINED are each stored as either of two strings, see SagaCodec.storedStatuses
@@ -524,16 +574,18 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     @Override
     public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
-        if (limit < 1) {
-            // A Mongo limit of 0 means no limit
-            throw new IllegalArgumentException("limit must be positive, was " + limit);
-        }
-        Query query = Query.query(where(SKIPPED_SAGA_ID).is(Objects.requireNonNull(sagaId, "sagaId cannot be null"))
-                        .and(SKIPPED_QUARANTINE_ID).is(Objects.requireNonNull(quarantineId, "quarantineId cannot be null")))
-                .with(Sort.by(Sort.Direction.ASC, SKIPPED_SEQ, SKIPPED_KEY))
-                .limit(limit);
-        Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, skippedInputsCollectionName);
-        return retryStrategy.execute(read).stream().map(SpringMongoSagaStateStore::toSkippedInput).toList();
+        return joiningCallersTransaction(() -> {
+            if (limit < 1) {
+                // A Mongo limit of 0 means no limit
+                throw new IllegalArgumentException("limit must be positive, was " + limit);
+            }
+            Query query = Query.query(where(SKIPPED_SAGA_ID).is(Objects.requireNonNull(sagaId, "sagaId cannot be null"))
+                            .and(SKIPPED_QUARANTINE_ID).is(Objects.requireNonNull(quarantineId, "quarantineId cannot be null")))
+                    .with(Sort.by(Sort.Direction.ASC, SKIPPED_SEQ, SKIPPED_KEY))
+                    .limit(limit);
+            Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, skippedInputsCollectionName);
+            return retryStrategy.execute(read).stream().map(SpringMongoSagaStateStore::toSkippedInput).toList();
+        });
     }
 
     private static SkippedInput toSkippedInput(Document document) {
@@ -542,47 +594,55 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     @Override
     public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
-        Objects.requireNonNull(saga, "saga cannot be null");
-        Objects.requireNonNull(input, "input cannot be null");
-        Bson update = withoutStateUnlessInsert(saga, expectedVersion);
-        Document filter = skippedInputFilter(saga.sagaId(), quarantineId, input.key());
-        return transition(database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
-                database -> skippedInputs(database).updateOne(filter, Updates.setOnInsert(SKIPPED_SEQ, input.seq()), new UpdateOptions().upsert(true)));
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Objects.requireNonNull(input, "input cannot be null");
+            Bson update = withoutStateUnlessInsert(saga, expectedVersion);
+            Document filter = skippedInputFilter(saga.sagaId(), quarantineId, input.key());
+            return transition(database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
+                    database -> skippedInputs(database).updateOne(filter, Updates.setOnInsert(SKIPPED_SEQ, input.seq()), new UpdateOptions().upsert(true)));
+        });
     }
 
     @Override
     public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-        Objects.requireNonNull(saga, "saga cannot be null");
-        Objects.requireNonNull(head, "head cannot be null");
-        Bson update = withoutStateUnlessInsert(saga, expectedVersion);
-        Document filter = skippedInputFilter(saga.sagaId(), quarantineId, head.key());
-        return transition(database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
-                database -> skippedInputs(database).updateOne(filter, Updates.set(SKIPPED_SEQ, head.seq()), new UpdateOptions().upsert(true)));
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Objects.requireNonNull(head, "head cannot be null");
+            Bson update = withoutStateUnlessInsert(saga, expectedVersion);
+            Document filter = skippedInputFilter(saga.sagaId(), quarantineId, head.key());
+            return transition(database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
+                    database -> skippedInputs(database).updateOne(filter, Updates.set(SKIPPED_SEQ, head.seq()), new UpdateOptions().upsert(true)));
+        });
     }
 
     @Override
     public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
-        Objects.requireNonNull(saga, "saga cannot be null");
-        Objects.requireNonNull(replayed, "replayed cannot be null");
-        Document document = toDocument(saga);
-        Document filter = skippedInputFilter(saga.sagaId(), quarantineId, replayed.key()).append(SKIPPED_SEQ, replayed.seq());
-        return transition(database -> instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
-                database -> skippedInputs(database).deleteOne(filter));
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Objects.requireNonNull(replayed, "replayed cannot be null");
+            Document document = toDocument(saga);
+            Document filter = skippedInputFilter(saga.sagaId(), quarantineId, replayed.key()).append(SKIPPED_SEQ, replayed.seq());
+            return transition(database -> instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
+                    database -> skippedInputs(database).deleteOne(filter));
+        });
     }
 
     @Override
     public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
-        Objects.requireNonNull(saga, "saga cannot be null");
-        Document document = toDocument(saga);
-        Document filter = quarantineFilter(saga.sagaId(), quarantineId);
-        // A release ends the quarantine of an instance it does not complete once its read of the records found none. That
-        // read can miss a record right after a failover, so the transaction reads the records again. It reads everything
-        // the primary has, which includes every write a majority acknowledged. A record written after that read changes
-        // the instance too, so the replaceOne then conflicts and the transaction runs again
-        boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
-        return transition(database -> (completes || skippedInputs(database).find(filter).first() == null)
-                                      && instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
-                database -> skippedInputs(database).deleteMany(filter));
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Document document = toDocument(saga);
+            Document filter = quarantineFilter(saga.sagaId(), quarantineId);
+            // A release ends the quarantine of an instance it does not complete once its read of the records found none. That
+            // read can miss a record right after a failover, so the transaction reads the records again. It reads everything
+            // the primary has, which includes every write a majority acknowledged. A record written after that read changes
+            // the instance too, so the replaceOne then conflicts and the transaction runs again
+            boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
+            return transition(database -> (completes || skippedInputs(database).find(filter).first() == null)
+                                          && instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
+                    database -> skippedInputs(database).deleteMany(filter));
+        });
     }
 
     private static Bson withoutStateUnlessInsert(StoredSaga saga, long expectedVersion) {
@@ -604,11 +664,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // The instance first, so a write that loses its compare-and-set has written nothing, and a second transition on the
     // same instance conflicts with the first on that document before either touches a skipped input
     private boolean transition(Function<MongoDatabase, Boolean> compareAndSet, Function<MongoDatabase, ?> writeSkippedInputs) {
-        return inTransaction((database, status) -> {
+        return inTransaction(database -> {
             if (!compareAndSet.apply(database)) {
-                if (status.isNewTransaction()) {
-                    status.setRollbackOnly();
-                }
                 return false;
             }
             writeSkippedInputs.apply(database);
@@ -616,20 +673,32 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         });
     }
 
-    private interface TransactionWork<T> {
-        T apply(MongoDatabase database, TransactionStatus status);
-    }
-
     // Run again from the start when the failure has the TransientTransactionError label, which says the transaction did
-    // not commit, so the attempt left nothing behind. Inside a transaction the caller started, a failure is the caller's to retry, since
-    // this store cannot run the caller's earlier writes again
-    private <T> T inTransaction(TransactionWork<T> work) {
-        boolean joinsCallersTransaction = MongoDatabaseUtils.isTransactionActive(databaseFactory);
-        // The database comes from MongoDatabaseUtils rather than the template, so it is bound to the transaction's
-        // session whatever session synchronization the template has
-        Supplier<T> attempt = () -> {
+    // not commit, so the attempt left nothing behind. Inside a transaction the caller started, a failure is the caller's
+    // to retry, since this store cannot run the caller's earlier writes again. The database comes from
+    // MongoDatabaseUtils rather than the template, so it is bound to the transaction's session whatever session
+    // synchronization the template has
+    private boolean inTransaction(Function<MongoDatabase, Boolean> work) {
+        boolean joinsCallersTransaction = joinsCallersTransaction();
+        if (databaseFactory.isTransactionActive()) {
+            // The store's transaction manager would start a second transaction on a new session of the factory, so the
+            // work runs on the database of the session the factory is bound to. The store can't abort that transaction
+            // after a failure between the writes, so its owner has to
             try {
-                return Objects.requireNonNull(transactions.execute(status -> work.apply(MongoDatabaseUtils.getDatabase(databaseFactory), status)));
+                return work.apply(databaseFactory.getMongoDatabase());
+            } catch (RuntimeException e) {
+                throw translated(e);
+            }
+        }
+        Supplier<Boolean> attempt = () -> {
+            try {
+                return Objects.requireNonNull(transactions.execute(status -> {
+                    boolean done = work.apply(MongoDatabaseUtils.getDatabase(databaseFactory));
+                    if (!done && status.isNewTransaction()) {
+                        status.setRollbackOnly();
+                    }
+                    return done;
+                }));
             } catch (RuntimeException e) {
                 throw translated(e);
             }
@@ -722,28 +791,31 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     @Override
     public void delete(String sagaId) {
-        Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        // An instance without a quarantine id has no skipped inputs, so it goes in a write of its own, which needs no
-        // replica set. A retry after a timed out attempt that deleted the document on the primary deletes nothing, and
-        // MongoDB still waits for a majority to have everything the primary has before it returns, that deletion included
-        Bson withoutQuarantineId = Filters.and(Filters.eq(ID, sagaId), Filters.eq(FAILURE_QUARANTINE_ID, null));
-        if (retryStrategy.execute(() -> writeDurably(collectionName, collection -> collection.deleteOne(withoutQuarantineId)).getDeletedCount()) > 0) {
-            return;
-        }
-        // Read at the local read concern, so an instance whose insert is on the primary alone is still deleted
-        Query exists = Query.query(where(ID).is(sagaId));
-        exists.fields().include(ID);
-        if (retryStrategy.execute(() -> mongoOperations.findOne(primary(exists), Document.class, collectionName)) == null) {
-            return;
-        }
-        FindOneAndDeleteOptions quarantineIdOnly = new FindOneAndDeleteOptions().projection(Projections.include(FAILURE_QUARANTINE_ID));
-        inTransaction((database, status) -> {
-            Document removed = instances(database).findOneAndDelete(Filters.eq(ID, sagaId), quarantineIdOnly);
-            String quarantineId = removed == null ? null : removed.getString(FAILURE_QUARANTINE_ID);
-            if (quarantineId != null) {
-                skippedInputs(database).deleteMany(quarantineFilter(sagaId, quarantineId));
+        joiningCallersTransaction(() -> {
+            Objects.requireNonNull(sagaId, "sagaId cannot be null");
+            // An instance without a quarantine id has no skipped inputs, so it goes in a write of its own, which needs no
+            // replica set. A retry after a timed out attempt that deleted the document on the primary deletes nothing, and
+            // MongoDB still waits for a majority to have everything the primary has before it returns, that deletion included
+            Bson withoutQuarantineId = Filters.and(Filters.eq(ID, sagaId), Filters.eq(FAILURE_QUARANTINE_ID, null));
+            if (retryStrategy.execute(() -> writeDurably(collectionName, collection -> collection.deleteOne(withoutQuarantineId)).getDeletedCount()) > 0) {
+                return null;
             }
-            return true;
+            // Read at the local read concern, so an instance whose insert is on the primary alone is still deleted
+            Query exists = Query.query(where(ID).is(sagaId));
+            exists.fields().include(ID);
+            if (retryStrategy.execute(() -> mongoOperations.findOne(primary(exists), Document.class, collectionName)) == null) {
+                return null;
+            }
+            FindOneAndDeleteOptions quarantineIdOnly = new FindOneAndDeleteOptions().projection(Projections.include(FAILURE_QUARANTINE_ID));
+            inTransaction(database -> {
+                Document removed = instances(database).findOneAndDelete(Filters.eq(ID, sagaId), quarantineIdOnly);
+                String quarantineId = removed == null ? null : removed.getString(FAILURE_QUARANTINE_ID);
+                if (quarantineId != null) {
+                    skippedInputs(database).deleteMany(quarantineFilter(sagaId, quarantineId));
+                }
+                return true;
+            });
+            return null;
         });
     }
 
@@ -858,8 +930,4 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return primary(query).withReadConcern(ReadConcern.MAJORITY);
     }
 
-    // Bounded by the write timeout, as MongoDB advises for a linearizable read, which can't complete without a majority
-    private static Query linearizableRead(Query query) {
-        return primary(query).withReadConcern(ReadConcern.LINEARIZABLE).maxTime(WRITE_TIMEOUT);
-    }
 }

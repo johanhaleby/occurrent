@@ -1332,17 +1332,25 @@ failure of the transaction at once. A standalone server refuses the transaction,
 throws an `IllegalStateException` on the first attempt that says it needs a replica set and that a single-member one is
 enough. A strategy implemented another way runs its own loop and decides what it retries.
 
-Inside a Spring MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your
-transaction instead of starting their own, and the store doesn't retry them. Your commit's write concern then decides
-whether they survive a failover. The store can't read that concern, so it doesn't check it.
+Inside a MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your transaction
+instead of starting their own, and the store doesn't retry them. That is a Spring transaction run by a
+`MongoTransactionManager`, a Spring transaction of another resource in which a template with
+`SessionSynchronization.ALWAYS` has started a MongoDB transaction, or a transaction on the session of a template from
+`MongoTemplate.withSession`. Your commit's write concern then decides whether they survive a failover. The store can't
+read that concern, so it doesn't check it. When a store call fails inside your transaction, abort the transaction,
+since a commit after the failure may keep what the store wrote before it. With a `MongoTransactionManager` set to
+`SYNCHRONIZATION_NEVER`, each store call takes part in your transaction with synchronization on for the call, so it
+reads and writes in your transaction as well.
 
-In such a transaction, or one on the session of a template from `MongoTemplate.withSession`, `find` and
-`findWithoutState` read at your transaction's snapshot, which misses an instance stored after it began. When the read
-finds no instance, the store inserts a document with the saga's id and deletes it again in your transaction. An
+In such a transaction, `find` and `findWithoutState` read at your transaction's snapshot, which misses an instance
+stored after it began. When the read finds no instance, the store inserts a document that holds only the saga's id and
+deletes it again in your transaction. An
 instance another writer stored after your snapshot began makes the insert fail with a `WriteConflict` labelled
 `TransientTransactionError`. Run your transaction again on that label, as you would for any write conflict, and the next
 attempt reads the instance. An instance your transaction deleted reads as absent. The two writes leave no document
-behind when your transaction commits, and a change stream on the saga collection may see them.
+behind when your transaction commits, and a change stream on the saga collection may see them. The saga collection
+must accept a document that holds only `_id`, so a validator that requires other fields makes such a read of an absent
+instance fail.
 
 Every constructor throws an `IllegalArgumentException` for a `MongoOperations` that isn't a `MongoTemplate`, since the
 store runs its transactions on the template's `MongoDatabaseFactory`. The message says to pass the `MongoTemplate`

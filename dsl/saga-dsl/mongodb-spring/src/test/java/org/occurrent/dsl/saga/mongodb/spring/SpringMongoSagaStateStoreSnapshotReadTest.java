@@ -26,6 +26,7 @@ import com.mongodb.client.MongoClients;
 import com.mongodb.client.model.Filters;
 import com.mongodb.event.CommandListener;
 import com.mongodb.event.CommandStartedEvent;
+import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -39,9 +40,13 @@ import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
+import org.springframework.data.mongodb.SessionSynchronization;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.MongoExceptionTranslator;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -54,11 +59,14 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchException;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * Docker-based. A transaction the caller started reads from a snapshot taken when its first operation ran, so an
@@ -86,6 +94,7 @@ class SpringMongoSagaStateStoreSnapshotReadTest {
     private SpringMongoSagaStateStore<Payment> store;
     private TransactionTemplate callersTransaction;
     private final List<String> insertedIntoTheSagaCollection = new CopyOnWriteArrayList<>();
+    private final List<String> commandsInAMongoDbTransaction = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void connect() {
@@ -95,6 +104,9 @@ class SpringMongoSagaStateStoreSnapshotReadTest {
             public void commandStarted(CommandStartedEvent event) {
                 if (event.getCommandName().equals("insert") && event.getCommand().getString("insert").getValue().equals(COLLECTION)) {
                     insertedIntoTheSagaCollection.add(event.getCommand().toJson());
+                }
+                if (event.getCommand().containsKey("autocommit")) {
+                    commandsInAMongoDbTransaction.add(event.getCommandName());
                 }
             }
         }).build());
@@ -263,16 +275,80 @@ class SpringMongoSagaStateStoreSnapshotReadTest {
         assertThat(result).isEmpty();
     }
 
+    // A Spring transaction of another resource, so no MongoDB transaction starts until a template with ALWAYS operates
+    private static final class AnotherResourcesTransactionManager extends AbstractPlatformTransactionManager {
+        @Override
+        protected Object doGetTransaction() {
+            return new Object();
+        }
+
+        @Override
+        protected void doBegin(Object transaction, TransactionDefinition definition) {
+        }
+
+        @Override
+        protected void doCommit(DefaultTransactionStatus status) {
+        }
+
+        @Override
+        protected void doRollback(DefaultTransactionStatus status) {
+        }
+    }
+
+    private <T> T inAnotherResourcesTransactionWithATemplateOnAlways(BiFunction<MongoTemplate, SpringMongoSagaStateStore<Payment>, T> work) {
+        MongoTemplate always = new MongoTemplate(template.getMongoDatabaseFactory());
+        always.setWriteConcern(WriteConcern.MAJORITY);
+        always.setSessionSynchronization(SessionSynchronization.ALWAYS);
+        SpringMongoSagaStateStore<Payment> storeOnAlways = new SpringMongoSagaStateStore<>(always, COLLECTION, Payment.class, null, RetryStrategy.none());
+        return new TransactionTemplate(new AnotherResourcesTransactionManager()).execute(status -> work.apply(always, storeOnAlways));
+    }
+
+    private List<Optional<StoredSaga>> readsOfAnInstanceStoredAfterTheFirstReadInAnotherResourcesTransaction(String lateSagaId) {
+        return inAnotherResourcesTransactionWithATemplateOnAlways((always, storeOnAlways) -> {
+            assertThat(storeOnAlways.find(EXISTING)).as("the first read of the transaction").isPresent();
+            storedOutsideTheTransaction(lateSagaId);
+            return List.of(storeOnAlways.find(lateSagaId), storeOnAlways.findWithoutState(lateSagaId));
+        });
+    }
+
     @Test
-    void find_of_an_absent_instance_inside_a_transaction_without_resource_synchronization_returns_empty_and_inserts_nothing() {
-        MongoTransactionManager withoutSynchronization = new MongoTransactionManager(template.getMongoDatabaseFactory());
-        withoutSynchronization.setTransactionSynchronization(AbstractPlatformTransactionManager.SYNCHRONIZATION_NEVER);
+    void find_and_findWithoutState_find_an_instance_stored_after_the_first_read_of_a_spring_transaction_of_another_resource_when_the_template_synchronizes_always() {
         stored(EXISTING);
-        insertedIntoTheSagaCollection.clear();
 
-        Optional<StoredSaga> found = new TransactionTemplate(withoutSynchronization).execute(status -> store.find("nowhere"));
+        List<Optional<StoredSaga>> found = new java.util.ArrayList<>();
+        Throwable thrown = catchThrowable(() -> found.addAll(readsOfAnInstanceStoredAfterTheFirstReadInAnotherResourcesTransaction("late-6")));
 
-        assertThat(found).isEmpty();
-        assertThat(insertedIntoTheSagaCollection).as("insert commands sent to the saga collection").isEmpty();
+        assertAll(
+                () -> assertThat(thrown).as("what the reads threw").isNull(),
+                () -> assertThat(found).as("find and findWithoutState").hasSize(2).allSatisfy(s -> assertThat(s).isPresent())
+        );
+    }
+
+    @Test
+    void reads_in_a_spring_transaction_of_another_resource_with_a_template_that_synchronizes_always_start_no_mongodb_transaction() {
+        stored(EXISTING);
+        commandsInAMongoDbTransaction.clear();
+
+        Throwable thrown = catchThrowable(() -> readsOfAnInstanceStoredAfterTheFirstReadInAnotherResourcesTransaction("late-7"));
+
+        assertAll(
+                () -> assertThat(thrown).as("what the reads threw").isNull(),
+                () -> assertThat(commandsInAMongoDbTransaction).as("commands the reads sent inside a MongoDB transaction").isEmpty()
+        );
+    }
+
+    // A template operation has started the MongoDB transaction, so the store joins it and reads at its snapshot
+    @Test
+    void find_joins_the_mongodb_transaction_a_template_started_in_a_spring_transaction_of_another_resource_and_throws_for_an_instance_stored_after_its_snapshot() {
+        stored(EXISTING);
+
+        Exception thrown = catchException(() -> inAnotherResourcesTransactionWithATemplateOnAlways((always, storeOnAlways) -> {
+            always.findOne(new Query(), Document.class, "other");
+            assertThat(storeOnAlways.find(EXISTING)).as("the read that starts the snapshot").isPresent();
+            storedOutsideTheTransaction("late-8");
+            return storeOnAlways.find("late-8");
+        }));
+
+        assertWriteConflictForACallerThatRetries(thrown);
     }
 }

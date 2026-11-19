@@ -125,13 +125,36 @@ sees the instance and its records as one write left them.
 
 ### 4. Inside a caller's transaction, the caller's commit decides
 
-A transition called while a Spring MongoDB transaction on the same `MongoDatabaseFactory` is active joins it, since
-the store's transaction propagates as `REQUIRED`. The instance and its records then change together because they are in
-that transaction, and they are durable only as far as the commit's write concern makes them. The store doesn't retry a
-transition it joined, and a failure reaches the caller's transaction.
+The store takes its database from `MongoDatabaseUtils.getDatabase`, and picks how it reads and writes from that
+database, not from the template. It joins the caller's transaction exactly when that database is bound to a session
+with an active MongoDB transaction. That holds in three cases:
 
-Inside that transaction, or one on the session of a template from `MongoTemplate.withSession`, `find` and
-`findWithoutState` read at the transaction's snapshot, which misses an instance written after the snapshot began. A
+- a Spring transaction that synchronizes its resources, as a `MongoTransactionManager` does by default,
+- a Spring transaction of another resource in which a template with `SessionSynchronization.ALWAYS` has started a
+  MongoDB transaction,
+- a transaction on the session of a template from `MongoTemplate.withSession`.
+
+A transition that joins runs its writes in that transaction. Under a `MongoTransactionManager` the store's own
+transaction propagates as `REQUIRED` and takes part in the caller's. On a template from `withSession`, the store's
+transaction manager would start a second transaction on a new session, so the store runs the writes directly on the
+database bound to the caller's session. The instance and its records then change together because they are in that
+transaction, and they are durable only as far as the commit's write concern makes them. The store doesn't retry a
+transition it joined, and a failure reaches the caller, whose transaction should then abort. A commit after the failure
+fails under a `MongoTransactionManager`, which the store marks rollback-only, and may keep the writes made before the
+failure in the other two cases, where it can't mark the transaction.
+
+A MongoDB transaction bound to the factory while transaction synchronization is off, as a `MongoTransactionManager`
+with `SYNCHRONIZATION_NEVER` runs it, gives a database bound to no session, from `MongoDatabaseUtils` and from the
+template alike. A transition would still join it, since the store's transaction manager takes part in it and turns
+synchronization on, but `find`, `findWithoutState` and the single-document writes would run outside it. So in that case
+every call of the store runs inside the store's own transaction, which takes part in the caller's and turns
+synchronization on for the call, and every database the call takes is bound to the caller's session. A failure inside
+the call marks the caller's transaction rollback-only.
+In a Spring transaction of another resource where no MongoDB transaction has started, the store reads and writes as it
+does outside a transaction. It reads through the driver rather than the template there, since a template with
+`SessionSynchronization.ALWAYS` would start a MongoDB transaction for the read, and the read would see its snapshot.
+
+Inside a transaction the store joins, `find` and `findWithoutState` read at the transaction's snapshot, which misses an instance written after the snapshot began. A
 found instance needs nothing more, since the executor writes it back through a compare-and-set, and a write inside the
 transaction to an instance changed after its snapshot fails with a write conflict. An absence has no such write, and no
 read in the transaction can see past its snapshot. So on an absence the store inserts a document with the
@@ -147,10 +170,10 @@ saga's id and deletes it again in the same transaction, and the server decides w
 | the transaction deleted it | absent | succeeds | empty |
 
 The `WriteConflict` has the `TransientTransactionError` label, so a caller that runs its transaction again on that
-label gets a new snapshot. The two writes leave no document behind when the transaction commits. The store reads and
-writes through `MongoDatabaseUtils`, as its own transactions do, so the read and both writes share the caller's session
-whatever session synchronization the template has. In a Spring transaction that doesn't synchronize its resources,
-`MongoDatabaseUtils` binds no session, so the store reads as it does outside a transaction and writes nothing.
+label gets a new snapshot. The two writes leave no document behind when the transaction commits. The read and both
+writes go through the database the store took from `MongoDatabaseUtils`, so they share the caller's session whatever
+session synchronization the template has. The collection must accept a document that holds only `_id`, so a validator
+that requires other fields makes such a read of an absent instance fail.
 
 Two alternatives fell short. A second read outside the session can't be had on a template from `withSession`, whose
 factory binds every database it hands out to the session, and it throws on an absence the transaction made by its own
