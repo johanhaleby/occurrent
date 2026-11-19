@@ -19,6 +19,7 @@ package org.occurrent.subscription.inmemory;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.retry.AttemptNotMade;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
@@ -142,6 +143,10 @@ public class InMemorySubscription implements Subscription, Runnable {
             if (cloudEvent != null) {
                 try {
                     executeWithRetry(consumer, __ -> !shutdown, retryStrategy).accept(cloudEvent);
+                } catch (AttemptNotMade withdrawn) {
+                    // A wrapping model withdrew the event, as a catch-up model does once a cancel or shutdown has
+                    // forgotten the subscription. Nothing here stores a position or delivers it again, so the loop
+                    // goes on, and a cancel or shutdown ends it at the next round.
                 } finally {
                     // In a finally so a handler that exhausts its retries and throws cannot leave the count stuck,
                     // which would hang waitUntilAllEventsProcessed forever.

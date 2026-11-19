@@ -87,8 +87,9 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * same id after a cancel is a new subscription there, whose calls can run beside a call of the cancelled one. Since a
  * cancel doesn't wait, such a call can still be in the action when the cancel returns. This model lets a call reach
  * the action only while the subscription is still the one subscribed, and a later subscribe of the same id calls the
- * action only once every call from before the cancel has returned. What this model does over a wrapped
- * model that breaks any of these rules is unspecified.
+ * action only once every call from before the cancel has returned. A call it doesn't let through throws
+ * {@code AttemptNotMade}, and the wrapped model must not store its position past an event whose action threw. What
+ * this model does over a wrapped model that breaks any of these rules is unspecified.
  */
 @NullMarked
 public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
