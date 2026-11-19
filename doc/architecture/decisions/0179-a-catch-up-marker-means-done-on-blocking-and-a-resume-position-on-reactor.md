@@ -310,9 +310,10 @@ is written, as `BlockingHandover` does, which would let the marker move on under
 beginning, as in 0.34.0. On the reactor stack a start is one of three kinds:
 
 * No replay. `goLive()` replays nothing and sends none of these callbacks, as in 0.34.0.
-* A replay from the beginning, when the start has no marker, see "What a reactor catch-up start replays". The view
-  gets `replayStarted()`, then `replayCompleted()` or `replayAbandoned()`, and `alreadyDeliveredByReplay()` for a live
-  copy of an event the replay delivered.
+* A replay from the beginning, when the start finds no marker, or when the push model skips its marker read after a
+  failed delete, see "What a reactor catch-up start replays". The view gets `replayStarted()`, then
+  `replayCompleted()` or `replayAbandoned()`, and `alreadyDeliveredByReplay()` for a live copy of an event the replay
+  delivered.
 * A replay after a stored position. Its events reach the view the way live events do, and none of these callbacks is
   sent.
 
