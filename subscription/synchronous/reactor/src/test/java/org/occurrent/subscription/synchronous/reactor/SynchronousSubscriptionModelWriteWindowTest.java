@@ -159,8 +159,10 @@ class SynchronousSubscriptionModelWriteWindowTest {
 
         write.get().then(Mono.fromRunnable(chained.run(() -> model.pauseSubscription("p")))).subscribe(ignored -> {
         }, chained.failure::set);
+        writesMayComplete.countDown();
 
         chained.awaitReturned("the pause chained after the write");
+        chained.assertRanOffTheSubscriber();
         assertThat(chained.failure).as("[error of the write]").hasValue(null);
         assertThat(model.isPaused("p")).as("paused once the pause returned").isTrue();
     }
@@ -170,8 +172,10 @@ class SynchronousSubscriptionModelWriteWindowTest {
 
         write.get().flatMap(result -> Mono.fromRunnable(chained.run(() -> model.pauseSubscription("p")))).subscribe(ignored -> {
         }, chained.failure::set);
+        writesMayComplete.countDown();
 
         chained.awaitReturned("the pause made from the result");
+        chained.assertRanOffTheSubscriber();
         assertThat(chained.failure).as("[error of the write]").hasValue(null);
         assertThat(model.isPaused("p")).as("paused once the pause returned").isTrue();
     }
@@ -180,7 +184,9 @@ class SynchronousSubscriptionModelWriteWindowTest {
         Chained chained = new Chained();
         write.get().then(Mono.fromRunnable(chained.run(model::stop))).subscribe(ignored -> {
         }, chained.failure::set);
+        writesMayComplete.countDown();
         chained.awaitReturned("the stop chained after the write");
+        chained.assertRanOffTheSubscriber();
         assertThat(chained.failure).as("[error of the write]").hasValue(null);
         assertThat(model.isRunning()).as("running once the stop returned").isFalse();
         subscribeHandler("p", Filter.type("NameDefined"));
@@ -372,6 +378,7 @@ class SynchronousSubscriptionModelWriteWindowTest {
     private static final class Chained {
         final CountDownLatch returned = new CountDownLatch(1);
         final AtomicReference<Thread> thread = new AtomicReference<>();
+        final Thread subscriber = Thread.currentThread();
         final AtomicReference<Throwable> failure = new AtomicReference<>();
 
         Runnable run(Runnable action) {
@@ -388,6 +395,10 @@ class SynchronousSubscriptionModelWriteWindowTest {
                 thread.get().interrupt();
             }
             assertThat(done).as(what + " returned").isTrue();
+        }
+
+        void assertRanOffTheSubscriber() {
+            assertThat(thread.get()).as("[thread the chained action ran on, not the one that subscribed and owns the window]").isNotSameAs(subscriber);
         }
     }
 
@@ -408,6 +419,19 @@ class SynchronousSubscriptionModelWriteWindowTest {
         return true;
     }
 
+    // Held until the test has subscribed, so the future completes after Mono.fromFuture installed its handler and the result
+    // is emitted on the pool thread and never inline on the thread that subscribed and owns the window
+    private final CountDownLatch writesMayComplete = new CountDownLatch(1);
+
+    private void awaitSubscribed() {
+        try {
+            assertThat(writesMayComplete.await(WAIT_SECONDS, TimeUnit.SECONDS)).as("the test subscribed").isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
     // Completes a write on a thread of the test's own executor when asked to, which is not a Reactor thread and is not
     // the thread that subscribed
     private final class ProgrammableEventStore implements EventStore {
@@ -417,6 +441,7 @@ class SynchronousSubscriptionModelWriteWindowTest {
 
         void completeWritesOnPlainThreads(Runnable beforeCompleting) {
             onWrite = write -> Mono.fromFuture(CompletableFuture.supplyAsync(() -> {
+                awaitSubscribed();
                 beforeCompleting.run();
                 return write.block();
             }, plainThreads));
@@ -485,6 +510,7 @@ class SynchronousSubscriptionModelWriteWindowTest {
 
         void completeWritesOnPlainThreads(Runnable beforeCompleting) {
             onAppend = append -> Mono.fromFuture(CompletableFuture.supplyAsync(() -> {
+                awaitSubscribed();
                 beforeCompleting.run();
                 return append.block();
             }, plainThreads));
