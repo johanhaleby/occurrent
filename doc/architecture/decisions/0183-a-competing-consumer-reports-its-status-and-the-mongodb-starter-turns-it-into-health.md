@@ -34,10 +34,13 @@ has the subscriber id, a state and an optional failure with the time the failure
 
 A call to the lease strategy or the wrapped model that throws, and that the model tries again, records the failure. The
 failure stays, with the time of the first one, until a try brings the subscription to the state it should be in.
-`competingConsumerStatuses()` lists the status of every id `competingConsumerStatus` answers for as the call begins, one a
-subscribe is still making included. It gathers the ids under the monitor the status is read under, and a give-up records the
-given-up status and forgets the subscription in one step under it, so the id of a subscription given up meanwhile is
-never missed.
+`competingConsumerStatuses()` lists the status of every id that `competingConsumerStatus` answers for both when the call
+gathers the ids and when it reads that id's status, one a subscribe is still making included. It gathers the ids under
+the monitor the status is read under, and a give-up records the given-up status and forgets the subscription in one step
+under it, so a subscription given up during the call is always in the list. One that is cancelled, shut down, or
+replaced by a subscription that doesn't compete during the call can be missing from it. Reading every status under the
+monitor would keep such an id, and would report a subscription cancelled during the call as `LEASE_HELD` or `STANDBY`,
+which is worse for a health endpoint than a missing id.
 
 A given-up subscription is kept in a map keyed by subscription id, since the model has forgotten everything else about
 it. A subscribe with the same id removes it, and so do a cancel of that id and a shutdown.

@@ -2064,10 +2064,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     /**
-     * The {@link #competingConsumerStatus(String) status} of every subscription that method answers for as this call
-     * begins, ordered by subscription id. That is every competing subscription this model knows, one that a subscribe is
-     * still making included, and every one it has {@link CompetingConsumerStatus.State#GIVEN_UP given up}. Empty once
-     * this model is shut down.
+     * The {@link #competingConsumerStatus(String) status} of every subscription that method answers for both when this
+     * call gathers the ids and when it reads that subscription's status, ordered by subscription id. That is every
+     * competing subscription this model knows, one that a subscribe is still making included, and every one it has
+     * {@link CompetingConsumerStatus.State#GIVEN_UP given up}. A subscription given up during the call is always in the
+     * list. One that is cancelled, shut down, or replaced by a subscription that doesn't compete during the call can be
+     * missing from it. Empty once this model is shut down.
      * <p>
      * Each status is what this model saw while the call ran. A change made during the call, such as a give-up that frees
      * an id, can make one out of date by the time the call returns.
@@ -2076,8 +2078,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      */
     public List<CompetingConsumerStatus> competingConsumerStatuses() {
         Set<String> ids = new TreeSet<>();
-        // Gathered under the monitor competingConsumerStatus reads under, from each map it answers from, so every id it
-        // answers for at that moment is listed, one a subscribe is still making too
+        // Gathered under the monitor competingConsumerStatus reads under, from each map it answers from, so the gather
+        // takes every id it answers for at that moment, one a subscribe is still making too. A give-up moves an id
+        // between the maps in one step under the monitor. An id that a cancel, a shutdown or a subscription that doesn't
+        // compete removes before its status is read is not listed.
         synchronized (this) {
             if (shutDown) {
                 return List.of();
