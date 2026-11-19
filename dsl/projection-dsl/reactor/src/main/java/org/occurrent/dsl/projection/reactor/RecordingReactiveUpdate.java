@@ -188,8 +188,8 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
         }
         // The history read is over even though it was cut short, and a pull feed goes on delivering live events to
         // this same fold afterwards, which are applied and are recorded. The clear the replay owed stays owed.
-        // A subscription model sends nothing here instead, since a stopped catch-up delivers nothing more until a
-        // new one announces itself.
+        // A subscription model has no such call. It either lets the next catchupStarted of the id supersede the episode
+        // or, as the reactor push model does, sends historyRead for it before the next catch-up replays.
         Object started = feedEpisode.getAndSet(null);
         if (started != null) {
             recording.historyAbandoned(started);

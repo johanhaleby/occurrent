@@ -9,7 +9,9 @@ Accepted. Part of [#1257](https://github.com/johanhaleby/occurrent/issues/1257).
 reclaimed, and [ADR 146](0146-a-catch-up-takes-over-a-live-start-the-wrapped-model-loses-as-it-opens.md), whose
 takeover resume fails when the wrapped model holds the subscription paused again. Applies to the blocking and reactor
 catch-up models, to `ManualStartSubscriptionModel` when it wraps one, and to the two handover engines,
-`BlockingHandover` and `ReactiveHandover`, with the push models and projection feeds built on them.
+`BlockingHandover` and `ReactiveHandover`, with the push models and projection feeds built on them. The order of the
+reactor catch-up marker is amended by
+[ADR 179](0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md).
 
 ## Context
 
@@ -206,18 +208,29 @@ The calls are `catchUp`, the three accept calls (`accept`, `acceptReportingDeliv
 `stopIfNotCatchingUp`, the stop and cancel calls of the models and feeds built on the engine, a feed's `register`, a
 registrar's `close()`, and the reset [#1291](https://github.com/johanhaleby/occurrent/issues/1291) asks for.
 
-The catch-up marker is written in this order on both stacks:
+The catch-up marker is written in this order on the blocking stack:
 
-1. Read the marker, and skip the replay when it's there.
+1. Read the marker, and skip the replay when it is there.
 2. Replay the history.
 3. Deliver the payloads buffered during the replay.
 4. Write the marker.
 
-`ReactiveHandover` writes the marker before step 3 today
-([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 31). A stop or cancel that takes effect before step 4
-means no marker is written and the catch-up ends as stopped, not as done (#1293 item 32). A failure is permanent, and
-on `ReactiveHandover` it also forgets the marker. Keeping a late store write from bringing the marker back after that is
-[#1150](https://github.com/johanhaleby/occurrent/issues/1150)'s.
+On the reactor stack `ReactiveHandover` asks its source for the marker, and ADR 179's "What a reactor catch-up start
+replays" says what a start then replays. When the handover writes the marker, it writes it between steps 2 and 3.
+[ADR 179](0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md) keeps that write where
+it is on purpose, since the broker delivers again a live event of its own that step 3 did not deliver. An event the
+handler's own code fed back, on the handler's thread or composed into the `Mono` the handler returns, can have no
+broker copy, so the handover does not write the marker while such an event waits in the buffer and the replay did not
+deliver it, as ADR 179's "Fed-back events on the reactor stack" says. An event another thread feeds after the handler
+has returned is not the handler's own code. The handover takes it like any other live event, and the code that fed it
+has to deliver it again when that delivery fails. ADR 179 says what a feed that runs on more than one replica needs.
+[#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 31, which would move the reactor write after step
+3, no longer applies to the reactor stack. A stop or cancel that takes effect before the marker write means no marker
+is written and the catch-up ends as stopped, not as done (#1293 item 32). A failure that starts the
+handover failing is permanent, and `ReactiveHandover` then asks the source to delete the marker, as ADR 179's
+"Fed-back events on the reactor stack" lists. A failed delivery that only fails the answer a caller waits for does
+neither. A marker write that the store applies after that delete is
+[#1150](https://github.com/johanhaleby/occurrent/issues/1150), and ADR 179 decides it.
 
 Every accepted payload gets an answer. The replay turn, which lets one catch-up at a time replay on an engine, is
 given back on every path. That includes a JVM-fatal error

@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.BoundedIdCache;
+import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
@@ -50,8 +51,9 @@ import java.util.function.Supplier;
 
 /**
  * The shared reactive catch-up-then-live coordination: the replay is folded to completion, then the payloads the
- * replay fed, then the catch-up-complete marker is recorded, then the live feed is delivered. Live payloads arriving
- * during the replay are buffered in a bounded unicast sink, and the replay-to-live overlap is de-duplicated by an id
+ * replay fed, then the catch-up marker is recorded, then the live feed is delivered. The marker is not recorded while
+ * a payload this engine's own code fed waits unfolded for the live feed, see {@link #catchUp(Source)}. Live payloads
+ * arriving during the replay are buffered in a bounded unicast sink, and the replay-to-live overlap is de-duplicated by an id
  * extracted from the payload. Each phase folds one payload at a time and the phases run one after another, so the
  * de-dup cache is only ever touched by one thread at a time. That is ordering, not visibility: an asynchronous fold completes on whichever
  * thread ran it, so {@code BoundedIdCache} is synchronized and must stay that way. Extracted from (and mirrors exactly) the reactor projection
@@ -71,9 +73,9 @@ import java.util.function.Supplier;
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
  * <p>
  * <strong>This engine's ordering differs from the blocking one on purpose</strong>: here, the catch-up-complete
- * {@link Mono} returned by {@link #catchUp(Source)} completes, and the marker is persisted, <em>before</em> the
- * buffered live payloads are folded, because the returned {@code Mono} completes once the marker phase is done rather
- * than at the end of the live stream. It does <em>not</em> complete before the replayed payloads are folded: the marker
+ * {@link Mono} returned by {@link #catchUp(Source)} completes, and the marker, when it is written, is persisted,
+ * <em>before</em> the buffered live payloads are folded, because the returned {@code Mono} completes once the marker
+ * phase is done rather than at the end of the live stream. It does <em>not</em> complete before the replayed payloads are folded: the marker
  * phase starts only after the replay phase has finished folding. Called from this engine's own code, it emits
  * {@code true} before the replay has run, see {@link #catchUp(Source)}. The blocking engine's
  * {@code BlockingHandover.catchUp} returns only <em>after</em> the buffered live
@@ -96,13 +98,25 @@ public final class ReactiveHandover<T, K> {
      * record that the catch-up completed.
      */
     public interface Source<T> {
-        /** Whether a prior catch-up already completed, so this one should skip straight to going live. */
+        /**
+         * Whether this catch-up skips its replay and goes straight to live. Subscribed when the catch-up is asked for,
+         * and again once its turn to replay has come when another catch-up went live in between, both before
+         * {@link #replayStarted()} and {@link #replay()}. So a source that replays after a stored position reads what
+         * is stored when its turn comes. Only the first answer decides the skip. The second read is there for the
+         * position it stores, and its answer is ignored.
+         */
         Mono<Boolean> isAlreadyCaughtUp();
 
-        /** The history to replay, in position order, from the beginning. */
+        /** The history to replay, in position order. */
         Flux<T> replay();
 
-        /** Record that the catch-up completed. */
+        /**
+         * Record that the catch-up completed. Subscribed after the replay and before the buffered live payloads are
+         * drained. A source that stores a resume position stores the head it read before the replay, not one read
+         * here.
+         * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md">ADR 179</a>'s
+         * "What a reactor catch-up start replays" says what a start reads and replays.
+         */
         Mono<Void> markCaughtUp();
 
         /**
@@ -110,7 +124,7 @@ public final class ReactiveHandover<T, K> {
          * stop one already in flight, because the model was stopped or is shutting down.
          * <p>
          * A stop is not a failure. {@link #markCaughtUp()} is not called and no terminal error is recorded, so the
-         * next catch-up replays the whole history and the handover stays usable.
+         * handover stays usable.
          * <p>
          * What the stop does with the live payloads depends on where the handover stood when the replay started. One
          * that had not gone live drains nothing and does not go live. The payloads it held and those arriving after
@@ -125,8 +139,10 @@ public final class ReactiveHandover<T, K> {
 
         /**
          * The replay is about to start delivering events. Called once, before the first {@link #replay()} item is
-         * folded, and only when a replay actually runs (not on a restart that skips straight to
-         * {@link #isAlreadyCaughtUp()}). The default does nothing, so a source with no replay-aware view pays nothing
+         * folded, and only when a replay actually runs, not when the first answer of {@link #isAlreadyCaughtUp()} is
+         * {@code true}. It runs after the last read of {@link #isAlreadyCaughtUp()}, so a source can tell from that
+         * read where the replay starts.
+         * The default does nothing, so a source with no replay-aware view pays nothing
          * for this hook (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0110-a-replay-tells-the-view-where-it-begins-and-ends.md">ADR 110</a>).
          */
         default void replayStarted() {
@@ -211,11 +227,12 @@ public final class ReactiveHandover<T, K> {
         }
 
         /**
-         * Undo {@link #markCaughtUp()}, so the next catch-up replays the history rather than skipping it. Called when
-         * this handover starts failing, on the source whose catch-up delivers live and on the source whose catch-up
-         * failed, see {@link ReactiveHandover#acceptReportingDelivery(Object)}, and on a source that wrote its marker
-         * while this handover started failing. A payload whose caller was told it was taken in can have failed, and a
-         * replay is the only thing left that can deliver it again. Awaited before this handover refuses anything for
+         * Delete what {@link #markCaughtUp()} stored, so a later catch-up that finds no marker replays from the
+         * beginning. Called when this handover starts failing, on the source whose catch-up delivers live and
+         * on the source whose catch-up failed, see {@link ReactiveHandover#acceptReportingDelivery(Object)}, and on a
+         * source that wrote its marker while this handover started failing. A payload whose caller was told it was
+         * taken in can have failed, and a replay from the beginning is the only thing left that can deliver it again
+         * when it sits at or below the stored marker. Awaited before this handover refuses anything for
          * that failure. An error signal from the returned {@link Mono} is retried 3 times and then logged, and the
          * handover goes on failing with the marker still in place. The default emits nothing.
          */
@@ -288,6 +305,10 @@ public final class ReactiveHandover<T, K> {
     // when a replay starts rather than by every catchUp(Source), so a catch-up that replays nothing leaves it in
     // place, and cleared with replayedIds when a replay is abandoned.
     private final AtomicReference<@Nullable Source<T>> replaySource = new AtomicReference<>();
+    // Payloads fed from code this handover runs, with their de-dup keys, from when they are queued for the live sink
+    // until their delivery ends. A catch-up does not store its marker while one of them is queued and its replay did
+    // not deliver it, see unfoldedOwnCodePayloadQueued().
+    private final java.util.Map<LiveAck, K> fedByOwnCodeInLiveSink = new ConcurrentHashMap<>();
     // The live sink accepts one subscriber ever. A catch-up on a handover that is already live, a feed's goLive()
     // after its catchUp(), leaves the running pipeline alone instead of subscribing again, which the sink would
     // refuse and the error handler would record as a failed catch-up.
@@ -600,10 +621,9 @@ public final class ReactiveHandover<T, K> {
      * A payload fed from a replayed fold, or from {@link Source#replayStarted()}, {@link Source#replayCompleted()} or
      * {@link Source#historyDone()} of a catch-up that replays, is folded after {@link Source#historyDone()} and before
      * the catch-up writes its marker, and so is every payload fed from its fold in turn. When one of them fails or is
-     * refused, the rest are still folded, and then that catch-up fails, so the marker is not written and the next
-     * catch-up replays the history that fed it. A replay that is stopped or fails leaves them to the live sink. One
-     * offered there and subscribed only once the catch-up has folded them goes to the live sink too, and is folded
-     * after the marker.
+     * refused, the rest are still folded, and then that catch-up fails and writes no marker. A replay that is stopped
+     * or fails leaves them to the live sink. One offered there and subscribed only once the catch-up has folded them
+     * goes to the live sink too, and is folded after the marker.
      * <p>
      * A payload fed from {@link Source#alreadyDeliveredByReplay(Object)} counts as fed from the fold of the payload it
      * was called for, so one called for a live payload from other code holds back that payload's answer. Nobody waits,
@@ -617,10 +637,11 @@ public final class ReactiveHandover<T, K> {
      * taken in and every payload its own code feeds it meanwhile, and once none is left fails for good with that
      * failure. A failed catch-up also answers each
      * payload from other code still waiting with its failure, and does not deliver those. Each payload answered
-     * {@code true} gets its delivery attempt. Once the marker is gone, the next catch-up replays the history. An
-     * attempt to forget that takes longer than 5 seconds counts as failed. A forget that still fails after 3 retries
-     * is logged, and the marker then has to be deleted before the next catch-up. A payload that no replay can bring
-     * back and nobody waits for is lost when its delivery fails, or when the process stops before it is delivered.
+     * {@code true} gets its delivery attempt. A catch-up that finds no marker replays from the beginning. An attempt to
+     * forget that takes longer than 5 seconds counts as failed. A forget that still fails after 3 retries is logged,
+     * and the marker can stay stored. ADR 179's "What a reactor catch-up start replays" says what a start replays then.
+     * A payload that no replay can bring back and nobody waits for is lost when its delivery fails, or when the process
+     * stops before it is delivered.
      *
      * @return A {@link Mono} that completes with {@code true} once the payload has been folded, live or by the drain,
      *         and every payload its fold fed with it, including a de-duplicated repeat of an already-delivered
@@ -911,6 +932,7 @@ public final class ReactiveHandover<T, K> {
                 liveBacklog.incrementAndGet();
                 Item<K> stamped = item.withTurn(admitted.incrementAndGet());
                 ack.admittedAs(stamped.turn());
+                registerIfFedByOwnCode(ack, stamped);
                 pendingOffers.add(new PendingOffer<>(stamped, ack, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
             }
         }
@@ -1013,10 +1035,38 @@ public final class ReactiveHandover<T, K> {
         }
     }
 
+    private void registerIfFedByOwnCode(LiveAck ack, Item<K> stamped) {
+        if (ack.answeredOnceQueued) {
+            fedByOwnCodeInLiveSink.put(ack, stamped.dedupKey());
+        }
+    }
+
+    // Whether a payload fed from code this handover runs is queued for the live sink and was not delivered by the
+    // replay that just ran. Its event can sit at or below the head that replay read without the replay having read it,
+    // when the write that stored it committed after the replay passed its position. If it is never folded, a start that
+    // reads that head skips it, so the marker waits (ADR 179's "Fed-back events on the reactor stack"). That holds
+    // whether or not the payload whose fold fed it waits for it, since that payload's answer can have gone out before
+    // this one is delivered. A payload the replay delivered was folded before the marker, whatever happens to its live
+    // copy. One a stop dropped is never delivered, so it no longer counts.
+    private boolean unfoldedOwnCodePayloadQueued() {
+        fedByOwnCodeInLiveSink.keySet().removeIf(LiveAck::dropped);
+        for (K key : fedByOwnCodeInLiveSink.values()) {
+            if (!replayedIds.contains(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // The bookkeeping deliver(..) does in its doFinally, for a payload that never reaches it. Without it a drain that
     // counted the payload never reaches zero, so its source is never told its buffer drained and its replay turn is
-    // never given back, which parks every later replay.
+    // never given back, which parks every later replay. Left in fedByOwnCodeInLiveSink, the payload would also hold
+    // back the marker of a later catch-up whose replay does not deliver it.
     private void dropFromBacklogAndDrains(Item<K> item) {
+        LiveAck ack = item.ack();
+        if (ack != null) {
+            fedByOwnCodeInLiveSink.remove(ack);
+        }
         if (!settledHere(item)) {
             return;
         }
@@ -1161,13 +1211,19 @@ public final class ReactiveHandover<T, K> {
     }
 
     /**
-     * Run the one-time catch-up: replay the source's history, record the completion marker, then start delivering the
-     * live feed. The returned {@link Mono} completes when the replay and marker are done (see the class javadoc for
-     * how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
+     * Run the catch-up. It replays the source's history, then starts delivering the live feed. Whether it records the
+     * catch-up marker is below. The returned {@link Mono} completes when the replay and marker are done (see the class
+     * javadoc for how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
      * {@code false} when {@link Source#keepReplaying()} stopped it partway. A failure errors it instead, and so does a
      * call while this handover is failing, see {@link #acceptReportingDelivery(Object)}, without replaying or writing
      * the marker. Called from code this handover is running, it emits {@code true} without waiting for the replay, see
      * below.
+     * <p>
+     * The catch-up does not call {@link Source#markCaughtUp()} while a payload that code this handover runs fed is held
+     * back for the live feed and was not delivered by its replay, so it does not replace the marker stored before. A
+     * fold that feeds a payload whenever it folds a live event can, under steady live traffic, keep this true at every
+     * catch-up of this handover, and its marker then stays where an earlier catch-up stored it. ADR 179's "What a
+     * reactor catch-up start replays" says what a start replays then.
      * <p>
      * A replay waits for a live payload still being delivered and then holds the live payloads back until it ends,
      * which matters on a handover that is already live, a feed's {@code catchUp()} after its {@code goLive()}. They are
@@ -1185,12 +1241,11 @@ public final class ReactiveHandover<T, K> {
      * code returns, and it can still be stopped, or refused because another catch-up on this handover failed. Neither
      * is reported to that code. Once it runs, it replays like any other catch-up, holding live payloads back until it
      * ends, and a failure of it starts this handover failing like any failed catch-up. It replays nothing and writes no
-     * marker when a replay that started after the call has gone live by then, since this handover takes every catch-up
-     * to replay the same history. So calls that code makes before a replay starts are all answered by that one replay
-     * once it goes live. Code that calls this for a
-     * payload asks for another catch-up each time a replay delivers that payload again, and each of those catch-ups
-     * whose {@link Source#isAlreadyCaughtUp()} answers {@code false} replays again. With a source that always answers
-     * {@code false}, the replays do not end. That code is a fold, live or replayed, {@link Source#alreadyDeliveredByReplay(Object)},
+     * marker when a replay that started after the call has gone live by then. So calls that code makes before a replay
+     * starts are all answered by that one replay once it goes live. Code that calls this for a payload asks for another
+     * catch-up each time a replay delivers that payload again, so with a source that replays the whole history each
+     * time, the replays do not end. ADR 179's "What a reactor catch-up start replays" says what a reactor source
+     * replays. That code is a fold, live or replayed, {@link Source#alreadyDeliveredByReplay(Object)},
      * {@link Source#replayStarted()}, {@link Source#replayCompleted()}, {@link Source#replayAbandoned()},
      * {@link Source#historyDone()} and {@link Source#liveDrained()}. This handover
      * recognizes the call when that code subscribes the returned {@code Mono} on the thread this handover called it on,
@@ -1243,8 +1298,10 @@ public final class ReactiveHandover<T, K> {
     private Mono<Boolean> startCountedCatchUp(Source<T> source, Throwable failedForGoodBefore, AtomicBoolean counted) {
         Sinks.One<Boolean> catchupDone = Sinks.one();
 
-        // Evaluate the marker once and reuse it, so the replay and the "record marker" step agree, and the marker is
-        // written only when the replay actually ran (not on a restart that skips it).
+        // Taken before the read below, so a catch-up that goes live after it is known and the marker is read again
+        long goneLiveWhenAsked = latestReplayGoneLive.get();
+        // Read once when the catch-up is asked and reused, so the replay and the marker write agree, and the marker is
+        // written only when the replay ran. Read again only on this catch-up's turn, below.
         Mono<Boolean> alreadyDone = source.isAlreadyCaughtUp().cache();
         // Tracks whether replayStarted() ran and replayCompleted() has not yet closed it out, so the error handler
         // below knows whether there is a replay lifecycle left open to abandon, rather than calling replayAbandoned()
@@ -1288,7 +1345,7 @@ public final class ReactiveHandover<T, K> {
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
         // the next sibling while the folds are still running. That wrote the marker mid-replay for an asynchronous
-        // fold, and since the marker makes a restart skip the replay, the unfolded events were lost with no error.
+        // fold, and since a start that reads the marker resumes after it, the unfolded events were lost with no error.
         Mono<Void> replayFolded = alreadyDone.flatMap(done -> {
             if (done) {
                 // Waits for a replay already holding live delivery back, so this call does not report the handover
@@ -1319,7 +1376,13 @@ public final class ReactiveHandover<T, K> {
                         answeredByAnotherReplay.set(true);
                         return Mono.<Void>empty();
                     }
-                    return pauseLiveDelivery(pause);
+                    if (latestReplayGoneLive.get() == goneLiveWhenAsked) {
+                        return pauseLiveDelivery(pause);
+                    }
+                    // A catch-up went live after this one read the marker, so the stored marker can be newer than
+                    // the one read. Read again, so this replay starts from what is stored now. Only the position the
+                    // read stores in the source matters here, not its answer.
+                    return source.isAlreadyCaughtUp().then(Mono.defer(() -> pauseLiveDelivery(pause)));
                 }
                 refusedForAnotherFailure.set(true);
                 return Mono.<Void>error(refusal(failed));
@@ -1357,9 +1420,10 @@ public final class ReactiveHandover<T, K> {
             }));
         });
         // This handover can start failing while this catch-up replays, and a marker written after the failure forgot
-        // it makes the next catch-up skip the replay that delivers the failed payload again. So the marker is not
-        // written once the failure has started, and is forgotten again when the failure started while it was being
-        // written, since the failure's own forget can have run first. A failure marks its start before it forgets.
+        // it can make a later catch-up resume after it, so a failed payload at or below it is not delivered again. So
+        // the marker is not written once the failure has started, and is forgotten again when the failure started
+        // while it was being written, since the failure's own forget can have run first. A failure marks its start
+        // before it forgets.
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> {
             if (done || answeredByAnotherReplay.get()) {
                 return Mono.<Void>empty();
@@ -1368,6 +1432,12 @@ public final class ReactiveHandover<T, K> {
             if (before != null && before != failureBeforeWaiting) {
                 refusedForAnotherFailure.set(true);
                 return Mono.<Void>error(refusal(before));
+            }
+            // The marker already stored stays, see ADR 179's "What a reactor catch-up start replays". Live delivery is
+            // held back until after this point, and no fold of this handover runs while this is checked and the marker
+            // is written, so no payload fed from its own code reaches the sink then.
+            if (unfoldedOwnCodePayloadQueued()) {
+                return Mono.<Void>empty();
             }
             markerMayBeWritten.set(true);
             return source.markCaughtUp().then(Mono.defer(() -> {
@@ -1421,13 +1491,13 @@ public final class ReactiveHandover<T, K> {
                     // and lets this drain deliver the payloads it is about to deliver.
                     catchUpEnded(counted);
                     latestReplayGoneLive.accumulateAndGet(replayNumber.get(), Math::max);
-                    // Held here until the marker is written, not from the end of the replay, so a payload a handover
+                    // Held here until the marker step ends, not from the end of the replay, so a payload a handover
                     // that was already live held back is never delivered and acknowledged while a phase that can still
                     // fail is running. A failure fails its acknowledgement instead, and its caller offers it again.
                     resumeLiveDelivery(pause);
                     // An empty buffer has nothing to deliver, so its drain is over the moment the handover is.
                     // Signalled here rather than beside historyDone, so a listener that frees the id on this cannot
-                    // do it while the marker is still unwritten. A buffer with anything in it reaches liveDrained
+                    // do it before the marker step ends. A buffer with anything in it reaches liveDrained
                     // from the last delivery instead, which also runs after this point.
                     boolean nothingBuffered;
                     Drain<T> drain = myDrain.get();
@@ -1650,6 +1720,10 @@ public final class ReactiveHandover<T, K> {
     private Mono<Void> deliver(Item<K> item, Object replayOwner) {
         Mono<Void> delivery = item.ack() == null ? deliverItem(item, replayOwner) : deliverWhenNoReplayRuns(item);
         return delivery.doFinally(signal -> {
+            LiveAck ack = item.ack();
+            if (ack != null) {
+                fedByOwnCodeInLiveSink.remove(ack);
+            }
             if (!settledHere(item)) {
                 return;
             }
@@ -1669,8 +1743,7 @@ public final class ReactiveHandover<T, K> {
 
     // Folds what the folds of a replay fed, and what those folds feed in turn, one at a time while the replay still
     // holds live delivery back. Each one is folded even after an earlier one failed, since its caller was told it was
-    // taken in. The first failure, or the first refusal of one, then fails the catch-up, so the marker is not written
-    // and the next catch-up replays the payload whose fold fed the one that failed.
+    // taken in. The first failure, or the first refusal of one, then fails the catch-up, so the marker is not written.
     private Mono<Void> foldFedByReplay(ReplayFeed feed) {
         return Mono.defer(() -> {
                     FedByReplay next = feed.next();
@@ -1735,6 +1808,7 @@ public final class ReactiveHandover<T, K> {
                 Item<K> stamped = ((Item<K>) fed.item()).withTurn(admitted.incrementAndGet());
                 LiveAck ack = Objects.requireNonNull(stamped.ack());
                 ack.admittedAs(stamped.turn());
+                registerIfFedByOwnCode(ack, stamped);
                 pendingOffers.add(new PendingOffer<>(stamped, ack, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
             }
         }
@@ -2019,22 +2093,22 @@ public final class ReactiveHandover<T, K> {
     }
 
     // Only one payload is delivered at a time, so no second failure of a queued payload can arrive while the first is
-    // forgetting the marker. The marker is forgotten before anything is refused, so a caller that sees the refusal and
-    // subscribes again finds it gone.
+    // forgetting the marker. The marker is forgotten before anything is refused, so the forget has run before any
+    // caller sees the refusal.
     private Mono<Void> failingFrom(K dedupKey, Throwable error) {
         Failing cause = new Failing(error, true);
         if (!failureStarted.compareAndSet(null, cause)) {
             log.error("A payload of this {} with de-dup key {} failed to be delivered while it was delivering what it "
-                    + "had taken in before failing for good. Its caller was told it was taken in, and the replay of the "
-                    + "next catch-up delivers it again if the history holds it. The rest is still delivered.",
+                    + "had taken in before failing for good. Its caller was told it was taken in. The rest is still "
+                    + "delivered.",
                     noun, dedupKey, error);
             return Mono.empty();
         }
         log.error("A payload of this {} with de-dup key {} failed to be delivered after its caller was told it was taken "
                 + "in. The {} refuses every other event from now on, delivers what it has already taken in, and then "
                 + "fails for good. Fix the cause, then replace it, a subscription by cancelling it and subscribing "
-                + "again, a projection feed by building a new one. Its catch-up replays the history once the catch-up "
-                + "marker is gone.", noun, dedupKey, noun, error);
+                + "again, a projection feed by building a new one. Only a replacement under a new id is sure to replay "
+                + "from the beginning, see the \"Cancel\" section of ADR 179.", noun, dedupKey, noun, error);
         Source<T> source = liveSource.get();
         return forgetCaughtUp(source == null ? List.of() : List.of(source))
                 .then(Mono.fromRunnable(() -> {
@@ -2093,10 +2167,21 @@ public final class ReactiveHandover<T, K> {
             });
             return;
         }
-        log.error("A catch-up of this {} failed. The {} refuses every event that does not come from its own handler "
-                + "from now on, delivers the events its handler fed it, and then fails for good. Fix the cause, then "
-                + "replace it, a subscription by cancelling it and subscribing again, a projection feed by building a "
-                + "new one. Its catch-up replays the history once the catch-up marker is gone.", noun, noun, error);
+        if (CatchupMarkers.refusedANonMarker(error)) {
+            // Advises against the cancel the other message suggests, since a cancel deletes what is stored under
+            // the id, and here that is another component's checkpoint
+            log.error("A catch-up of this {} failed, since the checkpoint stored under its id is not a catch-up "
+                    + "marker. The {} refuses every event that does not come from its own handler from now on, "
+                    + "delivers the events its handler fed it, and then fails for good. Replace it with one under a new "
+                    + "id. Cancelling a subscription deletes the checkpoint stored under its id, so cancel it only when "
+                    + "nothing else uses that checkpoint.", noun, noun, error);
+        } else {
+            log.error("A catch-up of this {} failed. The {} refuses every event that does not come from its own handler "
+                    + "from now on, delivers the events its handler fed it, and then fails for good. Fix the cause, then "
+                    + "replace it, a subscription by cancelling it and subscribing again, a projection feed by building a "
+                    + "new one. Only a replacement under a new id is sure to replay from the beginning, see the "
+                    + "\"Cancel\" section of ADR 179.", noun, noun, error);
+        }
         Source<T> live = liveSource.get();
         List<Source<T>> sources = live == null || live == source ? List.of(source) : List.of(source, live);
         // The pause and the replay turn stay held until this handover is failing, so a catch-up waiting for either
@@ -2113,7 +2198,7 @@ public final class ReactiveHandover<T, K> {
                 long undelivered = liveBacklog.get();
                 if (undelivered > 0) {
                     log.error("The pipeline delivering live events of this {} ended, and {} events it had taken in "
-                            + "were not delivered. The replay of the next catch-up delivers each one the history holds.",
+                            + "were not delivered. A catch-up from the beginning delivers each one the history holds.",
                             noun, undelivered);
                 }
                 failedForGood();
@@ -2156,7 +2241,7 @@ public final class ReactiveHandover<T, K> {
                 }, error -> {
                     if (error != FailedForGood.INSTANCE) {
                         log.error("The pipeline delivering what this {} had taken in before failing for good ended "
-                                + "with an error. What it still held was not delivered. The replay of the next catch-up "
+                                + "with an error. What it still held was not delivered. A catch-up from the beginning "
                                 + "delivers each one the history holds.", noun, error);
                         failedForGood();
                     }
@@ -2202,18 +2287,21 @@ public final class ReactiveHandover<T, K> {
         failedForGood.tryEmitError(FailedForGood.INSTANCE);
     }
 
-    // Retried, since a marker left in place makes the next catch-up skip the replay that delivers a failed payload
-    // again, and an attempt that takes longer than forgetAttemptTimeout counts as failed. Never errors, and always
-    // completes, so the failure goes on either way, and the log line tells an operator what to remove.
+    // Retried, since a catch-up that reads a marker left in place resumes after it, so a failed payload at or below
+    // it is not replayed, and an attempt that takes longer than forgetAttemptTimeout counts as failed. Never
+    // errors, and always completes, so the failure goes on either way, and the log line tells an operator what to
+    // remove.
     private Mono<Void> forgetCaughtUp(List<Source<T>> sources) {
         return Flux.fromIterable(sources)
                 .concatMap(source -> subscribedAsOwnCode(Mono.defer(source::forgetCaughtUp), NOBODY_WAITS)
                         .timeout(forgetAttemptTimeout)
                         .retryWhen(Retry.backoff(FORGET_RETRIES, FORGET_FIRST_RETRY_DELAY))
                         .onErrorResume(forgetFailure -> {
-                            log.error("The catch-up marker of this {} could not be forgotten, so its next catch-up "
-                                    + "skips the replay that delivers a failed event again. Delete the catch-up marker "
-                                    + "of this {} before replacing it.", noun, noun, forgetFailure);
+                            log.error("The catch-up marker of this {} could not be forgotten, so a catch-up that reads "
+                                    + "it resumes after it and does not replay a failed event at or below it. "
+                                    + "Deleting it by hand is best effort, and only a replacement under a new id is "
+                                    + "sure to replay from the beginning, see the \"Cancel\" section of ADR 179.",
+                                    noun, forgetFailure);
                             return Mono.empty();
                         }))
                 .then();

@@ -266,7 +266,7 @@ class CatchupThenPushSubscriptionModelTest {
         replacement.join(TimeUnit.SECONDS.toMillis(10));
         first.join(TimeUnit.SECONDS.toMillis(10));
 
-        assertThat(announced).hasSize(2);
+        await().untilAsserted(() -> assertThat(announced).hasSize(2));
         assertThat(announced.get(0))
                 .as("the attempt that reached its announce first is the one announced first, so a start never "
                         + "arrives behind the start of the attempt that replaced it")
@@ -330,9 +330,10 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
-    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
+    void a_restart_replays_only_the_events_after_the_stored_catchup_marker() {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
-        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created"), cloudEvent("2", "Updated")), 2);
+        InMemoryReactivePositionOrderedReader reader = new InMemoryReactivePositionOrderedReader();
+        reader.append(List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
 
         PushSubscriptionModel feed1 = new PushSubscriptionModel();
         List<String> firstRun = new CopyOnWriteArrayList<>();
@@ -341,7 +342,10 @@ class CatchupThenPushSubscriptionModelTest {
                 .waitUntilStarted().block();
         assertThat(firstRun).containsExactly("1", "2");
 
-        // Restart: fresh feed and model, same reader and marker. The replay is skipped.
+        // Written while no model runs, so only a replay after the stored marker can deliver it.
+        reader.append(List.of(cloudEvent("3", "Updated")));
+
+        // Restart: fresh feed and model, same reader and marker. The replay starts after the stored head.
         PushSubscriptionModel feed2 = new PushSubscriptionModel();
         List<String> secondRun = new CopyOnWriteArrayList<>();
         CatchupThenPushSubscriptionModel restarted = new CatchupThenPushSubscriptionModel(reader, feed2, marker);
@@ -349,15 +353,11 @@ class CatchupThenPushSubscriptionModelTest {
         restarted.listenForCatchup("proj", log);
         restarted.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(secondRun))
                 .waitUntilStarted().block();
-        assertThat(secondRun).isEmpty();
+        assertThat(secondRun).as("events replayed on the restart, none of them from before the stored marker").containsExactly("3");
 
-        // Both signals, even though no replay ran. This restart is the case that decides where the boundary goes:
-        // it skips the replay entirely and never reaches replayCompleted(), so a boundary placed there would leave
-        // the projection reading history for the rest of the model's life.
-        await().untilAsserted(() -> assertThat(log.signals()).containsExactly("started:0", "historyRead:0"));
-
-        feed2.accept(cloudEvent("3", "Updated")).block();
-        assertThat(secondRun).containsExactly("3");
+        feed2.accept(cloudEvent("4", "Updated")).block();
+        assertThat(secondRun).containsExactly("3", "4");
+        assertThat(log.signals()).as("a replay after a stored marker is plain delivery, so the listener hears nothing").isEmpty();
     }
 
     @Test
@@ -472,7 +472,7 @@ class CatchupThenPushSubscriptionModelTest {
         Throwable thrown = catchThrowable(() ->
                 model.subscribe("proj", null, StartAt.now(), ce -> Mono.empty()));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("always replays a projection's history from the beginning");
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("replays a projection's history from the beginning, or on the reactor stack after its stored catch-up marker");
     }
 
     @Test

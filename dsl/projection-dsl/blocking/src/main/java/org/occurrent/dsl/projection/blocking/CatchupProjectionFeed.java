@@ -50,7 +50,10 @@ import java.util.stream.Stream;
  * projection's history from the store in position order, folds each replayed event, then drains the buffer and goes
  * live, de-duplicating the replay-to-live overlap by an event-id extracted from the <em>domain</em> event (so the
  * de-dup does not depend on the CloudEvent id). A one-shot marker (an optional {@link CheckpointStorage}) makes a
- * restart skip the replay.
+ * restart skip the replay. The marker is stored under the feed's id alone, so give a feed whose projection or replay
+ * filter changes a new id. Under the old id the stored marker skips the replay, and the new filter never sees the
+ * history. Any checkpoint stored under the id counts as the marker, a durable subscription's for example, so do not
+ * give a durable subscription and this feed the same id in the same storage.
  * <p>
  * A replayed event has a CloudEvent behind it, so the replay always folds with real {@link EventMetadata}. A live event
  * does not, so metadata on the live path is something the source supplies. Use {@link #acceptAndWait(EventMetadata, Object)}
@@ -119,7 +122,8 @@ public final class CatchupProjectionFeed<E> {
      * @param converter       Decodes replayed CloudEvents to domain events (replay only, never the live path).
      * @param eventId         Extracts a stable id from a domain event, the replay-to-live de-dup key.
      * @param catchupMarker Records that the catch-up finished so a restart skips it, or {@code null} to always
-     *                        catch up.
+     *                        catch up. Any checkpoint stored under the feed's id counts as the marker, so do not share
+     *                        an id with a durable subscription that uses this storage.
      */
     public static <S extends @Nullable Object, E, ID> CatchupProjectionFeed<E> create(
             String id, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository,

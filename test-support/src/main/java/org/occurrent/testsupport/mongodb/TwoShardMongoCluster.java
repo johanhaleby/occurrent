@@ -16,6 +16,7 @@
 
 package org.occurrent.testsupport.mongodb;
 
+import org.jspecify.annotations.Nullable;
 import org.testcontainers.containers.Container.ExecResult;
 import org.testcontainers.mongodb.MongoDBContainer;
 
@@ -69,13 +70,32 @@ public final class TwoShardMongoCluster implements AutoCloseable {
      * Starts the container, starts the second shard in it and adds that shard to the cluster.
      */
     public static TwoShardMongoCluster start() {
+        return startWith(null);
+    }
+
+    /**
+     * Starts the cluster as {@link #start()} does, with an oplog of the given size on the second shard, so a test can
+     * make that oplog forget a position by writing a little more than that. The first shard keeps the default size. The
+     * second shard also takes a checkpoint every second instead of every 60, as the replica set of
+     * {@link ChangeStreamHistory} does, which shortened the drop there from 69 seconds to under one.
+     *
+     * @param secondShardOplogSizeMegabytes The size of the oplog of the second shard, in megabytes
+     */
+    public static TwoShardMongoCluster start(int secondShardOplogSizeMegabytes) {
+        if (secondShardOplogSizeMegabytes < 1) {
+            throw new IllegalArgumentException("The oplog size must be at least one megabyte, was " + secondShardOplogSizeMegabytes);
+        }
+        return startWith(secondShardOplogSizeMegabytes);
+    }
+
+    private static TwoShardMongoCluster startWith(@Nullable Integer secondShardOplogSizeMegabytes) {
         MongoDBContainer container = new MongoDBContainer("mongo:" + ReplicaSetReadyMongoDBContainer.defaultVersion())
                 .withSharding()
                 .withEnv("GLIBC_TUNABLES", "glibc.pthread.rseq=1");
         try {
             container.start();
             TwoShardMongoCluster cluster = new TwoShardMongoCluster(container, shell(container, "hostname").trim());
-            cluster.addSecondShard();
+            cluster.addSecondShard(secondShardOplogSizeMegabytes);
             return cluster;
         } catch (RuntimeException | Error e) {
             container.stop();
@@ -151,6 +171,16 @@ public final class TwoShardMongoCluster implements AutoCloseable {
         return () -> setCommitFailure("'off'");
     }
 
+    /**
+     * Runs a script in {@code mongosh} on the primary of the {@link #SECOND_SHARD second shard}, such as to read that
+     * shard's oplog. The shell runs inside the container, so the mongos is at {@code localhost:27017} from it.
+     * {@code ok(result)} is defined, and throws unless the result's {@code ok} is 1. Throws when the shell exits with an
+     * error, so a script that throws fails the caller.
+     */
+    public void mongoshOnSecondShard(String script) {
+        mongosh(SECOND_SHARD_PORT, script);
+    }
+
     private void setCommitFailure(String mode) {
         mongosh(SECOND_SHARD_PORT, "ok(db.adminCommand({configureFailPoint: 'failCommand', mode: " + mode
                 + ", data: {failCommands: ['commitTransaction'], errorCode: 2, failInternalCommands: true}}));");
@@ -160,9 +190,10 @@ public final class TwoShardMongoCluster implements AutoCloseable {
         mongosh(SECOND_SHARD_PORT, "ok(db.adminCommand({configureFailPoint: '" + COMMIT_FAIL_POINT + "', mode: '" + mode + "'}));");
     }
 
-    private void addSecondShard() {
+    private void addSecondShard(@Nullable Integer oplogSizeMegabytes) {
         shell(container, "mkdir -p /tmp/" + SECOND_SHARD + " && mongod --bind_ip_all --shardsvr --replSet " + SECOND_SHARD + " --port " + SECOND_SHARD_PORT
-                + " --dbpath /tmp/" + SECOND_SHARD + " --fork --logpath /tmp/" + SECOND_SHARD + ".log --wiredTigerCacheSizeGB 0.25 --setParameter enableTestCommands=1");
+                + " --dbpath /tmp/" + SECOND_SHARD + " --fork --logpath /tmp/" + SECOND_SHARD + ".log --wiredTigerCacheSizeGB 0.25 --setParameter enableTestCommands=1"
+                + (oplogSizeMegabytes == null ? "" : " --oplogSize " + oplogSizeMegabytes + " --syncdelay 1"));
         mongosh(SECOND_SHARD_PORT, "ok(rs.initiate({_id: '" + SECOND_SHARD + "', members: [{_id: 0, host: '" + hostname + ":" + SECOND_SHARD_PORT + "'}]}));");
         awaitSecondShardPrimary();
         mongosh(MONGOS_PORT, "ok(sh.addShard('" + SECOND_SHARD + "/" + hostname + ":" + SECOND_SHARD_PORT + "'));");

@@ -841,21 +841,25 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
+    void a_restart_replays_only_the_events_after_the_stored_catchup_marker() {
         CloudEventConverter<Counted> converter = countedConverter();
         Map<String, Integer> repo = new ConcurrentHashMap<>();
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        ResumePositionFixtures.InMemoryLog log = new ResumePositionFixtures.InMemoryLog();
+        log.append("1", "2");
 
-        feed("counter", reader("1", "2"), converter, repo, marker).catchUp().block();
+        feed("counter", log, converter, repo, marker).catchUp().block();
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(2));
+        // Written while no feed runs, so only a replay after the stored marker can fold it.
+        log.append("3");
 
-        // Restart: the replay is skipped, so the persisted count is not re-folded (which would double it).
-        CatchupProjectionFeed<Counted> restarted = feed("counter", reader("1", "2"), converter, repo, marker);
+        // Restart: the replay starts after the stored head, so the persisted count is folded once more and not re-folded.
+        CatchupProjectionFeed<Counted> restarted = feed("counter", log, converter, repo, marker);
         restarted.catchUp().block();
-        await().during(ofSeconds(1)).atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(2));
+        await().during(ofSeconds(1)).atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(3));
 
-        restarted.acceptAndWait(new Counted("3")).block();
-        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(3));
+        restarted.acceptAndWait(new Counted("4")).block();
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(4));
     }
 
     @Test

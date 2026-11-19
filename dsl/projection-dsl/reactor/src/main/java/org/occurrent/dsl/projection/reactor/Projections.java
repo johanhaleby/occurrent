@@ -79,8 +79,9 @@ public final class Projections {
      * the projection's {@link Projection#idWithMetadata() metadata-aware id} and folds through
      * {@link View#evolve(Object, EventMetadata, Object)}, so a projection can be keyed by metadata such as the stream id.
      * <p>
-     * During a catch-up replay this update coalesces its reads and writes per key rather than paying one of each per
-     * event; see {@link MaterializedViewOptions} and
+     * During a catch-up replay from the beginning this update coalesces its reads and writes per key rather than paying
+     * one of each per event. A catch-up that resumes after a stored marker sends no replay callbacks (ADR 179), so
+     * during it this update reads and writes once per event. See {@link MaterializedViewOptions} and
      * {@link #reactiveUpdateWithMetadata(Projection, ViewStateRepository, MaterializedViewOptions)} for the setting and
      * what it changes.
      */
@@ -90,7 +91,8 @@ public final class Projections {
 
     /**
      * As {@link #reactiveUpdateWithMetadata(Projection, ViewStateRepository)}, with explicit {@code options} for how
-     * the update batches its store calls during a catch-up replay
+     * the update batches its store calls during a catch-up replay from the beginning, and not during one that resumes
+     * after a stored marker
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0110-a-replay-tells-the-view-where-it-begins-and-ends.md">ADR 110</a>).
      * <p>
      * During a replay this update buffers events per key instead of writing through immediately, and flushes the
@@ -159,7 +161,9 @@ public final class Projections {
      * {@link Schedulers#boundedElastic()}. Use this to drive a blocking {@link MaterializedView} (for example the one the
      * view DSL's {@code materialized(...)} builds, with its own retry/locking policy) from a reactive pipeline. When
      * {@code materializedView} implements the blocking view DSL's replay-aware capability, the returned update forwards
-     * the replay lifecycle to it too, so a batching view keeps batching instead of writing through per event. See
+     * the replay lifecycle to it too, so a batching view keeps batching through a replay from the beginning instead of
+     * writing through per event. A catch-up that resumes after a stored marker sends no replay lifecycle, so the view
+     * writes through per event during it. See
      * {@link #reactiveUpdateWithMetadata(MaterializedView)}.
      */
     public static <E> Function<E, Mono<Void>> reactiveUpdate(MaterializedView<E> materializedView) {
@@ -173,7 +177,7 @@ public final class Projections {
      * always implements {@link ReactiveReplayAware}, and forwards
      * {@code replayStarted}/{@code replayCompleted}/{@code replayAbandoned} to {@code materializedView} whenever it
      * implements the blocking view DSL's {@code ReplayAware} capability, so a replay driven through a
-     * {@code CatchupProjectionFeed} still reaches a batching view wrapped through this bridge.
+     * {@code CatchupProjectionFeed} from the beginning still reaches a batching view wrapped through this bridge.
      */
     public static <E> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(MaterializedView<E> materializedView) {
         requireNonNull(materializedView, "materializedView cannot be null");
