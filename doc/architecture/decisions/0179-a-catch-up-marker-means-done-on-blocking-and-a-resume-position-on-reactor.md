@@ -82,7 +82,7 @@ reactor stack" below states that rule and what a delete that fails does. Its wri
 catch-up whose drain fails has already stored H, and that delete removes it. The events that drain did not deliver
 were handed in by calls that have not completed, so their listeners don't acknowledge them and the broker delivers
 them again. An event a handler fed back is the exception, and the same section says why the reactor stack does not
-write H while one waits in the drain.
+write H while one waits in the drain, and what a feed that runs on more than one replica needs for such an event.
 
 The write takes no new condition.
 
@@ -115,8 +115,9 @@ loses or applies after that delete makes the next start skip its replay, and the
 delivered again. That is #1150. Under a resume position the same late write stores an H that its own catch-up read
 before its replay. The write comes before the drain, so the live buffer can still hold an event at or below H when the
 store applies it. The next start resumes after H and still skips nothing, since the broker delivers again what that drain did not
-deliver, and the fed-back rule below keeps H unwritten while an event no broker delivers again waits. The next
-section shows why that holds.
+deliver, and the fed-back rule below keeps H unwritten while an event this process fed back, and the replay did not
+deliver, waits. An event another replica fed back needs a durable path of its own, which "Fed-back events on the
+reactor stack" describes. The next section shows why that holds.
 
 The blocking stack has no failure delete, so a done flag loses nothing there that the broker does not deliver again.
 A resume position would cost it a replay on every restart, of every event written since the previous start, with
@@ -163,9 +164,11 @@ On the reactor stack a 0.34.0 marker holds the head read at mark time, which is 
 it as a finished catch-up and skipped the replay, so a 0.35.0 start that resumes after it replays at least as much as
 0.34.0 did, and the upgrade loses no event that 0.34.0 had not lost already. An event a handler fed back can sit at or
 below that head without having been applied, when its delivery failed and the delete that follows was lost, or the
-process stopped before it delivered the event. No broker delivers such an event again, see "Fed-back events on the
-reactor stack", so 0.34.0 had lost it, and a 0.35.0 start that resumes after the marker does not bring it back. Only
-a rebuild under a new subscription id applies such an event, since it replays the whole history.
+process stopped before it delivered the event. Such an event comes back only through a path the application gave it,
+a broker copy or a handler that feeds it again when the event that triggered it is delivered again, see "Fed-back
+events on the reactor stack". Without one, 0.34.0 had lost it, and a 0.35.0 start that resumes after the marker does
+not bring it back. Only a rebuild under a new subscription id applies such an event, since it replays the whole
+history.
 Stored markers need no migration. A 0.34.0 node that reads a marker a 0.35.0 node wrote skips its replay, as 0.34.0
 always did.
 
@@ -213,14 +216,35 @@ live delivery back and waits for W's delivery to end before it replays, so that 
 What W's handler fed back is not. Take an event X that W's handler wrote and fed back, at a position at or below H,
 whose write committed after A's replay read past that position. A's replay does not read X, X waits in the live feed
 behind A's hold, and it is delivered only after A's write of H has completed, since the hold lasts until then. If that
-delivery fails, H is stored, the next start resumes after it, and nothing delivers X again.
+delivery fails, H is stored, the next start resumes after it, and only a path of X's own, which the contract below
+describes, delivers X again.
 
 So `ReactiveHandover` does not write H while an event its own code fed, and that A's replay did not deliver, waits in
 the live feed. P stays stored and the next start replays after P. X lies after P, because an X written before the
 catch-up that stored P read its head would have been replayed by that catch-up or kept it from storing P. An event A's
-replay did read is delivered before H is written, and its live copy is skipped as a repeat. Only a catch-up that runs
-after the source has gone live can meet such an event, which is a feed's `catchUp()` after `goLive()` or one a view
-asks for. A push model runs its catch-up before any live event is handled.
+replay did read is delivered before H is written, and its live copy is skipped as a repeat. Within one process, only a
+catch-up that runs after the source has gone live can meet such an event, which is a feed's `catchUp()` after
+`goLive()` or one a view asks for. A push model runs its catch-up before its own process handles any live event.
+
+That rule sees only what the process's own code fed. Replicas of one feed share its subscription id, and so its
+stored marker, and another replica's live delivery goes on while a replica catches up. Take replicas A and B of one
+reactor `@Projection`. B's handler, applying W, writes X and feeds it back into B's handover. A's catch-up reads an H at
+or above X's position before X's write commits, so A's replay passes that position without X. A's handover has no
+event of its own waiting, so it stores H. Then B's delivery of X fails, or B stops before it delivers X. W's
+acknowledgement waits for X, so the broker delivers W again, and a handler that skips the write because X is already stored feeds nothing. Every later start
+resumes after H, and nothing applies X. 0.34.0 has the same gap, since its marker made a start skip the replay
+altogether.
+
+So a fed-back event is an early copy, and it needs a durable path as well. Either the application's forwarder
+publishes it to the broker queue the feed's listener reads, as it does for an event any other code writes, or the
+handler feeds it again whenever the event that triggered it is delivered again, also when the write is already
+stored. Without either, a feed that runs on more than one replica can lose it. The rule above still holds H back for an event
+fed back within one process.
+
+The reactor push model has no feed-back path of its own. Its handover takes only what `acceptOrDefer` and `accept`
+hand it, at `CatchupThenPushSubscriptionModel.java:260` on `73a72f0f27`, so an event a push handler writes reaches the
+model as a broker copy once the forwarder publishes it, and that copy is its durable path. A handler that hands its own
+write straight to `acceptOrDefer` or `accept` has fed it back without a broker copy, and the contract above applies.
 
 `ReactiveHandover` also keeps deleting the marker through `Source.forgetCaughtUp()` when a delivery or a catch-up
 fails, as in 0.34.0, as a backstop behind that rule. It tries the delete four times and then logs. The reactor push
@@ -341,6 +365,10 @@ every third-party `CheckpointStorage` and needed a rolling-upgrade precondition.
   feed whose `catchUp()` runs again after `goLive()` under steady fed-back traffic keeps an older marker, so the next
   restart replays more, until [#1552](https://github.com/johanhaleby/occurrent/issues/1552) delivers those events
   before the marker as the blocking stack does.
+* A fed-back event needs a durable path of its own, a broker copy or a handler that feeds it again when the event
+  that triggered it is delivered again, or a feed that runs on more than one replica can lose it. 0.34.0 has the same
+  gap. The javadoc of the reactor `CatchupProjectionFeed`, `DomainEventFeed` and push model and the migration guide
+  have to say so.
 * The reactor stack still deletes the marker when a catch-up or a delivery fails, as in 0.34.0, as a backstop. When
   that delete throws, the reactor push model's next catch-up of the id in the same process replays from the beginning,
   as in 0.34.0.
