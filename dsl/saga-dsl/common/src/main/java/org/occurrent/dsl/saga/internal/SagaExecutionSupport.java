@@ -228,12 +228,12 @@ public final class SagaExecutionSupport {
         if (current != null && classify(current, meta, reorderWindow) != Delivery.NEW) {
             return Outcome.skip();
         }
-        return apply(saga, sagaId, current, input, meta, now, reorderWindow, hasStarted, startEvent);
+        return apply(saga, sagaId, current, input, meta, now, OptionalInt.of(reorderWindow), hasStarted, startEvent);
     }
 
     // The input applied to the instance, past every reason to skip it.
     private static <E, S extends @Nullable Object, C> Outcome<S, C> apply(Saga<E, S, C> saga, String sagaId, @Nullable SagaEnvelope<S> current,
-                                                                          SagaInput<E> input, EventMeta meta, Instant now, int reorderWindow,
+                                                                          SagaInput<E> input, EventMeta meta, Instant now, OptionalInt reorderWindow,
                                                                           boolean hasStarted, @Nullable E startEvent) {
 
         boolean starting = !hasStarted;
@@ -507,7 +507,7 @@ public final class SagaExecutionSupport {
         streamMarks.forEach((streamId, marks) -> {
             Map<String, TypeMark> byType = new LinkedHashMap<>();
             marks.byType().forEach((type, typeMark) -> {
-                long horizon = Math.max(typeMark.horizon(), typeMark.mark() - reorderWindow);
+                long horizon = horizon(typeMark.horizon(), typeMark.mark(), OptionalInt.of(reorderWindow));
                 byType.put(type, new TypeMark(typeMark.mark(), typeMark.applied().stream().filter(version -> version > horizon).toList(), horizon));
             });
             trimmed.put(streamId, new StreamMarks(marks.floor(), byType, marks.pending(), marks.legacyFailed(), marks.pendingSince()));
@@ -664,8 +664,8 @@ public final class SagaExecutionSupport {
      */
     public static final String EVENT_WITHOUT_STREAM_KEY_FAILURE_TYPE = "EventWithoutStreamKey";
 
-    // A window wider than any stream, so the marks forget no version, see replay(..)
-    private static final int NO_REORDER_WINDOW = Integer.MAX_VALUE;
+    // No reorder window, so the marks forget no version however far apart two versions are, see replay(..)
+    private static final OptionalInt NO_REORDER_WINDOW = OptionalInt.empty();
 
     private static final String MISSING_INPUT_MESSAGE_END = "' is missing from the event store, so the release could not replay it";
 
@@ -1018,6 +1018,10 @@ public final class SagaExecutionSupport {
      * was applied, so it stays skipped whatever its type, and the type marks start from the next event.
      */
     public static <S extends @Nullable Object> Delivery classify(SagaEnvelope<S> current, EventMeta meta, int reorderWindow) {
+        return classify(current, meta, OptionalInt.of(reorderWindow));
+    }
+
+    private static <S extends @Nullable Object> Delivery classify(SagaEnvelope<S> current, EventMeta meta, OptionalInt reorderWindow) {
         if (meta.streamId() == null || meta.streamVersion() == null) {
             return Delivery.NEW;
         }
@@ -1045,7 +1049,7 @@ public final class SagaExecutionSupport {
             return Delivery.NEW;
         }
         // The horizon outlasts a window that is raised later, because the versions it forgot are not in applied any more.
-        if (version > Math.max(typeMark.horizon(), typeMark.mark() - reorderWindow)) {
+        if (version > horizon(typeMark.horizon(), typeMark.mark(), reorderWindow)) {
             return Delivery.NEW;
         }
         // A failure record naming this input says it was never applied, since the save that applies it clears the record.
@@ -1153,9 +1157,14 @@ public final class SagaExecutionSupport {
         return meta.eventType() == null ? "" : meta.eventType();
     }
 
+    // The highest version a type mark forgets, which with no reorder window is only the horizon it has already
+    private static long horizon(long horizon, long mark, OptionalInt reorderWindow) {
+        return reorderWindow.isPresent() ? Math.max(horizon, mark - reorderWindow.getAsInt()) : horizon;
+    }
+
     // The marks of one stream after recording the version meta describes. The floor is fixed when the stream first gets
     // marks, at the watermark the instance had then, which is what the pre-0.35.0 rule would have skipped up to.
-    private static StreamMarks recorded(@Nullable StreamMarks marks, @Nullable Long watermark, EventMeta meta, int reorderWindow) {
+    private static StreamMarks recorded(@Nullable StreamMarks marks, @Nullable Long watermark, EventMeta meta, OptionalInt reorderWindow) {
         long floor = floorOf(marks, watermark);
         long version = Objects.requireNonNull(meta.streamVersion());
         Map<String, TypeMark> byType = marks == null ? new LinkedHashMap<>() : new LinkedHashMap<>(marks.byType());
@@ -1172,7 +1181,7 @@ public final class SagaExecutionSupport {
             mark = previous.mark();
         }
         // Past the window a version is skipped, so remembering it would only grow the state.
-        long horizon = Math.max(previous == null ? Long.MIN_VALUE : previous.horizon(), mark - reorderWindow);
+        long horizon = horizon(previous == null ? Long.MIN_VALUE : previous.horizon(), mark, reorderWindow);
         applied.removeIf(earlier -> earlier <= horizon);
         byType.put(typeKey(meta), new TypeMark(mark, List.copyOf(applied), horizon));
         // Applying a version settles it, so it stops being outstanding.
