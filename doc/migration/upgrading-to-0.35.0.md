@@ -228,6 +228,10 @@ other sections compile fine and behave differently, so read them first.
   the references. Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly
   sees the changes the starters make to find inherited handlers. **Breaks the build** if you refer to one of the five.
 
+- [The MongoDB starter adds two health contributors for competing consumers](#the-mongodb-starter-adds-two-health-contributors-for-competing-consumers).
+  With Spring Boot Actuator, `/actuator/health` is down when a competing consumer subscription was given up or keeps
+  failing, or when the lease refresh keeps failing. Compiles unchanged.
+
 ### Brokers
 
 - [A catch-up over both a stream and a DCB model refuses a position start without a filter](#a-catch-up-over-both-a-stream-and-a-dcb-model-refuses-a-position-start-without-a-filter).
@@ -3222,3 +3226,43 @@ Retrying another error from the position the subscription has read to is fine. S
 the position the subscription had read to, or to the position it opened at when it has read nothing. There is no
 default implementation, because a model that can't report a later loss would let a catch-up subscription skip events
 without saying so. The rewrite recipe doesn't add the method, since it has to be written for your model.
+
+## The MongoDB starter adds two health contributors for competing consumers
+
+With `spring-boot-health` on the classpath, the MongoDB Spring Boot starter adds the health contributors
+`competingConsumers` and `competingConsumerLeases`. Spring Boot reports `/actuator/health` as down when any contributor
+is down, so the overall status can be down in cases where 0.34.0 reported it up.
+
+### Who is affected
+
+An application on `occurrent-mongodb-spring-boot-starter` with Spring Boot Actuator, when something acts on the overall
+status of `/actuator/health`, such as a load balancer or a Kubernetes probe pointed at that path. A probe on
+`/actuator/health/liveness` or `/actuator/health/readiness` is not affected, because neither contributor is in those
+groups.
+
+### What changes
+
+`competingConsumers` has one component per subscription id, and `competingConsumerLeases` one per
+`SpringMongoLeaseCompetingConsumerStrategy` bean. A component is down in these cases:
+
+| Contributor | Down when | Up again when |
+| --- | --- | --- |
+| `competingConsumers` | The wrapped model refused to start the subscription after `subscribe` returned, so the subscription was given up. | The id is subscribed again or cancelled. |
+| `competingConsumers` | The wrapped model refused to start or resume the subscription from its position, so it's held paused. | The subscription is resumed. |
+| `competingConsumers` | A call to the lease strategy or the wrapped model failed, and the model keeps trying it. | A try succeeds. |
+| `competingConsumerLeases` | The latest lease refresh attempt failed, for example because MongoDB refuses writes. | A refresh attempt refreshes every lease. |
+
+A node on standby, a subscription you paused and a stopped model are up. The details of a component that is down
+include the failure and since when it has been failing.
+
+### What to do
+
+Nothing, if a node should report down in these cases. To leave one out, set
+`management.health.competingconsumers.enabled=false` or `management.health.competingconsumerleases.enabled=false`. To
+change what one reports, declare your own `HealthContributor` bean named `competingConsumers` or
+`competingConsumerLeases`, which replaces the starter's.
+
+`CompetingConsumerSubscriptionModel#competingConsumerStatus(subscriptionId)` and
+`SpringMongoLeaseCompetingConsumerStrategy#leaseRefreshFailure()` return the same information to code of your own. The
+code compiles unchanged, there is no OpenRewrite recipe, and nothing stored changes. See
+[ADR 183](../architecture/decisions/0183-a-competing-consumer-reports-its-status-and-the-mongodb-starter-turns-it-into-health.md).
