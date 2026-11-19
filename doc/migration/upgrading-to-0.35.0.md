@@ -2915,6 +2915,7 @@ of another model's subscription, or from the action once the subscription has go
 
 * A `start(..)` or `stop()` from a replay's action throws `IllegalStateException` with "Nothing was changed." in its
   message, and so does one from a thread on which the model is in the middle of a call for one of its subscriptions.
+* The public `stopReplay()` and `resumeReplay()` of `StreamCatchupSubscriptionModel` throw in the same places.
 * `shutdown()` from those threads doesn't throw, and goes ahead without waiting for a `start(..)` or `stop()` under
   way.
 * Elsewhere, each of `start(..)`, `stop()` and `shutdown()` waits, with no deadline, until one already under way on
