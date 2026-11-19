@@ -44,6 +44,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -246,6 +249,40 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
         assertThat(episodes.names).as("signals heard from the cancelled attempt and the one that replaced it")
                 .containsExactlyInAnyOrder("catchupStarted#1", "historyRead#1", "catchupStarted#2", "historyRead#2")
                 .startsWith("catchupStarted#1", "historyRead#1", "catchupStarted#2");
+    }
+
+    // The first attempt replays from the beginning and the listener is held inside historyRead for it. Another thread
+    // then cancels the id and subscribes again from the beginning. The replacement may not announce its catch-up
+    // while the listener is still being told the first one read its history.
+    @Test
+    void the_next_attempt_cannot_announce_its_catch_up_until_the_replay_that_read_its_history_has_told_the_listener() throws Exception {
+        store.append(List.of(event("1")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, new InMemoryCheckpointStorage());
+        CountDownLatch historyReadEntered = new CountDownLatch(1);
+        CountDownLatch releaseHistoryRead = new CountDownLatch(1);
+        HoldingHistoryReadSignals episodes = new HoldingHistoryReadSignals(historyReadEntered, releaseHistoryRead);
+        model.listenForCatchup("proj", episodes);
+        ExecutorService replacer = Executors.newSingleThreadExecutor();
+        try {
+            model.subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.empty());
+            assertThat(historyReadEntered.await(5, TimeUnit.SECONDS)).as("the listener is inside historyRead for the first attempt").isTrue();
+
+            Future<?> replaced = replacer.submit(() -> {
+                model.cancelSubscription("proj").block(TIMEOUT);
+                model.subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+            });
+
+            await().during(Duration.ofMillis(500)).atMost(TIMEOUT).untilAsserted(() -> assertThat(episodes.names())
+                    .as("signals heard while the listener is still inside historyRead for the first attempt").doesNotContain("catchupStarted#2"));
+            releaseHistoryRead.countDown();
+            replaced.get(5, TimeUnit.SECONDS);
+
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(episodes.names()).as("signals heard from the first attempt and its replacement")
+                    .containsExactly("catchupStarted#1", "historyRead#1", "catchupStarted#2", "historyRead#2"));
+        } finally {
+            releaseHistoryRead.countDown();
+            replacer.shutdownNow();
+        }
     }
 
     // The cancel comes before the attempt has read the marker, so the attempt no longer owns the id when it learns
@@ -456,6 +493,44 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
         @Override
         public void alreadyDeliveredByReplay(CloudEvent event) {
             names.add("alreadyDeliveredByReplay:" + event.getId());
+        }
+    }
+
+    // Names each signal after the catch-up it came from. A signal is named when its call returns, and historyRead for
+    // the first catch-up is held outside the listener's own monitor so nothing else the listener hears is blocked by it
+    private static final class HoldingHistoryReadSignals implements CatchupListener {
+        private final List<String> names = new CopyOnWriteArrayList<>();
+        private final List<Object> episodes = new CopyOnWriteArrayList<>();
+        private final CountDownLatch historyReadEntered;
+        private final CountDownLatch releaseHistoryRead;
+
+        HoldingHistoryReadSignals(CountDownLatch historyReadEntered, CountDownLatch releaseHistoryRead) {
+            this.historyReadEntered = historyReadEntered;
+            this.releaseHistoryRead = releaseHistoryRead;
+        }
+
+        List<String> names() {
+            return List.copyOf(names);
+        }
+
+        @Override
+        public void catchupStarted(Object episode) {
+            episodes.add(episode);
+            names.add("catchupStarted#" + episodes.size());
+        }
+
+        @Override
+        public void historyRead(Object episode) {
+            int number = episodes.indexOf(episode) + 1;
+            if (number == 1) {
+                historyReadEntered.countDown();
+                awaitQuietly(releaseHistoryRead);
+            }
+            names.add("historyRead#" + number);
+        }
+
+        @Override
+        public void alreadyDeliveredByReplay(CloudEvent event) {
         }
     }
 

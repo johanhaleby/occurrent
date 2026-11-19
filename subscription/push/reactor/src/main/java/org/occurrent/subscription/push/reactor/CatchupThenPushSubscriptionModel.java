@@ -395,15 +395,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public void historyDone() {
-                // Sent only by whoever removes the episode, so a later attempt that ended it first is the one that
-                // sent its historyRead, and this attempt sends none. The replay itself is the episode, so a listener that
-                // hears this after a later attempt's catchupStarted ignores it, and no lock is needed.
-                if (episodesReadingHistory.remove(subscriptionId, replayDone)) {
-                    CatchupListener listener = catchupListeners.get(subscriptionId);
-                    if (listener != null) {
-                        listener.historyRead(replayDone);
-                    }
-                }
+                endEpisodeAtEndOfHistory(subscriptionId, replayDone);
             }
 
             @Override
@@ -853,6 +845,19 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             return;
         }
         endUnfinishedEpisode(subscriptionId);
+    }
+
+    // Sent only by whoever removes the episode, so a replay whose episode a later attempt ended first sends no
+    // historyRead of its own. Under the monitor announceCatchupStart and endEpisodeStillReadingHistory take, so the
+    // next attempt of the id cannot announce or start its replay between the remove and the historyRead. No owner
+    // check, since a cancelled replay that still reaches the end of its history ends the episode it opened.
+    private synchronized void endEpisodeAtEndOfHistory(String subscriptionId, Sinks.One<Boolean> replayDone) {
+        if (episodesReadingHistory.remove(subscriptionId, replayDone)) {
+            CatchupListener listener = catchupListeners.get(subscriptionId);
+            if (listener != null) {
+                listener.historyRead(replayDone);
+            }
+        }
     }
 
     // Called only under this model's monitor, by an attempt that owns the id
