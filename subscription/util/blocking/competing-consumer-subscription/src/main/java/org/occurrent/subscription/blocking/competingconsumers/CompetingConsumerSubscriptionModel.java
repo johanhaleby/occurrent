@@ -689,6 +689,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // so a test can tell one from the other without measuring time.
     private volatile Runnable beforeATryWaitsForItsBackoff = () -> {
     };
+    // Runs on the thread of a try once the try has failed and let go of the lock of its subscription, before anything
+    // else. Exists so a test can stand there, which nothing outside this model can.
+    private volatile Runnable onceAFailedTryHasLetGoOfTheLock = () -> {
+    };
     // Runs on the thread of a pause, resume or cancel once it counts as waiting for the lock of its subscription, before
     // it waits. Exists so a test can stand there, which nothing outside this model can.
     private volatile Runnable beforeACallWaitsForTheLock = () -> {
@@ -1411,6 +1415,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // contract.
     void runBeforeATryWaitsForItsBackoff(Runnable hook) {
         this.beforeATryWaitsForItsBackoff = requireNonNull(hook, "hook cannot be null");
+    }
+
+    // Package-private for the test that stands where the field describes. Not public, and not part of this model's
+    // contract.
+    void runOnceAFailedTryHasLetGoOfTheLock(Runnable hook) {
+        this.onceAFailedTryHasLetGoOfTheLock = requireNonNull(hook, "hook cannot be null");
     }
 
     // Package-private for the test that stands where the field describes. Not public, and not part of this model's
@@ -4911,7 +4921,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     // Ends once the consumer is where it belongs, this model is shut down, or the thread is interrupted, and removes
-    // the try on each of those paths, so the next failure for the consumer starts a new one
+    // the try on each of those paths, so the next failure for the consumer starts a new one. The try is kept by the ids,
+    // so once a cancel or a give-up frees the id and a subscribe with the same ids takes it, this try goes on for the new
+    // subscription. Each try reads the state of the subscription under its lock and decides from that, as a try started
+    // for the new one would. From the old subscription it keeps its backoff, its count of failures between warnings,
+    // whether it acts at once or decides again, and where a lease callback handed to it puts it among the waiting
+    // pause, resume and cancel calls. None of them makes a call into the lease strategy or the wrapped model.
     private void keepTrying(SubscriptionIdAndSubscriberId key, Try tried) {
         boolean ended = false;
         try {
@@ -4926,12 +4941,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     logDebug("Stopped trying CompetingConsumer again, since its thread was interrupted (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
                     return;
                 } catch (Throwable e) {
+                    // Recorded as failing by reconcile, which held the subscription's lock
+                    onceAFailedTryHasLetGoOfTheLock.run();
                     failures++;
-                    synchronized (this) {
-                        if (!shutDown) {
-                            recordFailing(key, e);
-                        }
-                    }
                     // One logged with a warning already counts, but is not warned about again
                     boolean warned = tried.lastFailureWarnedAbout;
                     tried.lastFailureWarnedAbout = false;
@@ -5024,7 +5036,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         try {
             applyWhatWasHandedOverFirst(key.subscriptionId(), lock);
         } catch (Throwable e) {
-            lock.unlock();
+            try {
+                recordAFailedTry(key, e);
+            } finally {
+                lock.unlock();
+            }
             throw e;
         }
         triedOnThisThread.set(key);
@@ -5053,10 +5069,20 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } catch (Throwable e) {
             // Asked before the lock is let go of, which forgets it
             tried.lastFailureWarnedAbout = warnedAboutInThisCall(key, e);
+            recordAFailedTry(key, e);
             throw e;
         } finally {
             triedOnThisThread.remove();
             lock.unlock();
+        }
+    }
+
+    // Called under the subscription's lock, so a cancel or a give-up that frees the id waits for it, and a subscribe that
+    // takes the id again afterwards removes the failure. Recorded once the lock is let go of, the failure of a try for a
+    // cancelled subscription could be recorded against a new subscription with the same ids. An interrupt is no failure.
+    private synchronized void recordAFailedTry(SubscriptionIdAndSubscriberId key, Throwable failure) {
+        if (!shutDown && !(failure instanceof InterruptedException)) {
+            recordFailing(key, failure);
         }
     }
 
