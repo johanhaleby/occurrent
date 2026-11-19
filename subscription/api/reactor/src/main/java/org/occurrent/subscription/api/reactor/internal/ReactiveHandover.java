@@ -2105,8 +2105,8 @@ public final class ReactiveHandover<T, K> {
         log.error("A payload of this {} with de-dup key {} failed to be delivered after its caller was told it was taken "
                 + "in. The {} refuses every other event from now on, delivers what it has already taken in, and then "
                 + "fails for good. Fix the cause, then replace it, a subscription by cancelling it and subscribing "
-                + "again, a projection feed by building a new one. Its catch-up replays from the beginning once the "
-                + "catch-up marker is gone.", noun, dedupKey, noun, error);
+                + "again, a projection feed by building a new one. Only a replacement under a new id is sure to replay "
+                + "from the beginning, see the \"Cancel\" section of ADR 179.", noun, dedupKey, noun, error);
         Source<T> source = liveSource.get();
         return forgetCaughtUp(source == null ? List.of() : List.of(source))
                 .then(Mono.fromRunnable(() -> {
@@ -2177,8 +2177,8 @@ public final class ReactiveHandover<T, K> {
             log.error("A catch-up of this {} failed. The {} refuses every event that does not come from its own handler "
                     + "from now on, delivers the events its handler fed it, and then fails for good. Fix the cause, then "
                     + "replace it, a subscription by cancelling it and subscribing again, a projection feed by building a "
-                    + "new one. Its catch-up replays from the beginning once the catch-up marker is gone.", noun, noun,
-                    error);
+                    + "new one. Only a replacement under a new id is sure to replay from the beginning, see the "
+                    + "\"Cancel\" section of ADR 179.", noun, noun, error);
         }
         Source<T> live = liveSource.get();
         List<Source<T>> sources = live == null || live == source ? List.of(source) : List.of(source, live);
@@ -2297,8 +2297,9 @@ public final class ReactiveHandover<T, K> {
                         .onErrorResume(forgetFailure -> {
                             log.error("The catch-up marker of this {} could not be forgotten, so a catch-up that reads "
                                     + "it resumes after it and does not replay a failed event at or below it. "
-                                    + "Delete the catch-up marker of this {} before replacing it.", noun, noun,
-                                    forgetFailure);
+                                    + "Deleting it by hand is best effort, and only a replacement under a new id is "
+                                    + "sure to replay from the beginning, see the \"Cancel\" section of ADR 179.",
+                                    noun, forgetFailure);
                             return Mono.empty();
                         }))
                 .then();
