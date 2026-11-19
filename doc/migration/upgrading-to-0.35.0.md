@@ -318,8 +318,10 @@ A saga instance saved by 0.31.0 to 0.34.0 may hold a `positionWatermark`. 0.35.0
 is gone from that instance's document after its next save. A document without the field reads as `null`, and
 `SagaEnvelope.positionWatermark()` is deprecated.
 
-A 0.34.0 node reads a document that 0.35.0 saved, and the other way round. A rolling upgrade works, and so does going
-back to 0.34.0.
+A 0.34.0 node reads a document that 0.35.0 saved, and the other way round. That doesn't make it safe to run both
+versions at once. Stop every 0.34.0 node that runs sagas before any 0.35.0 node starts, and stop every 0.35.0 node
+before you start 0.34.0 again to go back. [ADR 178, point 8](../architecture/decisions/0178-a-quarantined-saga-instance-records-what-it-skips-and-is-released-by-replaying-it.md#8-persisted-format)
+has the steps for going back.
 
 A failure record whose input is `position:N` was written for a position-only event. On an `ACTIVE` instance 0.35.0
 treats it as no record, so the next failure starts a fresh budget and the next successful delivery clears it.
@@ -655,8 +657,9 @@ is applied as before. Late versions are recognised from the instance's next save
 
 `streamWatermarks` is still written with the highest version of each stream. A 0.34.0 node reads a document that
 0.35.0 saved, ignores `streamMarks`, and replaces the document without it on its next save. The next 0.35.0 node then
-reads it as an old document. A rolling upgrade works, and so does going back to 0.34.0, which loses late events on that
-stretch as it did before.
+reads it as an old document. Stop every 0.34.0 node that runs sagas before any 0.35.0 node starts, as
+[Stored saga state](#stored-saga-state) says. Going back to 0.34.0 is the same stop and then start, and it loses late
+events on that stretch as it did before.
 
 ### A record pattern over `SagaEnvelope` or `SagaRunnerConfig` stops compiling
 
