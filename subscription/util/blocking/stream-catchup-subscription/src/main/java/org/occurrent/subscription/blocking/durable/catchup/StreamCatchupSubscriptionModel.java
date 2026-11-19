@@ -181,7 +181,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     }
 
     @Override
-    protected Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
+    protected Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, Subscribed made) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
         // Position/time catch-up converts the filter into an Occurrent Filter for the historical query, so only the
         // filter types that wrap a plain Filter are supported here: StreamSubscriptionFilter (stream) and
@@ -197,7 +197,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
                 // Not allowed to start this subscription model, defer to parent
-                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action, holdPaused);
+                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action, holdPaused, made);
             }
             requestedStartAt = startAtGeneratedByDynamic;
         }
@@ -209,7 +209,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             if (checkpoint == null) {
                 // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
                 // the handover would, keeping DCB events out.
-                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, requestedStartAt), action, holdPaused);
+                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, requestedStartAt), action, holdPaused, made);
             }
             // A time position stored by a replay that did not finish resumes that replay, also on a store that
             // writes position, where it runs through the time-ordered catch-up
@@ -219,7 +219,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         }
         refuseGlobalPositionWithoutPositions(subscriptionId, firstStartAt);
         Subscription heldPaused = refuseOrHoldIfItsStoredLiveStartIsLost(subscriptionId, firstStartAt,
-                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, liveStart), action, true));
+                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, liveStart), action, true, made));
         if (heldPaused != null) {
             return heldPaused;
         }
@@ -227,7 +227,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         CatchupReplay replay = replayFrom(subscriptionId, filter, startAt, action, firstStartAt);
         if (replay == null) {
             return subscribeLiveUnlessItsStartIsLost(subscriptionId, firstStartAt, holdPaused,
-                    paused -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, firstStartAt), action, paused));
+                    paused -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, firstStartAt), action, paused, made));
         }
         return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, replay, holdPaused));
     }
@@ -284,8 +284,8 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      * before this while a catch-up for the id is in progress, under the same per-id lock as that catch-up's handover,
      * and a cancelled catch-up doesn't hand over.
      */
-    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, StreamSubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
-        return subscribeInTheWrappedModel(subscriptionId, filter, startAt, action, holdPaused);
+    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, StreamSubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, Subscribed made) {
+        return subscribeInTheWrappedModel(subscriptionId, filter, startAt, action, holdPaused, made);
     }
 
     // Resolved start kinds for a stream subscription. Classifying once keeps the routing above an exhaustive switch,

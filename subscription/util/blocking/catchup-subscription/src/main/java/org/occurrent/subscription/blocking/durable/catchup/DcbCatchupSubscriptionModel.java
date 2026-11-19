@@ -99,7 +99,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     }
 
     @Override
-    protected Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
+    protected Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, Subscribed made) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
         // A dynamic start that resolves to the model default takes the same resume decision as the default itself,
         // so a replay that stopped in the middle resumes from the position it stored instead of going live
@@ -107,7 +107,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         if (startAt.isDynamic()) {
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
-                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action, holdPaused);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action, holdPaused, made);
             }
             requestedStartAt = startAtGeneratedByDynamic;
         }
@@ -117,7 +117,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
             refuseIfStoredWithoutLiveStart(subscriptionId, checkpoint);
             if (checkpoint == null) {
-                return subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, requestedStartAt), action, holdPaused);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, requestedStartAt), action, holdPaused, made);
             }
             firstStartAt = StartAt.checkpoint(checkpoint);
         } else {
@@ -128,11 +128,11 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // token (or the caller asked to start live directly). Subscribe live, still applying the DCB query post-filter.
         if (!isDcbCatchupPosition(subscriptionId, firstStartAt)) {
             return subscribeLiveUnlessItsStartIsLost(subscriptionId, firstStartAt, holdPaused,
-                    paused -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, firstStartAt), action, paused));
+                    paused -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, firstStartAt), action, paused, made));
         }
 
         Subscription heldPaused = refuseOrHoldIfItsStoredLiveStartIsLost(subscriptionId, firstStartAt,
-                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, liveStart), action, true));
+                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, liveStart), action, true, made));
         if (heldPaused != null) {
             return heldPaused;
         }
@@ -158,8 +158,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      * before this while a catch-up for the id is in progress, under the same per-id lock as that catch-up's handover,
      * and a cancelled catch-up doesn't hand over.
      */
-    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
-        return subscribeInTheWrappedModel(subscriptionId, filter, startAt, dcbLiveConsumer(action, null), holdPaused);
+    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, Subscribed made) {
+        return subscribeInTheWrappedModel(subscriptionId, filter, startAt, dcbLiveConsumer(action, null), holdPaused, made);
     }
 
     private Consumer<CloudEvent> dcbLiveConsumer(Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache) {
