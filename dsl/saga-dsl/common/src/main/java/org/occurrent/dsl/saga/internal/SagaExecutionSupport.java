@@ -487,14 +487,32 @@ public final class SagaExecutionSupport {
      * quarantined under its quarantine id, and its input is applied to the active instance. A skip whose read came before
      * this write keeps its record, and nothing reads it after that, but its input is applied to the active instance all
      * the same.
+     * <p>
+     * The released instance keeps no more applied versions per stream and event type than {@code reorderWindow}, as
+     * after a live write, since the release kept every version it applied.
      *
      * @throws IllegalStateException when the instance is not releasing
      */
-    public static <S extends @Nullable Object> SagaEnvelope<S> withReleased(SagaEnvelope<S> current, Instant now) {
+    public static <S extends @Nullable Object> SagaEnvelope<S> withReleased(SagaEnvelope<S> current, Instant now, int reorderWindow) {
         if (!current.isReleasing()) {
             throw new IllegalStateException("Saga instance '" + current.sagaId() + "' is not releasing.");
         }
-        return withBookkeeping(current, SagaStatus.ACTIVE, now, null, current.streamMarks(), null);
+        return withBookkeeping(current, SagaStatus.ACTIVE, now, null, withinWindow(current.streamMarks(), reorderWindow), null);
+    }
+
+    // The marks with no more applied versions than reorderWindow keeps, the way a live write trims them. A release
+    // keeps every version it applies, see replay(..)
+    private static Map<String, StreamMarks> withinWindow(Map<String, StreamMarks> streamMarks, int reorderWindow) {
+        Map<String, StreamMarks> trimmed = new LinkedHashMap<>();
+        streamMarks.forEach((streamId, marks) -> {
+            Map<String, TypeMark> byType = new LinkedHashMap<>();
+            marks.byType().forEach((type, typeMark) -> {
+                long horizon = Math.max(typeMark.horizon(), typeMark.mark() - reorderWindow);
+                byType.put(type, new TypeMark(typeMark.mark(), typeMark.applied().stream().filter(version -> version > horizon).toList(), horizon));
+            });
+            trimmed.put(streamId, new StreamMarks(marks.floor(), byType, marks.pending(), marks.legacyFailed(), marks.pendingSince()));
+        });
+        return trimmed;
     }
 
     /**

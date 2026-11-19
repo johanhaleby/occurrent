@@ -534,7 +534,7 @@ class SagaReleaseSupportTest {
         void makes_it_active_and_clears_the_failure_record_the_quarantine_id_and_the_skip_count() {
             SagaEnvelope<OrderState> current = quarantined(releasingOn(9), 3L);
 
-            SagaEnvelope<OrderState> released = SagaExecutionSupport.withReleased(current, NOW);
+            SagaEnvelope<OrderState> released = SagaExecutionSupport.withReleased(current, NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
             assertAll(
                     () -> assertThat(released.status()).isEqualTo(SagaStatus.ACTIVE),
@@ -545,9 +545,56 @@ class SagaReleaseSupportTest {
             );
         }
 
+        private SagaEnvelope<OrderState> releasingWith(Map<String, StreamMarks> marks) {
+            SagaEnvelope<OrderState> from = quarantined(releasingOn(9), 3L);
+            return new SagaEnvelope<>("o1", from.state(), from.status(), from.version(), from.timers(), from.streamWatermarks(), from.positionWatermark(), from.createdAt(),
+                    from.updatedAt(), null, null, true, from.failure(), marks, from.quarantineSkipCount());
+        }
+
+        @Test
+        void trims_the_applied_versions_of_a_type_to_its_reorder_window_the_way_a_live_write_does() {
+            SagaEnvelope<OrderState> current = releasingWith(Map.of("o1", new StreamMarks(6, Map.of("type", new TypeMark(10, List.of(3L, 5L, 7L, 9L), 0)),
+                    Map.of("", List.of(12L)), List.of(4L), Map.of(12L, QUARANTINED_AT))));
+
+            StreamMarks released = SagaExecutionSupport.withReleased(current, NOW, 2).streamMarks().get("o1");
+
+            assertAll(
+                    () -> assertThat(released.byType()).isEqualTo(Map.of("type", new TypeMark(10, List.of(9L), 8))),
+                    () -> assertThat(released.floor()).isEqualTo(6),
+                    () -> assertThat(released.pending()).isEqualTo(Map.of("", List.of(12L))),
+                    () -> assertThat(released.legacyFailed()).isEqualTo(List.of(4L)),
+                    () -> assertThat(released.pendingSince()).isEqualTo(Map.of(12L, QUARANTINED_AT))
+            );
+        }
+
+        @Test
+        void trims_each_type_and_each_stream_by_its_own_mark() {
+            SagaEnvelope<OrderState> current = releasingWith(Map.of(
+                    "o1", new StreamMarks(6, Map.of(
+                            "a", new TypeMark(10, List.of(3L, 5L, 7L, 9L), 0),
+                            "b", new TypeMark(20, List.of(11L, 15L, 19L), 0)), Map.of(), List.of(), Map.of()),
+                    "o2", new StreamMarks(0, Map.of("a", new TypeMark(4, List.of(1L, 3L), 0)), Map.of(), List.of(), Map.of())));
+
+            Map<String, StreamMarks> released = SagaExecutionSupport.withReleased(current, NOW, 2).streamMarks();
+
+            assertAll(
+                    () -> assertThat(released.get("o1").byType()).isEqualTo(Map.of("a", new TypeMark(10, List.of(9L), 8), "b", new TypeMark(20, List.of(19L), 18))),
+                    () -> assertThat(released.get("o2").byType()).isEqualTo(Map.of("a", new TypeMark(4, List.of(3L), 2)))
+            );
+        }
+
+        @Test
+        void never_lowers_a_horizon_that_is_already_above_the_window() {
+            SagaEnvelope<OrderState> current = releasingWith(Map.of("o1", new StreamMarks(6, Map.of("type", new TypeMark(10, List.of(8L, 10L), 9)), Map.of(), List.of(), Map.of())));
+
+            StreamMarks released = SagaExecutionSupport.withReleased(current, NOW, 5).streamMarks().get("o1");
+
+            assertThat(released.byType()).isEqualTo(Map.of("type", new TypeMark(10, List.of(10L), 9)));
+        }
+
         @Test
         void refuses_an_instance_that_is_not_releasing() {
-            assertThatThrownBy(() -> SagaExecutionSupport.withReleased(quarantined(failedOn(9), 3L), NOW)).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> SagaExecutionSupport.withReleased(quarantined(failedOn(9), 3L), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW)).isInstanceOf(IllegalStateException.class);
         }
     }
 

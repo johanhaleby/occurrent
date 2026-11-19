@@ -832,7 +832,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             List<SkippedInput> first = records.findSkippedInputs(sagaId, quarantineId, 1);
             Instant now = clock.get();
             if (first.isEmpty()) {
-                if (stateStore.compareAndSaveWithoutState(sagaId, SagaExecutionSupport.withReleased(current, now), current.version())) {
+                if (stateStore.compareAndSaveWithoutState(sagaId, SagaExecutionSupport.withReleased(current, now, config.reorderWindow()), current.version())) {
                     log.info("Saga '{}' instance '{}' is released and ACTIVE again.", subscriptionId, sagaId);
                     return SagaSubscription.ReleaseResult.RELEASED;
                 }
