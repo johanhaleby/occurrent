@@ -83,8 +83,12 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * from before the pause can still be under way. That call can be waiting for such a replay, and both calls would then
  * reach the action together once the replay returns. The MongoDB subscription models wait for that call with no time
  * limit on the resumed run's own thread, in {@code ChangeStreamSubscriptions.waitForThePreviousRuns}, and
- * {@code InMemorySubscriptionModel} calls the action of each subscription from one thread. What this model does over
- * a wrapped model that breaks any of these rules is unspecified.
+ * {@code InMemorySubscriptionModel} calls the action of one subscription from one thread. A later subscribe of the
+ * same id after a cancel is a new subscription there, whose calls can run beside a call of the cancelled one. Since a
+ * cancel doesn't wait, such a call can still be in the action when the cancel returns. This model lets a call reach
+ * the action only while the subscription is still the one subscribed, and a later subscribe of the same id calls the
+ * action only once every call from before the cancel has returned. What this model does over a wrapped
+ * model that breaks any of these rules is unspecified.
  */
 @NullMarked
 public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
