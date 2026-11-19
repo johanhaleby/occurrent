@@ -5,15 +5,14 @@ Date: 2026-11-16
 ## Status
 
 Accepted. Decides [#1150](https://github.com/johanhaleby/occurrent/issues/1150) and
-[#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 23. Amends
-[ADR 62](0062-pluggable-projection-event-source.md) and
-[ADR 133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md) for the reactor stack,
-amends the marker order of
-[ADR 177](0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md) for the reactor stack, keeps
-the replay callbacks of
-[ADR 110](0110-a-replay-tells-the-view-where-it-begins-and-ends.md), and keeps the lease condition of
-[ADR 116](0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md) on the blocking push model's marker
-writes. Applies to both `CatchupThenPushSubscriptionModel`s, both `CatchupProjectionFeed`s and both
+[#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 23. Amends [ADR
+62](0062-pluggable-projection-event-source.md) and [ADR
+133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md) for the reactor stack, amends the
+marker order of [ADR 177](0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md) and decision 6
+of [ADR 132](0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md) for the reactor
+stack, keeps the replay callbacks of [ADR 110](0110-a-replay-tells-the-view-where-it-begins-and-ends.md), and keeps the
+lease condition of [ADR 116](0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md) on the blocking push
+model's marker writes. Applies to both `CatchupThenPushSubscriptionModel`s, both `CatchupProjectionFeed`s and both
 `DomainEventFeed`s.
 
 ## Context
@@ -28,7 +27,8 @@ Two paths try to delete the marker so that whatever runs next for the id replays
 
 * `ReactiveHandover` asks its source to delete it through `Source.forgetCaughtUp()` when it starts failing, on its
   first failed catch-up or its first failed delivery of an event nothing waits for, so a replay that reads no marker
-  replays that event. A source that refused the stored checkpoint as not a marker deletes nothing. "Fed-back
+  replays that event. A catch-up on a handover that has already started failing also asks for the delete of a
+  marker it may have written. A source that refused the stored checkpoint as not a marker deletes nothing. "Fed-back
   events on the reactor stack" lists which failures ask for the delete.
 * Both `CatchupThenPushSubscriptionModel`s delete it on `cancelSubscription(id)`.
 
@@ -259,7 +259,7 @@ event of its own waiting, so it stores H.
 X is waited when W's caller waits for W's answer and that answer has not gone out, which `waitingParent(..)` in
 `ReactiveHandover` decides. A waited X that fails goes to `partEnded(..)` and fails only W's answer. One that nothing
 waits for goes to `failingFrom(..)`. On B's handover's first failure that makes it start failing and ask the source to
-forget the marker through `forgetCaughtUp()`, in up to 4 attempts with a timeout on each, and on a later failure it
+forget the marker through `forgetCaughtUp()`, in up to 4 attempts with a timeout on each, and a later failed delivery
 asks for nothing.
 
 Each row of the table says whether a later start can skip X, and when. A start skips X when it reads a stored
@@ -295,14 +295,17 @@ without a broker copy, and the contract above applies to it.
 `ReactiveHandover` also keeps asking the source to delete the marker through `Source.forgetCaughtUp()` when it starts
 failing, as in 0.34.0, as a backstop behind that rule. It starts failing on its first failed catch-up or its first
 failed delivery of an event nothing waits for. A failed delivery of an event that something waits for asks for no
-delete, see the table above. It makes the request up to four times and logs when every attempt failed. The reactor
-push model keeps `markersNotYetDeleted` from 0.34.0, as "What a reactor catch-up start replays" describes. When the
-checkpoint stored under the id is not a global position, such as a durable subscription's resume token, the
-catch-up fails naming the id and the backstop deletes nothing, since that checkpoint is not the catch-up's to delete.
-A durable subscription's checkpoint that is a global position passes that check and is deleted like a marker, which is
-one more reason an id must not be shared.
-[#1552](https://github.com/johanhaleby/occurrent/issues/1552) tracks delivering the fed-back events before the marker
-is written, as `BlockingHandover` does, which would let the marker move on under steady fed-back traffic.
+delete, see the table above. It makes the request up to four times and logs when every attempt failed. Two paths of a
+catch-up also ask for the delete once the handover has started failing. A catch-up whose marker write completes after
+another failure started it failing asks for the delete of the marker it just wrote. A catch-up that fails on a handover
+that is already failing asks for it again when its marker write may have been sent, since a write that errored can still
+be stored after the first delete. The reactor push model keeps `markersNotYetDeleted` from 0.34.0, as "What a reactor
+catch-up start replays" describes. When the checkpoint stored under the id is not a global position, such as a durable
+subscription's resume token, the catch-up fails naming the id and the backstop deletes nothing, since that checkpoint is
+not the catch-up's to delete. A durable subscription's checkpoint that is a global position passes that check and is
+deleted like a marker, which is one more reason an id must not be shared.
+[#1552](https://github.com/johanhaleby/occurrent/issues/1552) tracks delivering the fed-back events before the marker is
+written, as `BlockingHandover` does, which would let the marker move on under steady fed-back traffic.
 
 ### The replay callbacks
 
@@ -323,13 +326,13 @@ it for a replay after P would drop the records of appends the view still holds. 
 "Markers that 0.34.0 stored" describes.
 
 A replay after P is plain delivery for the applied-append recorder too. Outside a catch-up the recorder records every
-append the projection applies, so it records each append such a replay applies. ADR 132 decision 6 still holds. It
-keeps a full replay, the history a catch-up reads from the beginning, from recording anything, and a replay after P is
-not one. Its events are the ones after the stored position, which is the volume the same projection records when it
-handles them live. Both MongoDB stores upsert one document per projection id and append id, so an append the
-projection recorded before the restart costs one more write and adds no document. A new document is written for each
-replayed append that has no record yet, which on the first 0.35.0 start can be most of the appends, and the TTL index
-on `recordedAt` removes them as it removes every other record.
+append the projection applies, so it records each append such a replay applies. This amends ADR 132 decision 6 for the
+reactor stack. Its rule keeps the recorder from recording while any replay reads its history, and on the reactor stack
+it now covers only a replay from the beginning. A replay after P delivers the events after the stored position, which is
+the volume the same projection records when it handles them live. Both MongoDB stores upsert one document per projection
+id and append id, so an append the projection recorded before the restart costs one more write and adds no document. A
+new document is written for each replayed append that has no record yet, which on the first 0.35.0 start can be most of
+the appends, and the TTL index on `recordedAt` removes them as it removes every other record.
 
 The `CatchupListener` that `listenForCatchup` gives a push model follows the same rule on the reactor stack. The
 reactor push model sends `catchupStarted`, `historyRead` and `alreadyDeliveredByReplay` only for a replay from the
