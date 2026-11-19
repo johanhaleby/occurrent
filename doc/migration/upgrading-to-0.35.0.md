@@ -3046,10 +3046,10 @@ What you see:
   event twice with the same result as once needs no change.
 - `catchUp()` on a feed with a stored marker replays the events after it, where 0.34.0 went straight to live.
 - A `@Projection` with `source = PUSH` waits for its catch-up at startup unless it sets `startupMode = BACKGROUND`, and
-  the marker is stored only once the replay is done. In 0.34.0 only the first start replayed, and now a start that
-  finds a stored marker replays too. When the replay takes longer than a startup probe, such as a Kubernetes one,
-  allows, the probe can restart the application before the marker is written, and the next start can replay those
-  events again. Set `startupMode = BACKGROUND` so the application starts while the catch-up runs.
+  the marker is stored only once the replay is done. In 0.34.0 a start that found a stored marker went live at once,
+  and now it replays the events after the marker first. When the replay takes longer than a startup probe, such as a
+  Kubernetes one, allows, the probe can restart the application before the marker is written, and the next start can
+  replay those events again. Set `startupMode = BACKGROUND` so the application starts while the catch-up runs.
 - On `CatchupProjectionFeed` and `DomainEventFeed`, where a catch-up can run again after `goLive()`, a catch-up can
   leave the stored marker as it was while an event that the feed's own handler or callbacks fed back waits to be
   handled. A handler that feeds back an event whenever it handles one, under steady live traffic, can then keep the
