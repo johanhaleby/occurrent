@@ -52,8 +52,13 @@ public interface CatchupListener {
      * projection records from here on, because for some of those events this catch-up is the only delivery they get.
      * <p>
      * Ignored for any episode other than the one currently held, which is what stops a catch-up that has lost its
-     * subscription from moving its replacement past a history the replacement has not read. Not sent at all for a
-     * history a stop truncated, since a history that stopped part way through is not a history that was read.
+     * subscription from moving its replacement past a history the replacement has not read.
+     * <p>
+     * A history that a stop, a cancel or a failure cut short is not a history that was read. A model either sends
+     * nothing for it, so the next {@link #catchupStarted(Object)} of the subscription supersedes the episode, or sends
+     * this for it before the next catch-up of the subscription replays, as the reactor {@code
+     * CatchupThenPushSubscriptionModel} does. Sent that way it means stop waiting for that history and record from
+     * here, and the next catch-up's {@code catchupStarted} can follow at once. A shutdown sends neither.
      *
      * @param episode The catch-up whose history has been read, as given to {@link #catchupStarted(Object)}.
      */

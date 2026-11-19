@@ -643,9 +643,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     /**
      * The listener hears a catch-up only when it replays from the beginning. A catch-up that resumes after a stored
-     * marker delivers its events the way the live feed does and sends the listener nothing, so a recording projection
-     * keeps what it recorded before the restart (ADR 179). The blocking push model still tells its listener about
-     * every start.
+     * marker delivers its events the way the live feed does and sends nothing about itself, so a recording projection
+     * keeps what it recorded before the restart (ADR 179). Before the next catch-up of the id replays, whether from the
+     * beginning or after a marker, the listener hears {@code historyRead} for a catch-up it heard start and that a
+     * stop, a cancel or a failure cut short. A shutdown sends it nothing. The blocking push model still tells its
+     * listener about every start.
      */
     @Override
     public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
