@@ -2734,9 +2734,9 @@ then skips its replay. 0.34.0 had the same gap.
 * Rebuild a push `@Saga` under a new id only when its completed instances are kept for as long as the history it
   replays. A new id replays the whole history into the saga, so every instance that its TTL removed is recreated from
   its start event and dispatches its commands again.
-* Don't give a durable subscription and a catch-up-then-push model, a `CatchupProjectionFeed` or a `DomainEventFeed`
-  the same subscription id in the same `CheckpointStorage`. Any checkpoint stored under the id counts as the marker, so
-  a checkpoint the durable subscription stored makes the catch-up skip its replay.
+* Don't give a durable subscription and a blocking catch-up-then-push model, `CatchupProjectionFeed` or
+  `DomainEventFeed` the same subscription id in the same `CheckpointStorage`. Any checkpoint stored under the id counts
+  as the marker, so a checkpoint the durable subscription stored makes the blocking catch-up skip its replay.
 
 The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
 [ADR 179](../architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md)
