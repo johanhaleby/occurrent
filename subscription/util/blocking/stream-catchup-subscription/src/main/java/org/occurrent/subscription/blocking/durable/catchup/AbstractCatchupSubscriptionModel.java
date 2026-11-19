@@ -562,9 +562,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Hands {@code subscriptionId} to the live delegate, held paused there when {@code holdPaused} is set. Called with
      * the handover lock held. When a replay that a cancel or a stop ended for the id can still be in the subscriber's
      * action, each call the live delegate makes to the action first waits for that replay to return, on the live
-     * delegate's thread, so the action never runs alongside itself. The subscribe itself returns without that wait. A
-     * cancel of the id under way during the wait ends it with {@link AttemptNotMade}, so the live delegate stores no
-     * position past the event, and a live delegate whose cancel waits for the call isn't held up by the wait.
+     * delegate's thread, so the action never runs alongside itself. The subscribe itself returns without that wait. The
+     * wait ends once the subscription is gone, and the event then doesn't reach the action. A cancel that throws keeps
+     * the subscription, so the event waits on and reaches the action once the replay has returned. An interrupt doesn't
+     * end the wait. It is set again once the wait is over.
      */
     protected Subscription subscribeInTheWrappedModel(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         Consumer<CloudEvent> afterEndedReplays = afterEndedReplaysReturned(subscriptionId, action);
@@ -575,8 +576,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     // The action, or, while a replay a cancel or a stop ended for subscriptionId can still be in it, the action called
     // only once that replay has returned. The wait ends early once the subscription is gone, and the event is then not
-    // handed to the action, since nothing wants it any more. A cancel under way ends it with AttemptNotMade. Called with
-    // the handover lock held.
+    // handed to the action, since nothing wants it any more. Called with the handover lock held.
     private Consumer<CloudEvent> afterEndedReplaysReturned(String subscriptionId, Consumer<CloudEvent> action) {
         CompletableFuture<Void> endedReplaysReturned = endedReplaysReturned(subscriptionId, null);
         if (endedReplaysReturned.isDone()) {
@@ -591,29 +591,31 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     // Whether the wait ended because the replays returned, rather than because the subscription is no longer wanted
     private boolean awaitEndedReplays(String subscriptionId, CompletableFuture<Void> endedReplaysReturned) {
-        while (!endedReplaysReturned.isDone()) {
-            // Withdrawn rather than skipped while a cancel is under way. A live delegate whose cancel waits for this call
-            // would otherwise wait for it while it waits for the cancel. Returning would let the live delegate store its
-            // position past the event, and a cancel that throws keeps the subscription. Withdrawn, the event is never
-            // acknowledged, so the live delegate stores no position past it.
-            if (cancelsUnderWay.containsKey(subscriptionId)) {
-                throw new AttemptNotMade("An event of subscription " + subscriptionId + " was withdrawn while it waited for a catch-up replay that a cancel or a stop ended to return from the action, since a cancel of the subscription is under way");
+        boolean interrupted = false;
+        try {
+            while (!endedReplaysReturned.isDone()) {
+                // Gone only once a cancel has returned, since a cancel forgets the subscription after the live delegate's
+                // cancel and keeps it when that throws. The event then waits on and reaches the action, because a live
+                // delegate that still runs the subscription won't deliver the event again. Throwing here would end the
+                // live delegate's delivery of the id, and returning would let it store its position past the event.
+                if (!subscribed.containsKey(subscriptionId)) {
+                    return false;
+                }
+                try {
+                    endedReplaysReturned.get(EARLIER_ATTEMPT_POLL_MILLIS, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException | ExecutionException ignored) {
+                    // Checked again on the next round
+                } catch (InterruptedException e) {
+                    // Waited on rather than thrown, for the same reason, and set again once the wait is over
+                    interrupted = true;
+                }
             }
-            if (!subscribed.containsKey(subscriptionId)) {
-                return false;
-            }
-            try {
-                endedReplaysReturned.get(EARLIER_ATTEMPT_POLL_MILLIS, TimeUnit.MILLISECONDS);
-            } catch (TimeoutException | ExecutionException ignored) {
-                // Checked again on the next round
-            } catch (InterruptedException e) {
-                // Thrown rather than returned, so a live delegate that stores its position once the action returns
-                // doesn't store one past an event the action never got
+            return true;
+        } finally {
+            if (interrupted) {
                 Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted while subscription " + subscriptionId + " waited for a catch-up replay that a cancel or a stop ended to return from the action", e);
             }
         }
-        return true;
     }
 
     /**

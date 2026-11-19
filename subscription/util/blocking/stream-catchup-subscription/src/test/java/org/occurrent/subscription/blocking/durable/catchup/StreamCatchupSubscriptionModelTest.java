@@ -2869,25 +2869,26 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     /**
-     * A live delegate whose cancel waits for the callback it runs for the id waits here for the live event's call, which
-     * waits for the replay a cancel ended, so that call has to end as soon as the cancel is under way, not once the
-     * replay has returned.
+     * A cancel that returned has forgotten the subscription, so the live event waiting for the replay a cancel ended has
+     * nothing to be handed to and ends its wait instead of waiting for that replay.
      */
     @Test
     @Timeout(30)
-    void a_cancel_of_a_live_delegate_that_waits_for_its_callback_does_not_wait_for_a_live_event_that_waits_for_an_ended_replays_call() throws InterruptedException {
+    void a_live_event_waiting_for_an_ended_replay_is_skipped_without_reaching_the_action_once_a_cancel_of_its_subscription_has_returned() throws InterruptedException {
         // Given
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
-        write(eventStore, nameDefined("history"));
+        NameDefined history = nameDefined("history");
+        write(eventStore, history);
         CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(liveModel, eventStore,
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
-        AtomicInteger entered = new AtomicInteger();
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
         CountDownLatch replayCallEntered = new CountDownLatch(1);
         CountDownLatch releaseReplayCall = new CountDownLatch(1);
         Consumer<CloudEvent> action = cloudEvent -> {
-            if (entered.incrementAndGet() == 1) {
+            received.add(cloudEvent.getId());
+            if (received.size() == 1) {
                 replayCallEntered.countDown();
                 awaitLatch(releaseReplayCall);
             }
@@ -2903,24 +2904,20 @@ class StreamCatchupSubscriptionModelTest {
             assertThat(subscribeLive.returnsWithin(Duration.ofSeconds(5))).as("the live subscribe returned").isTrue();
             write(eventStore, nameDefined("live"));
             await().atMost(Duration.ofSeconds(5)).until(() -> liveCallWaitsForTheEndedReplays());
-            liveModel.cancelWaitsForItsCallbackAndThen(null);
 
             // When
             cancel = Call.start(() -> subscription.cancelSubscription("subscription"));
 
             // Then
-            assertThat(cancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned within the live delegate's wait for its callback, which ends after %s s", CheckpointAwareInMemorySubscriptionModel.CALLBACK_WAIT_SECONDS).isTrue();
+            assertThat(cancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned while the replay's call is still in the action").isTrue();
             assertThat(cancel.failure()).as("what the cancel threw").isNull();
-            assertThat(entered.get()).as("the calls to the action while the replay's call is still in it, the live event's didn't reach it").isEqualTo(1);
-            assertThat(storage.read("subscription")).as("the position stored for the cancelled subscription").isNull();
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(liveCallWaitsForTheEndedReplays()).as("the live event still waits for the ended replay").isFalse());
 
             // When the replay's call is released
             releaseReplayCall.countDown();
 
-            // Then the live event's call ended without reaching the action
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(liveModel.callbackEnds()).as("how the live delegate's callbacks ended").containsExactly("AttemptNotMade"));
-            assertThat(entered.get()).as("the calls to the action, the replay's only").isEqualTo(1);
-            assertThat(storage.read("subscription")).as("the position stored for the cancelled subscription").isNull();
+            // Then the live event never reaches the action. The double acknowledges it all the same, since its callback returned and the subscription is gone.
+            await().during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).as("the events the action was given").containsExactly(history.eventId()));
         } finally {
             releaseReplayCall.countDown();
             if (subscribeLive != null) {
@@ -2934,24 +2931,29 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     /**
-     * A cancel that fails keeps the subscription, so the live event whose call ended for that cancel is not past the
-     * stored position.
+     * A cancel that throws before the live delegate has cancelled leaves the live delegate running the subscription, so
+     * the live event waiting for the ended replay has to reach the action once that replay returns. The live delegate
+     * stores its position past an event it is told is done, and won't deliver that event again.
      */
     @Test
     @Timeout(30)
-    void a_live_event_whose_call_ended_for_a_cancel_that_failed_is_not_stored_and_never_reaches_the_action() throws InterruptedException {
+    void a_live_event_waiting_for_an_ended_replay_is_kept_and_reaches_the_action_in_order_when_the_cancel_failed_without_cancelling_the_live_delegate() throws InterruptedException {
         // Given
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
-        write(eventStore, nameDefined("history"));
+        NameDefined history = nameDefined("history");
+        NameDefined live1 = nameDefined("live1");
+        NameDefined live2 = nameDefined("live2");
+        write(eventStore, history);
         CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(liveModel, eventStore,
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
-        AtomicInteger entered = new AtomicInteger();
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
         CountDownLatch replayCallEntered = new CountDownLatch(1);
         CountDownLatch releaseReplayCall = new CountDownLatch(1);
         Consumer<CloudEvent> action = cloudEvent -> {
-            if (entered.incrementAndGet() == 1) {
+            received.add(cloudEvent.getId());
+            if (received.size() == 1) {
                 replayCallEntered.countDown();
                 awaitLatch(releaseReplayCall);
             }
@@ -2965,27 +2967,27 @@ class StreamCatchupSubscriptionModelTest {
             subscription.cancelSubscription("subscription");
             subscribeLive = Call.start(() -> subscription.subscribe("subscription", StartAt.now(), action));
             assertThat(subscribeLive.returnsWithin(Duration.ofSeconds(5))).as("the live subscribe returned").isTrue();
-            write(eventStore, nameDefined("live"));
+            write(eventStore, live1);
             await().atMost(Duration.ofSeconds(5)).until(() -> liveCallWaitsForTheEndedReplays());
-            Checkpoint storedBefore = storage.read("subscription");
-            liveModel.cancelWaitsForItsCallbackAndThen(new IllegalStateException("the live delegate could not cancel"));
+            liveModel.cancelThrows(new IllegalStateException("the live delegate could not cancel"));
 
             // When
             cancel = Call.start(() -> subscription.cancelSubscription("subscription"));
 
             // Then
-            assertThat(cancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned within the live delegate's wait for its callback, which ends after %s s", CheckpointAwareInMemorySubscriptionModel.CALLBACK_WAIT_SECONDS).isTrue();
+            assertThat(cancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned while the replay's call is still in the action").isTrue();
             assertThat(cancel.failure()).as("what the cancel threw").isInstanceOf(IllegalStateException.class).hasMessage("the live delegate could not cancel");
-            assertThat(entered.get()).as("the calls to the action while the replay's call is still in it, the live event's didn't reach it").isEqualTo(1);
-            assertThat(storage.read("subscription")).as("the position stored for the subscription the cancel kept, which the live event is not past").isEqualTo(storedBefore);
+            await().during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(liveModel.acknowledged("subscription")).as("the events the live delegate was told are done").isEmpty());
+            assertThat(liveModel.isRunning("subscription")).as("the live delegate still runs the subscription").isTrue();
 
-            // When the replay's call is released
+            // When the replay's call is released and a later live event is written
             releaseReplayCall.countDown();
+            write(eventStore, live2);
 
-            // Then the live event's call ended without reaching the action
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(liveModel.callbackEnds()).as("how the live delegate's callbacks ended").containsExactly("AttemptNotMade"));
-            assertThat(entered.get()).as("the calls to the action, the replay's only").isEqualTo(1);
-            assertThat(storage.read("subscription")).as("the position stored for the subscription the cancel kept").isEqualTo(storedBefore);
+            // Then both live events reach the action once each, in order
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).as("the events the action was given").containsExactly(history.eventId(), live1.eventId(), live2.eventId()));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(liveModel.acknowledged("subscription")).as("the events the live delegate was told are done").containsExactly(live1.eventId(), live2.eventId()));
+            assertThat(liveModel.resumeCalls()).as("the resumes of the live delegate").isZero();
         } finally {
             releaseReplayCall.countDown();
             if (subscribeLive != null) {
@@ -2993,6 +2995,72 @@ class StreamCatchupSubscriptionModelTest {
             }
             if (cancel != null) {
                 cancel.join();
+            }
+            subscription.shutdown();
+        }
+    }
+
+    /**
+     * A cancel that cancels the live delegate and then throws, as a durable live delegate does when deleting its stored
+     * position fails, keeps the subscription, so the live event waiting for the ended replay reaches the action and a
+     * resume subscribes again.
+     */
+    @Test
+    @Timeout(30)
+    void a_subscription_whose_cancel_cancelled_the_live_delegate_and_then_failed_is_resumed_and_gives_the_action_its_live_events_in_order() throws InterruptedException {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        NameDefined history = nameDefined("history");
+        NameDefined live1 = nameDefined("live1");
+        NameDefined live2 = nameDefined("live2");
+        write(eventStore, history);
+        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(liveModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        CountDownLatch replayCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplayCall = new CountDownLatch(1);
+        Consumer<CloudEvent> action = cloudEvent -> {
+            received.add(cloudEvent.getId());
+            if (received.size() == 1) {
+                replayCallEntered.countDown();
+                awaitLatch(releaseReplayCall);
+            }
+        };
+        Call subscribeLive = null;
+        Call cancel = null;
+        Call resume = null;
+
+        try {
+            subscription.subscribe("subscription", StartAtTime.beginningOfTime(), action);
+            assertThat(replayCallEntered.await(5, TimeUnit.SECONDS)).as("the replay's call is in the action").isTrue();
+            subscription.cancelSubscription("subscription");
+            subscribeLive = Call.start(() -> subscription.subscribe("subscription", StartAt.now(), action));
+            assertThat(subscribeLive.returnsWithin(Duration.ofSeconds(5))).as("the live subscribe returned").isTrue();
+            write(eventStore, live1);
+            await().atMost(Duration.ofSeconds(5)).until(() -> liveCallWaitsForTheEndedReplays());
+            liveModel.cancelsAndThenThrows(new IllegalStateException("the live delegate could not delete its position"));
+            cancel = Call.start(() -> subscription.cancelSubscription("subscription"));
+            assertThat(cancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned while the replay's call is still in the action").isTrue();
+            assertThat(cancel.failure()).as("what the cancel threw").isInstanceOf(IllegalStateException.class).hasMessage("the live delegate could not delete its position");
+            releaseReplayCall.countDown();
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).as("the events the action was given").containsExactly(history.eventId(), live1.eventId()));
+
+            // When
+            resume = Call.start(() -> subscription.resumeSubscription("subscription"));
+            assertThat(resume.returnsWithin(Duration.ofSeconds(10))).as("the resume returned").isTrue();
+            write(eventStore, live2);
+
+            // Then
+            assertThat(resume.failure()).as("what the resume threw").isNull();
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).as("the events the action was given").containsSubsequence(live1.eventId(), live2.eventId()));
+        } finally {
+            releaseReplayCall.countDown();
+            for (Call call : new Call[]{subscribeLive, cancel, resume}) {
+                if (call != null) {
+                    call.join();
+                }
             }
             subscription.shutdown();
         }
@@ -3759,13 +3827,18 @@ class StreamCatchupSubscriptionModelTest {
         private final List<Checkpoint> resumeProbes = new CopyOnWriteArrayList<>();
         private final List<String> liveStarts = new CopyOnWriteArrayList<>();
         private final AtomicInteger globalCheckpointReads = new AtomicInteger();
-        // The cap on the wait of a cancel for the callback in flight, so a regression can't hang the build
-        private static final long CALLBACK_WAIT_SECONDS = 10;
-        private final ConcurrentHashMap<String, CountDownLatch> callbackInFlight = new ConcurrentHashMap<>();
-        // How each callback ended, the simple name of what it threw, or "returned"
-        private final List<String> callbackEnds = new CopyOnWriteArrayList<>();
-        private volatile boolean cancelWaitsForItsCallback = false;
+        // The ids of the events whose callback returned normally, per subscription id, which is what a durable live
+        // delegate stores as its position
+        private final ConcurrentHashMap<String, List<String>> acknowledged = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<String, LiveSubscription> subscriptions = new ConcurrentHashMap<>();
+        // What a cancel that cancelled and then threw left for resumeSubscription to subscribe again
+        private final ConcurrentHashMap<String, LiveSubscription> keptByAFailedCancel = new ConcurrentHashMap<>();
+        private final AtomicInteger resumeCalls = new AtomicInteger();
         private volatile @Nullable RuntimeException cancelFailure;
+        private volatile boolean cancelFailureCancelsFirst = false;
+
+        private record LiveSubscription(@Nullable SubscriptionFilter filter, Consumer<CloudEvent> action) {
+        }
 
         private CheckpointAwareInMemorySubscriptionModel(InMemorySubscriptionModel delegate) {
             this(delegate, new StringBasedCheckpoint("in-memory-global-position"));
@@ -3786,20 +3859,10 @@ class StreamCatchupSubscriptionModelTest {
             StartAt resolved = startAt.get(new StartAt.SubscriptionModelContext(InMemorySubscriptionModel.class));
             liveStarts.add(String.valueOf(resolved));
             StartAt startAtToUse = resolved != null && resolved.isDefault() ? StartAt.subscriptionModelDefault() : StartAt.now();
-            // The delegate's thread ends a callback that throws AttemptNotMade, which its retry rethrows
+            subscriptions.put(subscriptionId, new LiveSubscription(filter, action));
             Consumer<CloudEvent> tracked = cloudEvent -> {
-                CountDownLatch inFlight = new CountDownLatch(1);
-                callbackInFlight.put(subscriptionId, inFlight);
-                try {
-                    action.accept(cloudEvent);
-                    callbackEnds.add("returned");
-                } catch (Throwable e) {
-                    callbackEnds.add(e.getClass().getSimpleName());
-                    throw e;
-                } finally {
-                    callbackInFlight.remove(subscriptionId, inFlight);
-                    inFlight.countDown();
-                }
+                action.accept(cloudEvent);
+                acknowledged.computeIfAbsent(subscriptionId, id -> new CopyOnWriteArrayList<>()).add(cloudEvent.getId());
             };
             return delegate.subscribe(subscriptionId, filter, startAtToUse, tracked);
         }
@@ -3843,12 +3906,14 @@ class StreamCatchupSubscriptionModelTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId) {
-            return delegate.resumeSubscription(subscriptionId);
+            resumeCalls.incrementAndGet();
+            LiveSubscription kept = keptByAFailedCancel.remove(subscriptionId);
+            return kept == null ? delegate.resumeSubscription(subscriptionId) : subscribe(subscriptionId, kept.filter(), StartAt.now(), kept.action());
         }
 
         @Override
         public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-            return delegate.resumeSubscription(subscriptionId);
+            return resumeSubscription(subscriptionId);
         }
 
         @Override
@@ -3858,31 +3923,40 @@ class StreamCatchupSubscriptionModelTest {
 
         @Override
         public void cancelSubscription(String subscriptionId) {
-            CountDownLatch inFlight = cancelWaitsForItsCallback ? callbackInFlight.get(subscriptionId) : null;
-            if (inFlight != null) {
-                try {
-                    inFlight.await(CALLBACK_WAIT_SECONDS, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException(e);
-                }
-            }
             RuntimeException failure = cancelFailure;
-            if (failure != null) {
+            if (failure != null && !cancelFailureCancelsFirst) {
                 throw failure;
             }
+            LiveSubscription cancelled = subscriptions.remove(subscriptionId);
             delegate.cancelSubscription(subscriptionId);
+            if (failure != null) {
+                if (cancelled != null) {
+                    keptByAFailedCancel.put(subscriptionId, cancelled);
+                }
+                throw failure;
+            }
         }
 
-        // From now on a cancel first waits for the callback the delegate runs for the id to return, as nothing in the
-        // SubscriptionModel contract forbids, and then throws failure instead of cancelling when given
-        private void cancelWaitsForItsCallbackAndThen(@Nullable RuntimeException failure) {
-            this.cancelWaitsForItsCallback = true;
+        // From now on a cancel throws failure without cancelling, as a live delegate that can't reach what holds the
+        // subscription does, so the subscription keeps running
+        private void cancelThrows(RuntimeException failure) {
             this.cancelFailure = failure;
+            this.cancelFailureCancelsFirst = false;
         }
 
-        private List<String> callbackEnds() {
-            return List.copyOf(callbackEnds);
+        // From now on a cancel cancels the subscription and then throws failure, as a durable live delegate does when
+        // deleting its stored position fails. A resume subscribes it again. DurableSubscriptionModel over NativeMongoSubscriptionModel throws UnknownSubscriptionException on that resume instead, so the resume here models a live delegate that keeps the id.
+        private void cancelsAndThenThrows(RuntimeException failure) {
+            this.cancelFailure = failure;
+            this.cancelFailureCancelsFirst = true;
+        }
+
+        private List<String> acknowledged(String subscriptionId) {
+            return List.copyOf(acknowledged.getOrDefault(subscriptionId, List.of()));
+        }
+
+        private int resumeCalls() {
+            return resumeCalls.get();
         }
     }
 }
