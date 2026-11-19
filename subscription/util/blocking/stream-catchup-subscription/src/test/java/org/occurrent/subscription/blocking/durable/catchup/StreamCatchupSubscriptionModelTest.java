@@ -23,6 +23,7 @@ import ch.qos.logback.classic.spi.ThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.v1.CloudEventV1;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -70,6 +71,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -3249,7 +3251,7 @@ class StreamCatchupSubscriptionModelTest {
         CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(liveModel, eventStore, new CatchupSubscriptionModelConfig(100));
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        io.cloudevents.CloudEvent late = io.cloudevents.core.builder.CloudEventBuilder.v1().withId("late").withSource(java.net.URI.create("urn:test")).withType("late").build();
+        CloudEvent late = CloudEventBuilder.v1().withId("late").withSource(URI.create("urn:test")).withType("late").build();
 
         try {
             subscription.subscribe("subscription", StartAt.now(), cloudEvent -> received.add(cloudEvent.getId()));
@@ -3268,6 +3270,55 @@ class StreamCatchupSubscriptionModelTest {
         }
     }
 
+    /**
+     * The documented limit of the gate on a live call after a cancel. A subclass that overrides the protected
+     * startCatchupAsync and calls super on another thread starts the replay without the subscription's record, so the
+     * live delegate's call that comes after a cancel reaches the action, as it did in 0.34.0.
+     */
+    @Test
+    @Timeout(30)
+    void known_limit_a_late_live_call_after_a_cancel_reaches_the_action_when_a_subclass_starts_the_replay_on_another_thread_as_in_0_34_0() throws InterruptedException {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        NameDefined history = nameDefined("history");
+        write(eventStore, history);
+        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(liveModel, eventStore, new CatchupSubscriptionModelConfig(100)) {
+            @Override
+            protected Future<Subscription> startCatchupAsync(String subscriptionId, CatchupReplay catchup, boolean holdPaused) {
+                // Not waited for here, since the subscribing thread holds the handover lock that the call on the other thread takes
+                CompletableFuture<Subscription> started = new CompletableFuture<>();
+                Thread.ofVirtual().start(() -> {
+                    try {
+                        started.complete(super.startCatchupAsync(subscriptionId, catchup, holdPaused).get());
+                    } catch (Exception e) {
+                        started.completeExceptionally(e);
+                    }
+                });
+                return started;
+            }
+        };
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        CloudEvent late = CloudEventBuilder.v1().withId("late").withSource(URI.create("urn:test")).withType("late").build();
+
+        try {
+            subscription.subscribe("subscription", StartAtTime.beginningOfTime(), cloudEvent -> received.add(cloudEvent.getId()));
+            await().atMost(Duration.ofSeconds(5)).until(() -> received.contains(history.eventId()) && liveModel.isRunning("subscription"));
+            subscription.cancelSubscription("subscription");
+
+            // When
+            Throwable thrown = catchThrowable(() -> liveModel.deliverToTheCancelled("subscription", late));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).as("what the late live call threw").isNull(),
+                    () -> assertThat(received).as("the events the action was given").containsExactly(history.eventId(), "late")
+            );
+        } finally {
+            subscription.shutdown();
+        }
+    }
+
     @Test
     @Timeout(30)
     void a_live_event_that_waits_for_an_ended_replay_reaches_the_action_after_that_replays_call_returned_when_it_returns_while_the_catchup_model_shuts_down() throws InterruptedException {
@@ -3276,13 +3327,16 @@ class StreamCatchupSubscriptionModelTest {
         NameDefined history = nameDefined("history");
         NameDefined live = nameDefined("live");
         write(eventStore, history);
-        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel).stampingCheckpoints();
+        CountDownLatch replayCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplayCall = new CountDownLatch(1);
+        // Keeps reporting the subscription running while it waits for the live calls, and releases the replay's call at the
+        // moment its shutdown begins, which is before the live call has waited a second since this model began to shut down
+        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel).stampingCheckpoints()
+                .joiningLiveCallsOnShutdown(true).runningAtShutdown(releaseReplayCall::countDown);
         DurableSubscriptionModel durableLiveModel = new DurableSubscriptionModel(liveModel, new InMemoryCheckpointStorage());
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(durableLiveModel, eventStore,
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(new InMemoryCheckpointStorage()).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
         CopyOnWriteArrayList<String> trace = new CopyOnWriteArrayList<>();
-        CountDownLatch replayCallEntered = new CountDownLatch(1);
-        CountDownLatch releaseReplayCall = new CountDownLatch(1);
         Consumer<CloudEvent> action = cloudEvent -> {
             trace.add("enter " + cloudEvent.getId());
             if (cloudEvent.getId().equals(history.eventId())) {
@@ -3302,15 +3356,17 @@ class StreamCatchupSubscriptionModelTest {
             subscription.subscribe("subscription", StartAt.now(), action);
             write(eventStore, live);
             await().atMost(Duration.ofSeconds(5)).until(() -> liveCallWaitsForTheEndedReplays(liveModel));
+
+            // When the catch-up model shuts down, which returns the replay's call before the live delegate has stopped reporting the subscription running
             shutdown = Call.start(subscription::shutdown);
-            await().atMost(Duration.ofSeconds(10)).until(liveModel::shutdownBegan);
 
-            // When the replay's call returns before the live delegate interrupts the waiting call
-            releaseReplayCall.countDown();
-
-            // Then
-            await().atMost(Duration.ofSeconds(3)).untilAsserted(() -> assertThat(trace).as("what the action was given, in order").containsExactly("enter " + history.eventId(), "exit " + history.eventId(), "enter " + live.eventId(), "exit " + live.eventId()));
-            assertThat(liveModel.thrownByTheCallback()).as("what the live call threw").isEmpty();
+            // Then the live call reaches the action once the replay's call has returned
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(trace).as("what the action was given, in order").containsExactly("enter " + history.eventId(), "exit " + history.eventId(), "enter " + live.eventId(), "exit " + live.eventId()));
+            boolean shutdownReturned = shutdown.returnsWithin(Duration.ofSeconds(5));
+            assertAll(
+                    () -> assertThat(shutdownReturned).as("the catch-up model's shutdown returned").isTrue(),
+                    () -> assertThat(liveModel.thrownByTheCallback()).as("what the live call threw").isEmpty()
+            );
         } finally {
             releaseReplayCall.countDown();
             if (cancel != null) {
@@ -3362,19 +3418,193 @@ class StreamCatchupSubscriptionModelTest {
             shutdown = Call.start(subscription::shutdown);
             await().atMost(Duration.ofSeconds(10)).until(liveModel::shutdownBegan);
 
-            // Then the live call keeps waiting until the live delegate interrupts it, which the in-memory model does after it waited 5 seconds for its threads
-            await().during(Duration.ofMillis(700)).atMost(Duration.ofSeconds(3)).untilAsserted(() -> assertAll(
-                    () -> assertThat(liveModel.liveCallsEnded()).as("the live calls that ended before the live delegate interrupted the waiting one").isZero(),
-                    () -> assertThat(liveModel.thrownByTheCallback()).as("what the live call threw before the live delegate interrupted it").isEmpty(),
-                    () -> assertThat(received).as("the events the action was given before the live delegate interrupted the waiting call").containsExactly(history.eventId())
-            ));
-
-            // When the live delegate interrupts the waiting call
-            await().atMost(Duration.ofSeconds(15)).until(() -> liveModel.liveCallsEnded() > 0);
-
-            // Then
+            // Then the live call throws once the live delegate's shutdown has cleared its subscriptions, so it no longer reports the subscription running, while the replay's call is still in the action
+            await().atMost(Duration.ofSeconds(5)).until(() -> liveModel.liveCallsEnded() > 0);
+            boolean shutdownReturned = shutdown.returnsWithin(Duration.ofSeconds(5));
             assertAll(
-                    () -> assertThat(liveModel.thrownByTheCallback()).as("what the live call threw once interrupted").singleElement().isInstanceOf(AttemptNotMade.class),
+                    () -> assertThat(shutdownReturned).as("the catch-up model's shutdown returned").isTrue(),
+                    () -> assertThat(liveModel.thrownByTheCallback()).as("what the live call threw").singleElement().isInstanceOf(AttemptNotMade.class),
+                    () -> assertThat(liveStorage.read("subscription")).as("the checkpoint stored for the live event that was never given to the action").isNull(),
+                    () -> assertThat(received).as("the events the action was given while the replay's call is still in it").containsExactly(history.eventId())
+            );
+        } finally {
+            releaseReplayCall.countDown();
+            if (cancel != null) {
+                cancel.join();
+            }
+            if (shutdown != null) {
+                shutdown.join();
+            }
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void the_catchup_models_shutdown_returns_while_a_live_event_waits_for_an_ended_replay_stuck_in_the_action_when_the_live_delegates_shutdown_waits_for_its_threads_without_interrupting_them() throws InterruptedException {
+        // Given a live delegate that stops reporting the subscription running when its shutdown begins and then waits for the live call
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        NameDefined history = nameDefined("history");
+        NameDefined live = nameDefined("live");
+        write(eventStore, history);
+        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel).stampingCheckpoints().joiningLiveCallsOnShutdown(false);
+        InMemoryCheckpointStorage liveStorage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModel durableLiveModel = new DurableSubscriptionModel(liveModel, liveStorage);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(durableLiveModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(new InMemoryCheckpointStorage()).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        CountDownLatch replayCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplayCall = new CountDownLatch(1);
+        Consumer<CloudEvent> action = cloudEvent -> {
+            received.add(cloudEvent.getId());
+            if (received.size() == 1) {
+                replayCallEntered.countDown();
+                awaitLatch(releaseReplayCall);
+            }
+        };
+        Call cancel = null;
+        Call shutdown = null;
+
+        try {
+            subscription.subscribe("subscription", StartAtTime.beginningOfTime(), action);
+            assertThat(replayCallEntered.await(5, TimeUnit.SECONDS)).as("the replay's call is in the action").isTrue();
+            cancel = Call.start(() -> subscription.cancelSubscription("subscription"));
+            assertThat(cancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned while the replay's call is still in the action").isTrue();
+            subscription.subscribe("subscription", StartAt.now(), action);
+            write(eventStore, live);
+            await().atMost(Duration.ofSeconds(5)).until(() -> liveCallWaitsForTheEndedReplays(liveModel));
+
+            // When the catch-up model shuts down while the replay's call is still in the action
+            shutdown = Call.start(subscription::shutdown);
+            boolean shutdownReturned = shutdown.returnsWithin(Duration.ofSeconds(5));
+
+            // Then the shutdown returned, and the live call threw without reaching the action
+            assertThat(shutdownReturned).as("the catch-up model's shutdown returned while the replay's call is still in the action").isTrue();
+            assertAll(
+                    () -> assertThat(liveModel.thrownByTheCallback()).as("what the live call threw").singleElement().isInstanceOf(AttemptNotMade.class),
+                    () -> assertThat(liveStorage.read("subscription")).as("the checkpoint stored for the live event that was never given to the action").isNull(),
+                    () -> assertThat(received).as("the events the action was given while the replay's call is still in it").containsExactly(history.eventId())
+            );
+        } finally {
+            releaseReplayCall.countDown();
+            if (cancel != null) {
+                cancel.join();
+            }
+            if (shutdown != null) {
+                shutdown.join();
+            }
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_live_event_that_waits_for_an_ended_replay_throws_a_second_after_the_catchup_model_began_to_shut_down_when_the_live_delegate_still_reports_the_subscription_running() throws InterruptedException {
+        // Given a live delegate that keeps reporting the subscription running while its shutdown waits for the live call
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        NameDefined history = nameDefined("history");
+        NameDefined live = nameDefined("live");
+        write(eventStore, history);
+        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel).stampingCheckpoints().joiningLiveCallsOnShutdown(true);
+        InMemoryCheckpointStorage liveStorage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModel durableLiveModel = new DurableSubscriptionModel(liveModel, liveStorage);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(durableLiveModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(new InMemoryCheckpointStorage()).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        CountDownLatch replayCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplayCall = new CountDownLatch(1);
+        Consumer<CloudEvent> action = cloudEvent -> {
+            received.add(cloudEvent.getId());
+            if (received.size() == 1) {
+                replayCallEntered.countDown();
+                awaitLatch(releaseReplayCall);
+            }
+        };
+        Call cancel = null;
+        Call shutdown = null;
+
+        try {
+            subscription.subscribe("subscription", StartAtTime.beginningOfTime(), action);
+            assertThat(replayCallEntered.await(5, TimeUnit.SECONDS)).as("the replay's call is in the action").isTrue();
+            cancel = Call.start(() -> subscription.cancelSubscription("subscription"));
+            assertThat(cancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned while the replay's call is still in the action").isTrue();
+            subscription.subscribe("subscription", StartAt.now(), action);
+            write(eventStore, live);
+            await().atMost(Duration.ofSeconds(5)).until(() -> liveCallWaitsForTheEndedReplays(liveModel));
+
+            // When the catch-up model shuts down while the replay's call is still in the action
+            long beforeShutdown = System.nanoTime();
+            shutdown = Call.start(subscription::shutdown);
+
+            // Then the shutdown returns, although the replay's call is still in the action
+            boolean shutdownReturned = shutdown.returnsWithin(Duration.ofSeconds(5));
+            assertThat(shutdownReturned).as("the catch-up model's shutdown returned while the replay's call is still in the action").isTrue();
+
+            // And the live call threw no sooner than a second after the shutdown began, since the live delegate still reports the subscription running
+            assertAll(
+                    () -> assertThat(Duration.ofNanos(liveModel.lastLiveCallEndedNanos() - beforeShutdown)).as("how long after the shutdown began the live call ended").isGreaterThanOrEqualTo(AbstractCatchupSubscriptionModel.ACTION_WAIT),
+                    () -> assertThat(liveModel.thrownByTheCallback()).as("what the live call threw").singleElement().isInstanceOf(AttemptNotMade.class),
+                    () -> assertThat(liveStorage.read("subscription")).as("the checkpoint stored for the live event that was never given to the action").isNull(),
+                    () -> assertThat(received).as("the events the action was given while the replay's call is still in it").containsExactly(history.eventId())
+            );
+        } finally {
+            releaseReplayCall.countDown();
+            if (cancel != null) {
+                cancel.join();
+            }
+            if (shutdown != null) {
+                shutdown.join();
+            }
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void an_interrupt_of_a_live_event_that_waits_for_an_ended_replay_does_not_end_its_wait_while_the_catchup_model_shuts_down_and_the_live_delegate_still_reports_the_subscription_running() throws InterruptedException {
+        // Given a live delegate that keeps reporting the subscription running, and interrupts the waiting live call as its shutdown begins
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        NameDefined history = nameDefined("history");
+        NameDefined live = nameDefined("live");
+        write(eventStore, history);
+        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel).stampingCheckpoints().joiningLiveCallsOnShutdown(true);
+        liveModel.runningAtShutdown(() -> Objects.requireNonNull(liveModel.deliveryThread()).interrupt());
+        InMemoryCheckpointStorage liveStorage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModel durableLiveModel = new DurableSubscriptionModel(liveModel, liveStorage);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(durableLiveModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(new InMemoryCheckpointStorage()).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        CountDownLatch replayCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplayCall = new CountDownLatch(1);
+        Consumer<CloudEvent> action = cloudEvent -> {
+            received.add(cloudEvent.getId());
+            if (received.size() == 1) {
+                replayCallEntered.countDown();
+                awaitLatch(releaseReplayCall);
+            }
+        };
+        Call cancel = null;
+        Call shutdown = null;
+
+        try {
+            subscription.subscribe("subscription", StartAtTime.beginningOfTime(), action);
+            assertThat(replayCallEntered.await(5, TimeUnit.SECONDS)).as("the replay's call is in the action").isTrue();
+            cancel = Call.start(() -> subscription.cancelSubscription("subscription"));
+            assertThat(cancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned while the replay's call is still in the action").isTrue();
+            subscription.subscribe("subscription", StartAt.now(), action);
+            write(eventStore, live);
+            await().atMost(Duration.ofSeconds(5)).until(() -> liveCallWaitsForTheEndedReplays(liveModel));
+
+            // When the catch-up model shuts down, and the waiting live call is interrupted as it does
+            long beforeShutdown = System.nanoTime();
+            shutdown = Call.start(subscription::shutdown);
+
+            // Then the shutdown returns, and the interrupt didn't end the wait, which only the live delegate's report or the second after the shutdown began does
+            boolean shutdownReturned = shutdown.returnsWithin(Duration.ofSeconds(5));
+            assertThat(shutdownReturned).as("the catch-up model's shutdown returned while the replay's call is still in the action").isTrue();
+            assertAll(
+                    () -> assertThat(Duration.ofNanos(liveModel.lastLiveCallEndedNanos() - beforeShutdown)).as("how long after the shutdown began the interrupted live call ended").isGreaterThanOrEqualTo(AbstractCatchupSubscriptionModel.ACTION_WAIT),
+                    () -> assertThat(liveModel.thrownByTheCallback()).as("what the live call threw").singleElement().isInstanceOf(AttemptNotMade.class),
                     () -> assertThat(liveStorage.read("subscription")).as("the checkpoint stored for the live event that was never given to the action").isNull(),
                     () -> assertThat(received).as("the events the action was given while the replay's call is still in it").containsExactly(history.eventId())
             );
@@ -4642,9 +4872,20 @@ class StreamCatchupSubscriptionModelTest {
         // What the callback it was given threw, and how many of its calls have ended, returned or thrown
         private final List<Throwable> thrownByTheCallback = new CopyOnWriteArrayList<>();
         private final AtomicInteger liveCallsEnded = new AtomicInteger();
+        // System.nanoTime() as the last live call ended, 0 before one has
+        private volatile long lastLiveCallEndedNanos;
         // Gives each event a checkpoint, as a live model that reads a stream does, so a durable model over this one can store it
         private volatile boolean stampsCheckpoints = false;
         private volatile boolean shutdownBegan = false;
+        // Set for a live delegate whose shutdown waits for the live calls it has in flight without interrupting them, and
+        // then whether it keeps reporting its subscriptions running while it waits. Every other shutdown clears the
+        // subscriptions first, as the in-memory model does, and interrupts the threads after waiting 5 seconds for them
+        private volatile boolean joinsLiveCallsOnShutdown = false;
+        private volatile boolean reportsRunningWhileJoining = false;
+        // Run on the thread that shuts this model down, as soon as the shutdown begins, so a test acts at that moment
+        // instead of after a poll that can come late on a loaded machine
+        private volatile @Nullable Runnable atShutdown;
+        private final AtomicInteger liveCallsStarted = new AtomicInteger();
         // The callback each id was last subscribed with, kept after a cancel, for a call a live delegate makes late
         private final ConcurrentHashMap<String, Consumer<CloudEvent>> everSubscribed = new ConcurrentHashMap<>();
         private final ConcurrentHashMap<String, LiveSubscription> subscriptions = new ConcurrentHashMap<>();
@@ -4686,6 +4927,7 @@ class StreamCatchupSubscriptionModelTest {
             subscriptions.put(subscriptionId, new LiveSubscription(filter, action));
             everSubscribed.put(subscriptionId, action);
             Consumer<CloudEvent> tracked = cloudEvent -> {
+                liveCallsStarted.incrementAndGet();
                 deliveryThread = Thread.currentThread();
                 if (interruptBeforeTheNextDelivery) {
                     interruptBeforeTheNextDelivery = false;
@@ -4699,6 +4941,7 @@ class StreamCatchupSubscriptionModelTest {
                     thrownByTheCallback.add(thrown);
                     throw thrown;
                 } finally {
+                    lastLiveCallEndedNanos = System.nanoTime();
                     liveCallsEnded.incrementAndGet();
                 }
             };
@@ -4734,6 +4977,9 @@ class StreamCatchupSubscriptionModelTest {
 
         @Override
         public boolean isRunning(String subscriptionId) {
+            if (joinsLiveCallsOnShutdown && shutdownBegan) {
+                return reportsRunningWhileJoining && subscriptions.containsKey(subscriptionId);
+            }
             return delegate.isRunning(subscriptionId);
         }
 
@@ -4807,9 +5053,39 @@ class StreamCatchupSubscriptionModelTest {
         @Override
         public void shutdown() {
             shutdownBegan = true;
-            if (stampsCheckpoints) {
+            Runnable atShutdown = this.atShutdown;
+            if (atShutdown != null) {
+                atShutdown.run();
+            }
+            if (joinsLiveCallsOnShutdown) {
+                // Bounded, so a live call that is never ended makes the test fail on what it asserts and not hang
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                while (liveCallsEnded.get() < liveCallsStarted.get() && System.nanoTime() < deadline) {
+                    try {
+                        Thread.sleep(10);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+            if (stampsCheckpoints || joinsLiveCallsOnShutdown) {
                 delegate.shutdown();
             }
+        }
+
+        private CheckpointAwareInMemorySubscriptionModel runningAtShutdown(Runnable atShutdown) {
+            this.atShutdown = atShutdown;
+            return this;
+        }
+
+        // From now on a shutdown waits for the live calls in flight to end, without interrupting their threads, and
+        // before it clears anything. While it waits this model reports its subscriptions running when
+        // reportsRunningWhileJoining is set, and not running otherwise
+        private CheckpointAwareInMemorySubscriptionModel joiningLiveCallsOnShutdown(boolean reportsRunningWhileJoining) {
+            this.joinsLiveCallsOnShutdown = true;
+            this.reportsRunningWhileJoining = reportsRunningWhileJoining;
+            return this;
         }
 
         // Calls the callback the id was last subscribed with on the calling thread, as a live delegate whose delivery was
@@ -4825,6 +5101,10 @@ class StreamCatchupSubscriptionModelTest {
 
         private List<Throwable> thrownByTheCallback() {
             return List.copyOf(thrownByTheCallback);
+        }
+
+        private long lastLiveCallEndedNanos() {
+            return lastLiveCallEndedNanos;
         }
 
         private int liveCallsEnded() {

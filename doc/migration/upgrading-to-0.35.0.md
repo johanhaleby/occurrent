@@ -2871,7 +2871,9 @@ the subscriber's action that is under way.
   the action the catch-up gave the live delegate throws `AttemptNotMade` instead. That holds whether the call waited
   or not, and also for a subscription that went live from its replay. Once the catch-up has begun to shut down, such
   a call reaches the action. When it waits as above, it does so once the cancelled replay's call has returned, and
-  throws `AttemptNotMade` when the live delegate's shutdown interrupts its thread first.
+  throws `AttemptNotMade` when that call still runs once the live delegate no longer reports the subscription
+  running, or a second after the shutdown began. A live delegate that still reports it running then may still have
+  the run open, and may restart it. An interrupt doesn't end that wait either.
 * The live subscription model a catch-up wraps must not wait, in its `cancelSubscription`, for a call to the action
   that is under way. That call can be the wait above, so such a cancel returns only once the cancelled replay's
   action has, and never when that action cancels the same subscription. Its `pauseSubscription` must not wait for such

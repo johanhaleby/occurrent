@@ -106,6 +106,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // started applies it once the live delegate has the subscription, and a replay a resume started is held instead.
     protected final ConcurrentMap<String, Boolean> pauseRequestedDuringCatchup = new ConcurrentHashMap<>();
     protected volatile boolean shuttingDown = false;
+    // System.nanoTime() as the shutdown began, 0 until then. Also taken by the first live call that waits during a
+    // shutdown, for a subclass that sets shuttingDown without markShuttingDown
+    private final AtomicLong shutdownBeganNanos = new AtomicLong();
     // Set by stop(), and by a start whose live delegate failed on a stopped model. Cleared by start(...), and by a
     // resume of the live delegate after such a failed start. Checked by the replay loops so stop() interrupts an
     // in-flight replay, not just the delegate the replay has not registered with yet. Written only under lifecycleLock.
@@ -637,9 +640,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * whatever interrupt status its thread has.
      * <p>
      * Once this model has begun to shut down, a waiting call waits on although {@code made} is gone, and reaches the
-     * action once the replay has returned. An interrupt ends that wait, and the call then throws {@link AttemptNotMade}
-     * without handing the event to the action, since the live delegate's shutdown interrupts its threads only once it
-     * has closed their runs. A throw into a run the MongoDB live delegate still has open would make it restart the run.
+     * action uncounted once the replay has returned. Once the live delegate no longer reports the subscription running,
+     * the call throws {@link AttemptNotMade} without handing the event to the action instead. A live delegate should
+     * report it not running from the moment its shutdown begins, and from then on not restart a run whose action threw.
+     * The MongoDB models do both. A second after this model began to shut down, the call also throws for a live
+     * delegate that still reports the subscription running, so that delegate's shutdown doesn't wait for a replay stuck
+     * in the action. That throw can reach a run the delegate still has open, and the delegate may then restart the run
+     * or log it as a failure. The event isn't handed to the action either way. An interrupt doesn't end this wait.
      */
     protected Subscription subscribeInTheWrappedModel(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, Subscribed made) {
         Consumer<CloudEvent> afterEndedReplays = afterEndedReplaysReturned(subscriptionId, action, made);
@@ -652,8 +659,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // subscriptionId, and counted in made's live calls. While a replay a cancel or a stop ended for subscriptionId can
     // still be in the action, the call also waits for that replay to return first. The wait ends early once made is
     // gone, so a later subscribe of the same id doesn't count as this subscription still being wanted, and the call then
-    // throws AttemptNotMade without handing the event to the action. During a shutdown only an interrupt ends it early.
-    // Called with the handover lock held.
+    // throws AttemptNotMade without handing the event to the action. During a shutdown it ends once the live delegate no
+    // longer reports the subscription running, or ACTION_WAIT after the shutdown began. Called with the handover lock held.
     private Consumer<CloudEvent> afterEndedReplaysReturned(String subscriptionId, Consumer<CloudEvent> action, Subscribed made) {
         CompletableFuture<Void> endedReplaysReturned = endedReplaysReturned(subscriptionId, null);
         if (endedReplaysReturned.isDone()) {
@@ -720,8 +727,17 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // call is let in after the replays have returned, since they can return between two looks. A shutdown
                 // forgets every record before the live delegate closes its runs, and a throw into a run still open
                 // makes a live delegate such as the MongoDB one restart it, so the call waits on and reaches the
-                // action uncounted, as any call during a shutdown does
-                if (!shuttingDown && !isStillSubscribed(subscriptionId, made)) {
+                // action uncounted, as any call during a shutdown does. It throws once the live delegate no longer
+                // reports the subscription running, which the MongoDB models do from the moment their shutdown ignores
+                // a run's failure instead of restarting the run. So a live delegate whose shutdown waits for its threads
+                // without interrupting them doesn't wait for a stuck replay. ACTION_WAIT after the shutdown began it
+                // throws also for a live delegate that still reports the subscription running, whose run may restart
+                if (shuttingDown) {
+                    shutdownBeganNanos.compareAndSet(0, System.nanoTime());
+                    if (!getWrappedSubscriptionModel().isRunning(subscriptionId) || System.nanoTime() - shutdownBeganNanos.get() >= ACTION_WAIT.toNanos()) {
+                        throw liveEventWithdrawn(subscriptionId);
+                    }
+                } else if (!isStillSubscribed(subscriptionId, made)) {
                     throw liveEventWithdrawn(subscriptionId);
                 }
                 try {
@@ -733,11 +749,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     // thrown, since an action that reads it could skip the event as cancelled and the live delegate
                     // would then store its position past the event
                     interrupted = true;
-                    // The live delegate's shutdown interrupts its threads once it has closed its runs, so the throw
-                    // ends a closed run
-                    if (shuttingDown) {
-                        throw liveEventWithdrawn(subscriptionId);
-                    }
                 }
             }
             // Also a status get(..) returned without throwing for, or one set before a call that didn't wait
@@ -3930,6 +3941,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * live delegate; the dispatcher owns that.
      */
     public void markShuttingDown() {
+        shutdownBeganNanos.compareAndSet(0, System.nanoTime());
         shuttingDown = true;
         runningCatchupSubscriptions.clear();
         catchupListeners.clear();
@@ -4165,7 +4177,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     protected Future<Subscription> startCatchupAsync(String subscriptionId, CatchupReplay catchup, boolean holdPaused) {
         StartingFromSubscribe starting = STARTING_FROM_SUBSCRIBE.get();
-        Subscribed made = starting != null && starting.subscriptionId().equals(subscriptionId) ? starting.made() : null;
+        Subscribed made = starting != null && starting.made().owner() == this && starting.subscriptionId().equals(subscriptionId) ? starting.made() : null;
         return startCatchupAsync(subscriptionId, catchup, holdPaused, false, CompletableFuture.completedFuture(null), null, made);
     }
 
