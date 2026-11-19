@@ -644,9 +644,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@link AttemptNotMade} without handing the event to the action instead, so a live delegate whose shutdown waits
      * for its threads doesn't wait for a replay stuck in the action. A live delegate should not restart a run whose
      * action threw once its shutdown has begun. The MongoDB models don't, and their shutdown begins right after this
-     * model's. A live delegate whose shutdown begins more than a second after this model's, such as behind a wrapper
-     * that does work of its own first, or one that restarts such a run, may restart the run or log it as a failure. The
-     * event isn't handed to the action either way. An interrupt doesn't end this wait.
+     * model's. The throw reaches a run a live delegate still has open when its shutdown begins more than a second after
+     * this model's, such as behind a wrapper that does work of its own first, and that delegate may then restart the run
+     * or log it as a failure. The event isn't handed to the action either way. An interrupt doesn't end this wait.
      */
     protected Subscription subscribeInTheWrappedModel(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, Subscribed made) {
         Consumer<CloudEvent> afterEndedReplays = afterEndedReplaysReturned(subscriptionId, action, made);
