@@ -646,7 +646,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * The MongoDB models do both. A second after this model began to shut down, the call also throws for a live
      * delegate that still reports the subscription running, so that delegate's shutdown doesn't wait for a replay stuck
      * in the action. That throw can reach a run the delegate still has open, and the delegate may then restart the run
-     * or log it as a failure. The event isn't handed to the action either way. An interrupt doesn't end this wait.
+     * or log it as a failure. A MongoDB model gets it too when its own shutdown begins more than a second after this
+     * model's, such as behind a wrapper that does work of its own before shutting the MongoDB model down. The event
+     * isn't handed to the action either way. An interrupt doesn't end this wait.
      */
     protected Subscription subscribeInTheWrappedModel(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, Subscribed made) {
         Consumer<CloudEvent> afterEndedReplays = afterEndedReplaysReturned(subscriptionId, action, made);
@@ -734,7 +736,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // throws also for a live delegate that still reports the subscription running, whose run may restart
                 if (shuttingDown) {
                     shutdownBeganNanos.compareAndSet(0, System.nanoTime());
-                    if (!getWrappedSubscriptionModel().isRunning(subscriptionId) || System.nanoTime() - shutdownBeganNanos.get() >= ACTION_WAIT.toNanos()) {
+                    // The time first, so a live delegate whose isRunning blocks during its shutdown can't keep the call waiting
+                    if (System.nanoTime() - shutdownBeganNanos.get() >= ACTION_WAIT.toNanos() || !getWrappedSubscriptionModel().isRunning(subscriptionId)) {
                         throw liveEventWithdrawn(subscriptionId);
                     }
                 } else if (!isStillSubscribed(subscriptionId, made)) {
