@@ -191,6 +191,33 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
                 .containsExactly("catchupStarted#1", "historyRead#1");
     }
 
+    // The first attempt replays from the beginning and its handler fails on the first event, after it announced its
+    // start and before it read the history. The cancel deletes the marker, so the next subscribe replays from the
+    // beginning too. It has to end the episode the failed attempt left open before it announces its own, or the
+    // listener hears two starts and one end.
+    @Test
+    void a_failed_replay_from_the_beginning_has_its_episode_ended_before_the_next_attempt_that_replays_from_the_beginning_announces_its_own() {
+        store.append(List.of(event("1"), event("2")));
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, storage);
+        EpisodeSignals episodes = new EpisodeSignals();
+        model.listenForCatchup("proj", episodes);
+
+        Subscription failing = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.error(new IllegalStateException("handler failed")));
+        assertThat(catchThrowable(() -> failing.waitUntilStarted().block(TIMEOUT))).as("the attempt whose handler failed").isNotNull();
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(model.isCatchingUp("proj")).as("the failed replay has unwound").isFalse());
+        assertThat(episodes.names).as("signals heard from the failed attempt").containsExactly("catchupStarted#1");
+        model.cancelSubscription("proj").block(TIMEOUT);
+        assertThat(storage.read("proj").hasElement().block(TIMEOUT)).as("marker stored after the cancel").isFalse();
+
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.fromRunnable(() -> delivered.add(e.getId()))).waitUntilStarted().block(TIMEOUT);
+
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("replayed from the beginning").containsExactly("1", "2"));
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(episodes.names).as("signals heard from the failed attempt and the one that replayed from the beginning")
+                .containsExactly("catchupStarted#1", "historyRead#1", "catchupStarted#2", "historyRead#2"));
+    }
+
     // The cancel comes before the attempt has read the marker, so the attempt no longer owns the id when it learns
     // that it replays from the beginning. A start it announced then would arrive after its replacement's.
     @Test

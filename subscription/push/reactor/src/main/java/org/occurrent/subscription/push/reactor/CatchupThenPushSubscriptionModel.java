@@ -201,8 +201,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // would record that catch-up's history as though it were live.
     private final ConcurrentMap<String, CatchupListener> catchupListeners = new ConcurrentHashMap<>();
     // The episode each id's listener heard catchupStarted for and not yet historyRead. The episode of a stopped or
-    // failed attempt stays here, and a later attempt that resumes after a marker announces nothing of its own, so it
-    // ends that episode instead. Otherwise the listener would stay reading history for good.
+    // failed attempt stays here, and the next attempt of the id ends it before it replays, whether it announces an
+    // episode of its own or resumes after a marker and announces nothing. Otherwise the listener would stay reading
+    // history for good, or hear a second start with no end for the first. A shutdown drops it unended, since the
+    // model delivers nothing after it and a historyRead would claim a history was read that was not.
     private final ConcurrentMap<String, Sinks.One<Boolean>> episodesReadingHistory = new ConcurrentHashMap<>();
     // A pause asked for while a replay is in flight. The replay itself keeps running, since resuming it would mean
     // persisting the exact replay cursor, which this model does not do. Applied at the handover instead.
@@ -325,8 +327,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Whether the listener hears this attempt, set in replayStarted() from the same read the replay uses. The
         // handover can read the marker again on a catch-up's turn, and replayStarted() runs once after the last read,
         // so catchupStarted goes out at most once and only for a replay from the beginning. An attempt whose replay
-        // never starts is not heard. An attempt that resumes after a marker is not heard either, and ends an episode
-        // an earlier attempt left reading history.
+        // never starts is not heard. An attempt that resumes after a marker is not heard either. Every attempt whose
+        // replay starts ends an episode an earlier attempt left reading history.
         AtomicBoolean listenerHearsAttempt = new AtomicBoolean();
         // Whether this attempt's last marker read refused a checkpoint that is not a catch-up marker. Something else
         // stored it under the id, such as a durable subscription's resume token, so a failed catch-up does not delete
@@ -832,6 +834,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         if (catchupOwners.get(subscriptionId) != replayDone) {
             return;
         }
+        endUnfinishedEpisode(subscriptionId);
         CatchupListener startListener = catchupListeners.get(subscriptionId);
         if (startListener != null) {
             episodesReadingHistory.put(subscriptionId, replayDone);
@@ -845,6 +848,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         if (catchupOwners.get(subscriptionId) != replayDone) {
             return;
         }
+        endUnfinishedEpisode(subscriptionId);
+    }
+
+    // Called only under this model's monitor, by an attempt that owns the id
+    private void endUnfinishedEpisode(String subscriptionId) {
         Sinks.One<Boolean> unfinished = episodesReadingHistory.remove(subscriptionId);
         CatchupListener listener = catchupListeners.get(subscriptionId);
         if (unfinished != null && listener != null) {

@@ -3189,10 +3189,10 @@ What you see:
   the way the live feed does, without those calls. A `CatchupListener` on the reactor push model follows the same rule,
   and hears `catchupStarted`, `historyRead` and `alreadyDeliveredByReplay` only for a replay from the beginning. In
   0.34.0 it heard `catchupStarted` on every start, and the applied-append recorder of the reactive Spring Boot starter
-  deleted its records then, so a wait for an append applied before a restart could time out. A start that resumes after
-  a marker sends `historyRead` for an earlier catch-up of the id that the listener heard start and that did not finish
-  reading its history, such as one stopped during its replay, so the listener stops waiting for it. A listener of your
-  own that counted on hearing every start needs a look.
+  deleted its records then, so a wait for an append applied before a restart could time out. The next start of the id,
+  whether it replays from the beginning or resumes after a marker, first sends `historyRead` for a catch-up the listener
+  heard start and that did not finish reading its history, such as one that was stopped or failed, so the listener stops
+  waiting for it. A listener of your own that counted on hearing every start needs a look.
 
 0.34.0 wrote the marker only after a replay from the beginning, and a 0.34.0 start that found it skipped its replay and
 never wrote it again. The first 0.35.0 start that reads that marker resumes after it, so for an id that has run for

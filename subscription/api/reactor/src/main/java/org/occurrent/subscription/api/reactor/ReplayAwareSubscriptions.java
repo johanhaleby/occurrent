@@ -63,9 +63,12 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
      * that catch-up.
      * <p>
      * A model may send neither for a catch-up that replays only the events after a position it stored, as the reactor
-     * {@code CatchupThenPushSubscriptionModel} does. Before such a catch-up replays, the model sends
-     * {@link CatchupListener#historyRead(Object)} for an earlier catch-up of the id that it announced and that did not
-     * finish reading its history, so a listener does not wait for the end of a replay that no longer runs.
+     * {@code CatchupThenPushSubscriptionModel} does. That model sends {@link CatchupListener#historyRead(Object)} for
+     * a catch-up it announced and that did not finish reading its history, such as one that was stopped or failed,
+     * before the next catch-up of the id replays, whether that one replays from the beginning or after a stored
+     * position. So a listener does not wait for the end of a replay that no longer runs, and hears every
+     * {@code catchupStarted} followed by {@code historyRead} for the same catch-up. A shutdown ends a catch-up without
+     * either, since the model delivers nothing after it.
      * <p>
      * Register before subscribing. A listener registered after a catch-up has begun misses its start, and a
      * recording projection behind it would then record the history that catch-up is replaying.
