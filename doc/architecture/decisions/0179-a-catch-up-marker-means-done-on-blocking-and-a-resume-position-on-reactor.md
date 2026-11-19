@@ -89,7 +89,9 @@ Four cases change what a start replays:
   process. The stored marker stays as it was, so a later start that reads it replays after P and not after H. Only a
   catch-up that runs after its source has gone live can meet such an event, and "Fed-back events on the reactor
   stack" says why the write waits.
-* A marker write the store loses keeps an older position stored, so a start that reads it replays more.
+* A marker write the store loses keeps the previous marker stored, so a start that reads it replays more. When no
+  marker was stored before, as on the id's first catch-up or after a delete, a start that finds none replays from the
+  beginning.
 * A start that reads a stored position at or above the position of an event that was never applied skips that event,
   unless something delivers it again. An H that a catch-up stores while an event that other code fed back waits
   undelivered is such a position. Other code can be another replica, or another subscription in the same process. So
@@ -172,9 +174,9 @@ to. The reactor stack writes the marker before the live drain, so a crash betwee
 events above H that only the buffer held. With H stored, a start that reads it replays them. With the head at mark
 time stored, only the broker would deliver them again.
 
-Every value a reactor start writes is the head its own replay read up to. So a lost marker write, or an old H that
-reaches the store after a newer one, means the stored position is older than it should be, and a start that reads
-it replays more than it had to. The handover's cache de-duplicates the overlap between the replay and the live feed
+Every value a reactor start writes is the head its own replay read up to. So after a lost marker write an older
+position stays stored, or none when no marker was stored before, and an old H that reaches the store after a newer one
+stores an older position. Either way a start that follows can replay more than it had to. The handover's cache de-duplicates the overlap between the replay and the live feed
 within `CatchupThenLiveOptions.dedupCacheSize()`, and beyond that the at-least-once contract already applies. "What a
 reactor catch-up start replays" says when a stored position makes a start skip an event.
 
@@ -409,7 +411,7 @@ every third-party `CheckpointStorage` and needed a rolling-upgrade precondition.
   one still hears every start.
 * A reactor catch-up writes no marker while an event its handover's own code fed back, and its replay did not
   deliver, waits in the live feed. A feed whose `catchUp()` runs again after `goLive()` under steady fed-back traffic
-  can keep an older marker, so a restart can replay more, until
+  can keep an older marker stored, or none, so a restart can replay more, until
   [#1552](https://github.com/johanhaleby/occurrent/issues/1552) delivers those events before the marker as the
   blocking stack does.
 * A fed-back event needs a durable path of its own, a broker copy or a handler that feeds it again when the event
