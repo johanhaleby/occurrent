@@ -98,7 +98,11 @@ public final class DomainEventFeed<E> {
      *                        {@link #acceptOrDeferCloudEvent(CloudEvent)}, which do.
      * @param eventId         Extracts a stable id from a domain event, the replay-to-live de-dup key.
      * @param catchupMarker Records catch-up completion so a restart skips the replay, or {@code null}
-     *                        to always catch up.
+     *                        to always catch up. The marker is stored under the projection's id alone, so
+     *                        register a projection whose filter or logic changes under a new id. Under the old id
+     *                        the stored marker skips the replay, and the changed projection never sees the history.
+     *                        Any checkpoint stored under the id counts as the marker, so do not share an id with a
+     *                        durable subscription that uses this storage.
      */
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
                            Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker) {

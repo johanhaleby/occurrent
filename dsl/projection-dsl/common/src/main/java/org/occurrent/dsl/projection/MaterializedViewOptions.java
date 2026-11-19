@@ -20,6 +20,8 @@ package org.occurrent.dsl.projection;
  * Tuning knobs for a framework-built materialized view or update, shared by the blocking and reactor projection DSLs.
  * During a catch-up replay the view coalesces updates per key rather than reading and writing once per event
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0110-a-replay-tells-the-view-where-it-begins-and-ends.md">ADR 110</a>).
+ * On the reactor stack only a replay from the beginning counts. A catch-up that resumes after its stored marker
+ * delivers its events the way the live path does, one read and one write per event (ADR 179).
  * {@code batchSize} bounds how many replayed events are buffered, across every key, before that buffer is read,
  * folded and written. It exists to cap memory, not to change what gets written: a batch boundary in the middle of one
  * key's events still folds them in arrival order onto that key's current state.

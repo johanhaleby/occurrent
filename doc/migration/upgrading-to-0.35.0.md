@@ -142,6 +142,9 @@ other sections compile fine and behave differently, so read them first.
   Compiles unchanged.
 - [A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs](#a-blocking-cancel-doesnt-wait-for-a-subscribe-whose-startatdynamic-function-runs).
   A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
+- [A blocking cancel no longer promises a rebuild](#a-blocking-cancel-no-longer-promises-a-rebuild).
+  `cancelSubscription(id)` on the blocking `CatchupThenPushSubscriptionModel` still deletes the catch-up marker, but a
+  rebuild takes a new subscription id. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
   `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached. Over
   `ReactorMongoSubscriptionModel` it fails only when MongoDB's reply to `hello` has no `localTime`, where 0.34.0 didn't
@@ -156,12 +159,27 @@ other sections compile fine and behave differently, so read them first.
   On a server that sends no operation time, a `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel`
   subscription at the present reads the change stream once to record its position, and `waitUntilStarted(..)` and
   `start(true)` throw `UnsupportedStartAtException` when that read gives none. Compiles unchanged.
+- [A MongoDB subscription whose history is lost is refused when restarts are off](#a-mongodb-subscription-whose-history-is-lost-is-refused-when-restarts-are-off).
+  With `restartSubscriptionsOnChangeStreamHistoryLost` off, `waitUntilStarted(..)` and `start(true)` throw
+  `UnsupportedStartAtException` for a `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` subscription
+  whose change stream history is gone. In 0.34.0 a `waitUntilStarted()` with no timeout never returned, one with a
+  timeout answered `false`, and `start(true)` returned. Through a mongos, a subscription at a stored position, or at
+  a present that `subscribe(..)` read earlier than right before its change stream opened, such as on a stopped model,
+  counts as started once the change stream's first reply came, whatever that setting is. Compiles unchanged.
+- [A subscription handle throws once the model gives the subscription up](#a-subscription-handle-throws-once-the-model-gives-the-subscription-up).
+  A handle from `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` that answered `true` throws from
+  `waitUntilStarted(..)` once the model refuses the subscription after a loss of history, or holds it paused after a
+  restart that gets no position. In 0.34.0 it kept answering `true`. Compiles unchanged.
 - [A blocking catch-up resume at a dynamic start uses the catch-up's answer](#a-blocking-catch-up-resume-at-a-dynamic-start-uses-the-catch-ups-answer).
   The live model resumes at the start a `StartAt.dynamic(..)` function answered the catch-up, where 0.34.0 let the live
   model ask the function for itself. Compiles unchanged.
 - [A blocking catch-up refuses a resume at a position of a subscription that runs](#a-blocking-catch-up-refuses-a-resume-at-a-position-of-a-subscription-that-runs).
   `resumeSubscription(id, startAt)` throws `SubscriptionAlreadyRunningException` itself, where 0.34.0 passed the resume
   on to the live model and the MongoDB models threw `UnknownSubscriptionException` while the `subscribe(..)` replay ran.
+  Compiles unchanged.
+- [A catch-up marker on the reactor stack is a position to resume after](#a-catch-up-marker-on-the-reactor-stack-is-a-position-to-resume-after).
+  A reactor `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` start that reads a stored
+  marker replays the events after it instead of skipping its replay, and a cancel no longer promises a rebuild.
   Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
@@ -2957,6 +2975,37 @@ code stops compiling.
 Remove the reference. Nothing replaces it. Code that asked `isDefaultKnownLiveOnlyFor(..)` whether a projection never
 replays should treat a projection with no `startAt` as one that can replay.
 
+## A blocking cancel no longer promises a rebuild
+
+This applies to the blocking `CatchupThenPushSubscriptionModel` when you give it a `CheckpointStorage` for the catch-up
+marker, and to every `@Projection` or `@Saga` with `source = PUSH` in the blocking Spring Boot starter, unless it sets
+`catchup = NONE`. The marker keeps its 0.34.0 meaning on the blocking stack. A stored marker means the catch-up
+finished, and a start that finds it skips its replay.
+
+### What changes
+
+In 0.34.0 the javadoc said that `cancelSubscription(id)` deletes the marker, so subscribing the same id again replays
+the history. The cancel still deletes the marker before anything else, and the code is the same as in 0.34.0, but that
+promise is gone. A delete that a Redis failover loses, or that a MongoDB member with the in-memory storage engine rolls
+back, leaves the marker stored. So does a marker write the store applies after the delete. The next subscribe of the id
+then skips its replay. 0.34.0 had the same gap.
+
+### What to do
+
+* Subscribe under a new subscription id when a projection has to be rebuilt, or when its filter or its projection
+  changes. The marker is stored under the id alone, so under the old id a stored marker skips the replay and the
+  changed projection never sees the history.
+* Rebuild a push `@Saga` under a new id only when its completed instances are kept for as long as the history it
+  replays. A new id replays the whole history into the saga, so every instance that its TTL removed is recreated from
+  its start event and dispatches its commands again. With `catchup = NONE` a new id replays nothing.
+* Don't give a durable subscription and a blocking catch-up-then-push model, `CatchupProjectionFeed` or
+  `DomainEventFeed` the same subscription id in the same `CheckpointStorage`. Any checkpoint stored under the id counts
+  as the marker, so a checkpoint the durable subscription stored makes the blocking catch-up skip its replay.
+
+The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
+[ADR 179](../architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md)
+has the reasoning.
+
 ## A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs
 
 In 0.34.0 the blocking `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel`, `CatchupSubscriptionModel` and
@@ -3164,16 +3213,17 @@ When that read returns neither an event nor a resume token, the subscription can
   position. The subscription is removed from the model, and the listeners added through
   `StartRefusalReportingSubscriptions` are told, as for a catch-up's checkpoint.
 * A `resumeSubscription(id, StartAt.now())` does the read when the resumed change stream opens. When it gets neither,
-  the subscription is held paused and stays in the model, `waitUntilStarted(..)` on the handle the resume returned
-  throws the `UnsupportedStartAtException`, and the listeners added through `StartRefusalReportingSubscriptions` are
-  told through `handleHeldPaused(..)`, not `handleStartRefusal(..)`. `resumeSubscription(id)` reads the change
-  stream again. A `StartAt.dynamic(..)` resume that resolves to the present as its change stream opens is held the
-  same way.
+  the subscription is held paused and stays in the model, `waitUntilStarted(..)` on every handle returned up to the held
+  run throws the `UnsupportedStartAtException` until a resume starts it, and the listeners added through
+  `StartRefusalReportingSubscriptions` are told through `handleHeldPaused(..)`, not `handleStartRefusal(..)`.
+  `resumeSubscription(id)` reads the change stream again. A `StartAt.dynamic(..)` resume that resolves to the present as
+  its change stream opens is held the same way.
 * With `restartSubscriptionsOnChangeStreamHistoryLost` on, a restart from the present after the history was lost that
   gets neither holds the subscription paused. `isPaused(id)` answers `true`, an error in the log names it, the
   listeners are told through `handleHeldPaused(..)`, and `resumeSubscription(id)` reads the change stream again.
-  When the subscription hadn't started before that, `waitUntilStarted(..)` on the handle `subscribe(..)` returned
-  throws the `UnsupportedStartAtException`, until a resume starts it.
+  `waitUntilStarted(..)` on every handle returned up to the held run, the one `subscribe(..)` returned and each one a
+  resume returned, then throws the `UnsupportedStartAtException`, also when it answered earlier that the subscription
+  started, until a resume starts it.
 * Under a `CompetingConsumerSubscriptionModel` the node that holds a subscription paused this way holds it as if the
   user had paused it. It gives the lease back, so another node can get it, and doesn't compete for the lease again
   until `resumeSubscription(id)` is called on that node. A handle that waits for the held start throws once the lease
@@ -3201,6 +3251,101 @@ the exception can stop the application from starting, with no call of your own i
 `startupMode = BACKGROUND` on the annotation to start the subscription in the background instead, or pass
 `waitUntilStarted = false` to the Kotlin DSL's `subscribe(..)`. The refusal is then logged as an error and the
 subscription is removed.
+
+## A MongoDB subscription whose history is lost is refused when restarts are off
+
+`NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel` don't restart a subscription whose change stream
+history is lost while `restartSubscriptionsOnChangeStreamHistoryLost` is off, which is the default. That hasn't
+changed. What changes is what a caller waiting for the subscription to start sees:
+
+* When MongoDB reports the loss as the change stream opens, or through a mongos with the change stream's first
+  reply, `waitUntilStarted()` and `start(true)` throw an
+  `UnsupportedStartAtException`, and so does `waitUntilStarted(..)` with a timeout, which answered `false` in 0.34.0.
+  `startAt()` on the exception is the checkpoint whose history is gone, or the subscription's current start position
+  when there is no checkpoint to name, which after a resume at a new position is that position. MongoDB's error, code 286 (`ChangeStreamHistoryLost`), is in its cause chain, and
+  its message names the fixes below.
+* The listeners added through `StartRefusalReportingSubscriptions` are told through `handleStartRefusal(..)`. A
+  `CompetingConsumerSubscriptionModel` forgets the subscription on that node, as it does for any refused start.
+* The id is free, so `subscribe(..)` with it works again.
+* A loss on a later read, after the handle answered that the subscription started, tells the listeners and frees the
+  id the same way. Every handle of the subscription, the one `subscribe(..)` returned and each one a resume returned,
+  throws the `UnsupportedStartAtException` from its next `waitUntilStarted(..)` on, and so does a handle a
+  `CompetingConsumerSubscriptionModel` returned.
+
+In 0.34.0 the model removed the subscription and released no waiter, so a `waitUntilStarted()` with no timeout never
+returned, one with a timeout answered `false`, and `start(true)` returned.
+
+Through a mongos, whatever `restartSubscriptionsOnChangeStreamHistoryLost` is set to, a subscription that opens at a
+stored position, or at the position a resumed subscription read to, such as after a pause, `stop()` and `start(true)`,
+or a competing consumer's lease takeover, now counts as started only once the change stream's first reply came, where
+0.34.0 counted it as started as the change stream opened. On a quiet collection a wait can then take up to the
+`maxAwaitTime` configured, or the server's default when none is, so a `waitUntilStarted(..)` with a shorter timeout
+answers `false`. So does a subscription at the present that opens at the position `subscribe(..)` read for it, unless
+its change stream opens right after that read on the first try. One made while the model was stopped and started later,
+one resumed after a pause before its first reply, and one whose first try to open failed wait, since that position can
+have left the oplog by then. A start at the present read right before the change stream opens counts as started as it
+opens, which covers a `subscribe(..)` at `StartAt.now()` on a started model and a resume at `StartAt.now()`. So does
+every start on a replica set, unless the model can't ask MongoDB whether it reaches it through a mongos. It then waits
+for the first reply, as through a mongos, and asks again at the next start.
+
+### Who is affected
+
+Code that waits for one of these subscriptions to start with restarts after a loss of history off. The blocking Spring
+Boot starter turns restarts on by default, so this reaches it only with
+`occurrent.subscription.mongodb.restart-on-change-stream-history-lost=false`. It then waits for a subscription at
+`NOW` or `DEFAULT` to start by default, so an application whose stored checkpoint for one is older than the oplog's
+history can fail to start with the `UnsupportedStartAtException`. Set
+`startupMode = BACKGROUND` on the annotation, or pass `waitUntilStarted = false` to the Kotlin DSL's `subscribe(..)`,
+to start it in the background.
+
+Code that waits with a timeout for a subscription that reaches a sharded cluster through a mongos and opens at a
+stored position, at the position a resumed subscription read to, such as after a pause, `stop()` and `start(true)`, or
+a competing consumer's lease takeover, or at a present that `subscribe(..)` read earlier than right before the change
+stream opened, whatever `restartSubscriptionsOnChangeStreamHistoryLost` is set to. Give the wait a timeout with room
+for opening the change stream and for its `maxAwaitTime`, or the server's default when none is set.
+
+### What to do
+
+Pick one, as the exception's message says:
+
+* Subscribe through a catch-up subscription, which replays from the event store and then goes live.
+* Remove the subscription's checkpoint from the durable storage, so it starts again from the position it is
+  subscribed at.
+* Turn `restartSubscriptionsOnChangeStreamHistoryLost` on, which restarts the subscription at the present and skips
+  what was written in between.
+
+## A subscription handle throws once the model gives the subscription up
+
+In 0.34.0 a `Subscription` handle kept answering `true` from `waitUntilStarted(..)` once its subscription had started,
+also after a pause, a stop or a lost lock race. That still holds for those three. For a handle that
+`NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` returned, two cases now throw instead:
+
+* With `restartSubscriptionsOnChangeStreamHistoryLost` off, a loss of the change stream's history on a later read
+  refuses the subscription for good. The next `waitUntilStarted(..)` throws the refusal, an
+  `UnsupportedStartAtException`, and so does every call after it.
+* With `restartSubscriptionsOnChangeStreamHistoryLost` on, a restart from the present that gets no position holds the
+  subscription paused. Each `waitUntilStarted(..)` throws the reason until a resume starts the subscription again.
+
+A cancel or a shutdown ends a hold and frees the id. A handle of a subscription that had started answers `true` again,
+and one of a subscription that never started throws an `UnsupportedStartAtException` saying that the subscription was
+cancelled while it was held paused and can be subscribed again with the same id.
+
+A refusal reaches every handle of the subscription, the one `subscribe(..)` returned and each one a resume returned. A
+hold reaches the handles returned up to the held run, so a handle a later resume returned answers for that later run. A
+handle a `CompetingConsumerSubscriptionModel` returned over one of them asks the handle it wraps, so it throws too.
+[ADR 181](../architecture/decisions/0181-a-subscription-handle-throws-once-the-model-gives-the-subscription-up.md) has
+the reasons.
+
+### Who is affected
+
+Code that keeps a handle and asks it later, such as a readiness check that calls `waitUntilStarted(Duration.ZERO)`.
+Where it got `true` in 0.34.0 for a subscription no node ran, it now gets the `UnsupportedStartAtException`.
+
+### What to do
+
+Catch `UnsupportedStartAtException` where you ask a kept handle, and treat it as a subscription that needs you to act,
+as the exception's message says. Ask `isRunning(id)` on the model when you want to know whether the subscription runs
+now, since a handle answers about its start.
 
 ## A blocking catch-up resume at a dynamic start uses the catch-up's answer
 
@@ -3235,6 +3380,79 @@ now. While the `subscribe(..)` replay ran they didn't hold it yet, and threw `Un
 while its `subscribe(..)` replay runs isn't refused this way. The live model doesn't hold it until that replay hands
 over, so a resume at a position before then still throws `UnknownSubscriptionException` from a MongoDB model, as in
 0.34.0.
+
+## A catch-up marker on the reactor stack is a position to resume after
+
+This applies to the reactor `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` and `DomainEventFeed` when you
+give them a `CheckpointStorage` for the catch-up marker. It also applies to every `@Projection` with `source = PUSH` in
+the reactive Spring Boot starter, unless it sets `catchup = NONE`. The starter builds the push model with the
+application's `CheckpointStorage` bean, so you never pass one yourself. The blocking ones, and every `@Projection` or
+`@Saga` with `source = PUSH` in the blocking starter, keep the 0.34.0 meaning. A stored marker means the catch-up
+finished, and a start that finds it skips its replay. Their cancel changes too, see
+[A blocking cancel no longer promises a rebuild](#a-blocking-cancel-no-longer-promises-a-rebuild).
+
+In 0.34.0 a stored marker meant that the history had been read in full, and a catch-up that found it went live without
+a replay. In 0.35.0 a reactor catch-up start that reads a stored marker replays the events after it. See "What a
+reactor catch-up start replays" in
+[ADR 179](../architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md#what-a-reactor-catch-up-start-replays)
+for what a start reads, replays and stores, and the cases that change it. ADR 179 also says why the blocking stack
+keeps the 0.34.0 marker.
+
+What you see:
+
+- A restart can replay events the projection handled live before it. The cache that removes duplicates is in memory,
+  so the projection applies those events again. Delivery was already at least once, so a projection that applies an
+  event twice with the same result as once needs no change.
+- `catchUp()` on a feed with a stored marker replays the events after it, where 0.34.0 went straight to live.
+- A `@Projection` with `source = PUSH` waits for its catch-up at startup unless it sets `startupMode = BACKGROUND`, and
+  the marker is stored only once the replay is done. In 0.34.0 a start that found a stored marker went live at once,
+  and now it replays the events after the marker first. When the replay takes longer than a startup probe, such as a
+  Kubernetes one, allows, the probe can restart the application before the marker is written, and the next start can
+  replay those events again. Set `startupMode = BACKGROUND` so the application starts while the catch-up runs.
+- On `CatchupProjectionFeed` and `DomainEventFeed`, where a catch-up can run again after `goLive()`, a catch-up can
+  leave the stored marker as it was while an event that the feed's own handler or callbacks fed back waits to be
+  handled. A handler that feeds back an event whenever it handles one, under steady live traffic, can then keep the
+  marker from moving on, so later starts replay more. `CatchupThenPushSubscriptionModel` runs each catch-up before its
+  subscription goes live, so it doesn't meet that cost.
+- When a reactor feed or push model runs on more than one replica, an event a handler writes to the event store and
+  feeds back needs a durable path of its own. Either your forwarder publishes it to the broker queue the listener
+  reads, as it does for any other written event, or the handler feeds it again whenever the event that triggered it is
+  delivered again, also when the write is already stored. Replicas share the catch-up marker, so another replica's
+  catch-up can store a marker at or above an event this replica fed back and has not handled yet. Without either path,
+  a feed or push model that runs on more than one replica can lose such an event, and
+  [ADR 179](../architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md)
+  lists when in "Fed-back events on the reactor stack". 0.34.0 has the same gap.
+- `cancelSubscription(id)` still deletes the marker, after it cancels, and the `Mono` it returns completes once the
+  delete is done. A later subscribe of the id can still resume after a stored marker, and "What a reactor catch-up
+  start replays" in ADR 179 says when. Subscribe under a new subscription id when you need a rebuild.
+- The marker is stored under the subscription id alone. When you change the filter or the projection, subscribe under
+  a new id. A start under the old id can resume after a position its earlier filter stored, and skip the events at or
+  below it that the new filter matches. 0.34.0 skipped the whole replay in that case.
+- A catch-up that reads a checkpoint stored under the subscription id takes it as its marker. When something other
+  than a catch-up stored it, such as a durable subscription that used the id before it moved to `source = PUSH`, and
+  it is not a position, that catch-up fails with an `IllegalStateException` that names the id. 0.34.0 took any stored
+  checkpoint as a finished catch-up and skipped the replay. Delete that checkpoint, or subscribe under a new id. A
+  start that finds no marker replays the whole history. A failed catch-up does not delete that checkpoint, but the
+  push model's `cancelSubscription(id)` does. When a durable checkpoint is a position, a catch-up can resume after it
+  and replace it. So don't share a subscription id between a durable subscription and a catch-up-then-push model,
+  `CatchupProjectionFeed` or `DomainEventFeed`, on either stack.
+- `ReactiveReplayAware`, and a `ReplayAware` view on a reactor feed, hear `replayStarted()`, `replayCompleted()` and
+  `replayAbandoned()` only for a replay from the beginning, as in 0.34.0. A replay after a marker delivers its events
+  the way the live feed does, without those calls. A `CatchupListener` on the reactor push model follows the same rule,
+  and hears `catchupStarted`, `historyRead` and `alreadyDeliveredByReplay` only for a replay from the beginning. In
+  0.34.0 it heard `catchupStarted` on every start, and the applied-append recorder of the reactive Spring Boot starter
+  deleted its records then, so a wait for an append applied before a restart could time out. The next start of the id,
+  whether it replays from the beginning or resumes after a marker, first sends `historyRead` for a catch-up the listener
+  heard start and that a stop, a cancel or a failure cut short, so the listener stops waiting for it. A catch-up a
+  shutdown cuts short gets no `historyRead`. A listener of your own that counted on hearing every start needs a look.
+
+0.34.0 wrote the marker only after a replay from the beginning, and a 0.34.0 start that found it skipped its replay and
+never wrote it again. The first 0.35.0 start that reads that marker resumes after it, so for an id that has run for
+long it can replay most of the history. That replay sends no replay callbacks, so a view that batches its writes during
+a replay, such as the one `Projections` builds, reads and writes once per event through it, and the applied-append
+recorder writes a record for each append the projection applies. Plan for that replay, and set
+`startupMode = BACKGROUND` when a startup probe could cut it short. A 0.34.0 node that reads a marker 0.35.0 stored
+skips its replay, as it always did, so a rolling upgrade needs nothing more on either side.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 

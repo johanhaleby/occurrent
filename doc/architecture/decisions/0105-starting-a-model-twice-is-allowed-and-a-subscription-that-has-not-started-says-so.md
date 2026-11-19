@@ -6,6 +6,9 @@ Date: 2026-08-06
 
 Accepted. Wave A of the post-0.31.0 API review remediation arc (#579), which gates the 0.32.0 tag.
 
+Amended by [ADR 181](0181-a-subscription-handle-throws-once-the-model-gives-the-subscription-up.md) for a
+subscription the model gives up on after it started, whose handle then throws instead of answering `true`.
+
 Numbered 105 rather than 103 or 104 because `main` carries a duplicated `0102` pair, PR #595 renumbers
 the dispatcher one to 0103, and PR #596 takes 0104.
 

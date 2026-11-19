@@ -28,29 +28,32 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
+import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
  * The reactor counterpart of the blocking {@code CatchupProjectionFeed}: feeds a projection with
- * <strong>domain events</strong> and gives it a one-time <strong>catch-up</strong>, without the double
- * encode/decode of routing domain events through the CloudEvent push feed.
+ * <strong>domain events</strong> and gives it a <strong>catch-up</strong> from the event store, without the
+ * double encode/decode of routing domain events through the CloudEvent push feed.
  * <p>
  * The live path is conversion-free: {@link #acceptAndWait(Object)} folds a domain event straight into the read model. Only the
  * catch-up reads the event store (CloudEvents) and decodes each replayed event once with the {@link CloudEventConverter}.
  * The catch-up folds the replayed events first, then the events a replayed fold, {@code replayStarted()} or
- * {@code replayCompleted()} fed, and then records the catch-up-complete marker. Live events that arrive meanwhile wait
- * in a bounded unicast sink and are folded after that, de-duplicated by an event id extracted from the
+ * {@code replayCompleted()} fed, and only then can store the catch-up marker. Live events that arrive meanwhile
+ * wait in a bounded unicast sink and are folded after that, de-duplicated by an event id extracted from the
  * <em>domain</em> event.
  * <p>
  * Contract (see ADR 62): catch-up is Occurrent's job, live-resume is the broker's. The {@link Mono} from
@@ -67,6 +70,14 @@ import java.util.function.Function;
  * A listener whose {@link Mono} errors, or completes with {@link RoutingOutcome#DEFERRED}, does not acknowledge the
  * message and has the broker deliver it again, as {@link RoutingOutcome.Disposition#HOLD} describes. Not acknowledging
  * is not enough on its own.
+ * <p>
+ * An event the fold writes to the event store and feeds back through {@link #acceptAndWait(Object)} is an early copy,
+ * and it needs a durable path as well. Either the application's forwarder publishes it to the broker queue this feed's
+ * listener reads, or the fold feeds it again whenever the event that triggered it is delivered again, also when the
+ * write is already stored. Replicas of one projection share its catch-up marker, and another replica's catch-up can
+ * store a marker at or above an event this replica fed back and has not yet folded. Without either path, a projection
+ * that runs on more than one replica can lose such an event, and ADR 179's "Fed-back events on the reactor stack"
+ * lists when.
  * <p>
  * The replay decodes CloudEvents, so {@link EventMetadata} is available there and is folded with the event. A live
  * domain event arrives with no CloudEvent behind it and is folded with {@link EventMetadata#empty()}. A projection
@@ -245,9 +256,11 @@ public final class CatchupProjectionFeed<E> {
      * A failing feed deletes its catch-up marker, refuses every later event that does not come from its fold, folds the
      * events it has already taken in and those its fold feeds it meanwhile, and then fails for good. A failed catch-up
      * starts it failing the same way, and also refuses each event from anywhere else that is still waiting, and does
-     * not fold it. Build a new feed, and once the marker is gone its catch-up replays the history. When deleting the
-     * marker still fails after 3 retries, the feed logs an error naming the feed id, and the marker has to be deleted
-     * by hand before building a new feed.
+     * not fold it. When deleting the marker still fails after 3 retries, the feed logs an error naming the feed id. A
+     * catch-up that reads a marker the store still holds resumes after it and does not replay a failed event at or
+     * below it. Deleting the marker by hand is best effort, so only a new feed under a new id is sure to replay from
+     * the beginning, see the "Cancel" section of
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md">ADR 179</a>.
      * <p>
      * An event fed from code nothing waits for has no caller to tell, so when no replay can bring it back, it is lost
      * if its fold fails or the process stops before it is folded. An event the fold's code feeds on another thread
@@ -345,9 +358,14 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
-     * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), record the
-     * completion marker, then start delivering the live feed. The returned {@link Mono} completes when the replay and
-     * marker are done. Call once, after wiring the live feed.
+     * Run the catch-up. It replays the projection's history from the store, decoding each event once, then starts
+     * delivering the live feed. The returned {@link Mono} completes when the replay and marker step are done. Call
+     * once, after wiring the live feed.
+     * <p>
+     * With no catch-up marker stored, the replay starts from the beginning and a {@link ReactiveReplayAware} fold gets
+     * its callbacks. With one stored, the replay reads only the events after the stored position and the fold gets
+     * them the way it gets live events, with none of the {@link ReactiveReplayAware} callbacks. ADR 179's "What a
+     * reactor catch-up start replays" says what the catch-up stores as its marker, and when.
      * <p>
      * Before it writes the marker, the catch-up folds every event fed from the fold of a replayed event, or from
      * {@code replayStarted()} or {@code replayCompleted()}, and every event fed from their folds in turn. When one of
@@ -367,8 +385,8 @@ public final class CatchupProjectionFeed<E> {
      * before the replay they asked for starts, that replay runs once for all of them.
      * <p>
      * A view that calls this for an event a replay delivers asks for another catch-up each time a replay delivers that
-     * event again. Each of those catch-ups replays again unless it finds the catch-up marker written, so a feed built
-     * without a {@link CheckpointStorage} for that marker replays without end.
+     * event again. ADR 179's "What a reactor catch-up start replays" says what such a catch-up replays. A feed built
+     * without a {@link CheckpointStorage} for the marker replays the whole history each time, and so without end.
      *
      * @return A {@link Mono} that completes when the catch-up replay has finished, the events fed from it have been
      *         folded and the feed has gone live, or, for a call the view makes while this feed is calling it, once the
@@ -384,14 +402,18 @@ public final class CatchupProjectionFeed<E> {
         // then() drops whether the catch-up finished or was stopped. A stop here is always one this feed's own owner
         // asked for, so it already knows.
         return handover.catchUp(new ReactiveHandover.Source<>() {
+            // Set in isAlreadyCaughtUp(), which the handover calls before replayStarted() and replay(). Volatile
+            // because a live delivery's thread reads it when it reports a duplicate (ADR 179).
+            private volatile ReplayStart start = ReplayStart.FROM_BEGINNING_UNMARKED;
+
             @Override
             public Mono<Boolean> isAlreadyCaughtUp() {
-                return CatchupProjectionFeed.this.alreadyCaughtUp();
+                return readReplayStart().doOnNext(read -> start = read).thenReturn(false);
             }
 
             @Override
             public Flux<DeliveredEvent<E>> replay() {
-                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
+                return reader.readInPositionOrder(replayFilter, start.range())
                         .map(CatchupProjectionFeed.this::replayedItem);
             }
 
@@ -402,7 +424,7 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public Mono<Void> markCaughtUp() {
-                return CatchupProjectionFeed.this.markCaughtUp();
+                return CatchupProjectionFeed.this.markCaughtUp(start);
             }
 
             @Override
@@ -410,16 +432,18 @@ public final class CatchupProjectionFeed<E> {
                 return CatchupProjectionFeed.this.forgetCaughtUp();
             }
 
+            // The replay callbacks reach the view only for a replay from the beginning. A replay after a stored
+            // marker delivers its events the way the live feed does.
             @Override
             public void replayStarted() {
-                if (fold instanceof ReactiveReplayAware replayAware) {
+                if (start.fromBeginning() && fold instanceof ReactiveReplayAware replayAware) {
                     replayAware.replayStarted();
                 }
             }
 
             @Override
             public Mono<Void> replayCompleted() {
-                if (fold instanceof ReactiveReplayAware replayAware) {
+                if (start.fromBeginning() && fold instanceof ReactiveReplayAware replayAware) {
                     return replayAware.replayCompleted();
                 }
                 return Mono.empty();
@@ -427,14 +451,14 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public void replayAbandoned() {
-                if (fold instanceof ReactiveReplayAware replayAware) {
+                if (start.fromBeginning() && fold instanceof ReactiveReplayAware replayAware) {
                     replayAware.replayAbandoned();
                 }
             }
 
             @Override
             public Mono<Void> alreadyDeliveredByReplay(DeliveredEvent<E> delivered) {
-                if (fold instanceof ReactiveReplayAware replayAware) {
+                if (start.fromBeginning() && fold instanceof ReactiveReplayAware replayAware) {
                     return replayAware.alreadyDeliveredByReplay(delivered.metadata());
                 }
                 return Mono.empty();
@@ -443,10 +467,9 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
-     * Go live without a catch-up: skip the one-time replay and start delivering buffered live events. Use this
+     * Go live without a catch-up: skip the replay and start delivering buffered live events. Use this
      * instead of {@link #catchUp()} for a feed whose events are not in the local event store, so there is nothing to
-     * replay. No completion marker is recorded, since nothing was replayed, so a later {@link #catchUp()} still
-     * replays the full history.
+     * replay. No catch-up marker is written, since nothing was replayed.
      * <p>
      * A second call, or a call after {@link #catchUp()} has finished, finds the feed already live and changes nothing.
      * A live copy of an event that catch-up applied is still de-duplicated and still recorded.
@@ -480,7 +503,7 @@ public final class CatchupProjectionFeed<E> {
                 throw new AssertionError("isAlreadyCaughtUp() is true, so nothing here was caught up to mark.");
             }
 
-            // A catchUp() after this call records its marker, and this source can still be the one that delivers
+            // A catchUp() after this call can record its marker, and this source can still be the one that delivers
             // live, so it forgets that marker the same way.
             @Override
             public Mono<Void> forgetCaughtUp() {
@@ -490,17 +513,16 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
-     * Stop a replay still in flight. It notices at its next event and unwinds without recording the completion marker,
-     * so a partial replay is never recorded as a finished one and the next {@link #catchUp()} replays the whole
-     * history again. A stop is not a failure: the feed stays usable rather than failing every later event.
+     * Stop a replay still in flight. It notices at its next event and unwinds without writing the catch-up marker. A
+     * stop is not a failure, so the feed stays usable rather than failing every later event.
      * <p>
      * A replay notices a stop at the next event it hands to the view, and notices only a stop that came after its own
      * {@link #catchUp()} call. A catch-up asked for before the stop still notices it when another {@link #catchUp()}
      * comes after the stop, from the view or from anywhere else. A catch-up with no event left to hand to the view does
      * not notice a stop, and finishes as if there had been none, so the feed goes live. That is a {@link #goLive()},
      * even one called before the stop and waiting for the stopped replay, one whose history is empty, one that finds
-     * the marker already written, and one whose replay has handed its last event to the view, for example while a view
-     * that buffers during a replay writes that buffer in {@code replayCompleted()}.
+     * no event after its stored marker, and one whose replay has handed its last event to the view, for example while
+     * a view that buffers during a replay writes that buffer in {@code replayCompleted()}.
      * <p>
      * What a stop the replay notices does with the live events depends on where the feed stood when the replay started.
      * One that had not gone live drains nothing and does not go live, and the {@link Mono} {@link #acceptAndWait(Object)}
@@ -542,25 +564,59 @@ public final class CatchupProjectionFeed<E> {
         return Objects.requireNonNull(eventId.apply(event), "The eventId function returned null; every domain event must have a stable non-null id for de-duplication.");
     }
 
-    private Mono<Boolean> alreadyCaughtUp() {
-        return catchupMarker == null ? Mono.just(false) : catchupMarker.read(id).hasElement();
+    private Mono<ReplayStart> readReplayStart() {
+        if (catchupMarker == null) {
+            return Mono.just(ReplayStart.FROM_BEGINNING_UNMARKED);
+        }
+        return catchupMarker.read(id)
+                .map(stored -> Optional.of(CatchupMarkers.positionOf(id, stored)))
+                .defaultIfEmpty(Optional.empty())
+                .flatMap(storedPosition -> reader.currentPosition()
+                        .map(head -> new ReplayStart(storedPosition.orElse(null), head)));
     }
 
-    private Mono<Void> markCaughtUp() {
-        if (catchupMarker == null) {
+    // Stores the head read before the replay, not the head now (ADR 179)
+    private Mono<Void> markCaughtUp(ReplayStart start) {
+        return catchupMarker == null ? Mono.empty() : catchupMarker.save(id, GlobalCheckpoint.of(start.head())).then();
+    }
+
+    // The stored position a catch-up resumes after, null when there is none, and the head read before its replay
+    private record ReplayStart(@Nullable Long storedPosition, long head) {
+        static final ReplayStart FROM_BEGINNING_UNMARKED = new ReplayStart(null, -1);
+
+        boolean fromBeginning() {
+            return storedPosition == null;
+        }
+
+        PositionRange range() {
+            return storedPosition == null ? PositionRange.fromBeginning() : PositionRange.afterPosition(storedPosition);
+        }
+    }
+
+    // Reads what is stored when asked, since the source a forget runs for can be the one delivering live while another
+    // catch-up failed, and a marker read it made earlier says nothing about what is stored now. Deletes nothing when
+    // that is not a catch-up marker, such as a durable subscription's resume token, since it is not this feed's to
+    // delete. Names the id, since the handover logs this when every attempt failed, and an operator needs to know
+    // which marker can still be stored.
+    private Mono<Void> forgetCaughtUp() {
+        CheckpointStorage marker = catchupMarker;
+        if (marker == null) {
             return Mono.empty();
         }
-        return reader.currentPosition()
-                .flatMap(head -> catchupMarker.save(id, GlobalCheckpoint.of(head)))
-                .then();
-    }
-
-    // Names the id, since the handover logs this when every attempt failed and an operator then deletes the marker by
-    // hand.
-    private Mono<Void> forgetCaughtUp() {
-        return catchupMarker == null ? Mono.empty() : catchupMarker.delete(id)
+        return marker.read(id)
+                .filter(this::isCatchupMarker)
+                .flatMap(__ -> marker.delete(id))
                 .onErrorMap(error -> new IllegalStateException("Could not delete the catch-up marker of projection "
                         + "feed " + id + ".", error));
+    }
+
+    private boolean isCatchupMarker(Checkpoint stored) {
+        try {
+            CatchupMarkers.positionOf(id, stored);
+            return true;
+        } catch (CatchupMarkers.NotACatchupMarkerException notAMarker) {
+            return false;
+        }
     }
 
     private DeliveredEvent<E> replayedItem(CloudEvent cloudEvent) {

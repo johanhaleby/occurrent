@@ -66,17 +66,20 @@ failure does.
 
 ## How you find out
 
-Three log lines from `org.occurrent.dsl.saga.blocking.SagaExecution`, all naming the saga's subscription id and the
-instance's saga id, and all logging the exception with its stack trace. There is no metric and no health indicator for
-any of this, in 0.34.0 or 0.35.0.
+Three log lines from `org.occurrent.dsl.saga.blocking.SagaExecution`, and a fourth when the runner cannot record a
+failure at all, all naming the saga's subscription id and the instance's saga id, and all logging the exception with its
+stack trace. There is no metric and no health indicator for any of this, in 0.34.0 or 0.35.0.
 
 The first `WARN` says the instance failed on an event and leaves it to whatever feeds the subscription whether the
 event is offered again. The duration in that line is the budget it has to exhaust, not how long it has been failing so far.
 
 That line does not repeat for every redelivery. The runner only logs it when it writes a failure record, and the same
 input failing again inside the budget records nothing new, so the redeliveries after the first are silent. A different
-input failing usually does write a record and log again, though not if that write loses a compare-and-set to something
-else touching the instance, in which case the runner discards it and says nothing.
+input failing writes a record and logs again. When that write loses a compare-and-set to something else touching the
+instance, the runner reads the instance again and writes again, up to `SagaRunnerConfig.maxCasAttempts()` times. Only
+when every attempt loses does it give up, and it then logs the fourth line, a `WARN` saying it could not record the
+failure because the instance kept changing. The exception goes back to whatever feeds the subscription, and the next
+failure of the event tries again.
 
 So silence after that first line tells you nothing on its own. The instance may still be failing on the same event, or
 a later delivery may have succeeded and cleared the record, which the runner does without logging anything. Read the
@@ -103,10 +106,11 @@ The third line is a `WARN` for one of the ways an instance past its budget is no
 could not confirm it still holds the failing event. That instance stays `ACTIVE`, so it does not appear in step 1,
 and this line is the only log line that says so.
 
-The other ways log nothing about the quarantine. When the store read or write behind it throws, or the write loses a
-compare-and-set to another writer, no quarantine line appears. After a lost compare-and-set the runner cannot tell what
-the other writer did either. Read the instance's status with step 1 or step 2 rather than working it out from the time
-or from which lines you saw.
+The other ways log no quarantine line. When the store read or write behind it throws, none appears. A quarantine write
+that loses a compare-and-set to another writer is worked out again from what is stored and tried again, up to
+`SagaRunnerConfig.maxCasAttempts()` times, so the quarantine line appears if a later attempt quarantines the instance.
+When every attempt loses, the runner logs the fourth line instead. Read the instance's status with step 1 or step 2
+rather than working it out from the time or from which lines you saw.
 
 That refusal is not final. The runner asks the subscription again on every redelivery, so a check that failed because
 a store was briefly unreachable can succeed later, and the same instance can be quarantined then. That recovery needs a later
