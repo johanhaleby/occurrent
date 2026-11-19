@@ -80,6 +80,11 @@ other sections compile fine and behave differently, so read them first.
   a saga instance with `SagaCodec`, and a store persists the `StoredSaga` it's given. `SpringMongoSagaStateStore` keeps
   its document layout, so nothing needs migrating. Breaks the build for a `SagaStateStore` of your own and for code that
   reads an instance from a store directly.
+- [Saga writes on MongoDB wait for a majority to journal them](#saga-writes-on-mongodb-wait-for-a-majority-to-journal-them).
+  `SpringMongoSagaStateStore` writes every saga instance at `majority` with `j: true` whatever your write concern, and
+  quarantine on MongoDB needs a replica set. On a replica set of a primary, a secondary and an arbiter, every saga
+  write fails while the secondary is down. Compiles unchanged, and a store built on a `MongoOperations` that isn't a
+  `MongoTemplate` fails at construction.
 - [The shorter `SagaEnvelope` and `SagaFailure` constructors are removed](#the-shorter-sagaenvelope-and-sagafailure-constructors-are-removed).
   Only the canonical constructors remain.
 
@@ -886,7 +891,7 @@ say to set `occurrent.saga.quarantine-enabled=false` to turn quarantine off. Wit
 that doesn't retain every event, the application starts.
 
 While it is quarantined, an instance records the key of every input it skips, in the order they arrive. A skip used to
-write nothing, and now it makes three writes, two to the instance and the record between them. The records are kept
+write nothing, and now writes the instance and the record together, in one transaction on MongoDB. The records are kept
 outside the instance's document, so a quarantine can record any number of inputs.
 
 `SagaSubscription.release(sagaId)` reads the event the instance stopped on from the event store and applies it, and
@@ -902,7 +907,7 @@ instance only once it has gone a whole `timerPollInterval` without a write, so i
 running on any node, as long as that release takes less than `timerPollInterval` over each input. Two more cases let
 the poller and a release replay the same input and dispatch its commands twice. A `release` call made while the poller
 replays the instance goes on beside the poller. A release that spends longer than `timerPollInterval` on inputs the
-stream marks show as applied writes nothing, so the poller goes on beside it, though neither dispatches anything until
+stream marks show as applied leaves the instance's `updatedAt` as it is, so the poller goes on beside it, though neither dispatches anything until
 the first input that isn't applied.
 
 A timer that came due while the instance was quarantined fires after every recorded input has been replayed, because a
@@ -944,12 +949,12 @@ The message names the interface and `SagaRunnerConfig.disableQuarantine()`. On t
 quarantine on, on a model that retains every event, whose `SagaStateStore` bean doesn't implement it fails at startup
 with a message that names the interface and `occurrent.saga.quarantine-enabled=false`.
 
-A store that implements it keeps the skipped inputs, with `recordSkippedInput`, `recordSkippedInputAtHead`,
-`findSkippedInputs`, `deleteSkippedInput` and `deleteSkippedInputs(sagaId, quarantineId)`. `recordSkippedInputAtHead`
-sets the sequence number of a record that is there already, or writes the record when there is none, in one atomic
-write per key. In `delete(sagaId)` it deletes the records
-under the quarantine id of the instance it removes, after the instance, and leaves the records under any other
-quarantine id alone, since a new instance with the same saga id can be started and quarantined in between. It implements
+A store that implements it keeps the skipped inputs. It reads them with `findSkippedInputs`, and changes them only in
+four compare-and-sets on the instance, `compareAndSaveSkipped`, `compareAndSaveReleaseStarted`,
+`compareAndSaveReplayed` and `compareAndSaveQuarantineEnded`. Each writes the instance and its records in one atomic
+write, and on a version conflict returns `false` and writes neither. In `delete(sagaId)` it deletes the records under
+the quarantine id of the instance it removes, in the same atomic write as the instance. A call that returns normally
+has to have made its write survive a failover, since the runner acknowledges the input right after it. It implements
 `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`
 set, in ascending order, after the id `after` (all of them when it is `null`), and at most `limit` of them. The timer
 poller asks for them on every poll and goes on with their release, starting each poll after the last id the previous
@@ -1248,6 +1253,58 @@ into the fields `SagaCodec` expects, or migrate it.
 
 `UpgradeToOccurrent_0_35` doesn't port a store, since how a store keeps the fields and queries the index depends on its
 database.
+
+## Saga writes on MongoDB wait for a majority to journal them
+
+`SpringMongoSagaStateStore` writes every saga instance at write concern `majority` with `j: true`, whatever write
+concern your `MongoTemplate` has, and reads it at read concern `majority`. 0.34.0 wrote and read the instance at the
+template's concerns. A saga acknowledges its input as soon as the write returns, so a write that a failover rolls back
+loses the input.
+
+A quarantined instance and the inputs it skips now change together, in one MongoDB transaction, so quarantine on
+MongoDB needs a replica set.
+
+### Who is affected
+
+- An application whose `MongoTemplate`, client, database or server default sets a write concern below `majority`, such
+  as `w: 1`. Saga writes no longer use it.
+- A replica set of a primary, a secondary and an arbiter. With the secondary down, a majority can't journal a write, so
+  every saga write fails, where `w: 1` succeeded.
+- An application that runs sagas with quarantine on, the default in 0.35.0, against a standalone MongoDB server. The
+  first input a quarantined instance skips fails, since the server refuses the transaction.
+- Code that builds a `SpringMongoSagaStateStore` with a `MongoOperations` that isn't a `MongoTemplate`, such as a
+  wrapper or a mock.
+
+### What changes
+
+`compareAndSave` and `compareAndSaveWithoutState` stay a single-document write each, and wait until a majority of the
+replica set has the write in its on-disk journal. When a majority doesn't acknowledge it within 10 seconds, the write
+throws, and the store's `RetryStrategy` tries it again. On a client with a `timeoutMS` above 0, where the driver sends
+no `wtimeout`, your `timeoutMS` bounds each attempt instead. A write that timed out can still be on the primary. Reads
+at read concern `majority` don't return it until a majority has it, so the saga doesn't act on it before then.
+
+The four writes of `SagaStateStoreSkippedInputs` and the `delete` of a quarantined instance run in a transaction that
+commits at `majority` with `j: true` and reads at read concern `snapshot`. The store retries a transaction that fails
+with the `TransientTransactionError` label, and commits again after an `UnknownTransactionCommitResult`, both with its
+`RetryStrategy`. A standalone server refuses the transaction, and the store throws an `IllegalStateException` that says
+it needs a replica set and that a single-member one is enough.
+
+Inside a Spring MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your
+transaction instead of starting their own, and the store doesn't retry them. Your commit's write concern then decides
+whether they survive a failover. The store can't read that concern, so it doesn't check it.
+
+Every constructor throws an `IllegalArgumentException` for a `MongoOperations` that isn't a `MongoTemplate`, since the
+store runs its transactions on the template's `MongoDatabaseFactory`. The message says to pass the `MongoTemplate`
+bean.
+
+### What to do
+
+- On a replica set of a primary, a secondary and an arbiter, replace the arbiter with a data-bearing member, or expect
+  saga writes to fail while the secondary is down.
+- On a standalone server, run MongoDB as a replica set, which can have a single member, or turn quarantine off with
+  `SagaRunnerConfig.disableQuarantine()` or `occurrent.saga.quarantine-enabled=false`.
+- Pass the `MongoTemplate` bean to `SpringMongoSagaStateStore`. The Spring Boot starter already does.
+- Run the transitions outside a transaction of yours, or commit yours at `majority` with `j: true`.
 
 ## The shorter `SagaEnvelope` and `SagaFailure` constructors are removed
 

@@ -319,7 +319,7 @@ The poller and a release can still replay the same input, and both dispatch its 
 - The poller's clock is `timerPollInterval` or more ahead of the clock of the node that wrote.
 - You call `release` while the poller is replaying the instance. Your call goes on beside the poller.
 - The release spends longer than `timerPollInterval` on inputs the stream marks show as applied. It deletes their
-  records without writing the instance, so the poller goes on beside it. Neither dispatches anything for those inputs,
+  records in writes that leave the instance's `updatedAt` as it is, so the poller goes on beside it. Neither dispatches anything for those inputs,
   so only the first input that isn't applied can have its commands dispatched twice.
 
 A receiver handles such a repeat the way it handles a live input delivered twice.
@@ -411,8 +411,8 @@ happens.
 So delete an instance only once its source can no longer redeliver any of its events. Leaving it in `QUARANTINED`
 until then is safe, because the runner skips every event addressed to it. It is not free, though. Every later event
 addressed to that instance is still delivered and still reads the instance from the state store before the runner
-skips it. From 0.35.0 the skip also records the event's key, which takes two writes to the instance and one record
-between them, so a correlation id that keeps receiving events costs a read and three writes for each one.
+skips it. From 0.35.0 the skip also records the event's key, in one write of the instance and the record together, a
+transaction on MongoDB, so a correlation id that keeps receiving events costs a read and that write for each one.
 
 `SagaStateStore.delete(sagaId)` is the call, and whether you have anything to call it on depends on how the store was
 wired.

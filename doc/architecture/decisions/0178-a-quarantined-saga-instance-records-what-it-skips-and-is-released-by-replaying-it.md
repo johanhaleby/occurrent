@@ -16,6 +16,12 @@ Occurrent, the `ACTIVE_MARKED` status in
 [ADR 154](0154-a-saga-tells-a-late-stream-event-from-a-redelivery-per-event-type.md), and the upgrade guide's section
 on upgrading from 0.34.0 and rolling back to it.
 
+Amended by [ADR 182](0182-a-saga-instance-and-its-skipped-input-records-change-in-one-atomic-write.md). Every write
+that changes a record now changes the instance in the same atomic write, at write concern `majority` with `j: true` on
+MongoDB. That replaces the separate writes of a skip and a release in points 1, 2 and 3, the leftover records and the
+race between a skip and a release that point 2 and point 3 step 3 describe, the instance writes at the caller's write
+concern in point 2, and the consequences that follow from them.
+
 ## Context
 
 ADR 134 quarantines a saga instance once one input has kept failing for longer than `quarantineAfter`. A quarantined
