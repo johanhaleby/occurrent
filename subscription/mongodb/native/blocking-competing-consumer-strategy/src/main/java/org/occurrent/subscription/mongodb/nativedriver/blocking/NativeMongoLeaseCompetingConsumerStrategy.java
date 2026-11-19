@@ -8,11 +8,13 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.NullUnmarked;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.mongodb.blocking.ccs.LeaseRefreshFailure;
 import org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 import static org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport.DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION;
@@ -99,6 +101,21 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
     @Override
     public OptionalLong fencingToken(String subscriptionId) {
         return support.fencingToken(subscriptionId);
+    }
+
+    /**
+     * Why the scheduled lease refresh fails, and since when, or empty while it works. A refresh attempt fails when it
+     * cannot write a lease this node holds or competes for, which also covers a database that answers reads while it
+     * refuses writes, and the failure stays until an attempt refreshes every lease. A node that cannot write its
+     * leases cannot take a subscription over, so when no node can, every node waits and no subscription runs.
+     * <p>
+     * Reads a field, so this neither blocks nor reaches MongoDB.
+     *
+     * @return The failure of the latest refresh attempt and when the failures began, or empty when the latest attempt
+     * refreshed every lease or none has failed.
+     */
+    public Optional<LeaseRefreshFailure> leaseRefreshFailure() {
+        return support.leaseRefreshFailure();
     }
 
     /**

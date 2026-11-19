@@ -124,7 +124,7 @@ class ProjectionAnnotationRegistrar {
     private final Queue<BackgroundCatchUp> backgroundCatchUps = new ConcurrentLinkedQueue<>();
     // Set by close(). A background catch-up checks it before starting, because stopping a feed only takes effect once
     // the replay is running: a stop that lands before the thread gets scheduled would otherwise be cleared by the
-    // catch-up itself and the whole history would replay into a closing store.
+    // catch-up itself and the replay would run into a closing store.
     private volatile boolean closing = false;
 
     // The applied-append recording poll's pacing (ADR 132 decision 7), the timer that fires each projection's due
@@ -323,8 +323,8 @@ class ProjectionAnnotationRegistrar {
             try {
                 // Read again here, and not only before the thread was started, because stopCatchUp() only takes effect
                 // on a replay that is already running. close() can stop this entry while the thread is still waiting to
-                // be scheduled, and catchUp() sets that stop back to false before it replays, so the whole history
-                // would replay into a closing store.
+                // be scheduled, and catchUp() sets that stop back to false before it replays, so the replay would run
+                // into a closing store.
                 if (closing) {
                     return null;
                 }
@@ -406,7 +406,7 @@ class ProjectionAnnotationRegistrar {
                         // Cleared by the throw, so the retry still runs on a thread that is not interrupted.
                     }
                     // Read again after the wait, because close() stops only a replay that is running, and a retry
-                    // started after it would replay the whole history into a closing store.
+                    // started after it would replay into a closing store.
                     if (closing) {
                         Thread.currentThread().interrupt();
                         throw e;

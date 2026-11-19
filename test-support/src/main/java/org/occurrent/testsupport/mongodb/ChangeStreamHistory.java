@@ -39,11 +39,14 @@ import static java.util.Objects.requireNonNull;
  * MongoDB accepts, one megabyte, and {@link #dropHistoryFrom} writes until MongoDB has truncated the oplog past the
  * operation time.
  * <p>
- * MongoDB took about a minute to truncate the oplog in these tests, however much was written. Writing filler for that
- * whole minute grew mongod past five gigabytes on a second drop in the same container, and the kernel killed it for
- * running out of memory. With the filler bounded and no write after it, MongoDB did not truncate the oplog at all
- * within three minutes. So {@link #dropHistoryFrom} writes ten megabytes of filler, then one small document every
- * hundred milliseconds until the oplog is truncated.
+ * The replica set runs with {@code --syncdelay 1}, so MongoDB takes a checkpoint every second instead of every 60. In
+ * one run on mongo:8.0 the drop took 69 seconds with the default and 0.3 seconds with {@code --syncdelay 1}, which fits
+ * MongoDB truncating the oplog only after a checkpoint. An {@code fsync} after every write instead took 95 seconds.
+ * <p>
+ * Before {@code --syncdelay 1}, writing filler for the whole drop grew mongod past five gigabytes on a second drop in
+ * the same container, and the kernel killed it for running out of memory. With the filler bounded and no write after
+ * it, MongoDB did not truncate the oplog at all within three minutes. So {@link #dropHistoryFrom} writes ten megabytes
+ * of filler, then one small document every hundred milliseconds until the oplog is truncated.
  */
 public final class ChangeStreamHistory {
 
@@ -58,11 +61,11 @@ public final class ChangeStreamHistory {
     }
 
     /**
-     * A single-node replica set with a one megabyte oplog.
+     * A single-node replica set with a one megabyte oplog that checkpoints every second.
      */
     public static ReplicaSetReadyMongoDBContainer container() {
         ReplicaSetReadyMongoDBContainer container = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
-        container.withCommand("--replSet", "docker-rs", "--oplogSize", "1");
+        container.withCommand("--replSet", "docker-rs", "--oplogSize", "1", "--syncdelay", "1");
         return container;
     }
 

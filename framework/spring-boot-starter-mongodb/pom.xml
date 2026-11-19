@@ -43,6 +43,12 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-mongodb</artifactId>
         </dependency>
+        <!-- Health, configured only when the application has it on the classpath, see ADR 171 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-health</artifactId>
+            <optional>true</optional>
+        </dependency>
         <!-- Generate configuration metadata file automatically, see https://docs.spring.io/spring-boot/docs/current/reference/html/configuration-metadata.html#configuration-metadata.annotation-processor -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -214,6 +220,12 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-inmemory</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
