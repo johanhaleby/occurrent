@@ -58,6 +58,7 @@ import java.util.function.Supplier;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -491,6 +492,34 @@ class OccurrentMongoAutoConfigurationCompetingConsumerHealthTest {
             model.shutdown();
         }
         assertThat(subscribing.isAlive()).as("the subscribe is alive").isFalse();
+    }
+
+    @Test
+    void a_subscription_whose_lease_strategy_throws_an_error_when_asked_for_the_lease_is_UP_as_STANDBY_and_the_health_call_does_not_throw() {
+        // Given a real model that runs a subscription under a lease the strategy says is held
+        CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
+        when(strategy.registerCompetingConsumer(anyString(), anyString())).thenReturn(true);
+        when(strategy.hasLock(anyString(), anyString())).thenReturn(true);
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(new InMemorySubscriptionModel(), strategy);
+        model.subscribe("node", "running", null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+
+        try {
+            // When the strategy throws an Error instead of answering whether the lease is held
+            when(strategy.hasLock(anyString(), anyString())).thenThrow(new AssertionError("The lease strategy's hasLock throws an Error"));
+
+            // Then the subscription is still listed, UP and on STANDBY, and no health call throws
+            contextRunner.withBean("subscriptionModel", SubscriptionModel.class, () -> model).run(context -> {
+                assertThatCode(() -> competingConsumers(context).stream().toList()).as("listing the subscriptions").doesNotThrowAnyException();
+                assertThat(competingConsumers(context).stream()).extracting(CompositeHealthContributor.Entry::name).containsExactly("running");
+                assertThatCode(() -> indicator(competingConsumers(context), "running").health()).as("asking for the health").doesNotThrowAnyException();
+                Health health = indicator(competingConsumers(context), "running").health();
+                assertThat(health.getStatus()).isEqualTo(Status.UP);
+                assertThat(health.getDetails()).containsEntry("state", "STANDBY").containsEntry("subscriberId", "node").doesNotContainKeys("failure", "since");
+            });
+        } finally {
+            model.shutdown();
+        }
     }
 
     private static CompetingConsumerSubscriptionModel modelReporting(CompetingConsumerStatus status) {

@@ -55,7 +55,9 @@ import java.util.stream.Collectors;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -85,6 +87,7 @@ class CompetingConsumerReportsItsStatusTest {
         wrapped.reportsPausedAsRunning = false;
         wrapped.pauseFailureMessage = "The wrapped model's pause fails";
         strategy.hasLockFails = false;
+        strategy.hasLockError = null;
         wrapped.pauseGate = null;
         wrapped.isRunningGate.set(null);
         strategy.unregisterGate = null;
@@ -226,6 +229,23 @@ class CompetingConsumerReportsItsStatusTest {
             assertThat(status().state()).isEqualTo(State.LEASE_HELD);
             assertThat(status().isFailing()).as("failing").isFalse();
         });
+    }
+
+    @Test
+    void reports_a_subscription_whose_lease_strategy_throws_an_error_when_asked_for_the_lease_as_standby_and_lists_it() {
+        // Given a subscription that runs under the lease this node holds
+        strategy.grantOnRegister = true;
+        subscribe();
+        assertThat(status().state()).as("state before the strategy throws").isEqualTo(State.LEASE_HELD);
+
+        // When the strategy throws an Error instead of answering whether the lease is held
+        strategy.hasLockError = new AssertionError("The lease strategy's hasLock throws an Error");
+
+        // Then the lease counts as not held, and neither read throws
+        assertThatCode(() -> model.competingConsumerStatus(ID)).as("reading the status").doesNotThrowAnyException();
+        assertThat(status().state()).isEqualTo(State.STANDBY);
+        assertThatCode(model::competingConsumerStatuses).as("listing the statuses").doesNotThrowAnyException();
+        assertThat(model.competingConsumerStatuses()).extracting(CompetingConsumerStatus::subscriptionId, CompetingConsumerStatus::state).containsExactly(tuple(ID, State.STANDBY));
     }
 
     @Test
@@ -902,6 +922,10 @@ class CompetingConsumerReportsItsStatusTest {
         assertThat(subscribeFailure.get()).as("the subscribe failed").isNull();
     }
 
+    // Probabilistic. The test cannot force the interleaving, because the fixed code moves the id between the maps in one
+    // step under the monitor, with no point between the two moves for a hook. It went red in 5 of 5 runs against the old
+    // gather, which took the ids from the given-up and known subscriptions outside the monitor. A slower machine could
+    // let the old gather through.
     @Test
     void lists_every_subscription_in_a_read_that_races_the_give_up_of_their_refused_starts() throws Exception {
         // Given many subscriptions that are given up, so that collecting them takes long, and many that run
@@ -1078,6 +1102,7 @@ class CompetingConsumerReportsItsStatusTest {
         private final Set<String> holders = ConcurrentHashMap.newKeySet();
         private volatile boolean grantOnRegister;
         private volatile boolean hasLockFails;
+        private volatile @Nullable Error hasLockError;
         private volatile boolean releasesFail;
         private volatile @Nullable Gate unregisterGate;
         private volatile @Nullable Gate registerGate;
@@ -1114,6 +1139,10 @@ class CompetingConsumerReportsItsStatusTest {
 
         @Override
         public boolean hasLock(String subscriptionId, String subscriberId) {
+            @Nullable Error error = hasLockError;
+            if (error != null) {
+                throw error;
+            }
             if (hasLockFails) {
                 throw new IllegalStateException("The lease strategy's hasLock fails");
             }
