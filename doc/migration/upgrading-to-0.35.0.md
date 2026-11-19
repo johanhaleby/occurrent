@@ -167,6 +167,10 @@ other sections compile fine and behave differently, so read them first.
   `resumeSubscription(id, startAt)` throws `SubscriptionAlreadyRunningException` itself, where 0.34.0 passed the resume
   on to the live model and the MongoDB models threw `UnknownSubscriptionException` while the `subscribe(..)` replay ran.
   Compiles unchanged.
+- [A catch-up marker on the reactor stack is a position to resume after](#a-catch-up-marker-on-the-reactor-stack-is-a-position-to-resume-after).
+  A reactor `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` start that reads a stored
+  marker replays the events after it instead of skipping its replay, and a cancel no longer promises a rebuild.
+  Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
@@ -3124,6 +3128,79 @@ now. While the `subscribe(..)` replay ran they didn't hold it yet, and threw `Un
 while its `subscribe(..)` replay runs isn't refused this way. The live model doesn't hold it until that replay hands
 over, so a resume at a position before then still throws `UnknownSubscriptionException` from a MongoDB model, as in
 0.34.0.
+
+## A catch-up marker on the reactor stack is a position to resume after
+
+This applies to the reactor `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` and `DomainEventFeed` when you
+give them a `CheckpointStorage` for the catch-up marker. It also applies to every `@Projection` with `source = PUSH` in
+the reactive Spring Boot starter, unless it sets `catchup = NONE`. The starter builds the push model with the
+application's `CheckpointStorage` bean, so you never pass one yourself. The blocking ones, and every `@Projection` or
+`@Saga` with `source = PUSH` in the blocking starter, keep the 0.34.0 meaning. A stored marker means the catch-up
+finished, and a start that finds it skips its replay. Their cancel changes too, see
+[A blocking cancel no longer promises a rebuild](#a-blocking-cancel-no-longer-promises-a-rebuild).
+
+In 0.34.0 a stored marker meant that the history had been read in full, and a catch-up that found it went live without
+a replay. In 0.35.0 a reactor catch-up start that reads a stored marker replays the events after it. See "What a
+reactor catch-up start replays" in
+[ADR 179](../architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md#what-a-reactor-catch-up-start-replays)
+for what a start reads, replays and stores, and the cases that change it. ADR 179 also says why the blocking stack
+keeps the 0.34.0 marker.
+
+What you see:
+
+- A restart can replay events the projection handled live before it. The cache that removes duplicates is in memory,
+  so the projection applies those events again. Delivery was already at least once, so a projection that applies an
+  event twice with the same result as once needs no change.
+- `catchUp()` on a feed with a stored marker replays the events after it, where 0.34.0 went straight to live.
+- A `@Projection` with `source = PUSH` waits for its catch-up at startup unless it sets `startupMode = BACKGROUND`, and
+  the marker is stored only once the replay is done. In 0.34.0 a start that found a stored marker went live at once,
+  and now it replays the events after the marker first. When the replay takes longer than a startup probe, such as a
+  Kubernetes one, allows, the probe can restart the application before the marker is written, and the next start can
+  replay those events again. Set `startupMode = BACKGROUND` so the application starts while the catch-up runs.
+- On `CatchupProjectionFeed` and `DomainEventFeed`, where a catch-up can run again after `goLive()`, a catch-up can
+  leave the stored marker as it was while an event that the feed's own handler or callbacks fed back waits to be
+  handled. A handler that feeds back an event whenever it handles one, under steady live traffic, can then keep the
+  marker from moving on, so later starts replay more. `CatchupThenPushSubscriptionModel` runs each catch-up before its
+  subscription goes live, so it doesn't meet that cost.
+- When a reactor feed or push model runs on more than one replica, an event a handler writes to the event store and
+  feeds back needs a durable path of its own. Either your forwarder publishes it to the broker queue the listener
+  reads, as it does for any other written event, or the handler feeds it again whenever the event that triggered it is
+  delivered again, also when the write is already stored. Replicas share the catch-up marker, so another replica's
+  catch-up can store a marker at or above an event this replica fed back and has not handled yet. Without either path,
+  a feed or push model that runs on more than one replica can lose such an event, and
+  [ADR 179](../architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md)
+  lists when in "Fed-back events on the reactor stack". 0.34.0 has the same gap.
+- `cancelSubscription(id)` still deletes the marker, after it cancels, and the `Mono` it returns completes once the
+  delete is done. A later subscribe of the id can still resume after a stored marker, and "What a reactor catch-up
+  start replays" in ADR 179 says when. Subscribe under a new subscription id when you need a rebuild.
+- The marker is stored under the subscription id alone. When you change the filter or the projection, subscribe under
+  a new id. A start under the old id can resume after a position its earlier filter stored, and skip the events at or
+  below it that the new filter matches. 0.34.0 skipped the whole replay in that case.
+- A catch-up that reads a checkpoint stored under the subscription id takes it as its marker. When something other
+  than a catch-up stored it, such as a durable subscription that used the id before it moved to `source = PUSH`, and
+  it is not a position, that catch-up fails with an `IllegalStateException` that names the id. 0.34.0 took any stored
+  checkpoint as a finished catch-up and skipped the replay. Delete that checkpoint, or subscribe under a new id. A
+  start that finds no marker replays the whole history. A failed catch-up does not delete that checkpoint, but the
+  push model's `cancelSubscription(id)` does. When a durable checkpoint is a position, a catch-up can resume after it
+  and replace it. So don't share a subscription id between a durable subscription and a catch-up-then-push model,
+  `CatchupProjectionFeed` or `DomainEventFeed`, on either stack.
+- `ReactiveReplayAware`, and a `ReplayAware` view on a reactor feed, hear `replayStarted()`, `replayCompleted()` and
+  `replayAbandoned()` only for a replay from the beginning, as in 0.34.0. A replay after a marker delivers its events
+  the way the live feed does, without those calls. A `CatchupListener` on the reactor push model follows the same rule,
+  and hears `catchupStarted`, `historyRead` and `alreadyDeliveredByReplay` only for a replay from the beginning. In
+  0.34.0 it heard `catchupStarted` on every start, and the applied-append recorder of the reactive Spring Boot starter
+  deleted its records then, so a wait for an append applied before a restart could time out. The next start of the id,
+  whether it replays from the beginning or resumes after a marker, first sends `historyRead` for a catch-up the listener
+  heard start and that a stop, a cancel or a failure cut short, so the listener stops waiting for it. A catch-up a
+  shutdown cuts short gets no `historyRead`. A listener of your own that counted on hearing every start needs a look.
+
+0.34.0 wrote the marker only after a replay from the beginning, and a 0.34.0 start that found it skipped its replay and
+never wrote it again. The first 0.35.0 start that reads that marker resumes after it, so for an id that has run for
+long it can replay most of the history. That replay sends no replay callbacks, so a view that batches its writes during
+a replay, such as the one `Projections` builds, reads and writes once per event through it, and the applied-append
+recorder writes a record for each append the projection applies. Plan for that replay, and set
+`startupMode = BACKGROUND` when a startup probe could cut it short. A 0.34.0 node that reads a marker 0.35.0 stored
+skips its replay, as it always did, so a rolling upgrade needs nothing more on either side.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
