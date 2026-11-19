@@ -40,6 +40,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -103,9 +104,6 @@ public final class CatchupProjectionFeed<E> {
     // Counts stopCatchUp() calls. Read by the replay once per event, so a stop takes effect at the next event rather
     // than at the end.
     private final AtomicLong stops = new AtomicLong();
-    // Whether the last marker read refused a checkpoint that is not a catch-up marker. Something else stored it under
-    // this id, such as a durable subscription's resume token, so forgetting the marker does not delete it.
-    private volatile boolean storedIsNotAMarker;
 
     private CatchupProjectionFeed(String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -407,10 +405,15 @@ public final class CatchupProjectionFeed<E> {
             // Set in isAlreadyCaughtUp(), which the handover calls before replayStarted() and replay(). Volatile
             // because a live delivery's thread reads it when it reports a duplicate (ADR 179).
             private volatile ReplayStart start = ReplayStart.FROM_BEGINNING_UNMARKED;
+            // Whether this attempt's last marker read refused a checkpoint that is not a catch-up marker. Something
+            // else stored it under this id, such as a durable subscription's resume token, so a failed catch-up does
+            // not delete it. Kept per attempt, so what another catch-up on this feed read cannot decide what this
+            // attempt deletes.
+            private final AtomicBoolean storedIsNotAMarker = new AtomicBoolean();
 
             @Override
             public Mono<Boolean> isAlreadyCaughtUp() {
-                return readReplayStart().doOnNext(read -> start = read).thenReturn(false);
+                return readReplayStart(storedIsNotAMarker).doOnNext(read -> start = read).thenReturn(false);
             }
 
             @Override
@@ -431,7 +434,7 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public Mono<Void> forgetCaughtUp() {
-                return CatchupProjectionFeed.this.forgetCaughtUp();
+                return Mono.defer(() -> storedIsNotAMarker.get() ? Mono.empty() : deleteMarker());
             }
 
             // The replay callbacks reach the view only for a replay from the beginning. A replay after a stored
@@ -506,10 +509,10 @@ public final class CatchupProjectionFeed<E> {
             }
 
             // A catchUp() after this call can record its marker, and this source can still be the one that delivers
-            // live, so it forgets that marker the same way.
+            // live, so it forgets that marker. It made no marker read of its own, so it reads what is stored now.
             @Override
             public Mono<Void> forgetCaughtUp() {
-                return CatchupProjectionFeed.this.forgetCaughtUp();
+                return deleteMarkerIfStored();
             }
         }).then();
     }
@@ -566,23 +569,23 @@ public final class CatchupProjectionFeed<E> {
         return Objects.requireNonNull(eventId.apply(event), "The eventId function returned null; every domain event must have a stable non-null id for de-duplication.");
     }
 
-    private Mono<ReplayStart> readReplayStart() {
+    private Mono<ReplayStart> readReplayStart(AtomicBoolean storedIsNotAMarker) {
         if (catchupMarker == null) {
             return Mono.just(ReplayStart.FROM_BEGINNING_UNMARKED);
         }
         return catchupMarker.read(id)
-                .map(stored -> Optional.of(storedPosition(stored)))
+                .map(stored -> Optional.of(storedPosition(stored, storedIsNotAMarker)))
                 .defaultIfEmpty(Optional.empty())
-                .doOnNext(__ -> storedIsNotAMarker = false)
+                .doOnNext(__ -> storedIsNotAMarker.set(false))
                 .flatMap(storedPosition -> reader.currentPosition()
                         .map(head -> new ReplayStart(storedPosition.orElse(null), head)));
     }
 
-    private long storedPosition(Checkpoint stored) {
+    private long storedPosition(Checkpoint stored, AtomicBoolean storedIsNotAMarker) {
         try {
             return CatchupMarkers.positionOf(id, stored);
         } catch (CatchupMarkers.NotACatchupMarkerException notAMarker) {
-            storedIsNotAMarker = true;
+            storedIsNotAMarker.set(true);
             throw notAMarker;
         }
     }
@@ -606,11 +609,30 @@ public final class CatchupProjectionFeed<E> {
     }
 
     // Names the id, since the handover logs this when every attempt failed and an operator then deletes the marker by
-    // hand. Deletes nothing when the last read refused what is stored, since that is not this feed's to delete.
-    private Mono<Void> forgetCaughtUp() {
-        return catchupMarker == null || storedIsNotAMarker ? Mono.empty() : catchupMarker.delete(id)
+    // hand
+    private Mono<Void> deleteMarker() {
+        return catchupMarker == null ? Mono.empty() : catchupMarker.delete(id)
                 .onErrorMap(error -> new IllegalStateException("Could not delete the catch-up marker of projection "
                         + "feed " + id + ".", error));
+    }
+
+    // Deletes nothing when what is stored is not a catch-up marker, since that is not this feed's to delete
+    private Mono<Void> deleteMarkerIfStored() {
+        if (catchupMarker == null) {
+            return Mono.empty();
+        }
+        return catchupMarker.read(id)
+                .filter(stored -> !refusedAsMarker(stored))
+                .flatMap(__ -> deleteMarker());
+    }
+
+    private boolean refusedAsMarker(Checkpoint stored) {
+        try {
+            CatchupMarkers.positionOf(id, stored);
+            return false;
+        } catch (CatchupMarkers.NotACatchupMarkerException notAMarker) {
+            return true;
+        }
     }
 
     private DeliveredEvent<E> replayedItem(CloudEvent cloudEvent) {
