@@ -56,7 +56,7 @@ public interface CatchupListener {
      * <p>
      * A history that a stop, a cancel or a failure cut short is not a history that was read. A model either sends
      * nothing for it, so the next {@link #catchupStarted(Object)} of the subscription supersedes the episode, or sends
-     * this for it before the next catch-up of the subscription replays, as the reactor {@code
+     * this once for it before the next catch-up of the subscription replays, as the reactor {@code
      * CatchupThenPushSubscriptionModel} does. Sent that way it means stop waiting for that history and record from
      * here, and the next catch-up's {@code catchupStarted} can follow at once. A shutdown sends neither.
      *

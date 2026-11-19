@@ -395,12 +395,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public void historyDone() {
-                // The replay itself is the episode, so a listener a later attempt for this id has since started
-                // ignores this and no lock is needed to keep this attempt from speaking for that one.
-                CatchupListener listener = catchupListeners.get(subscriptionId);
-                if (listener != null && listenerHearsAttempt.get()) {
-                    episodesReadingHistory.remove(subscriptionId, replayDone);
-                    listener.historyRead(replayDone);
+                // Sent only by whoever removes the episode, so a later attempt that ended it first is the one that
+                // sent its historyRead, and this attempt sends none. The replay itself is the episode, so a listener that
+                // hears this after a later attempt's catchupStarted ignores it, and no lock is needed.
+                if (episodesReadingHistory.remove(subscriptionId, replayDone)) {
+                    CatchupListener listener = catchupListeners.get(subscriptionId);
+                    if (listener != null) {
+                        listener.historyRead(replayDone);
+                    }
                 }
             }
 

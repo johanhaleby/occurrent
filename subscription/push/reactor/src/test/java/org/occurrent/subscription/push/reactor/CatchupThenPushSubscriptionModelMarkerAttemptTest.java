@@ -218,6 +218,36 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
                 .containsExactly("catchupStarted#1", "historyRead#1", "catchupStarted#2", "historyRead#2"));
     }
 
+    // The first attempt replays from the beginning and is held in the handler of its last event, so the cancel comes
+    // after its last ownership check and it still reaches the end of its history. The next subscribe replays from the
+    // beginning too and ends the episode the cancelled attempt left open, before it announces its own. Only then is
+    // the first attempt let go, and its end of history comes after that episode was ended by someone else.
+    @Test
+    void a_cancelled_replay_from_the_beginning_that_reaches_the_end_of_its_history_after_the_next_attempt_ended_its_episode_does_not_tell_the_listener_a_second_time_that_the_history_was_read() throws Exception {
+        store.append(List.of(event("1")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, new InMemoryCheckpointStorage());
+        EpisodeSignals episodes = new EpisodeSignals();
+        model.listenForCatchup("proj", episodes);
+        CountDownLatch lastEventReached = new CountDownLatch(1);
+        CountDownLatch releaseLastEvent = new CountDownLatch(1);
+
+        Subscription first = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.fromRunnable(() -> {
+            lastEventReached.countDown();
+            awaitQuietly(releaseLastEvent);
+        }));
+        assertThat(lastEventReached.await(5, TimeUnit.SECONDS)).as("the first attempt is replaying its last event").isTrue();
+        model.cancelSubscription("proj").block(TIMEOUT);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+        assertThat(episodes.names).as("signals heard before the first attempt reaches the end of its history")
+                .startsWith("catchupStarted#1", "historyRead#1", "catchupStarted#2");
+        releaseLastEvent.countDown();
+        catchThrowable(() -> first.waitUntilStarted().block(TIMEOUT));
+
+        assertThat(episodes.names).as("signals heard from the cancelled attempt and the one that replaced it")
+                .containsExactlyInAnyOrder("catchupStarted#1", "historyRead#1", "catchupStarted#2", "historyRead#2")
+                .startsWith("catchupStarted#1", "historyRead#1", "catchupStarted#2");
+    }
+
     // The cancel comes before the attempt has read the marker, so the attempt no longer owns the id when it learns
     // that it replays from the beginning. A start it announced then would arrive after its replacement's.
     @Test
