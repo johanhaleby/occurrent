@@ -32,6 +32,7 @@ import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
@@ -290,6 +291,60 @@ class CatchupThenPushSubscriptionModelTest {
         // Only live events flow after the restart, resumed by the broker (here, the forwarding store).
         store.write("s1", List.of(cloudEvent("3", "Updated")));
         assertThat(secondRun).containsExactly("3");
+    }
+
+    @Test
+    void a_checkpoint_another_component_stored_under_the_id_makes_the_start_skip_the_replay() {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        marker.save("proj", new StringBasedCheckpoint("resume-token-xyz"));
+        AtomicReference<PushSubscriptionModel> sink = new AtomicReference<>();
+        InMemoryEventStore store = new InMemoryEventStore(events -> {
+            PushSubscriptionModel current = sink.get();
+            if (current != null) {
+                current.accept(events);
+            }
+        });
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        sink.set(feed);
+        List<String> delivered = new ArrayList<>();
+
+        new CatchupThenPushSubscriptionModel(store, feed, marker)
+                .subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()))
+                .waitUntilStarted();
+
+        assertThat(delivered).as("a stored checkpoint of any kind says the catch-up is done, so nothing is replayed").isEmpty();
+        store.write("s1", List.of(cloudEvent("3", "Updated")));
+        assertThat(delivered).containsExactly("3");
+    }
+
+    @Test
+    void subscribing_under_a_new_id_replays_the_whole_history_although_a_marker_is_stored_under_the_old_id() {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        AtomicReference<PushSubscriptionModel> sink = new AtomicReference<>();
+        InMemoryEventStore store = new InMemoryEventStore(events -> {
+            PushSubscriptionModel current = sink.get();
+            if (current != null) {
+                current.accept(events);
+            }
+        });
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
+        PushSubscriptionModel feed1 = new PushSubscriptionModel();
+        sink.set(feed1);
+        new CatchupThenPushSubscriptionModel(store, feed1, marker)
+                .subscribe("old-id", null, StartAt.subscriptionModelDefault(), ce -> {
+                })
+                .waitUntilStarted();
+        assertThat(marker.exists("old-id")).as("marker stored under the old id").isTrue();
+
+        PushSubscriptionModel feed2 = new PushSubscriptionModel();
+        sink.set(feed2);
+        List<String> delivered = new ArrayList<>();
+        new CatchupThenPushSubscriptionModel(store, feed2, marker)
+                .subscribe("new-id", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()))
+                .waitUntilStarted();
+
+        assertThat(delivered).containsExactly("1", "2");
     }
 
     @Test

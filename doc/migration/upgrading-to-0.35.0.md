@@ -132,6 +132,9 @@ other sections compile fine and behave differently, so read them first.
   Compiles unchanged.
 - [A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs](#a-blocking-cancel-doesnt-wait-for-a-subscribe-whose-startatdynamic-function-runs).
   A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
+- [A blocking cancel no longer promises a rebuild](#a-blocking-cancel-no-longer-promises-a-rebuild).
+  `cancelSubscription(id)` on the blocking `CatchupThenPushSubscriptionModel` still deletes the catch-up marker, but a
+  rebuild takes a new subscription id. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
   `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached. Over
   `ReactorMongoSubscriptionModel` it fails only when MongoDB's reply to `hello` has no `localTime`, where 0.34.0 didn't
@@ -2715,6 +2718,37 @@ code stops compiling.
 
 Remove the reference. Nothing replaces it. Code that asked `isDefaultKnownLiveOnlyFor(..)` whether a projection never
 replays should treat a projection with no `startAt` as one that can replay.
+
+## A blocking cancel no longer promises a rebuild
+
+This applies to the blocking `CatchupThenPushSubscriptionModel` when you give it a `CheckpointStorage` for the catch-up
+marker, and to every `@Projection` or `@Saga` with `source = PUSH` in the blocking Spring Boot starter, unless it sets
+`catchup = NONE`. The marker keeps its 0.34.0 meaning on the blocking stack. A stored marker means the catch-up
+finished, and a start that finds it skips its replay.
+
+### What changes
+
+In 0.34.0 the javadoc said that `cancelSubscription(id)` deletes the marker, so subscribing the same id again replays
+the history. The cancel still deletes the marker before anything else, and the code is the same as in 0.34.0, but that
+promise is gone. A delete that a Redis failover loses, or that a MongoDB member with the in-memory storage engine rolls
+back, leaves the marker stored. So does a marker write the store applies after the delete. The next subscribe of the id
+then skips its replay. 0.34.0 had the same gap.
+
+### What to do
+
+* Subscribe under a new subscription id when a projection has to be rebuilt, or when its filter or its projection
+  changes. The marker is stored under the id alone, so under the old id a stored marker skips the replay and the
+  changed projection never sees the history.
+* Rebuild a push `@Saga` under a new id only when its completed instances are kept for as long as the history it
+  replays. A new id replays the whole history into the saga, so every instance that its TTL removed is recreated from
+  its start event and dispatches its commands again. With `catchup = NONE` a new id replays nothing.
+* Don't give a durable subscription and a blocking catch-up-then-push model, `CatchupProjectionFeed` or
+  `DomainEventFeed` the same subscription id in the same `CheckpointStorage`. Any checkpoint stored under the id counts
+  as the marker, so a checkpoint the durable subscription stored makes the blocking catch-up skip its replay.
+
+The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
+[ADR 179](../architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md)
+has the reasoning.
 
 ## A blocking cancel doesn't wait for a subscribe whose `StartAt.dynamic` function runs
 
