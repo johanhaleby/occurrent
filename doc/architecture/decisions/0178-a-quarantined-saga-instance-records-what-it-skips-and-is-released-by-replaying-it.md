@@ -276,13 +276,13 @@ retries the failed input until it succeeds or its budget runs out, and it also r
 interrupted.
 
 The poller goes on with an instance only when its `updatedAt` is at least `timerPollInterval` old. A release writes
-the instance for every input it applies and for every input that fails, and a skip doesn't change `updatedAt`, so an
+the instance for every input it applies and the first time an input fails, and a skip doesn't change `updatedAt`, so an
 instance whose release is still running was written within that time, and the poller skips it, whichever node runs
 the release. Without that, a release that runs longer than one poll interval has the poller replay the same
 records beside it, and both dispatch each record's commands. The poller starts each poll a `timerPollInterval` after
 the last one ended, so a release it went on with itself is old enough by the next poll.
 
-In four cases a release and the poller, or two releases, can still replay the same record and both dispatch its
+In five cases a release and the poller, or two releases, can still replay the same record and both dispatch its
 commands, which delivery at least once allows:
 
 - A release that takes longer than `timerPollInterval` over one input.
@@ -293,8 +293,12 @@ commands, which delivery at least once allows:
   instance, so after `timerPollInterval` of that the poller goes on beside it. Neither dispatches anything for those
   records, so only the first record that isn't applied can have its commands dispatched by both, the same at-least-once
   dispatch a live input has.
+- Two polls that read the instance at the same time, once its last write is `timerPollInterval` old. Without a
+  competing-consumer strategy every node polls, and with one, two nodes can poll at once while the timer lease moves
+  from one to the other. A retry that fails again on the same input within its budget writes nothing, so while that
+  input keeps failing, every node that polls retries it.
 
-A claim stored on the instance would rule all four out, at the cost of a write to take and give back for every release
+A claim stored on the instance would rule all five out, at the cost of a write to take and give back for every release
 and a way to take over the claim of a node that crashed.
 
 The poller polls only while the `timersEnabled` that `SagaRunner.run` takes returns `true`, so that gate holds back the

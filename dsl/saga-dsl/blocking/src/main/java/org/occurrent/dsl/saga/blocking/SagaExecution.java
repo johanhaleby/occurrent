@@ -595,17 +595,21 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * until it succeeds or its budget runs out, and resumes a release a crash interrupted. Asked on every poll, so with
      * a competing-consumer strategy only the node holding the saga's timer lease asks.
      * <p>
-     * A release writes the instance for every record it replays and for every input that fails, so an instance written
+     * A release writes the instance for every record it replays and the first time an input fails, so an instance written
      * within the last {@code timerPollInterval} has a release still running, on this node or another, and the poll
      * skips it. Polls are a {@code timerPollInterval} apart from the end of one to the start of the next, so a
      * release this poller went on with is older than that by the next poll. A release that stopped, after a crash or a
      * failed input, is gone on with by the first poll a {@code timerPollInterval} after its last write. The poll and a
      * release can still replay the same record, and both dispatch its commands, which delivery at least once allows,
-     * in four cases. A release takes longer than that over one record. A node's clock is that far ahead of the
+     * in five cases. A release takes longer than that over one record. A node's clock is that far ahead of the
      * writer's. A {@code release} call comes while a poll replays the instance, which is releasing already, so the
      * call goes on beside the poll without the check. A release works through records the stream marks show as
      * applied, which it deletes in writes that leave the instance's {@code updatedAt} as it is, for longer than that.
-     * It dispatches nothing for those records, so only the first record that isn't applied can be dispatched twice. A store that does not implement
+     * It dispatches nothing for those records, so only the first record that isn't applied can be dispatched twice. Two
+     * polls read the instance at the same time, once it is that old, and both go on with it. Without a
+     * competing-consumer strategy every node polls, and with one, two nodes can poll at once while the timer lease
+     * moves from one to the other. A retry that fails again on the same input within its budget writes nothing, so
+     * while that input keeps failing, every node that polls retries it. A store that does not implement
      * {@link SagaStateStoreSkippedInputs} has no releasing instances to list, and a runner without an
      * {@link EventStoreQueries} has nothing to replay from, so neither asks.
      * <p>
