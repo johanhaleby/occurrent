@@ -215,8 +215,10 @@ The catch-up marker is written in this order on the blocking stack:
 3. Deliver the payloads buffered during the replay.
 4. Write the marker.
 
-On the reactor stack `ReactiveHandover` reads the marker and resumes after it, and writes the marker between steps 2
-and 3. [ADR 179](0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md) keeps that write
+On the reactor stack `ReactiveHandover` reads the marker through its source and resumes after the position the source
+answers, except that the reactor push model replays from the beginning without reading it after a failed delete, as
+ADR 179 says. The handover writes the marker between steps 2 and 3.
+[ADR 179](0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md) keeps that write
 where it is on purpose. The reactor marker is the head H read before the replay, and the replay delivers the history
 through H. After a crash between the write and step 3, the next start replays the buffered events above H. A buffered
 live event at or below H is not replayed, and it is safe only because the broker delivers it again when step 3
