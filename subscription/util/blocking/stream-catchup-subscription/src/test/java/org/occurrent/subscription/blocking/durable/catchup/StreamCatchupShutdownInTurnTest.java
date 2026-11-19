@@ -46,14 +46,16 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
 import static org.occurrent.subscription.blocking.durable.catchup.GatedLiveSubscriptionModel.SHUTDOWN;
 import static org.occurrent.subscription.blocking.durable.catchup.GatedLiveSubscriptionModel.START_RETURNED;
 import static org.occurrent.subscription.blocking.durable.catchup.GatedLiveSubscriptionModel.STOP_RETURNED;
 
 /**
  * A {@code shutdown()} from a thread that must not wait for a {@code start(..)} or {@code stop()} under way, such as the
- * action of a replay or of a live call, returns at once and leaves shutting the live delegate down to the call that holds
- * the model's lock, after that call's own call to the live delegate. A start that finds the model shut down resumes
+ * action of a replay or of a live call, returns at once and leaves shutting the live delegate down to the lifecycle
+ * thread, which runs it once the action of the live call has returned and the call that holds the model's lock has
+ * returned from its own call to the live delegate. A start that finds the model shut down resumes
  * nothing. A {@code shutdown()} from any other thread, and a start or stop behind one, run one at a time in the order
  * they came.
  */
@@ -175,7 +177,7 @@ class StreamCatchupShutdownInTurnTest {
 
         gate.release();
         calls.forEach(CallOnAThread::awaitEnded);
-        assertThat(live.events()).as("what the live delegate was asked once the " + lifecycle + " returned").containsExactly(lifecycle.returned, SHUTDOWN);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the " + lifecycle + " returned").containsExactly(lifecycle.returned, SHUTDOWN));
     }
 
     @ParameterizedTest
@@ -258,7 +260,7 @@ class StreamCatchupShutdownInTurnTest {
         calls.forEach(CallOnAThread::awaitEnded);
 
         // Then
-        assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(START_RETURNED, SHUTDOWN);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(START_RETURNED, SHUTDOWN));
         assertThat(delivered).as("the events the parked replay delivered, which a start after the shutdown doesn't run again").containsExactly("1");
     }
 

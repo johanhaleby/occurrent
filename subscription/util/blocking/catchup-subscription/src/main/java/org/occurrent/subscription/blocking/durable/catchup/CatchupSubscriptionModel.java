@@ -334,17 +334,18 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // per child. The children have to be told so a replay already in flight stops delivering and is parked. A child
     // that fails to park a replay doesn't keep the others or the live delegate from stopping. The stop then waits once,
     // up to a second in all, for the actions the children's replays let through, before the live delegate stops. The
-    // children share one model lock, so the whole stop runs alone against a start or a shutdown of any of them.
+    // children share one model lock, so the whole stop runs alone against a start or a shutdown of any of them. Called
+    // from inside the action of a live call, it takes effect once the action has returned, as runInTurn describes.
     @Override
     public void stop() {
-        try (AbstractCatchupSubscriptionModel.ModelLock ignored = anyCatchupModel().lockTheModel("stop()")) {
+        anyCatchupModel().runInTurn(this, "stop()", () -> {
             List<AbstractCatchupSubscriptionModel.ActionInFlight> admitted = new ArrayList<>();
             List<Runnable> steps = new ArrayList<>();
             presentCatchupModels().forEach(model -> steps.add(() -> model.stopReplayLeavingTheActions(admitted)));
             steps.add(() -> AbstractCatchupSubscriptionModel.awaitTheAdmittedActions(admitted, "stop"));
             steps.add(getWrappedSubscriptionModel()::stop);
             AbstractCatchupSubscriptionModel.runEach(steps, Runnable::run);
-        }
+        });
     }
 
     // The claim is shared by every child, so any of them hands it out
@@ -361,7 +362,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // run again only once the live delegate is started, so each hands over to a delegate that runs, and only when
     // resuming automatically, as the delegate itself resumes only then. When the delegate's start throws, each child
     // that was stopped stops again, unless the delegate runs, or a resume of the delegate came in the meantime. The
-    // whole start runs alone under the model lock the children share. The delegate is asked whether it runs once,
+    // whole start runs alone under the model lock the children share, and called from inside the action of a live call it
+    // takes effect once the action has returned, as runInTurn describes. The delegate is asked whether it runs once,
     // before any child takes its lock.
     // When a subscription the delegate holds paused would replay on resumeSubscription(..), a replay that a cancel ended
     // for one hasn't returned yet, or a cancel is under way, the delegate starts without resuming anything and each
@@ -372,7 +374,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // a delegate that throws does.
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        try (AbstractCatchupSubscriptionModel.ModelLock ignored = anyCatchupModel().lockTheModel("start(..)")) {
+        anyCatchupModel().runInTurn(this, "start(..)", () -> {
             Map<AbstractCatchupSubscriptionModel, AbstractCatchupSubscriptionModel.StartAttempt> attempts = new LinkedHashMap<>();
             presentCatchupModels().forEach(model -> attempts.put(model, model.beginStart()));
             final AbstractCatchupSubscriptionModel replaysOnResume;
@@ -404,7 +406,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 }));
             }
             AbstractCatchupSubscriptionModel.runEach(resumes, Runnable::run);
-        }
+        });
     }
 
     // Asks the catch-up children too, because a replay is running before the live delegate has registered the
@@ -649,7 +651,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @PreDestroy
     @Override
     public void shutdown() {
-        anyCatchupModel().shutDownInTurn(() -> {
+        anyCatchupModel().shutDownInTurn(this, () -> {
             // Every child flagged before any forgets the state they share, see flagShuttingDown
             presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::flagShuttingDown);
             presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::markShuttingDown);

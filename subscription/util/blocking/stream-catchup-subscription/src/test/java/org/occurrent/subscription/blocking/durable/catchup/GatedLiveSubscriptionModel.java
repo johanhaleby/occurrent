@@ -42,7 +42,9 @@ import java.util.function.Consumer;
  * A live delegate that keeps the action it was given and calls it when told to, on the calling thread, as a delegate
  * does that delivers on a thread of its own. A test can hold its start, stop and shutdown on a gate, and it records
  * each call that returned, in order. Its {@code stop()} waits, for a bounded time, for every other thread that is inside
- * a call of a kept action, as a live delegate does that waits for its deliveries to end.
+ * a call of a kept action, as a live delegate does that waits for its deliveries to end. When told to, its {@code stop()}
+ * and {@code shutdown()} wait for the calling thread's own call of a kept action too, which a call made from inside the
+ * action can never see end, and either can be told to throw.
  */
 final class GatedLiveSubscriptionModel implements CheckpointAwareSubscriptionModel {
     static final String START_RETURNED = "start-returned";
@@ -60,6 +62,9 @@ final class GatedLiveSubscriptionModel implements CheckpointAwareSubscriptionMod
     volatile @Nullable Gate startGate;
     volatile @Nullable Gate stopGate;
     volatile @Nullable Gate shutdownGate;
+    volatile boolean stopAndShutdownWaitForTheCallersOwnAction;
+    volatile @Nullable RuntimeException stopThrows;
+    volatile @Nullable RuntimeException shutdownThrows;
 
     GatedLiveSubscriptionModel(Duration stopWaitsForActionsFor) {
         this.stopWaitsForActionsFor = stopWaitsForActionsFor;
@@ -118,8 +123,15 @@ final class GatedLiveSubscriptionModel implements CheckpointAwareSubscriptionMod
     @Override
     public void stop() {
         pass(stopGate);
+        throwIfTold(stopThrows);
+        waitForTheKeptActions();
+        runs = false;
+        events.add(STOP_RETURNED);
+    }
+
+    private void waitForTheKeptActions() {
         long deadline = System.nanoTime() + stopWaitsForActionsFor.toNanos();
-        while (anotherThreadIsInAKeptAction()) {
+        while (aThreadIsInAKeptAction()) {
             if (System.nanoTime() >= deadline) {
                 stopTimedOut.set(true);
                 break;
@@ -131,12 +143,16 @@ final class GatedLiveSubscriptionModel implements CheckpointAwareSubscriptionMod
                 break;
             }
         }
-        runs = false;
-        events.add(STOP_RETURNED);
     }
 
-    private boolean anotherThreadIsInAKeptAction() {
-        return inAKeptAction.stream().anyMatch(thread -> thread != Thread.currentThread());
+    private boolean aThreadIsInAKeptAction() {
+        return inAKeptAction.stream().anyMatch(thread -> stopAndShutdownWaitForTheCallersOwnAction || thread != Thread.currentThread());
+    }
+
+    private static void throwIfTold(@Nullable RuntimeException failure) {
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     @Override
@@ -179,6 +195,10 @@ final class GatedLiveSubscriptionModel implements CheckpointAwareSubscriptionMod
     @Override
     public void shutdown() {
         pass(shutdownGate);
+        throwIfTold(shutdownThrows);
+        if (stopAndShutdownWaitForTheCallersOwnAction) {
+            waitForTheKeptActions();
+        }
         events.add(SHUTDOWN);
     }
 

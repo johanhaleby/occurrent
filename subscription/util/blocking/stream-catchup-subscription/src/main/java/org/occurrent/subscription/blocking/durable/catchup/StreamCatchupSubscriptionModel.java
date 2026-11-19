@@ -613,7 +613,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
 
     @Override
     public void shutdown() {
-        shutDownInTurn(this::markShuttingDown, subscriptionModel::shutdown);
+        shutDownInTurn(this, this::markShuttingDown, subscriptionModel::shutdown);
     }
 
     static boolean isTimeBasedCheckpoint(StartAt startAt, Class<?> contextType) {

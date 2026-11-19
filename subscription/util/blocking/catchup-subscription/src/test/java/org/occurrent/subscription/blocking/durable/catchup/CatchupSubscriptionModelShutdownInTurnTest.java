@@ -48,6 +48,7 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
 
 /**
  * A {@code shutdown()} of a {@link CatchupSubscriptionModel} from the action of a replay or from a thread that holds a
@@ -115,7 +116,7 @@ class CatchupSubscriptionModelShutdownInTurnTest {
         assertThat(live.events()).as("what the live delegate was asked while the start was inside it").doesNotContain(SHUTDOWN);
         startGate.countDown();
         calls.forEach(CallOnAThread::awaitEnded);
-        assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(START_RETURNED, SHUTDOWN);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(START_RETURNED, SHUTDOWN));
     }
 
     @Test
@@ -148,7 +149,7 @@ class CatchupSubscriptionModelShutdownInTurnTest {
         calls.forEach(CallOnAThread::awaitEnded);
 
         // Then
-        assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(START_RETURNED, SHUTDOWN);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(START_RETURNED, SHUTDOWN));
         assertThat(delivered).as("the events the parked replay delivered, which a start after the shutdown doesn't run again").containsExactly("1");
     }
 
