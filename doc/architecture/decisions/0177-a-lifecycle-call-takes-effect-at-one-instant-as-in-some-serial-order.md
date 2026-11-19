@@ -220,8 +220,12 @@ and 3. [ADR 179](0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-posi
 where it is on purpose. The reactor marker is the head H read before the replay, and the replay delivers the history
 through H. After a crash between the write and step 3, the next start replays the buffered events above H. A buffered
 live event at or below H is not replayed, and it is safe only because the broker delivers it again when step 3
-did not. An event a handler fed back has no broker to deliver it again, so H is not written while such an event waits
-in the buffer and the replay did not deliver it, as ADR 179's "Fed-back events on the reactor stack" says. [#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 31, which would move the reactor write after step
+did not. An event the handler's own code fed back, on the handler's thread or composed into the `Mono` the handler
+returns, can have no broker copy, so H is not written while such an event waits in the buffer and the replay did not
+deliver it, as ADR 179's "Fed-back events on the reactor stack" says. An event another thread feeds after the handler
+has returned is not the handler's own code. The handover takes it like any other live event, and the code that fed it
+has to deliver it again when that delivery fails. Holding H back covers only what this process fed, and ADR 179
+says what a feed that runs on more than one replica needs. [#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 31, which would move the reactor write after step
 3, no longer applies to the reactor stack. A stop or cancel that takes effect before the marker write means no marker
 is written and the catch-up ends as stopped, not as done (#1293 item 32). A failure is permanent, and on
 `ReactiveHandover` it also deletes the marker. A marker write that the store applies after that delete is
