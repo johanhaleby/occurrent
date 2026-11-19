@@ -289,6 +289,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         return new RegisteredSubscription(subscriptionId, true);
     }
 
+    /**
+     * Cancels the subscription. Unlike a pause or a stop, this doesn't wait for a write {@link #openWriteWindow()}
+     * admitted before it, so a write running at the same time as the cancel may or may not reach the handler.
+     */
     @Override
     public final void cancelSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");

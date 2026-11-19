@@ -26,6 +26,7 @@ import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.HandlerScan;
+import org.occurrent.springboot.common.internal.LateFactoryLiveStarts;
 import org.occurrent.springboot.common.internal.LateLiveStarts;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.occurrent.springboot.common.internal.StartupGap;
@@ -148,8 +149,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
 
     // The start boundary each bean built after startup read when it was created, until it registers
     private final LateLiveStarts lateLiveStarts = new LateLiveStarts();
-    // A FactoryBean's read is keyed by its bean name, since its product is a different instance under the same name
-    private final Map<String, String> lateFactoryLiveStarts = new ConcurrentHashMap<>();
+    // The boundary a FactoryBean built after startup read for its product, until the product arrives
+    private final LateFactoryLiveStarts lateFactoryLiveStarts = new LateFactoryLiveStarts();
     private StartPositionSupport startPositionSupport;
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
     private ProjectionAnnotationRegistrar projectionRegistrar;
@@ -187,12 +188,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
         if (bean instanceof FactoryBean<?>) {
             if (startupScanComplete) {
-                @Nullable String liveStart = startPositionSupport.readLateLiveStart();
-                if (liveStart == null) {
-                    lateFactoryLiveStarts.remove(beanName);
-                } else {
-                    lateFactoryLiveStarts.put(beanName, liveStart);
-                }
+                lateFactoryLiveStarts.put(beanName, singletonDefinition(beanName), startPositionSupport.readLateLiveStart());
             }
         } else {
             // put rather than putIfAbsent, because a creation that failed is retried and the retry can produce a
@@ -214,6 +210,12 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
         }
         return bean;
+    }
+
+    // Read from the bean definition, since isSingleton on a FactoryBean's name answers for its product
+    private boolean singletonDefinition(String beanName) {
+        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
+        return beanFactory.containsBeanDefinition(beanName) && beanFactory.getMergedBeanDefinition(beanName).isSingleton();
     }
 
     // The instance that reaches postProcessAfterInitialization can be a proxy around the one that read its boundary
@@ -280,7 +282,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // Looked up again, since the drain may have registered it before the gate opened
             @Nullable Method stillUnregistered = unregisteredSynchronousHandler(beanName, bean, target);
             if (stillUnregistered != null) {
-                throw StartupWriteAdmission.refusal(beanName, stillUnregistered);
+                throw StartupWriteAdmission.refusalAfterInitialization(beanName, stillUnregistered);
             }
         }
         // Read again rather than reused, so a bean finishing as the scan ends is registered by whichever of the two
@@ -291,7 +293,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // the same factory, or one whose factory was built before the startup scan ended, reads it now. Taken
             // also for an instance with no bean definition, so its entry does not stay in the map
             boolean product = defined && beanFactory.isFactoryBean(beanName);
-            @Nullable String lateLiveStart = product ? lateFactoryLiveStarts.remove(beanName) : takeLateLiveStart(bean);
+            @Nullable String lateLiveStart = product ? lateFactoryLiveStarts.remove(beanName, singletonDefinition(beanName)) : takeLateLiveStart(bean);
             if (defined) {
                 if (lateLiveStart == null && product && declaresAnyOccurrentAnnotation(userClassOf(bean), true)) {
                     lateLiveStart = startPositionSupport.readLateLiveStart();

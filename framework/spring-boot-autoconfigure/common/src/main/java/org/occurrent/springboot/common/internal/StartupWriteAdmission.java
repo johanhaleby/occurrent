@@ -31,7 +31,8 @@ import java.util.function.Supplier;
  * synchronous handler that isn't registered yet and registers it before opening. Once the gate is open, such a bean
  * fails its creation before its {@code @PostConstruct} method runs. A bean whose initialization began before the gate
  * opened fails once it is initialized instead, and so does a bean that another post-processor replaced with an object
- * that declares such a handler.
+ * that declares such a handler. A write such a bean made during its initialization may already be stored by then,
+ * and the handler won't get it once the bean is fixed either, since it has no replay.
  * <p>
  * A registration that another thread starts while the gate is closed keeps it closed until it ends, since a handler
  * counts as registered from the moment it is claimed, before it subscribes.
@@ -143,15 +144,31 @@ public final class StartupWriteAdmission {
     }
 
     /**
-     * The exception that fails the creation of a bean whose synchronous handler would register after the gate opened.
+     * The exception that fails the creation of a bean whose synchronous handler would register after the gate opened,
+     * thrown before the bean's initialization runs.
      */
     public static IllegalStateException refusal(String beanName, Method handler) {
+        return refusal(beanName, handler, "");
+    }
+
+    /**
+     * The exception that fails the creation of a bean whose synchronous handler would register after the gate opened,
+     * thrown once the bean's initialization has run. That happens when the gate opened while the bean was initialized, or
+     * when another post-processor replaced the bean with an object that declares the handler.
+     */
+    public static IllegalStateException refusalAfterInitialization(String beanName, Method handler) {
+        return refusal(beanName, handler, "The bean was refused after its initialization ran, so a write it made during initialization, for example " +
+                                          "from its @PostConstruct method, may already be stored, and the handler won't get that write after the bean is " +
+                                          "fixed either. ");
+    }
+
+    private static IllegalStateException refusal(String beanName, Method handler, String afterInitialization) {
         return new IllegalStateException(("Bean '%s' declares the synchronous handler %s#%s and is created after the startup scan of the Spring Boot " +
-                                          "starter registered the synchronous handlers. A synchronous handler has no replay and gets only the writes " +
+                                          "starter registered the synchronous handlers. %sA synchronous handler has no replay and gets only the writes " +
                                           "made after it registers, so it would miss the earlier ones. Let the startup scan register it: remove @Lazy " +
                                           "from the bean, or declare its @Bean method with the annotated class as the return type rather than an " +
                                           "interface or Object. Or make the handler asynchronous, with @Subscription instead of " +
                                           "@SynchronousSubscription, or mode = ASYNC on @Projection and @Snapshot.")
-                .formatted(beanName, handler.getDeclaringClass().getName(), handler.getName()));
+                .formatted(beanName, handler.getDeclaringClass().getName(), handler.getName(), afterInitialization));
     }
 }
