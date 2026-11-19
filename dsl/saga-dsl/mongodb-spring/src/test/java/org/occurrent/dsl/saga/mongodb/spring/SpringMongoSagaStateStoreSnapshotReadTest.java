@@ -17,10 +17,15 @@
 package org.occurrent.dsl.saga.mongodb.spring;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoException;
 import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoClient;
+import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.model.Filters;
+import com.mongodb.event.CommandListener;
+import com.mongodb.event.CommandStartedEvent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -36,6 +41,7 @@ import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.MongoExceptionTranslator;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -47,6 +53,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
@@ -78,11 +85,19 @@ class SpringMongoSagaStateStoreSnapshotReadTest {
     private MongoTemplate template;
     private SpringMongoSagaStateStore<Payment> store;
     private TransactionTemplate callersTransaction;
+    private final List<String> insertedIntoTheSagaCollection = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void connect() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-snapshot-" + UUID.randomUUID().toString().substring(0, 8)));
-        client = MongoClients.create(connectionString);
+        client = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).addCommandListener(new CommandListener() {
+            @Override
+            public void commandStarted(CommandStartedEvent event) {
+                if (event.getCommandName().equals("insert") && event.getCommand().getString("insert").getValue().equals(COLLECTION)) {
+                    insertedIntoTheSagaCollection.add(event.getCommand().toJson());
+                }
+            }
+        }).build());
         template = new MongoTemplate(client, requireNonNull(connectionString.getDatabase()));
         template.setWriteConcern(WriteConcern.MAJORITY);
         store = new SpringMongoSagaStateStore<>(template, COLLECTION, Payment.class, null, RetryStrategy.none());
@@ -116,7 +131,7 @@ class SpringMongoSagaStateStoreSnapshotReadTest {
         });
     }
 
-    private static void assertTransientAndNaming(Exception thrown, String sagaId) {
+    private static void assertWriteConflictForACallerThatRetries(Exception thrown) {
         assertThat(thrown).as("a read of an instance the snapshot misses").isNotNull();
         assertThat(new MongoExceptionTranslator().isTransientFailure(thrown)).as("transient for a caller that retries on the label").isTrue();
         Throwable cause = thrown;
@@ -124,8 +139,9 @@ class SpringMongoSagaStateStoreSnapshotReadTest {
             cause = cause.getCause();
         }
         assertThat(cause).isInstanceOf(MongoException.class);
-        assertThat(((MongoException) cause).hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)).isTrue();
-        assertThat(thrown.getMessage()).contains(sagaId);
+        MongoException mongoException = (MongoException) cause;
+        assertThat(mongoException.getCode()).as("WriteConflict").isEqualTo(112);
+        assertThat(mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)).isTrue();
     }
 
     @Test
@@ -134,7 +150,7 @@ class SpringMongoSagaStateStoreSnapshotReadTest {
 
         Exception thrown = catchException(() -> afterTheSnapshotBegan("late-1", store::find));
 
-        assertTransientAndNaming(thrown, "late-1");
+        assertWriteConflictForACallerThatRetries(thrown);
     }
 
     @Test
@@ -143,7 +159,7 @@ class SpringMongoSagaStateStoreSnapshotReadTest {
 
         Exception thrown = catchException(() -> afterTheSnapshotBegan("late-2", store::findWithoutState));
 
-        assertTransientAndNaming(thrown, "late-2");
+        assertWriteConflictForACallerThatRetries(thrown);
     }
 
     @Test
@@ -153,6 +169,7 @@ class SpringMongoSagaStateStoreSnapshotReadTest {
         List<Optional<StoredSaga>> found = callersTransaction.execute(status -> List.of(store.find("nowhere"), store.findWithoutState("nowhere")));
 
         assertThat(found).containsExactly(Optional.empty(), Optional.empty());
+        assertThat(template.getCollection(COLLECTION).countDocuments(Filters.eq("_id", "nowhere"))).as("documents left by the read of an absent instance").isZero();
     }
 
     @Test
@@ -172,5 +189,90 @@ class SpringMongoSagaStateStoreSnapshotReadTest {
         Optional<StoredSaga> retried = callersTransaction.execute(status -> store.find("late-3"));
 
         assertThat(retried).isPresent();
+    }
+
+    // A WriteConflict aborts the transaction on the server, so each read gets a session of its own
+    private Exception thrownBySessionBoundRead(String sagaIdWrittenAfterwards, Function<SpringMongoSagaStateStore<Payment>, Function<String, Optional<StoredSaga>>> read) {
+        try (ClientSession session = client.startSession()) {
+            SpringMongoSagaStateStore<Payment> sessionBound = new SpringMongoSagaStateStore<>(template.withSession(session), COLLECTION, Payment.class, null, RetryStrategy.none());
+            session.startTransaction();
+            try {
+                assertThat(sessionBound.find(EXISTING)).as("the read that starts the snapshot").isPresent();
+                storedOutsideTheTransaction(sagaIdWrittenAfterwards);
+                return catchException(() -> read.apply(sessionBound).apply(sagaIdWrittenAfterwards));
+            } finally {
+                session.abortTransaction();
+            }
+        }
+    }
+
+    @Test
+    void find_on_a_session_bound_template_throws_when_the_instance_was_stored_after_the_snapshot_began() {
+        stored(EXISTING);
+
+        Exception thrown = thrownBySessionBoundRead("late-4", s -> s::find);
+
+        assertWriteConflictForACallerThatRetries(thrown);
+    }
+
+    @Test
+    void findWithoutState_on_a_session_bound_template_throws_when_the_instance_was_stored_after_the_snapshot_began() {
+        stored(EXISTING);
+
+        Exception thrown = thrownBySessionBoundRead("late-5", s -> s::findWithoutState);
+
+        assertWriteConflictForACallerThatRetries(thrown);
+    }
+
+    @Test
+    void find_and_findWithoutState_return_empty_for_an_instance_the_transaction_deleted_itself() {
+        stored("own-delete-1");
+
+        List<Optional<StoredSaga>> found = callersTransaction.execute(status -> {
+            store.delete("own-delete-1");
+            return List.of(store.find("own-delete-1"), store.findWithoutState("own-delete-1"));
+        });
+
+        assertThat(found).containsExactly(Optional.empty(), Optional.empty());
+    }
+
+    @Test
+    void a_caller_that_retries_on_a_transient_failure_ends_after_one_attempt_when_its_own_delete_made_the_instance_absent() {
+        stored("own-delete-2");
+        MongoExceptionTranslator translator = new MongoExceptionTranslator();
+        int attempts = 0;
+        Optional<StoredSaga> result = null;
+
+        while (attempts < 5 && result == null) {
+            attempts++;
+            try {
+                result = callersTransaction.execute(status -> {
+                    if (store.find("own-delete-2").isPresent()) {
+                        store.delete("own-delete-2");
+                    }
+                    return store.find("own-delete-2");
+                });
+            } catch (RuntimeException e) {
+                if (!translator.isTransientFailure(e)) {
+                    throw e;
+                }
+            }
+        }
+
+        assertThat(attempts).as("attempts").isEqualTo(1);
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void find_of_an_absent_instance_inside_a_transaction_without_resource_synchronization_returns_empty_and_inserts_nothing() {
+        MongoTransactionManager withoutSynchronization = new MongoTransactionManager(template.getMongoDatabaseFactory());
+        withoutSynchronization.setTransactionSynchronization(AbstractPlatformTransactionManager.SYNCHRONIZATION_NEVER);
+        stored(EXISTING);
+        insertedIntoTheSagaCollection.clear();
+
+        Optional<StoredSaga> found = new TransactionTemplate(withoutSynchronization).execute(status -> store.find("nowhere"));
+
+        assertThat(found).isEmpty();
+        assertThat(insertedIntoTheSagaCollection).as("insert commands sent to the saga collection").isEmpty();
     }
 }

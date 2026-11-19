@@ -1336,11 +1336,13 @@ Inside a Spring MongoDB transaction of yours on the template's `MongoDatabaseFac
 transaction instead of starting their own, and the store doesn't retry them. Your commit's write concern then decides
 whether they survive a failover. The store can't read that concern, so it doesn't check it.
 
-In such a transaction, `find` and `findWithoutState` read at your transaction's snapshot, which misses an instance
-inserted after it began. When neither read finds the instance, the store reads it once more outside your transaction,
-at read concern `linearizable`. If it is there, the store throws a `MongoException` with the `TransientTransactionError`
-label instead of returning empty, translated as the template translates its own failures. Run your transaction again
-when a failure has that label, as you would for a write conflict, and the next attempt reads the instance.
+In such a transaction, or one on the session of a template from `MongoTemplate.withSession`, `find` and
+`findWithoutState` read at your transaction's snapshot, which misses an instance stored after it began. When the read
+finds no instance, the store inserts a document with the saga's id and deletes it again in your transaction. An
+instance another writer stored after your snapshot began makes the insert fail with a `WriteConflict` labelled
+`TransientTransactionError`. Run your transaction again on that label, as you would for any write conflict, and the next
+attempt reads the instance. An instance your transaction deleted reads as absent. The two writes leave no document
+behind when your transaction commits, and a change stream on the saga collection may see them.
 
 Every constructor throws an `IllegalArgumentException` for a `MongoOperations` that isn't a `MongoTemplate`, since the
 store runs its transactions on the template's `MongoDatabaseFactory`. The message says to pass the `MongoTemplate`

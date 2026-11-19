@@ -66,6 +66,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
@@ -125,6 +126,16 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * <p>
  * Called inside a Spring transaction on the same {@link MongoDatabaseFactory}, those writes join it and are not retried.
  * The commit of that transaction then decides whether they survive a failover, with the write concern it commits with.
+ * <p>
+ * Inside such a transaction, or one on the session of a template from {@link MongoTemplate#withSession}, {@link #find}
+ * and {@link #findWithoutState} read at the transaction's snapshot, which misses an instance written after the snapshot
+ * began. When the read finds no instance, the store inserts a document with the saga's id and deletes it again in the
+ * same transaction, and the server decides whether that insert conflicts. An instance another writer wrote after the
+ * snapshot began makes the insert fail with a {@code WriteConflict} that has the {@code TransientTransactionError}
+ * label, and a caller that runs its transaction again on that label reads the instance. An instance the transaction
+ * deleted itself reads as absent. The two writes leave no document behind when the transaction commits, and a change
+ * stream on the collection may see them. In a Spring transaction that doesn't synchronize its resources, the store binds
+ * no session, reads as it does outside a transaction and writes nothing.
  * <p>
  * {@link #findReleasingSagaIds(String, int)} finds the instances that have {@code failureReleasedAt} set. The inputs a
  * quarantined instance skips are stored one document each, in a collection next to the instances named after it with
@@ -351,38 +362,44 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // maxTimeMS. MongoDB documents that such a read returns every write a majority acknowledged before the read
     // started, see
     // https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/
-    // Inside a transaction the caller started, both reads go through its session and see its snapshot, which misses an
-    // instance inserted after the snapshot began. So an absence there is read once more outside the session. An instance
-    // found that way throws with the TransientTransactionError label, translated as the template translates, so a caller
-    // that retries on the label runs the transaction again with a snapshot that has the instance
     private @Nullable Document findInstance(String sagaId, Supplier<Query> query) {
+        if (inCallersTransaction()) {
+            return findInCallersTransaction(sagaId, query.get());
+        }
         Document found = retryStrategy.execute(() -> mongoOperations.findOne(majorityRead(query.get()), Document.class, collectionName));
-        if (found != null) {
+        return found != null ? found : retryStrategy.execute(() -> mongoOperations.findOne(linearizableRead(query.get()), Document.class, collectionName));
+    }
+
+    // Inside a transaction the caller started, a read sees the transaction's snapshot, and no read in the transaction
+    // sees a write made after the snapshot began. So the server decides an absence instead. The store inserts a document
+    // with the saga's _id and deletes it again, both in the caller's transaction, which together leave nothing behind
+    // when it commits. An instance another writer wrote after the snapshot began, committed or not, makes the insert
+    // fail with a WriteConflict that has the TransientTransactionError label, and the caller's next attempt reads it
+    // with a new snapshot. An absence the transaction made itself, by deleting the instance, lets the insert through.
+    // The read and both writes take the database from MongoDatabaseUtils, as inTransaction does, so they share one
+    // session whatever session synchronization the template has. Nothing is retried, since only the caller can run its
+    // transaction again
+    private @Nullable Document findInCallersTransaction(String sagaId, Query query) {
+        MongoCollection<Document> instances = instances(MongoDatabaseUtils.getDatabase(databaseFactory));
+        try {
+            Document found = instances.find(query.getQueryObject()).projection(query.getFieldsObject()).first();
+            if (found == null) {
+                instances.insertOne(new Document(ID, sagaId));
+                instances.deleteOne(Filters.eq(ID, sagaId));
+            }
             return found;
+        } catch (RuntimeException e) {
+            throw translated(e);
         }
-        Document linearizable = retryStrategy.execute(() -> mongoOperations.findOne(linearizableRead(query.get()), Document.class, collectionName));
-        if (linearizable == null && MongoDatabaseUtils.isTransactionActive(databaseFactory) && existsOutsideTheSession(sagaId)) {
-            throw translated(newerThanTheCallersSnapshot(sagaId));
-        }
-        return linearizable;
     }
 
-    // The database from the factory itself is bound to no session, so this read is not part of the caller's transaction
-    private boolean existsOutsideTheSession(String sagaId) {
-        return retryStrategy.execute(() -> databaseFactory.getMongoDatabase().getCollection(collectionName)
-                .withReadPreference(ReadPreference.primary())
-                .withReadConcern(ReadConcern.LINEARIZABLE)
-                .find(Filters.eq(ID, sagaId))
-                .projection(Projections.include(ID))
-                .maxTime(WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
-                .first() != null);
-    }
-
-    private MongoException newerThanTheCallersSnapshot(String sagaId) {
-        MongoException e = new MongoException("Saga instance '" + sagaId + "' in collection '" + collectionName + "' was written after the snapshot of the caller's "
-                                              + "MongoDB transaction began, so the transaction can't read it. Run the transaction again.");
-        e.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
-        return e;
+    // True only when MongoDatabaseUtils hands out a database bound to a session with an active transaction. That holds
+    // for a factory bound to such a session, as MongoTemplate.withSession gives, and for a Spring transaction that
+    // synchronizes its resources. In a Spring transaction without synchronization the database is bound to no session, and the
+    // inserted document would be visible to every reader until its delete
+    private boolean inCallersTransaction() {
+        return databaseFactory.isTransactionActive()
+               || TransactionSynchronizationManager.isSynchronizationActive() && MongoDatabaseUtils.isTransactionActive(databaseFactory);
     }
 
     @Override

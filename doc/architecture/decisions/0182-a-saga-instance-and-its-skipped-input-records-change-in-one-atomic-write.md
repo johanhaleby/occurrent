@@ -130,14 +130,32 @@ the store's transaction propagates as `REQUIRED`. The instance and its records t
 that transaction, and they are durable only as far as the commit's write concern makes them. The store doesn't retry a
 transition it joined, and a failure reaches the caller's transaction.
 
-Inside that transaction, `find` and `findWithoutState` read at its snapshot, which misses an instance inserted after
-the snapshot began. A found instance needs nothing more, since the executor writes it back through a compare-and-set,
-and a write inside the transaction to an instance changed after its snapshot fails with a write conflict. An absence
-has no such write, so when neither read finds the instance, the store reads it once more outside the transaction, at
-read concern `linearizable`. If it is there, the store throws a `MongoException` with the `TransientTransactionError`
-label instead of returning empty, and the executor doesn't skip the input. A caller that runs its transaction again on
-that label gets a snapshot that has the instance. Refusing a caller's transaction outright would break every saga run
-inside one, the case this point is about.
+Inside that transaction, or one on the session of a template from `MongoTemplate.withSession`, `find` and
+`findWithoutState` read at the transaction's snapshot, which misses an instance written after the snapshot began. A
+found instance needs nothing more, since the executor writes it back through a compare-and-set, and a write inside the
+transaction to an instance changed after its snapshot fails with a write conflict. An absence has no such write, and no
+read in the transaction can see past its snapshot. So on an absence the store inserts a document with the
+saga's id and deletes it again in the same transaction, and the server decides whether that insert conflicts.
+
+| In the transaction, for one saga id | The read | The insert | `find` |
+| --- | --- | --- | --- |
+| another writer stored the instance after the snapshot began | absent | `WriteConflict` | throws, the caller's next attempt reads it |
+| another writer is storing it, not yet committed | absent | `WriteConflict` | throws, the next attempt reads it or its absence |
+| another writer deleted it before the snapshot began | absent | succeeds | empty |
+| another writer deleted it after the snapshot began | found | not run | the instance, and a write-back of it conflicts |
+| the transaction stored or updated it | found | not run | the instance |
+| the transaction deleted it | absent | succeeds | empty |
+
+The `WriteConflict` has the `TransientTransactionError` label, so a caller that runs its transaction again on that
+label gets a new snapshot. The two writes leave no document behind when the transaction commits. The store reads and
+writes through `MongoDatabaseUtils`, as its own transactions do, so the read and both writes share the caller's session
+whatever session synchronization the template has. In a Spring transaction that doesn't synchronize its resources,
+`MongoDatabaseUtils` binds no session, so the store reads as it does outside a transaction and writes nothing.
+
+Two alternatives fell short. A second read outside the session can't be had on a template from `withSession`, whose
+factory binds every database it hands out to the session, and it throws on an absence the transaction made by its own
+delete, on every attempt. Refusing a caller's transaction outright would break every saga run inside one, the case this
+point is about.
 
 The store doesn't check that write concern. Spring keeps the transaction's `ClientSession` in a package-private
 `MongoResourceHolder`, so the store can tell that a transaction is active but can't read the concern it commits at. A
