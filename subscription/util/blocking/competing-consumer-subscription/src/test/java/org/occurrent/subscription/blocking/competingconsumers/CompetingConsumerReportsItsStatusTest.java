@@ -672,6 +672,62 @@ class CompetingConsumerReportsItsStatusTest {
     }
 
     @Test
+    void does_not_report_the_failure_of_a_try_for_a_subscription_that_was_cancelled_and_subscribed_again_with_the_same_ids_while_the_try_had_let_go_of_the_lock() throws Exception {
+        // Given a try that waits before it first runs and then waits again once it has failed, so a status can be read in between
+        CountDownLatch firstTryMayRun = new CountDownLatch(1);
+        CountDownLatch waitsAgain = new CountDownLatch(1);
+        CountDownLatch mayGoOn = new CountDownLatch(1);
+        AtomicInteger waits = new AtomicInteger();
+        model.runBeforeATryWaitsForItsBackoff(() -> {
+            try {
+                if (waits.incrementAndGet() == 1) {
+                    firstTryMayRun.await(30, SECONDS);
+                } else {
+                    waitsAgain.countDown();
+                    mayGoOn.await(30, SECONDS);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        // And a try whose pause fails, which cancels the subscription and subscribes it again once it has let go of the lock
+        // of the subscription, where a cancel and a subscribe that follow it are free to run
+        AtomicBoolean subscribedAgain = new AtomicBoolean();
+        AtomicReference<@Nullable Throwable> subscribingAgainFailed = new AtomicReference<>();
+        model.runOnceAFailedTryHasLetGoOfTheLock(() -> {
+            if (subscribedAgain.compareAndSet(false, true)) {
+                try {
+                    wrapped.pausesFail = false;
+                    model.cancelSubscription(ID);
+                    subscribe();
+                } catch (Throwable e) {
+                    subscribingAgainFailed.set(e);
+                }
+            }
+        });
+        strategy.grantOnRegister = true;
+        subscribe();
+        wrapped.pausesFail = true;
+        strategy.holders.remove(ID);
+        model.onConsumeProhibited(ID, NODE);
+
+        try {
+            // When the try runs and its pause fails
+            firstTryMayRun.countDown();
+
+            // Then the try has gone on, with the subscription cancelled and subscribed again, which does not fail
+            assertThat(waitsAgain.await(30, SECONDS)).as("the try went on after it failed").isTrue();
+            assertThat(subscribingAgainFailed.get()).as("the cancel and the subscribe that followed it").isNull();
+            assertThat(subscribedAgain).as("subscribed again").isTrue();
+            CompetingConsumerStatus status = status();
+            assertThat(status.isFailing()).as("the new subscription is failing").isFalse();
+            assertThat(status.failure()).as("failure of the new subscription").isNull();
+        } finally {
+            mayGoOn.countDown();
+        }
+    }
+
+    @Test
     void does_not_report_the_refusal_of_a_subscription_that_was_held_and_resumed_when_the_user_pauses_it_later() {
         strategy.grantOnRegister = false;
         subscribe();
