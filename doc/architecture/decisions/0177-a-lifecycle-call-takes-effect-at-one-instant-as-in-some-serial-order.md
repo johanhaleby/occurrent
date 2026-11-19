@@ -215,28 +215,22 @@ The catch-up marker is written in this order on the blocking stack:
 3. Deliver the payloads buffered during the replay.
 4. Write the marker.
 
-On the reactor stack `ReactiveHandover` reads the marker through its source and resumes after the position the source
-answers, except that the reactor push model replays from the beginning without reading it after a failed delete, as
-ADR 179 says. The handover writes the marker between steps 2 and 3.
-[ADR 179](0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md) keeps that write
-where it is on purpose. The reactor marker is the head H read before the replay, and the replay delivers the history
-through H. After a crash between the write and step 3, the next start replays the buffered events above H. A buffered
-live event at or below H is not replayed, and it is safe only because the broker delivers it again when step 3
-did not. An event the handler's own code fed back, on the handler's thread or composed into the `Mono` the handler
-returns, can have no broker copy, so H is not written while such an event waits in the buffer and the replay did not
+On the reactor stack `ReactiveHandover` asks its source for the marker, and ADR 179's "What a reactor catch-up start
+replays" says what a start then replays. When the handover writes the marker, it writes it between steps 2 and 3.
+[ADR 179](0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md) keeps that write where
+it is on purpose, since the broker delivers again a live event of its own that step 3 did not deliver. An event the
+handler's own code fed back, on the handler's thread or composed into the `Mono` the handler returns, can have no
+broker copy, so the handover does not write the marker while such an event waits in the buffer and the replay did not
 deliver it, as ADR 179's "Fed-back events on the reactor stack" says. An event another thread feeds after the handler
 has returned is not the handler's own code. The handover takes it like any other live event, and the code that fed it
-has to deliver it again when that delivery fails. Holding H back covers only what this process fed, and ADR 179
-says what a feed that runs on more than one replica needs. [#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 31, which would move the reactor write after step
+has to deliver it again when that delivery fails. ADR 179 says what a feed that runs on more than one replica needs.
+[#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 31, which would move the reactor write after step
 3, no longer applies to the reactor stack. A stop or cancel that takes effect before the marker write means no marker
 is written and the catch-up ends as stopped, not as done (#1293 item 32). A failure that starts the
 handover failing is permanent, and `ReactiveHandover` then asks the source to delete the marker, as ADR 179's
 "Fed-back events on the reactor stack" lists. A failed delivery that only fails the answer a caller waits for does
 neither. A marker write that the store applies after that delete is
-[#1150](https://github.com/johanhaleby/occurrent/issues/1150), and ADR 179 decides it. The late write stores a head,
-and a reactor start that reads it resumes after it, so that start does not replay from the beginning and skips an
-event at or below that head that nothing delivers again. A start of the reactor push model in the same process can
-instead replay from the beginning without reading it. ADR 179 says when, and which fed-back events need a durable path.
+[#1150](https://github.com/johanhaleby/occurrent/issues/1150), and ADR 179 decides it.
 
 Every accepted payload gets an answer. The replay turn, which lets one catch-up at a time replay on an engine, is
 given back on every path. That includes a JVM-fatal error
