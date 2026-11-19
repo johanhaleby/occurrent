@@ -43,8 +43,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -259,6 +261,66 @@ class CatchupProjectionFeedResumePositionTest {
         assertThat(catchThrowable(() -> feed(new RecordingReplayAwareView()).catchUp().block(TIMEOUT))).as("the refused catch-up").isNotNull();
 
         assertThat(marker.read("counter").block(TIMEOUT)).as("checkpoint of another subscription under the same id").isEqualTo(foreign);
+    }
+
+    @Test
+    void a_failed_catch_up_forgets_the_marker_its_own_read_found_when_another_catch_up_on_the_feed_read_a_foreign_checkpoint_while_it_forgot() throws Exception {
+        log.append("1", "2");
+        AtomicInteger reads = new AtomicInteger();
+        CompletableFuture<Void> releaseThirdRead = new CompletableFuture<>();
+        CountDownLatch firstDeleteApplied = new CountDownLatch(1);
+        CompletableFuture<Void> releaseFirstDelete = new CompletableFuture<>();
+        AtomicBoolean firstDelete = new AtomicBoolean(true);
+        // Holds the third marker read until the test says so, and the answer of the first delete after it is applied, so
+        // the order of the reads and of the forgets is the test's and not the scheduler's.
+        InMemoryCheckpointStorage ordered = new InMemoryCheckpointStorage() {
+            @Override
+            public Mono<Checkpoint> read(String subscriptionId) {
+                return reads.incrementAndGet() == 3 ? Mono.fromFuture(releaseThirdRead).then(Mono.defer(() -> super.read(subscriptionId))) : super.read(subscriptionId);
+            }
+
+            @Override
+            public Mono<Void> delete(String subscriptionId) {
+                return Mono.defer(() -> super.delete(subscriptionId).then(Mono.defer(() -> {
+                    if (!firstDelete.compareAndSet(true, false)) {
+                        return Mono.empty();
+                    }
+                    firstDeleteApplied.countDown();
+                    return Mono.fromFuture(releaseFirstDelete);
+                })));
+            }
+        };
+        CountDownLatch foldingThree = new CountDownLatch(1);
+        CompletableFuture<Void> failTheFold = new CompletableFuture<>();
+        BiFunction<EventMetadata, Counted, Mono<Void>> fold = (metadata, event) -> event.eventId().equals("3")
+                ? Mono.fromRunnable(foldingThree::countDown).then(Mono.fromFuture(failTheFold)).then(Mono.error(new IllegalStateException("fold boom")))
+                : Mono.empty();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", fold, Filter.all(), log, converter, Counted::eventId, ordered);
+        // Reads no marker, stores one and goes live, so it is the catch-up that delivers live when the next one fails.
+        feed.catchUp().block(TIMEOUT);
+        log.append("3");
+
+        // Reads that marker and holds in the fold of 3.
+        CompletableFuture<Void> failing = feed.catchUp().toFuture();
+        assertThat(foldingThree.await(5, TimeUnit.SECONDS)).as("the second catch-up is folding 3").isTrue();
+        // Asked before the first one fails, so it is let in, but its read has not answered yet.
+        CompletableFuture<Void> reading = feed.catchUp().toFuture();
+
+        failTheFold.complete(null);
+        assertThat(firstDeleteApplied.await(5, TimeUnit.SECONDS)).as("the failing catch-up has deleted the marker it read").isTrue();
+        // Something else is stored under the id now, which the third catch-up reads and refuses.
+        ordered.save("counter", new StringBasedCheckpoint("resume-token-xyz")).block(TIMEOUT);
+        releaseThirdRead.complete(null);
+        assertThat(catchThrowable(() -> reading.get(5, TimeUnit.SECONDS))).as("the catch-up that read the foreign checkpoint")
+                .hasStackTraceContaining("subscribe under a new id");
+        // A catch-up marker is stored by the time the catch-up that delivers live forgets.
+        ordered.save("counter", GlobalCheckpoint.of(2)).block(TIMEOUT);
+        releaseFirstDelete.complete(null);
+
+        assertThat(catchThrowable(() -> failing.get(5, TimeUnit.SECONDS))).as("the catch-up that failed in its fold").hasStackTraceContaining("fold boom");
+        assertThat(ordered.read("counter").blockOptional(TIMEOUT))
+                .as("checkpoint under the id once the catch-up that delivers live forgot, which read a marker itself")
+                .isEmpty();
     }
 
     @Test
