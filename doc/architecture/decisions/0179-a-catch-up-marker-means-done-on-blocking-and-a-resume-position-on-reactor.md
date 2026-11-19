@@ -241,10 +241,11 @@ handler feeds it again whenever the event that triggered it is delivered again, 
 stored. Without either, a feed that runs on more than one replica can lose it. The rule above still holds H back for an event
 fed back within one process.
 
-The reactor push model has no feed-back path of its own. Its handover takes only what `acceptOrDefer` and `accept`
-hand it, at `CatchupThenPushSubscriptionModel.java:260` on `73a72f0f27`, so an event a push handler writes reaches the
-model as a broker copy once the forwarder publishes it, and that copy is its durable path. A handler that hands its own
-write straight to `acceptOrDefer` or `accept` has fed it back without a broker copy, and the contract above applies.
+The reactor push model's handover takes only what `acceptOrDefer` and `accept` hand it, at
+`CatchupThenPushSubscriptionModel.java:260` on `73a72f0f27`. An event a push handler writes reaches it in one of two
+ways. The forwarder publishes it, and the broker copy arrives on the listener's thread, which is the durable path. Or
+`accept` runs on the handler's own thread, as the blocking `InMemoryEventStore`'s listener does, which feeds it back
+without a broker copy, and the contract above applies to it.
 
 `ReactiveHandover` also keeps deleting the marker through `Source.forgetCaughtUp()` when a delivery or a catch-up
 fails, as in 0.34.0, as a backstop behind that rule. It tries the delete four times and then logs. The reactor push
