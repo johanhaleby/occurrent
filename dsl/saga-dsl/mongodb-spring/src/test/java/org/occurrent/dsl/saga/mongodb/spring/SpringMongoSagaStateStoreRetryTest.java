@@ -18,7 +18,10 @@ package org.occurrent.dsl.saga.mongodb.spring;
 
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.mongodb.ConnectionString;
+import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -32,20 +35,15 @@ import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,7 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * Docker-based. Every test here injects exactly one transient {@link DataAccessResourceFailureException} into a named
- * {@link MongoOperations} method through a {@link Proxy}, then lets the call go through a second time.
+ * method of a {@link FlakyMongoTemplate}, a real {@code MongoTemplate}, then lets the call go through a second time.
  * <p>
  * Tests 1 through 6 build the store with the plain, no-{@link RetryStrategy} constructor, so a test passing is itself
  * the evidence that a default retry strategy is applied without the caller asking for one. The last test builds the
@@ -72,9 +70,23 @@ class SpringMongoSagaStateStoreRetryTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
     private static final String COLLECTION = "saga-retry";
 
-    private MongoOperations mongoOperations() {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-retry-" + UUID.randomUUID()));
-        return new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase()));
+    private MongoClient client;
+    private String database;
+
+    @BeforeEach
+    void connect() {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-retry-" + UUID.randomUUID().toString().substring(0, 8)));
+        client = MongoClients.create(connectionString);
+        database = requireNonNull(connectionString.getDatabase());
+    }
+
+    @AfterEach
+    void close() {
+        client.close();
+    }
+
+    private FlakyMongoTemplate failing(String methodName, int failures) {
+        return new FlakyMongoTemplate(client, database, methodName, failures);
     }
 
     record Payment(long amount) {
@@ -92,44 +104,13 @@ class SpringMongoSagaStateStoreRetryTest {
                 NOW, null, null, true, null, Map.of(), null);
     }
 
-    /** Wraps {@code real}, throwing a {@link DataAccessResourceFailureException} on the first {@code failures} calls to the method named {@code methodName} and delegating every other call and every other method unchanged. */
-    private static MongoOperations failing(MongoOperations real, String methodName, int failures) {
-        AtomicInteger remaining = new AtomicInteger(failures);
-        InvocationHandler handler = (proxy, method, args) -> {
-            if (method.getName().equals(methodName) && remaining.getAndDecrement() > 0) {
-                throw new DataAccessResourceFailureException("simulated transient MongoDB failure in " + methodName);
-            }
-            try {
-                return method.invoke(real, args);
-            } catch (InvocationTargetException e) {
-                throw e.getCause();
-            }
-        };
-        return (MongoOperations) Proxy.newProxyInstance(MongoOperations.class.getClassLoader(),
-                new Class<?>[]{MongoOperations.class}, handler);
-    }
-
-    /** Wraps {@code real}, throwing on every call to {@code methodName} and counting how many of them reached it. */
-    private static MongoOperations alwaysFailing(MongoOperations real, String methodName, AtomicInteger calls) {
-        InvocationHandler handler = (proxy, method, args) -> {
-            if (method.getName().equals(methodName)) {
-                calls.incrementAndGet();
-                throw new DataAccessResourceFailureException("simulated sustained MongoDB outage in " + methodName);
-            }
-            try {
-                return method.invoke(real, args);
-            } catch (InvocationTargetException e) {
-                throw e.getCause();
-            }
-        };
-        return (MongoOperations) Proxy.newProxyInstance(MongoOperations.class.getClassLoader(),
-                new Class<?>[]{MongoOperations.class}, handler);
+    private FlakyMongoTemplate healthy() {
+        return failing("none", 0);
     }
 
     @Test
     void a_transient_failure_on_a_read_is_retried_rather_than_reaching_the_caller() {
-        MongoOperations mongoOperations = failing(mongoOperations(), "findOne", 1);
-        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
+        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing("findOne", 1), COLLECTION, Payment.class);
         SagaEnvelopes.of(store, null).compareAndSave("order-1", payment("order-1"), 0);
 
         SagaEnvelope<Payment> read = SagaEnvelopes.of(store, null).find("order-1").orElseThrow();
@@ -139,8 +120,7 @@ class SpringMongoSagaStateStoreRetryTest {
 
     @Test
     void a_transient_failure_inserting_a_new_instance_is_retried_and_the_instance_is_still_saved() {
-        MongoOperations mongoOperations = failing(mongoOperations(), "insert", 1);
-        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
+        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing("execute", 1), COLLECTION, Payment.class);
 
         boolean saved = SagaEnvelopes.of(store, null).compareAndSave("order-2", payment("order-2"), 0);
 
@@ -149,22 +129,23 @@ class SpringMongoSagaStateStoreRetryTest {
 
     @Test
     void a_transient_failure_replacing_an_existing_instance_is_retried_and_the_replacement_is_still_saved() {
-        MongoOperations mongoOperations = mongoOperations();
-        SagaStateStore<Payment> setup = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
+        SagaStateStore<Payment> setup = new SpringMongoSagaStateStore<>(healthy(), COLLECTION, Payment.class);
         SagaEnvelopes.of(setup, null).compareAndSave("order-3", payment("order-3"), 0);
-        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing(mongoOperations, "findAndReplace", 1), COLLECTION, Payment.class);
+        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing("execute", 1), COLLECTION, Payment.class);
 
         boolean saved = SagaEnvelopes.of(store, null).compareAndSave("order-3", replacementPayment("order-3"), 1);
 
-        assertThat(saved).isTrue();
+        assertAll(
+                () -> assertThat(saved).isTrue(),
+                () -> assertThat(SagaEnvelopes.of(store, null).find("order-3").orElseThrow().state()).isEqualTo(new Payment(99L))
+        );
     }
 
     @Test
     void a_transient_failure_finding_due_timers_is_retried_and_the_instance_is_still_found() {
-        MongoOperations mongoOperations = mongoOperations();
-        SagaStateStore<Payment> setup = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
+        SagaStateStore<Payment> setup = new SpringMongoSagaStateStore<>(healthy(), COLLECTION, Payment.class);
         SagaEnvelopes.of(setup, null).compareAndSave("order-4", payment("order-4"), 0);
-        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing(mongoOperations, "find", 1), COLLECTION, Payment.class);
+        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing("find", 1), COLLECTION, Payment.class);
 
         List<SagaEnvelope<Payment>> due = SagaEnvelopes.of(store, null).findWithDueTimers(NOW.plusSeconds(60), 10);
 
@@ -173,10 +154,9 @@ class SpringMongoSagaStateStoreRetryTest {
 
     @Test
     void a_transient_failure_deleting_an_instance_is_retried_and_the_instance_is_still_gone() {
-        MongoOperations mongoOperations = mongoOperations();
-        SagaStateStore<Payment> setup = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
+        SagaStateStore<Payment> setup = new SpringMongoSagaStateStore<>(healthy(), COLLECTION, Payment.class);
         SagaEnvelopes.of(setup, null).compareAndSave("order-5", payment("order-5"), 0);
-        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing(mongoOperations, "remove", 1), COLLECTION, Payment.class);
+        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing("execute", 1), COLLECTION, Payment.class);
 
         store.delete("order-5");
 
@@ -185,9 +165,7 @@ class SpringMongoSagaStateStoreRetryTest {
 
     @Test
     void a_transient_failure_creating_the_indexes_at_construction_is_retried_and_the_store_is_still_usable() {
-        MongoOperations mongoOperations = failing(mongoOperations(), "getCollection", 1);
-
-        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
+        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing("getCollection", 1), COLLECTION, Payment.class);
 
         assertThat(SagaEnvelopes.of(store, null).compareAndSave("order-6", payment("order-6"), 0)).isTrue();
     }
@@ -197,17 +175,16 @@ class SpringMongoSagaStateStoreRetryTest {
         // The shipped policy with its backoff swapped for a fast one, so this exercises the attempt limit the store
         // actually ships rather than a limit the test invented. The limit is what keeps a sustained outage from
         // retrying without end, since this store has no shutdown flag to stop one.
-        AtomicInteger calls = new AtomicInteger();
-        MongoOperations mongoOperations = alwaysFailing(mongoOperations(), "findOne", calls);
-        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class, null,
+        FlakyMongoTemplate template = failing("findOne", Integer.MAX_VALUE);
+        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(template, COLLECTION, Payment.class, null,
                 SpringMongoSagaStateStore.defaultRetryStrategy().backoff(Backoff.fixed(1)));
 
         Throwable thrown = catchThrowable(() -> SagaEnvelopes.of(store, null).find("order-8"));
 
         assertAll(
-                () -> assertThat(calls)
+                () -> assertThat(template.calls())
                         .as("the shipped default must give up after exactly %s attempts, so an outage that never clears cannot retry without end", SpringMongoSagaStateStore.DEFAULT_MAX_ATTEMPTS)
-                        .hasValue(SpringMongoSagaStateStore.DEFAULT_MAX_ATTEMPTS),
+                        .isEqualTo(SpringMongoSagaStateStore.DEFAULT_MAX_ATTEMPTS),
                 () -> assertThat(thrown)
                         .as("the failure that exhausted the attempts must reach the caller rather than being swallowed")
                         .isInstanceOf(DataAccessResourceFailureException.class)
@@ -216,8 +193,7 @@ class SpringMongoSagaStateStoreRetryTest {
 
     @Test
     void the_constructor_that_accepts_a_retry_strategy_is_honoured_and_a_transient_failure_reaches_the_caller() {
-        MongoOperations mongoOperations = failing(mongoOperations(), "findOne", 1);
-        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class, null, RetryStrategy.none());
+        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(failing("findOne", 1), COLLECTION, Payment.class, null, RetryStrategy.none());
 
         Throwable thrown = catchThrowable(() -> SagaEnvelopes.of(store, null).find("order-7"));
 

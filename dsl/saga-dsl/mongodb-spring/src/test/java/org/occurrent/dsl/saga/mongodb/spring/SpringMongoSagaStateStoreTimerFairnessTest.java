@@ -17,7 +17,11 @@ package org.occurrent.dsl.saga.mongodb.spring;
 
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClients;
+import com.mongodb.event.CommandListener;
+import com.mongodb.event.CommandStartedEvent;
+import org.bson.BsonDocument;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -33,14 +37,10 @@ import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Query;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -73,11 +73,19 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
 
     private MongoOperations mongoOperations;
     private SagaStateStore<String> stateStore;
+    private final AtomicReference<BsonDocument> sortedFind = new AtomicReference<>();
 
     @BeforeEach
     void createInstances() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-fair-" + UUID.randomUUID()));
-        mongoOperations = new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase()));
+        mongoOperations = new MongoTemplate(MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).addCommandListener(new CommandListener() {
+            @Override
+            public void commandStarted(CommandStartedEvent event) {
+                if (event.getCommandName().equals("find") && event.getCommand().getString("find").getValue().equals(COLLECTION) && event.getCommand().containsKey("sort")) {
+                    sortedFind.set(event.getCommand().clone());
+                }
+            }
+        }).build()), requireNonNull(connectionString.getDatabase()));
         stateStore = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, String.class);
     }
 
@@ -199,20 +207,7 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
 
     @Test
     void the_sorted_due_query_the_store_runs_is_served_in_order_by_the_status_and_nextTimerFiresAt_index_without_an_in_memory_sort() {
-        AtomicReference<Query> dueQuery = new AtomicReference<>();
-        InvocationHandler recordTheDueQuery = (proxy, method, args) -> {
-            if (method.getName().equals("find") && args.length == 3 && args[0] instanceof Query query) {
-                dueQuery.set(query);
-            }
-            try {
-                return method.invoke(mongoOperations, args);
-            } catch (InvocationTargetException e) {
-                throw e.getCause();
-            }
-        };
-        MongoOperations recording = (MongoOperations) Proxy.newProxyInstance(MongoOperations.class.getClassLoader(),
-                new Class<?>[]{MongoOperations.class}, recordTheDueQuery);
-        SagaStateStore<String> recordingStore = new SpringMongoSagaStateStore<>(recording, COLLECTION, String.class);
+        SagaStateStore<String> recordingStore = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, String.class);
         for (int i = 0; i < 5; i++) {
             SagaEnvelopes.of(recordingStore, null).compareAndSave("s" + i, instanceWith("s" + i, List.of(new TimerEntry("t", BASE - 5_000 + i))), 0);
             SagaEnvelopes.of(recordingStore, null).compareAndSave("m" + i, new SagaEnvelope<>("m" + i, "awaiting-payment", SagaStatus.ACTIVE, 1,
@@ -220,9 +215,9 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
                     Map.of("order", new SagaEnvelope.StreamMarks(1, Map.of())), null), 0);
         }
         SagaEnvelopes.of(recordingStore, null).findWithDueTimers(NOW, 3);
-        Query query = requireNonNull(dueQuery.get(), "findWithDueTimers ran no find");
+        BsonDocument find = requireNonNull(sortedFind.get(), "findWithDueTimers sent no sorted find");
 
-        Document explain = mongoOperations.getCollection(COLLECTION).find(query.getQueryObject()).sort(query.getSortObject()).limit(query.getLimit()).explain();
+        Document explain = mongoOperations.getCollection(COLLECTION).find(find.getDocument("filter")).sort(find.getDocument("sort")).limit(find.get("limit").asNumber().intValue()).explain();
 
         String plan = explain.get("queryPlanner", Document.class).get("winningPlan", Document.class).toJson();
         assertAll(

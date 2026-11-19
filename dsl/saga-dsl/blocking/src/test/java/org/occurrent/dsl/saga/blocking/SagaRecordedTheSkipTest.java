@@ -162,7 +162,7 @@ class SagaRecordedTheSkipTest {
     @Test
     void whose_instance_stopped_being_quarantined_when_the_write_lost_propagates_the_load_failure_and_does_not_skip_the_input() {
         quarantinedWithAnUndecodableState();
-        store.beforeTheNextWriteWithoutState(() -> {
+        store.beforeTheNextSkip(() -> {
             // Another node releases the instance between the skip's read and its first write
             store.undecodable = false;
             execution.release(ORDER);
@@ -183,7 +183,7 @@ class SagaRecordedTheSkipTest {
     void whose_instance_is_gone_when_the_write_lost_propagates_the_load_failure_and_does_not_skip_the_input() {
         quarantinedWithAnUndecodableState();
         AtomicBoolean wasGone = new AtomicBoolean();
-        store.beforeTheNextWriteWithoutState(() -> {
+        store.beforeTheNextSkip(() -> {
             inMemory.delete(ORDER);
             wasGone.set(inMemory.find(ORDER).isEmpty());
         });
@@ -200,13 +200,13 @@ class SagaRecordedTheSkipTest {
     @Test
     void whose_write_keeps_losing_propagates_the_load_failure_after_every_attempt_and_does_not_skip_the_input() {
         quarantinedWithAnUndecodableState();
-        store.losesEveryWriteWithoutState = true;
-        store.writesWithoutState.set(0);
+        store.losesEverySkip = true;
+        store.skips.set(0);
 
         Throwable thrown = deliverANewInput();
 
         assertAll(
-                () -> assertThat(store.writesWithoutState.get()).as("control: the write was tried maxCasAttempts times").isEqualTo(CONFIG.maxCasAttempts()),
+                () -> assertThat(store.skips.get()).as("control: the write was tried maxCasAttempts times").isEqualTo(CONFIG.maxCasAttempts()),
                 () -> assertThat(thrown).as("the delivery fails, so the subscription does not move past the input").isNotNull(),
                 () -> assertThat(thePropagatedFailureIsTheLoadFailure(thrown)).as(String.valueOf(thrown)).isTrue(),
                 () -> assertThat(inMemory.findSkippedInputs(ORDER, instance().quarantineId(), Integer.MAX_VALUE)).as("nothing is recorded").isEmpty()
@@ -215,12 +215,12 @@ class SagaRecordedTheSkipTest {
 
     private final class UndecodableStore implements SagaStateStore<Order>, SagaStateStoreSkippedInputs {
         volatile boolean undecodable;
-        volatile boolean losesEveryWriteWithoutState;
-        final AtomicInteger writesWithoutState = new AtomicInteger();
-        private final AtomicReference<@Nullable Runnable> beforeTheNextWriteWithoutState = new AtomicReference<>();
+        volatile boolean losesEverySkip;
+        final AtomicInteger skips = new AtomicInteger();
+        private final AtomicReference<@Nullable Runnable> beforeTheNextSkip = new AtomicReference<>();
 
-        void beforeTheNextWriteWithoutState(Runnable action) {
-            beforeTheNextWriteWithoutState.set(action);
+        void beforeTheNextSkip(Runnable action) {
+            beforeTheNextSkip.set(action);
         }
 
         @Override
@@ -248,14 +248,6 @@ class SagaRecordedTheSkipTest {
 
         @Override
         public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
-            writesWithoutState.incrementAndGet();
-            Runnable action = beforeTheNextWriteWithoutState.getAndSet(null);
-            if (action != null) {
-                action.run();
-            }
-            if (losesEveryWriteWithoutState) {
-                return false;
-            }
             return inMemory.compareAndSaveWithoutState(saga, expectedVersion);
         }
 
@@ -270,8 +262,16 @@ class SagaRecordedTheSkipTest {
         }
 
         @Override
-        public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-            inMemory.recordSkippedInput(sagaId, quarantineId, input);
+        public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
+            skips.incrementAndGet();
+            Runnable action = beforeTheNextSkip.getAndSet(null);
+            if (action != null) {
+                action.run();
+            }
+            if (losesEverySkip) {
+                return false;
+            }
+            return inMemory.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input);
         }
 
         @Override
@@ -280,18 +280,18 @@ class SagaRecordedTheSkipTest {
         }
 
         @Override
-        public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
-            inMemory.recordSkippedInputAtHead(sagaId, quarantineId, head);
+        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
+            return inMemory.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
         }
 
         @Override
-        public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-            inMemory.deleteSkippedInput(sagaId, quarantineId, input);
+        public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+            return inMemory.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
         }
 
         @Override
-        public void deleteSkippedInputs(String sagaId, String quarantineId) {
-            inMemory.deleteSkippedInputs(sagaId, quarantineId);
+        public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+            return inMemory.compareAndSaveQuarantineEnded(saga, expectedVersion, quarantineId);
         }
 
         @Override

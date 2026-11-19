@@ -1946,8 +1946,23 @@ class SagaQuarantineTest {
         }
 
         @Override
-        public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-            delegate.recordSkippedInput(sagaId, quarantineId, input);
+        public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
+            return delegate.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input);
+        }
+
+        @Override
+        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
+            return delegate.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
+        }
+
+        @Override
+        public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+            return delegate.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
+        }
+
+        @Override
+        public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+            return delegate.compareAndSaveQuarantineEnded(saga, expectedVersion, quarantineId);
         }
 
         @Override
@@ -1955,20 +1970,6 @@ class SagaQuarantineTest {
             return delegate.findSkippedInputs(sagaId, quarantineId, limit);
         }
 
-        @Override
-        public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
-            delegate.recordSkippedInputAtHead(sagaId, quarantineId, head);
-        }
-
-        @Override
-        public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-            delegate.deleteSkippedInput(sagaId, quarantineId, input);
-        }
-
-        @Override
-        public void deleteSkippedInputs(String sagaId, String quarantineId) {
-            delegate.deleteSkippedInputs(sagaId, quarantineId);
-        }
     }
 
     /**

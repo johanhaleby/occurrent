@@ -109,7 +109,7 @@ class SpringMongoSagaStateStoreFlowRunnerTest {
 
     @BeforeEach
     void createTheStore() {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-flow-runner-" + UUID.randomUUID()));
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-flow-runner-" + UUID.randomUUID().toString().substring(0, 8)));
         stateStore = new SpringMongoSagaStateStore<>(new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase())),
                 "saga-flow-runner", rawFlowStateType(), converter);
     }

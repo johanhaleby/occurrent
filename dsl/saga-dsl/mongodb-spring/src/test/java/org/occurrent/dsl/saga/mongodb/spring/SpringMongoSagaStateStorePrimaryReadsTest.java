@@ -115,6 +115,10 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
                 NOW.minusSeconds(600), NOW, null, null, true, failure, Map.of(), 0L);
     }
 
+    private static SagaEnvelope<Payment> atVersion(SagaEnvelope<Payment> e, long version) {
+        return new SagaEnvelope<>(e.sagaId(), e.state(), e.status(), version, e.timers(), e.streamWatermarks(), null, e.createdAt(), e.updatedAt(), e.completedAt(), e.currentStep(), e.started(), e.failure(), e.streamMarks(), e.quarantineSkipCount());
+    }
+
     private static SagaFailure releasingFailure() {
         return new SagaFailure("order-1@7", 7L, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom", NOW, QUARANTINE_ID);
     }
@@ -206,7 +210,8 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
 
     @Test
     void find_skipped_inputs_reads_from_the_primary_whatever_the_read_preference_of_the_template() {
-        writer.recordSkippedInput("order-1", QUARANTINE_ID, new SkippedInput(0, "order-1@8"));
+        writerEnvelopes.compareAndSave("order-1", envelope("order-1", SagaStatus.QUARANTINED, List.of(), releasingFailure()), 0);
+        writerEnvelopes.compareAndSaveSkipped(writer, atVersion(envelope("order-1", SagaStatus.QUARANTINED, List.of(), releasingFailure()), 2), 1, QUARANTINE_ID, new SkippedInput(0, "order-1@8"));
 
         AtomicReference<List<SkippedInput>> read = new AtomicReference<>();
 

@@ -31,6 +31,7 @@ import org.occurrent.dsl.saga.blocking.SagaSubscription.ReleaseResult;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
 import java.net.URI;
@@ -43,6 +44,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -148,7 +150,7 @@ class SagaReleaseConcurrentCallersTest {
     }
 
     @Test
-    void a_second_release_call_writing_the_head_record_after_the_first_recorded_it_does_not_lose_the_input() throws Exception {
+    void a_second_release_call_starting_the_release_after_the_first_finished_it_loses_and_does_not_lose_the_input() throws Exception {
         HeadRacingStore store = new HeadRacingStore();
         SagaExecution<OrderEvent, Order, Object> execution = execution(store);
         execution.onCloudEvent(append(new OrderPlaced(nextEventId(), ORDER)));
@@ -172,12 +174,13 @@ class SagaReleaseConcurrentCallersTest {
         assertAll(
                 () -> assertThat(after.state().items()).as("the input the instance was quarantined on is applied once. " + evidence).containsExactly("poison"),
                 () -> assertThat(dispatched).as("the commands it produced. " + evidence).containsExactly(new Pack(ORDER, "poison")),
+                () -> assertThat(store.bStartWon).as("B's start of the release loses its version compare-and-set. " + evidence).isFalse(),
                 () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE)).as("no record is left. " + evidence).isEmpty()
         );
     }
 
     @Test
-    void a_second_release_call_moving_the_head_record_while_the_first_has_started_and_not_read_the_records_applies_the_input_once_and_before_every_later_record() throws Exception {
+    void a_second_release_call_starting_the_release_while_the_first_has_not_read_the_records_loses_and_the_input_is_applied_once_and_before_every_later_record() throws Exception {
         HeldReadStore store = new HeldReadStore();
         SagaExecution<OrderEvent, Order, Object> execution = execution(store);
         execution.onCloudEvent(append(new OrderPlaced(nextEventId(), ORDER)));
@@ -189,7 +192,8 @@ class SagaReleaseConcurrentCallersTest {
         execution.onCloudEvent(append(new ItemAdded(nextEventId(), ORDER, "b")));
         String quarantineId = instance().quarantineId();
         // The record an earlier release left for the input it was quarantined on, at a seq after the records of the inputs it skipped
-        inMemory.recordSkippedInput(ORDER, quarantineId, new SkippedInput(1_000_000, poison.getExtension(OccurrentCloudEventExtension.STREAM_ID) + "@" + poison.getExtension(OccurrentCloudEventExtension.STREAM_VERSION)));
+        SagaEnvelope<Order> current = instance();
+        envelopes.compareAndSaveSkipped(inMemory, SagaExecutionSupport.withSkipCounted(current), current.version(), quarantineId, new SkippedInput(1_000_000, poison.getExtension(OccurrentCloudEventExtension.STREAM_ID) + "@" + poison.getExtension(OccurrentCloudEventExtension.STREAM_VERSION)));
 
         CompletableFuture<ReleaseResult> b = CompletableFuture.supplyAsync(() -> {
             store.b = Thread.currentThread();
@@ -206,6 +210,7 @@ class SagaReleaseConcurrentCallersTest {
         assertAll(
                 () -> assertThat(after.state().items()).as("the input the instance was quarantined on is applied once and before the inputs it skipped. " + evidence).containsExactly("poison", "a", "b"),
                 () -> assertThat(dispatched).as("the commands it produced. " + evidence).containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b")),
+                () -> assertThat(store.bStartWon).as("B's start of the release loses its version compare-and-set. " + evidence).isFalse(),
                 () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE)).as("no record is left. " + evidence).isEmpty()
         );
     }
@@ -292,8 +297,23 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-            inMemory.recordSkippedInput(sagaId, quarantineId, input);
+        public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
+            return inMemory.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input);
+        }
+
+        @Override
+        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
+            return inMemory.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
+        }
+
+        @Override
+        public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+            return inMemory.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
+        }
+
+        @Override
+        public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+            return inMemory.compareAndSaveQuarantineEnded(saga, expectedVersion, quarantineId);
         }
 
         @Override
@@ -302,34 +322,18 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
-            inMemory.recordSkippedInputAtHead(sagaId, quarantineId, head);
-        }
-
-        @Override
-        public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-            inMemory.deleteSkippedInput(sagaId, quarantineId, input);
-        }
-
-        @Override
-        public void deleteSkippedInputs(String sagaId, String quarantineId) {
-            inMemory.deleteSkippedInputs(sagaId, quarantineId);
-        }
-
-        @Override
         public void delete(String sagaId) {
             inMemory.delete(sagaId);
         }
     }
 
-    // Call order: B reads, A reads, A writes the head record, B writes the head record over it and pauses, A wins the
-    // start write and finishes the release, B resumes. The head write is the one recordSkippedInputAtHead makes
+    // Call order: B reads, A reads, A starts the release and finishes it, B resumes and tries to start the release it read
+    // the instance for, which must lose
     private final class HeadRacingStore extends DelegatingStore {
         volatile @Nullable Thread b;
         final CountDownLatch bHasRead = new CountDownLatch(1);
-        final CountDownLatch aRecorded = new CountDownLatch(1);
-        final CountDownLatch bWroteTheHead = new CountDownLatch(1);
         final CountDownLatch aFinished = new CountDownLatch(1);
+        final AtomicBoolean bStartWon = new AtomicBoolean(true);
         private final AtomicInteger bReads = new AtomicInteger();
 
         private boolean isB() {
@@ -346,35 +350,26 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
-            if (!isB() && aRecorded.getCount() == 0 && bWroteTheHead.getCount() > 0) {
-                await(bWroteTheHead);
-            }
-            return super.compareAndSaveWithoutState(saga, expectedVersion);
-        }
-
-        @Override
-        public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
+        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
             if (isB()) {
-                await(aRecorded);
-                super.recordSkippedInputAtHead(sagaId, quarantineId, head);
-                bWroteTheHead.countDown();
                 await(aFinished);
-                return;
+                boolean saved = super.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
+                bStartWon.set(saved);
+                return saved;
             }
-            super.recordSkippedInputAtHead(sagaId, quarantineId, head);
-            aRecorded.countDown();
+            return super.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
         }
     }
 
-    // Call order: B reads the instance, A writes the head record and starts the release and pauses before it reads the
-    // records, B writes the head record and pauses, A reads the records and finishes the release, B resumes
+    // Call order: B reads the instance, A starts the release and pauses before it reads the records, B tries to start the
+    // release it read the instance for and pauses, A reads the records and finishes the release, B resumes
     private final class HeldReadStore extends DelegatingStore {
         volatile @Nullable Thread b;
         final CountDownLatch bHasRead = new CountDownLatch(1);
         final CountDownLatch aIsAboutToReadTheRecords = new CountDownLatch(1);
-        final CountDownLatch bWroteTheHead = new CountDownLatch(1);
+        final CountDownLatch bTriedToStart = new CountDownLatch(1);
         final CountDownLatch aFinished = new CountDownLatch(1);
+        final AtomicBoolean bStartWon = new AtomicBoolean(true);
         private final AtomicInteger bReads = new AtomicInteger();
         private final AtomicInteger aRecordReads = new AtomicInteger();
 
@@ -395,21 +390,22 @@ class SagaReleaseConcurrentCallersTest {
         public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
             if (!isB() && aRecordReads.incrementAndGet() == 1) {
                 aIsAboutToReadTheRecords.countDown();
-                await(bWroteTheHead);
+                await(bTriedToStart);
             }
             return super.findSkippedInputs(sagaId, quarantineId, limit);
         }
 
         @Override
-        public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
+        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
             if (isB()) {
                 await(aIsAboutToReadTheRecords);
-                super.recordSkippedInputAtHead(sagaId, quarantineId, head);
-                bWroteTheHead.countDown();
+                boolean saved = super.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
+                bStartWon.set(saved);
+                bTriedToStart.countDown();
                 await(aFinished);
-                return;
+                return saved;
             }
-            super.recordSkippedInputAtHead(sagaId, quarantineId, head);
+            return super.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
         }
     }
 
@@ -436,8 +432,8 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
-            boolean saved = super.compareAndSaveWithoutState(saga, expectedVersion);
+        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
+            boolean saved = super.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
             if (isR() && rWrites.incrementAndGet() == 1) {
                 rHasStartedTheRelease.countDown();
                 await(pHasReadTheInstance);
@@ -458,14 +454,15 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-            super.deleteSkippedInput(sagaId, quarantineId, input);
-            if (isR() && input.seq() < 0) {
+        public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+            boolean saved = super.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
+            if (isR() && replayed.seq() < 0) {
                 rDeletedTheStartRecord.countDown();
             }
-            if (isP() && input.seq() >= 0) {
+            if (isP() && replayed.seq() >= 0) {
                 pDeletedItsRecord.countDown();
             }
+            return saved;
         }
     }
 }

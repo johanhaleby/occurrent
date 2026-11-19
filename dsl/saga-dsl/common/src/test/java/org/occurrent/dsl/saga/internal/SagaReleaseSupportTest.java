@@ -179,7 +179,7 @@ class SagaReleaseSupportTest {
             SagaEnvelope<OrderState> current = quarantined(failedOn(9), 4L);
 
             SagaEnvelope<OrderState> counted = SagaExecutionSupport.withSkipCounted(current);
-            SagaEnvelope<OrderState> finished = SagaExecutionSupport.withSkipFinished(counted);
+            SagaEnvelope<OrderState> finished = SagaExecutionSupport.oneVersionUp(counted);
 
             assertAll(
                     () -> assertThat(finished.version()).isEqualTo(current.version() + 2),
@@ -488,7 +488,7 @@ class SagaReleaseSupportTest {
         @Test
         void is_an_append_when_only_the_version_and_the_skip_count_moved() {
             SagaEnvelope<OrderState> before = quarantined(releasingOn(9), 3L);
-            SagaEnvelope<OrderState> after = SagaExecutionSupport.withSkipFinished(SagaExecutionSupport.withSkipCounted(before));
+            SagaEnvelope<OrderState> after = SagaExecutionSupport.oneVersionUp(SagaExecutionSupport.withSkipCounted(before));
 
             assertThat(SagaExecutionSupport.differsOnlyByRecordedSkips(before, after)).isTrue();
         }
@@ -519,7 +519,7 @@ class SagaReleaseSupportTest {
         @Test
         void is_rewritten_one_version_above_the_instance_read_again_with_its_skip_count() {
             SagaEnvelope<OrderState> before = quarantined(releasingOn(9), 3L);
-            SagaEnvelope<OrderState> after = SagaExecutionSupport.withSkipFinished(SagaExecutionSupport.withSkipCounted(before));
+            SagaEnvelope<OrderState> after = SagaExecutionSupport.oneVersionUp(SagaExecutionSupport.withSkipCounted(before));
             SagaEnvelope<OrderState> computed = SagaExecutionSupport.replay(saga(), "o1", before, new SkippedInput(0, "o1@7"),
                     SagaInput.event(new OrderPlaced("o1")), at(7), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW).envelope();
 
@@ -557,7 +557,7 @@ class SagaReleaseSupportTest {
         @MethodSource("fieldsThatMoveAlone")
         void is_not_an_append_when_one_more_field_moved_as_well(String field, UnaryOperator<SagaEnvelope<OrderState>> move) {
             SagaEnvelope<OrderState> before = quarantined(releasingOn(9), 3L);
-            SagaEnvelope<OrderState> counted = SagaExecutionSupport.withSkipFinished(SagaExecutionSupport.withSkipCounted(before));
+            SagaEnvelope<OrderState> counted = SagaExecutionSupport.oneVersionUp(SagaExecutionSupport.withSkipCounted(before));
 
             assertAll(
                     () -> assertThat(SagaExecutionSupport.differsOnlyByRecordedSkips(before, counted)).as("control: nothing but the skip moved").isTrue(),
