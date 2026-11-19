@@ -5,12 +5,13 @@ Date: 2026-11-16
 ## Status
 
 Accepted. Decides [#1150](https://github.com/johanhaleby/occurrent/issues/1150) and
-[#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 23. Amends [ADR
-62](0062-pluggable-projection-event-source.md) and [ADR
-133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md) for the reactor stack, amends the
-marker order of [ADR 177](0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md) and decision 6
-of [ADR 132](0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md) for the reactor
-stack, keeps the replay callbacks of [ADR 110](0110-a-replay-tells-the-view-where-it-begins-and-ends.md), and keeps the
+[#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 23. Amends
+[ADR 62](0062-pluggable-projection-event-source.md) and
+[ADR 133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md) for the reactor stack,
+amends the marker order of
+[ADR 177](0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md) and decision 6 of
+[ADR 132](0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md) for the reactor stack,
+keeps the replay callbacks of [ADR 110](0110-a-replay-tells-the-view-where-it-begins-and-ends.md), and keeps the
 lease condition of [ADR 116](0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md) on the blocking push
 model's marker writes. Applies to both `CatchupThenPushSubscriptionModel`s, both `CatchupProjectionFeed`s and both
 `DomainEventFeed`s.
@@ -426,6 +427,11 @@ every third-party `CheckpointStorage` and needed a rolling-upgrade precondition.
   the reactor stack" lists which. When that delete fails, the reactor push model's next catch-up of the id in the same
   process tries it again and replays from the beginning, as in 0.34.0, unless a delete or a marker write of that model
   succeeds first.
+* ADR 62 is amended for the reactor stack. It calls the marker a one-shot catch-up-complete marker that is not a
+  moving resume watermark, calls the catch-up one-time and run once per subscription id, and says the catch-up always
+  replays from the beginning. Those hold on the blocking stack. On the reactor stack the marker is a resume position,
+  so a later catch-up under the same id replays the events after it, as "What a reactor catch-up start replays"
+  describes. ADR 62's Status section points here, and its body is unchanged.
 * ADR 177's marker order is amended for the reactor stack. Step 1 reads the marker on both stacks, apart from the
   push-model case "What a reactor catch-up start replays" lists. The blocking stack writes it after the drain, and the
   reactor stack, when it writes H, writes it before the drain on purpose, so
