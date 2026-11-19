@@ -227,10 +227,11 @@ has returned is not the handler's own code. The handover takes it like any other
 has to deliver it again when that delivery fails. Holding H back covers only what this process fed, and ADR 179
 says what a feed that runs on more than one replica needs. [#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 31, which would move the reactor write after step
 3, no longer applies to the reactor stack. A stop or cancel that takes effect before the marker write means no marker
-is written and the catch-up ends as stopped, not as done (#1293 item 32). A failure is permanent, and on
-`ReactiveHandover` it also deletes the marker. A marker write that the store applies after that delete is
+is written and the catch-up ends as stopped, not as done (#1293 item 32). A failure is permanent, and
+`ReactiveHandover` can also delete the marker on it, as ADR 179's "Fed-back events on the reactor stack" lists. A marker write that the store applies after that delete is
 [#1150](https://github.com/johanhaleby/occurrent/issues/1150), and ADR 179 decides it. The late write stores a head
-the next reactor start resumes after, so it costs that start a longer replay and skips no event.
+the next reactor start resumes after, so it costs that start a longer replay and skips no event apart from one another
+replica fed back with no durable path of its own, which ADR 179 describes.
 
 Every accepted payload gets an answer. The replay turn, which lets one catch-up at a time replay on an engine, is
 given back on every path. That includes a JVM-fatal error
