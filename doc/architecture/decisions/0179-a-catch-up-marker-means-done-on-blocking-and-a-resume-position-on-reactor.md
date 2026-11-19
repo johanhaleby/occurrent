@@ -84,15 +84,17 @@ Four cases change what a start replays:
   start of a delete until a delete or a marker write of that model succeeds. While the id is there, a start of it in
   the same process deletes the marker again and replays from the beginning, whether or not that delete succeeds. The
   set is in memory, so a start after a restart reads the stored marker. The feeds keep no such set.
-* A start skips step 4 while an event that its own process's code fed back, and that its replay did not deliver,
-  waits in the live feed. The stored marker stays as it was, so a later start that reads it replays after P and not
-  after H. Only a catch-up that runs after the source has gone live can meet such an event, and "Fed-back events on
-  the reactor stack" says why the write waits.
+* A start skips step 4 while an event that its own handover's code fed back, and that its replay did not deliver,
+  waits in the live feed. Its handover's code is the source's own handler and callbacks, not other code in the same
+  process. The stored marker stays as it was, so a later start that reads it replays after P and not after H. Only a
+  catch-up that runs after its source has gone live can meet such an event, and "Fed-back events on the reactor
+  stack" says why the write waits.
 * A marker write the store loses keeps an older position stored, so a start that reads it replays more.
 * A start that reads a stored position at or above the position of an event that was never applied skips that event,
-  unless something delivers it again. An H that another replica's catch-up stores while a fed-back event waits on
-  this replica is such a position, and so is a marker write the store applies after a delete. "Fed-back events on the
-  reactor stack" lists which failures leave such an event.
+  unless something delivers it again. An H that a catch-up stores while an event that other code fed back waits
+  undelivered is such a position. Other code can be another replica, or another subscription in the same process. So
+  is a marker write the store applies after a delete. "Fed-back events on the reactor stack" lists which failures
+  leave such an event.
 
 A catch-up that one of these sources asks for from its own code, such as a view calling `catchUp()` from the code that applies an event,
 reads P and H when it gets its turn to replay, not when it is asked. It then resumes after the marker the catch-up
