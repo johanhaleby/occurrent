@@ -149,6 +149,17 @@ other sections compile fine and behave differently, so read them first.
   On a server that sends no operation time, a `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel`
   subscription at the present reads the change stream once to record its position, and `waitUntilStarted(..)` and
   `start(true)` throw `UnsupportedStartAtException` when that read gives none. Compiles unchanged.
+- [A MongoDB subscription whose history is lost is refused when restarts are off](#a-mongodb-subscription-whose-history-is-lost-is-refused-when-restarts-are-off).
+  With `restartSubscriptionsOnChangeStreamHistoryLost` off, `waitUntilStarted(..)` and `start(true)` throw
+  `UnsupportedStartAtException` for a `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` subscription
+  whose change stream history is gone. In 0.34.0 a `waitUntilStarted()` with no timeout never returned, one with a
+  timeout answered `false`, and `start(true)` returned. Through a mongos, a subscription at a stored position, or at
+  a present that `subscribe(..)` read earlier than right before its change stream opened, such as on a stopped model,
+  counts as started once the change stream's first reply came, whatever that setting is. Compiles unchanged.
+- [A subscription handle throws once the model gives the subscription up](#a-subscription-handle-throws-once-the-model-gives-the-subscription-up).
+  A handle from `NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` that answered `true` throws from
+  `waitUntilStarted(..)` once the model refuses the subscription after a loss of history, or holds it paused after a
+  restart that gets no position. In 0.34.0 it kept answering `true`. Compiles unchanged.
 - [A blocking catch-up resume at a dynamic start uses the catch-up's answer](#a-blocking-catch-up-resume-at-a-dynamic-start-uses-the-catch-ups-answer).
   The live model resumes at the start a `StartAt.dynamic(..)` function answered the catch-up, where 0.34.0 let the live
   model ask the function for itself. Compiles unchanged.
@@ -2946,16 +2957,17 @@ When that read returns neither an event nor a resume token, the subscription can
   position. The subscription is removed from the model, and the listeners added through
   `StartRefusalReportingSubscriptions` are told, as for a catch-up's checkpoint.
 * A `resumeSubscription(id, StartAt.now())` does the read when the resumed change stream opens. When it gets neither,
-  the subscription is held paused and stays in the model, `waitUntilStarted(..)` on the handle the resume returned
-  throws the `UnsupportedStartAtException`, and the listeners added through `StartRefusalReportingSubscriptions` are
-  told through `handleHeldPaused(..)`, not `handleStartRefusal(..)`. `resumeSubscription(id)` reads the change
-  stream again. A `StartAt.dynamic(..)` resume that resolves to the present as its change stream opens is held the
-  same way.
+  the subscription is held paused and stays in the model, `waitUntilStarted(..)` on every handle returned up to the held
+  run throws the `UnsupportedStartAtException` until a resume starts it, and the listeners added through
+  `StartRefusalReportingSubscriptions` are told through `handleHeldPaused(..)`, not `handleStartRefusal(..)`.
+  `resumeSubscription(id)` reads the change stream again. A `StartAt.dynamic(..)` resume that resolves to the present as
+  its change stream opens is held the same way.
 * With `restartSubscriptionsOnChangeStreamHistoryLost` on, a restart from the present after the history was lost that
   gets neither holds the subscription paused. `isPaused(id)` answers `true`, an error in the log names it, the
   listeners are told through `handleHeldPaused(..)`, and `resumeSubscription(id)` reads the change stream again.
-  When the subscription hadn't started before that, `waitUntilStarted(..)` on the handle `subscribe(..)` returned
-  throws the `UnsupportedStartAtException`, until a resume starts it.
+  `waitUntilStarted(..)` on every handle returned up to the held run, the one `subscribe(..)` returned and each one a
+  resume returned, then throws the `UnsupportedStartAtException`, also when it answered earlier that the subscription
+  started, until a resume starts it.
 * Under a `CompetingConsumerSubscriptionModel` the node that holds a subscription paused this way holds it as if the
   user had paused it. It gives the lease back, so another node can get it, and doesn't compete for the lease again
   until `resumeSubscription(id)` is called on that node. A handle that waits for the held start throws once the lease
@@ -2983,6 +2995,101 @@ the exception can stop the application from starting, with no call of your own i
 `startupMode = BACKGROUND` on the annotation to start the subscription in the background instead, or pass
 `waitUntilStarted = false` to the Kotlin DSL's `subscribe(..)`. The refusal is then logged as an error and the
 subscription is removed.
+
+## A MongoDB subscription whose history is lost is refused when restarts are off
+
+`NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel` don't restart a subscription whose change stream
+history is lost while `restartSubscriptionsOnChangeStreamHistoryLost` is off, which is the default. That hasn't
+changed. What changes is what a caller waiting for the subscription to start sees:
+
+* When MongoDB reports the loss as the change stream opens, or through a mongos with the change stream's first
+  reply, `waitUntilStarted()` and `start(true)` throw an
+  `UnsupportedStartAtException`, and so does `waitUntilStarted(..)` with a timeout, which answered `false` in 0.34.0.
+  `startAt()` on the exception is the checkpoint whose history is gone, or the subscription's current start position
+  when there is no checkpoint to name, which after a resume at a new position is that position. MongoDB's error, code 286 (`ChangeStreamHistoryLost`), is in its cause chain, and
+  its message names the fixes below.
+* The listeners added through `StartRefusalReportingSubscriptions` are told through `handleStartRefusal(..)`. A
+  `CompetingConsumerSubscriptionModel` forgets the subscription on that node, as it does for any refused start.
+* The id is free, so `subscribe(..)` with it works again.
+* A loss on a later read, after the handle answered that the subscription started, tells the listeners and frees the
+  id the same way. Every handle of the subscription, the one `subscribe(..)` returned and each one a resume returned,
+  throws the `UnsupportedStartAtException` from its next `waitUntilStarted(..)` on, and so does a handle a
+  `CompetingConsumerSubscriptionModel` returned.
+
+In 0.34.0 the model removed the subscription and released no waiter, so a `waitUntilStarted()` with no timeout never
+returned, one with a timeout answered `false`, and `start(true)` returned.
+
+Through a mongos, whatever `restartSubscriptionsOnChangeStreamHistoryLost` is set to, a subscription that opens at a
+stored position, or at the position a resumed subscription read to, such as after a pause, `stop()` and `start(true)`,
+or a competing consumer's lease takeover, now counts as started only once the change stream's first reply came, where
+0.34.0 counted it as started as the change stream opened. On a quiet collection a wait can then take up to the
+`maxAwaitTime` configured, or the server's default when none is, so a `waitUntilStarted(..)` with a shorter timeout
+answers `false`. So does a subscription at the present that opens at the position `subscribe(..)` read for it, unless
+its change stream opens right after that read on the first try. One made while the model was stopped and started later,
+one resumed after a pause before its first reply, and one whose first try to open failed wait, since that position can
+have left the oplog by then. A start at the present read right before the change stream opens counts as started as it
+opens, which covers a `subscribe(..)` at `StartAt.now()` on a started model and a resume at `StartAt.now()`. So does
+every start on a replica set, unless the model can't ask MongoDB whether it reaches it through a mongos. It then waits
+for the first reply, as through a mongos, and asks again at the next start.
+
+### Who is affected
+
+Code that waits for one of these subscriptions to start with restarts after a loss of history off. The blocking Spring
+Boot starter turns restarts on by default, so this reaches it only with
+`occurrent.subscription.mongodb.restart-on-change-stream-history-lost=false`. It then waits for a subscription at
+`NOW` or `DEFAULT` to start by default, so an application whose stored checkpoint for one is older than the oplog's
+history can fail to start with the `UnsupportedStartAtException`. Set
+`startupMode = BACKGROUND` on the annotation, or pass `waitUntilStarted = false` to the Kotlin DSL's `subscribe(..)`,
+to start it in the background.
+
+Code that waits with a timeout for a subscription that reaches a sharded cluster through a mongos and opens at a
+stored position, at the position a resumed subscription read to, such as after a pause, `stop()` and `start(true)`, or
+a competing consumer's lease takeover, or at a present that `subscribe(..)` read earlier than right before the change
+stream opened, whatever `restartSubscriptionsOnChangeStreamHistoryLost` is set to. Give the wait a timeout with room
+for opening the change stream and for its `maxAwaitTime`, or the server's default when none is set.
+
+### What to do
+
+Pick one, as the exception's message says:
+
+* Subscribe through a catch-up subscription, which replays from the event store and then goes live.
+* Remove the subscription's checkpoint from the durable storage, so it starts again from the position it is
+  subscribed at.
+* Turn `restartSubscriptionsOnChangeStreamHistoryLost` on, which restarts the subscription at the present and skips
+  what was written in between.
+
+## A subscription handle throws once the model gives the subscription up
+
+In 0.34.0 a `Subscription` handle kept answering `true` from `waitUntilStarted(..)` once its subscription had started,
+also after a pause, a stop or a lost lock race. That still holds for those three. For a handle that
+`NativeMongoSubscriptionModel` or `SpringMongoSubscriptionModel` returned, two cases now throw instead:
+
+* With `restartSubscriptionsOnChangeStreamHistoryLost` off, a loss of the change stream's history on a later read
+  refuses the subscription for good. The next `waitUntilStarted(..)` throws the refusal, an
+  `UnsupportedStartAtException`, and so does every call after it.
+* With `restartSubscriptionsOnChangeStreamHistoryLost` on, a restart from the present that gets no position holds the
+  subscription paused. Each `waitUntilStarted(..)` throws the reason until a resume starts the subscription again.
+
+A cancel or a shutdown ends a hold and frees the id. A handle of a subscription that had started answers `true` again,
+and one of a subscription that never started throws an `UnsupportedStartAtException` saying that the subscription was
+cancelled while it was held paused and can be subscribed again with the same id.
+
+A refusal reaches every handle of the subscription, the one `subscribe(..)` returned and each one a resume returned. A
+hold reaches the handles returned up to the held run, so a handle a later resume returned answers for that later run. A
+handle a `CompetingConsumerSubscriptionModel` returned over one of them asks the handle it wraps, so it throws too.
+[ADR 181](../architecture/decisions/0181-a-subscription-handle-throws-once-the-model-gives-the-subscription-up.md) has
+the reasons.
+
+### Who is affected
+
+Code that keeps a handle and asks it later, such as a readiness check that calls `waitUntilStarted(Duration.ZERO)`.
+Where it got `true` in 0.34.0 for a subscription no node ran, it now gets the `UnsupportedStartAtException`.
+
+### What to do
+
+Catch `UnsupportedStartAtException` where you ask a kept handle, and treat it as a subscription that needs you to act,
+as the exception's message says. Ask `isRunning(id)` on the model when you want to know whether the subscription runs
+now, since a handle answers about its start.
 
 ## A blocking catch-up resume at a dynamic start uses the catch-up's answer
 

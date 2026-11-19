@@ -56,6 +56,8 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions.HistoryLossListener;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.internal.ExecutorShutdown;
@@ -88,6 +90,7 @@ import java.util.function.BooleanSupplier;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.TEN_SECONDS;
@@ -396,6 +399,31 @@ class NativeMongoSubscriptionModelStuckActionTest {
         waitAtMostFor(FIVE_SECONDS, () -> subscriptionModel.isPaused(subscriptionId));
         assertThat(subscriptionModel.isPaused(subscriptionId)).as("paused after the listener took it over").isTrue();
         assertThat(mostInFlight).as("most calls running at once").hasValue(1);
+    }
+
+    @Test
+    void a_history_loss_as_the_resumed_run_opens_makes_the_next_wait_throw_after_the_run_counted_as_started_while_it_waited_for_the_stuck_call() {
+        // Given: the first call for E1 is stuck, and restarts after a history loss are off
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, StartAt.now(), this::action).waitUntilStarted(Duration.ofSeconds(10));
+        mongoEventStore.write("1", 0, serialize(e1));
+        await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
+        subscriptionModel.pauseSubscription(subscriptionId);
+
+        // When: resumed, its history is lost as the resumed run opens its change stream, and the stuck call returns
+        historyLostWhenOpening.set(true);
+        Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+        boolean startedWhileWaiting = resumed.waitUntilStarted(Duration.ofSeconds(10));
+        releaseFirstCallOfE1.countDown();
+        waitAtMostFor(TEN_SECONDS, () -> !subscriptionModel.subscriptionIds().contains(subscriptionId));
+
+        // Then: the wait that came while the run waited for the stuck call counted it as started, and the next one throws
+        assertThat(startedWhileWaiting).as("answer while the resumed run waited for the stuck call").isTrue();
+        assertThat(catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(1)))).as("thrown once the history was lost")
+                .isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .hasMessageStartingWith("There was not enough oplog to resume subscription \"" + subscriptionId + "\"")
+                .rootCause().isInstanceOfSatisfying(MongoCommandException.class, e -> assertThat(e.getErrorCode()).isEqualTo(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE));
+        assertThat(subscriptionModel.subscriptionIds()).as("ids the model knows").doesNotContain(subscriptionId);
     }
 
     @Test

@@ -107,6 +107,11 @@ import static java.util.Objects.requireNonNull;
  * on no node and its lease stays free. It runs again once {@code subscribe} is called with the same id, on any node,
  * with a start position the wrapped model accepts. They refuse a start at the present the same way when MongoDB gives
  * neither an operation time nor a change stream position to start from, and this model handles that refusal as above.
+ * They also refuse a subscription whose change stream history is lost while
+ * {@code restartSubscriptionsOnChangeStreamHistoryLost} is off, as it opens or on a later read after it ran for a while,
+ * and this model handles that refusal as above too. Subscribing it again at the checkpoint whose history is lost is
+ * refused again, so subscribe it through a catch-up subscription model, at a position the history still has, or with
+ * restarts after a loss of history on.
  * When a resume, or a restart from the present after a loss of history, gets no such position, they hold the
  * subscription paused instead and report it through
  * {@link StartRefusalReportingSubscriptions.StartRefusalListener#handleHeldPaused(String, UnsupportedStartAtException)}.
@@ -5235,8 +5240,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             addSuppressed(refused, unregisterFailure);
         }
         startRefusal.refused(refused);
-        log.error("The wrapped subscription model refused the start position of a subscription this node started, so the subscription id is free and {}. No node runs the subscription from a start the wrapped model refuses. Subscribe it again with the same id and a start position the wrapped model accepts (subscriberId={}, subscriptionId={})",
-                unregistered ? "this node no longer competes for its lease" : "a later try unregisters this node from its lease", key.subscriberId(), subscriptionId, refused);
+        log.error("The wrapped subscription model refused a subscription this node started, so the subscription id is free and {}. It said \"{}\". No node runs the subscription from a position the wrapped model refuses. Subscribe it again with the same id once the refusal is dealt with, at a start position the wrapped model accepts. A loss of the change stream's history is refused again at the same checkpoint (subscriberId={}, subscriptionId={})",
+                unregistered ? "this node no longer competes for its lease" : "a later try unregisters this node from its lease", refused.getMessage(), key.subscriberId(), subscriptionId, refused);
     }
 
     private Subscription startWaitingConsumer(CompetingConsumer cc) {
