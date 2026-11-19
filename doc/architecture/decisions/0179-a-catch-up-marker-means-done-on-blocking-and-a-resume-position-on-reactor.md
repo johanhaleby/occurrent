@@ -218,8 +218,8 @@ live delivery back and waits for W's delivery to end before it replays, so that 
 What W's handler fed back is not. Take an event X that W's handler wrote and fed back, at a position at or below H,
 whose write committed after A's replay read past that position. A's replay does not read X, X waits in the live feed
 behind A's hold, and it is delivered only after A's write of H has completed, since the hold lasts until then. If that
-delivery fails, H is stored, the next start resumes after it, and only a path of X's own, which the contract below
-describes, delivers X again.
+delivery fails while W's answer waits for X, nothing deletes the marker, so H stays stored, the next start resumes
+after it, and only a path of X's own, which the contract below describes, delivers X again.
 
 So `ReactiveHandover` does not write H while an event its own code fed, and that A's replay did not deliver, waits in
 the live feed. P stays stored and the next start replays after P. X lies after P, because an X written before the
@@ -232,9 +232,13 @@ That rule sees only what the process's own code fed. Replicas of one feed share 
 stored marker, and another replica's live delivery goes on while a replica catches up. Take replicas A and B of one
 reactor `@Projection`. B's handler, applying W, writes X and feeds it back into B's handover. A's catch-up reads an H at
 or above X's position before X's write commits, so A's replay passes that position without X. A's handover has no
-event of its own waiting, so it stores H. Then B's delivery of X fails, or B stops before it delivers X. W's
-acknowledgement waits for X, so the broker delivers W again, and a handler that skips the write because X is already stored feeds nothing. Every later start
-resumes after H, and nothing applies X. 0.34.0 has the same gap, since its marker made a start skip the replay
+event of its own waiting, so it stores H. Nothing then applies X when B stops before it delivers X, or when B's
+delivery of X fails while W's answer waits for X, since that failure goes to W's answer through `partEnded(..)` in
+`ReactiveHandover` and deletes no marker. In both, the broker delivers W again, and a handler that skips the write
+because X is already stored feeds nothing. Nothing applies X either when B's delivery of X fails with nothing waiting
+for it and the marker delete that failure makes through `Source.forgetCaughtUp()` fails, the store loses that delete,
+or the store applies a marker write of A after it. Every later start then resumes after H. When that delete holds, the
+next start replays from the beginning and applies X. 0.34.0 has the same gap, since its marker made a start skip the replay
 altogether.
 
 So a fed-back event is an early copy, and it needs a durable path as well. Either the application's forwarder
