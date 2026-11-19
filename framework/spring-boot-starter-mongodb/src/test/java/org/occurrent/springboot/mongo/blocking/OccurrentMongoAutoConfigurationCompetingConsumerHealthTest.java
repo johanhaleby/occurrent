@@ -17,11 +17,16 @@
 package org.occurrent.springboot.mongo.blocking;
 
 import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerStatus;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerStatus.State;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
+import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.mongodb.blocking.ccs.LeaseRefreshFailure;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.springframework.boot.health.autoconfigure.registry.HealthContributorRegistryAutoConfiguration;
@@ -45,11 +50,15 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
@@ -445,6 +454,45 @@ class OccurrentMongoAutoConfigurationCompetingConsumerHealthTest {
         });
     }
 
+    @Test
+    void a_subscription_that_fails_while_a_subscribe_is_still_making_it_is_DOWN_before_the_subscribe_returns() throws Exception {
+        // Given a real model whose subscribe is held while it registers the subscription
+        RefusingModel wrapped = new RefusingModel();
+        CountDownLatch registering = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
+        when(strategy.registerCompetingConsumer(anyString(), anyString())).thenAnswer(invocation -> {
+            registering.countDown();
+            release.await(30, SECONDS);
+            return true;
+        });
+        when(strategy.hasLock(anyString(), anyString())).thenReturn(true);
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
+        Thread subscribing = new Thread(() -> model.subscribe("node", "making", null, StartAt.subscriptionModelDefault(), __ -> {
+        }));
+        subscribing.start();
+
+        try {
+            assertThat(registering.await(10, SECONDS)).as("the subscribe is registering the subscription").isTrue();
+
+            // When the wrapped model reports a refusal of the start while the subscribe is making the subscription
+            wrapped.reportRefusal("making");
+
+            // Then the subscription is DOWN, before the subscribe has returned
+            contextRunner.withBean("subscriptionModel", SubscriptionModel.class, () -> model).run(context -> {
+                assertThat(competingConsumers(context).stream()).extracting(CompositeHealthContributor.Entry::name).containsExactly("making");
+                Health health = indicator(competingConsumers(context), "making").health();
+                assertThat(health.getStatus()).isEqualTo(Status.DOWN);
+                assertThat(health.getDetails()).containsEntry("subscriberId", "node").extractingByKey("failure").asString().contains(UnsupportedStartAtException.class.getName());
+            });
+        } finally {
+            release.countDown();
+            subscribing.join(30_000);
+            model.shutdown();
+        }
+        assertThat(subscribing.isAlive()).as("the subscribe is alive").isFalse();
+    }
+
     private static CompetingConsumerSubscriptionModel modelReporting(CompetingConsumerStatus status) {
         CompetingConsumerSubscriptionModel model = mock(CompetingConsumerSubscriptionModel.class);
         when(model.competingConsumerStatuses()).thenReturn(List.of(status));
@@ -481,6 +529,24 @@ class OccurrentMongoAutoConfigurationCompetingConsumerHealthTest {
             assertThat(indicator.health().getStatus()).isEqualTo(Status.DOWN);
             assertThat(indicator.health().getStatus()).isEqualTo(Status.UP);
         });
+    }
+
+    private static final class RefusingModel extends InMemorySubscriptionModel implements StartRefusalReportingSubscriptions {
+        private final List<StartRefusalListener> listeners = new CopyOnWriteArrayList<>();
+
+        void reportRefusal(String subscriptionId) {
+            listeners.forEach(listener -> listener.handleStartRefusal(subscriptionId, new UnsupportedStartAtException(StartAt.now(), "Refused the start of " + subscriptionId)));
+        }
+
+        @Override
+        public void addStartRefusalListener(StartRefusalListener listener) {
+            listeners.add(listener);
+        }
+
+        @Override
+        public void removeStartRefusalListener(StartRefusalListener listener) {
+            listeners.remove(listener);
+        }
     }
 
     private static final class CountingFactoryBean<T> implements FactoryBean<T> {

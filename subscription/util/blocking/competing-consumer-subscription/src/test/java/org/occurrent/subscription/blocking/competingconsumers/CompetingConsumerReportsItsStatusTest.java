@@ -40,6 +40,7 @@ import org.occurrent.subscription.internal.HistoryLossMessages;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -50,6 +51,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -86,6 +88,7 @@ class CompetingConsumerReportsItsStatusTest {
         wrapped.pauseGate = null;
         wrapped.isRunningGate.set(null);
         strategy.unregisterGate = null;
+        strategy.registerGate = null;
         model.shutdown();
     }
 
@@ -863,8 +866,96 @@ class CompetingConsumerReportsItsStatusTest {
         assertThat(model.competingConsumerStatuses()).as("statuses").hasSize(1);
     }
 
+    @Test
+    void lists_a_subscription_with_its_failure_while_a_subscribe_is_still_making_it() throws Exception {
+        // Given a subscribe held while it registers the subscription, so it is being made
+        strategy.grantOnRegister = true;
+        CountDownLatch inside = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        strategy.registerGate = new Gate(inside, release);
+        AtomicReference<@Nullable Throwable> subscribeFailure = new AtomicReference<>();
+        Thread subscribing = new Thread(() -> {
+            try {
+                subscribe();
+            } catch (Throwable t) {
+                subscribeFailure.set(t);
+            }
+        });
+        subscribing.start();
+
+        try {
+            assertThat(inside.await(10, SECONDS)).as("the subscribe is registering the subscription").isTrue();
+
+            // When the wrapped model reports a refusal of the start while the subscribe is making the subscription
+            wrapped.reportRefusal(ID);
+
+            // Then the status of the id is listed, with the failure
+            List<CompetingConsumerStatus> statuses = model.competingConsumerStatuses();
+            assertThat(statuses).as("statuses").extracting(CompetingConsumerStatus::subscriptionId).containsExactly(ID);
+            assertThat(statuses.getFirst().isFailing()).as("failing").isTrue();
+            assertThat(statuses.getFirst().failure().cause()).as("failure").isInstanceOf(UnsupportedStartAtException.class);
+        } finally {
+            release.countDown();
+            subscribing.join(30_000);
+        }
+        assertThat(subscribing.isAlive()).as("the subscribe is alive").isFalse();
+        assertThat(subscribeFailure.get()).as("the subscribe failed").isNull();
+    }
+
+    @Test
+    void lists_every_subscription_in_a_read_that_races_the_give_up_of_their_refused_starts() throws Exception {
+        // Given many subscriptions that are given up, so that collecting them takes long, and many that run
+        strategy.grantOnRegister = true;
+        for (int i = 0; i < 1_500; i++) {
+            String givenUp = "given-up-" + i;
+            subscribe(givenUp);
+            wrapped.refuse(givenUp);
+        }
+        List<String> running = new ArrayList<>();
+        for (int i = 0; i < 500; i++) {
+            String id = "running-" + i;
+            subscribe(id);
+            running.add(id);
+        }
+        AtomicInteger reads = new AtomicInteger();
+        AtomicBoolean done = new AtomicBoolean();
+        Set<String> missing = ConcurrentHashMap.newKeySet();
+        AtomicReference<@Nullable Throwable> readFailure = new AtomicReference<>();
+        Thread reader = new Thread(() -> {
+            try {
+                while (!done.get()) {
+                    Set<String> listed = model.competingConsumerStatuses().stream().map(CompetingConsumerStatus::subscriptionId).collect(Collectors.toSet());
+                    running.stream().filter(id -> !listed.contains(id)).forEach(missing::add);
+                    reads.incrementAndGet();
+                }
+            } catch (Throwable t) {
+                readFailure.set(t);
+            }
+        });
+        reader.start();
+
+        try {
+            // When each of them is given up while the statuses are being read
+            running.forEach(wrapped::refuse);
+            int readsNow = reads.get();
+            await().atMost(EVENTUALLY).until(() -> reads.get() >= readsNow + 2 || readFailure.get() != null);
+        } finally {
+            done.set(true);
+            reader.join(30_000);
+        }
+
+        // Then every read listed every one of them, as running or as given up
+        assertThat(reader.isAlive()).as("the reader is alive").isFalse();
+        assertThat(readFailure.get()).as("the read failed").isNull();
+        assertThat(missing).as("subscriptions a read left out while they were given up").isEmpty();
+    }
+
     private void subscribe() {
-        model.subscribe(NODE, ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        subscribe(ID);
+    }
+
+    private void subscribe(String subscriptionId) {
+        model.subscribe(NODE, subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
         });
     }
 
@@ -908,6 +999,10 @@ class CompetingConsumerReportsItsStatusTest {
 
         void refuse(String subscriptionId) {
             super.cancelSubscription(subscriptionId);
+            reportRefusal(subscriptionId);
+        }
+
+        void reportRefusal(String subscriptionId) {
             listeners.forEach(listener -> listener.handleStartRefusal(subscriptionId, new UnsupportedStartAtException(StartAt.now(), "Refused the start of " + subscriptionId)));
         }
 
@@ -985,9 +1080,14 @@ class CompetingConsumerReportsItsStatusTest {
         private volatile boolean hasLockFails;
         private volatile boolean releasesFail;
         private volatile @Nullable Gate unregisterGate;
+        private volatile @Nullable Gate registerGate;
 
         @Override
         public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
+            @Nullable Gate gate = registerGate;
+            if (gate != null) {
+                gate.pass();
+            }
             if (grantOnRegister) {
                 holders.add(subscriptionId);
                 return true;
