@@ -24,11 +24,12 @@ they are given, under the subscription id. ADR 177 puts the marker read at step 
 at step 4. The blocking push model's class javadoc says it plainly: "The stored value marks completion, it is not a
 live resume position." ADR 62 gives the same meaning.
 
-Two paths delete the marker so that whatever runs next for the id replays the history again:
+Two paths try to delete the marker so that whatever runs next for the id replays the history again:
 
-* `ReactiveHandover` deletes it through `Source.forgetCaughtUp()` when it starts failing, on its first failed catch-up
-  or its first failed delivery of an event nothing waits for, so a replay that reads no marker delivers that event
-  again. "Fed-back events on the reactor stack" lists which failures delete it.
+* `ReactiveHandover` asks its source to delete it through `Source.forgetCaughtUp()` when it starts failing, on its
+  first failed catch-up or its first failed delivery of an event nothing waits for, so a replay that reads no marker
+  replays that event. A source that refused the stored checkpoint as not a marker deletes nothing. "Fed-back
+  events on the reactor stack" lists which failures ask for the delete.
 * Both `CatchupThenPushSubscriptionModel`s delete it on `cancelSubscription(id)`.
 
 Each of those deletes loses to a marker write that the store applies after it. A client can give up on a save after a
@@ -78,8 +79,8 @@ A catch-up that one of these sources asks for from its own code, such as a view 
 reads P and H when it gets its turn to replay, not when it is asked. It then resumes after the marker the catch-up
 that asked has stored.
 
-The reactor stack still deletes the marker on some failures, as in 0.34.0, and "Fed-back events on the reactor
-stack" below lists which, and what a delete that fails does. Its write comes before the live drain, so a catch-up has
+The reactor stack still asks for the marker's delete on some failures, as in 0.34.0, and "Fed-back events on the reactor
+stack" below lists which, and when a later start can skip an event. Its write comes before the live drain, so a catch-up has
 stored H before its drain delivers anything. An event from the broker that the drain fails or does not deliver was
 handed in by a call that has not completed, so its listener does not acknowledge it and the broker delivers it again,
 whether or not a delete removes H. An event a handler fed back is the exception, and the same section says why the
@@ -236,24 +237,28 @@ reactor `@Projection`. B's handler, applying W, writes X and feeds it back into 
 or above X's position before X's write commits, so A's replay passes that position without X. A's handover has no
 event of its own waiting, so it stores H.
 
-What happens to X then follows the branch B's handover takes in `ReactiveHandover.ownPartEnded(..)`, and what the
-source's `forgetCaughtUp()` does. X is waited when W's caller waits for W's answer and that answer has not gone out,
-which `waitingParent(..)` decides. A waited X that fails goes to `partEnded(..)` and fails only W's answer. One that
-nothing waits for goes to `failingFrom(..)`. On the handover's first failure that makes B's handover start failing and
-delete the marker through `forgetCaughtUp()`, with 3 retries, and on a later one it deletes nothing. A later marker write below is one from a catch-up of another replica that read H
-before the delete and stores its own head, at or above H, after it. A start that reads H, or that head, does not
-replay X. On the push model a cancel deletes the marker through the same `deleteMarker(..)`, so the last four rows
-apply to a cancel's delete too.
+X is waited when W's caller waits for W's answer and that answer has not gone out, which `waitingParent(..)` in
+`ReactiveHandover` decides. A waited X that fails goes to `partEnded(..)` and fails only W's answer. One that nothing
+waits for goes to `failingFrom(..)`. On B's handover's first failure that makes it start failing and ask the source to
+forget the marker through `forgetCaughtUp()`, in up to 4 attempts with a timeout on each, and on a later failure it
+asks for nothing.
+
+Each row of the table says whether a later start can skip X, and when. A start skips X when it reads a stored
+position at or above X's position. H is one. So is the head of a later marker write, which is one from a catch-up of
+another replica that read H before a delete and stores its own head after that delete. On the push model a start in
+B's process also needs the id out of B's `markersNotYetDeleted` to skip X, since while the id is there that start
+deletes the marker again and replays from the beginning, whether or not that delete succeeds. The id is there from the
+start of a delete until a delete or a marker write of B succeeds. A cancel on the push model deletes the marker through
+the same `deleteMarker(..)` in one attempt, with no retry, so the last row applies to a cancel's delete with one
+attempt in place of four. The table says nothing about whether a start that replays X applies it, since X's delivery
+can fail again.
 
 | B's handling of X | `CatchupThenPushSubscriptionModel` | `CatchupProjectionFeed`, `DomainEventFeed` |
 |---|---|---|
-| B stops before it delivers X | Nothing deletes the marker, so a start that reads H does not replay X. | The same. |
-| X fails while W's answer waits for it | Only W's answer fails and nothing deletes the marker, so a start that reads H does not replay X. X is applied again only if the handler feeds it again when W is delivered again. | The same, with `acceptAndWait` failing for W. |
-| X fails with nothing waiting for it after B's handover already started failing | Nothing deletes the marker, so a start that reads H does not replay X. | The same. |
-| X fails with nothing waiting for it as B's handover's first failure, and the delete holds | A catch-up of the id on any replica that reads the marker after the delete replays from the beginning and applies X, unless a later marker write follows the delete. | The same. |
-| The same, and the delete still fails after 3 retries | The marker keeps H, and the id stays in `markersNotYetDeleted` until a delete or a marker write of B succeeds. While it is there, B's next subscribe of the id in this process deletes the marker again and replays from the beginning, whether or not that delete succeeds. A start after a restart, or on another replica, reads H and does not replay X. | The marker keeps H, and the feeds keep no such set, so a new feed in this process, a start after a restart and a start on another replica read H and do not replay X. |
-| The same, and the store acknowledges the delete and then loses it, as a Redis failover can | The id has left `markersNotYetDeleted`, so a start in this process or another reads H and does not replay X. | A start reads H and does not replay X. |
-| The same, and a later marker write follows the delete | A start that reads that marker does not replay X. | The same. |
+| B's process stops before B delivers X | Yes, while the stored position is H or a later head. This path deletes nothing. | The same. |
+| X fails while W's answer waits for it | Yes, while the stored position is H or a later head. This path deletes nothing and fails only W's answer. | The same, with `acceptAndWait` failing for W. |
+| X fails with nothing waiting for it, after B's handover already started failing | Yes, while the stored position is H or a later head. This path deletes nothing. | The same. |
+| X fails with nothing waiting for it, as B's handover's first failure | Yes, when the store still holds H or a later marker write followed the delete. The store still holds H when every attempt failed before the delete applied, or when the store acknowledged the delete and then lost it, as a Redis failover can. An attempt that errors or times out can have applied anyway, and a start that then finds no marker replays from the beginning. | Yes, under the same conditions. The feeds keep no set like `markersNotYetDeleted`, so a new feed in B's process skips X under them too. |
 
 0.34.0 has the same gap, since its marker made a start skip the replay altogether.
 
@@ -269,14 +274,14 @@ ways. The forwarder publishes it, and the broker copy arrives on the listener's 
 `accept` runs on the handler's own thread, as the blocking `InMemoryEventStore`'s listener does, which feeds it back
 without a broker copy, and the contract above applies to it.
 
-`ReactiveHandover` also keeps deleting the marker through `Source.forgetCaughtUp()` when it starts failing, as in
-0.34.0, as a backstop behind that rule. It starts failing on its first failed catch-up or its first failed delivery of
-an event nothing waits for. A failed delivery of an event that something waits for deletes nothing, see the table
-above. It tries the delete
-four times and then logs. The reactor push model keeps `markersNotYetDeleted` from 0.34.0. An id is in it from the
-start of a delete until a delete or a marker write of that model succeeds, and the next catch-up of that id in the same
-process meanwhile tries the delete again and replays from the beginning instead of resuming after the marker that is
-still stored. The set is kept in memory, so a restart empties it and the next start resumes after that marker. When
+`ReactiveHandover` also keeps asking the source to delete the marker through `Source.forgetCaughtUp()` when it starts
+failing, as in 0.34.0, as a backstop behind that rule. It starts failing on its first failed catch-up or its first
+failed delivery of an event nothing waits for. A failed delivery of an event that something waits for asks for no
+delete, see the table above. It makes the request up to four times and logs when every attempt failed. The reactor push model keeps
+`markersNotYetDeleted` from 0.34.0. An id is in it from the start of a delete until a delete or a marker write of that
+model succeeds, and the next catch-up of that id in the same process meanwhile tries the delete again and replays from
+the beginning instead of resuming after a marker that may still be stored. The set is kept in memory, so a restart
+empties it, and a start after the restart resumes after whatever marker is stored. When
 the checkpoint stored under the id is not a global position, such as a durable subscription's resume token, the
 catch-up fails naming the id and the backstop deletes nothing, since that checkpoint is not the catch-up's to delete.
 A durable subscription's checkpoint that is a global position passes that check and is deleted like a marker, which is
@@ -395,8 +400,8 @@ every third-party `CheckpointStorage` and needed a rolling-upgrade precondition.
   that triggered it is delivered again, or a feed that runs on more than one replica can lose it. 0.34.0 has the same
   gap. The javadoc of the reactor `CatchupProjectionFeed`, `DomainEventFeed` and push model and the migration guide
   have to say so.
-* The reactor stack still deletes the marker on some failures, as in 0.34.0, as a backstop, and "Fed-back events on
-  the reactor stack" lists which. When that delete throws, the reactor push model's next catch-up of the id in the same
+* The reactor stack still asks for the marker's delete on some failures, as in 0.34.0, as a backstop, and "Fed-back events on
+  the reactor stack" lists which. When that delete fails, the reactor push model's next catch-up of the id in the same
   process tries it again and replays from the beginning, as in 0.34.0, unless a delete or a marker write of that model
   succeeds first.
 * ADR 177's marker order is amended for the reactor stack. Step 1 reads the marker on both stacks, the blocking stack
