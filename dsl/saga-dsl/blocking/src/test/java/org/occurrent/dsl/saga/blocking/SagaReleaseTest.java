@@ -30,6 +30,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.saga.*;
+import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
 import org.occurrent.dsl.saga.blocking.SagaSubscription.ReleaseResult;
 import org.occurrent.dsl.saga.internal.SkippedInputKey;
 import org.occurrent.eventstore.api.SortBy;
@@ -913,6 +914,80 @@ class SagaReleaseTest {
                     () -> assertThat(second).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(items()).as("the items of the instance").containsExactlyInAnyOrder("i3", "i4", "i5", "i6", "poison"),
                     () -> assertThat(packed()).as("the commands dispatched for the input it failed on").extracting(Pack::item).filteredOn("poison"::equals).hasSize(1)
+            );
+        }
+
+        @Test
+        void leaves_the_released_instance_with_no_more_applied_versions_of_a_type_than_the_window() {
+            execution = execution(CONFIG.withReorderWindow(1));
+            deliver(placed());
+            failing.add("poison");
+            quarantineOn(added("poison"));
+            for (String item : List.of("i3", "i4", "i5", "i6")) {
+                deliver(added(item));
+            }
+            failing.clear();
+
+            ReleaseResult result = execution.release(ORDER);
+
+            List<TypeMark> typeMarks = instance().streamMarks().get(ORDER).byType().values().stream().toList();
+            assertAll(
+                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(items()).as("the items of the instance").containsExactlyInAnyOrder("poison", "i3", "i4", "i5", "i6"),
+                    () -> assertThat(typeMarks).as("the type marks of the stream").isNotEmpty().allSatisfy(typeMark -> assertThat(typeMark.applied()).hasSizeLessThanOrEqualTo(1))
+            );
+        }
+
+        @Test
+        void is_applied_by_the_release_when_an_earlier_record_raised_the_mark_past_it_and_is_not_deleted_unapplied() {
+            execution = execution(CONFIG.withReorderWindow(1));
+            deliver(placed());
+            failing.add("poison");
+            quarantineOn(added("poison"));
+            String quarantineId = instance().quarantineId();
+            CloudEvent behind = added("v3");
+            added("never delivered");
+            CloudEvent ahead = added("v5");
+            deliver(ahead);
+            deliver(behind);
+            failing.clear();
+
+            ReleaseResult result = execution.release(ORDER);
+
+            assertAll(
+                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(items()).as("the items of the instance").containsExactlyInAnyOrder("poison", "v5", "v3"),
+                    () -> assertThat(packed()).as("the commands dispatched").extracting(Pack::item).containsExactlyInAnyOrder("poison", "v5", "v3"),
+                    () -> assertThat(recordedKeysOf(quarantineId)).as("the records left").isEmpty(),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE)
+            );
+        }
+
+        @Test
+        void has_its_failure_recorded_by_the_release_and_is_applied_by_the_next_one() {
+            execution = execution(CONFIG.withReorderWindow(1));
+            deliver(placed());
+            failing.add("poison");
+            quarantineOn(added("poison"));
+            CloudEvent behind = added("v3");
+            added("never delivered");
+            CloudEvent ahead = added("v5");
+            deliver(ahead);
+            deliver(behind);
+            failing.clear();
+            failing.add("v3");
+
+            ReleaseResult first = execution.release(ORDER);
+            SagaFailure recorded = instance().failure();
+            failing.clear();
+            ReleaseResult second = execution.release(ORDER);
+
+            assertAll(
+                    () -> assertThat(first).isEqualTo(ReleaseResult.STILL_RELEASING),
+                    () -> assertThat(recorded).isNotNull(),
+                    () -> assertThat(recorded.input()).as("the input the failure is recorded on").isEqualTo(streamKey(behind)),
+                    () -> assertThat(second).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(items()).as("the items of the instance").containsExactlyInAnyOrder("poison", "v5", "v3")
             );
         }
     }
