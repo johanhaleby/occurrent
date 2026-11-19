@@ -40,7 +40,6 @@ import reactor.core.publisher.Mono;
 
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -405,15 +404,10 @@ public final class CatchupProjectionFeed<E> {
             // Set in isAlreadyCaughtUp(), which the handover calls before replayStarted() and replay(). Volatile
             // because a live delivery's thread reads it when it reports a duplicate (ADR 179).
             private volatile ReplayStart start = ReplayStart.FROM_BEGINNING_UNMARKED;
-            // Whether this attempt's last marker read refused a checkpoint that is not a catch-up marker. Something
-            // else stored it under this id, such as a durable subscription's resume token, so a failed catch-up does
-            // not delete it. Kept per attempt, so what another catch-up on this feed read cannot decide what this
-            // attempt deletes.
-            private final AtomicBoolean storedIsNotAMarker = new AtomicBoolean();
 
             @Override
             public Mono<Boolean> isAlreadyCaughtUp() {
-                return readReplayStart(storedIsNotAMarker).doOnNext(read -> start = read).thenReturn(false);
+                return readReplayStart().doOnNext(read -> start = read).thenReturn(false);
             }
 
             @Override
@@ -434,7 +428,7 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public Mono<Void> forgetCaughtUp() {
-                return Mono.defer(() -> storedIsNotAMarker.get() ? Mono.empty() : deleteMarker());
+                return CatchupProjectionFeed.this.forgetCaughtUp();
             }
 
             // The replay callbacks reach the view only for a replay from the beginning. A replay after a stored
@@ -509,10 +503,10 @@ public final class CatchupProjectionFeed<E> {
             }
 
             // A catchUp() after this call can record its marker, and this source can still be the one that delivers
-            // live, so it forgets that marker. It made no marker read of its own, so it reads what is stored now.
+            // live, so it forgets that marker the same way.
             @Override
             public Mono<Void> forgetCaughtUp() {
-                return deleteMarkerIfStored();
+                return CatchupProjectionFeed.this.forgetCaughtUp();
             }
         }).then();
     }
@@ -569,25 +563,15 @@ public final class CatchupProjectionFeed<E> {
         return Objects.requireNonNull(eventId.apply(event), "The eventId function returned null; every domain event must have a stable non-null id for de-duplication.");
     }
 
-    private Mono<ReplayStart> readReplayStart(AtomicBoolean storedIsNotAMarker) {
+    private Mono<ReplayStart> readReplayStart() {
         if (catchupMarker == null) {
             return Mono.just(ReplayStart.FROM_BEGINNING_UNMARKED);
         }
         return catchupMarker.read(id)
-                .map(stored -> Optional.of(storedPosition(stored, storedIsNotAMarker)))
+                .map(stored -> Optional.of(CatchupMarkers.positionOf(id, stored)))
                 .defaultIfEmpty(Optional.empty())
-                .doOnNext(__ -> storedIsNotAMarker.set(false))
                 .flatMap(storedPosition -> reader.currentPosition()
                         .map(head -> new ReplayStart(storedPosition.orElse(null), head)));
-    }
-
-    private long storedPosition(Checkpoint stored, AtomicBoolean storedIsNotAMarker) {
-        try {
-            return CatchupMarkers.positionOf(id, stored);
-        } catch (CatchupMarkers.NotACatchupMarkerException notAMarker) {
-            storedIsNotAMarker.set(true);
-            throw notAMarker;
-        }
     }
 
     // Stores the head read before the replay, not the head now (ADR 179)
@@ -608,30 +592,29 @@ public final class CatchupProjectionFeed<E> {
         }
     }
 
-    // Names the id, since the handover logs this when every attempt failed and an operator then deletes the marker by
-    // hand
-    private Mono<Void> deleteMarker() {
-        return catchupMarker == null ? Mono.empty() : catchupMarker.delete(id)
+    // Reads what is stored when asked, since the source a forget runs for can be the one delivering live while another
+    // catch-up failed, and a marker read it made earlier says nothing about what is stored now. Deletes nothing when
+    // that is not a catch-up marker, such as a durable subscription's resume token, since it is not this feed's to
+    // delete. Names the id, since the handover logs this when every attempt failed and an operator then deletes the
+    // marker by hand.
+    private Mono<Void> forgetCaughtUp() {
+        CheckpointStorage marker = catchupMarker;
+        if (marker == null) {
+            return Mono.empty();
+        }
+        return marker.read(id)
+                .filter(this::isCatchupMarker)
+                .flatMap(__ -> marker.delete(id))
                 .onErrorMap(error -> new IllegalStateException("Could not delete the catch-up marker of projection "
                         + "feed " + id + ".", error));
     }
 
-    // Deletes nothing when what is stored is not a catch-up marker, since that is not this feed's to delete
-    private Mono<Void> deleteMarkerIfStored() {
-        if (catchupMarker == null) {
-            return Mono.empty();
-        }
-        return catchupMarker.read(id)
-                .filter(stored -> !refusedAsMarker(stored))
-                .flatMap(__ -> deleteMarker());
-    }
-
-    private boolean refusedAsMarker(Checkpoint stored) {
+    private boolean isCatchupMarker(Checkpoint stored) {
         try {
             CatchupMarkers.positionOf(id, stored);
-            return false;
-        } catch (CatchupMarkers.NotACatchupMarkerException notAMarker) {
             return true;
+        } catch (CatchupMarkers.NotACatchupMarkerException notAMarker) {
+            return false;
         }
     }
 
