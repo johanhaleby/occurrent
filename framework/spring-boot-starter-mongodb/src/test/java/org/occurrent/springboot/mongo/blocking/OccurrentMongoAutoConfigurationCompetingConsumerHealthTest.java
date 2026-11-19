@@ -212,6 +212,62 @@ class OccurrentMongoAutoConfigurationCompetingConsumerHealthTest {
     }
 
     @Test
+    void a_subscription_id_two_models_share_is_DOWN_with_the_details_of_the_model_that_fails_whichever_model_comes_first() {
+        CompetingConsumerSubscriptionModel failingModel = modelReporting(new CompetingConsumerStatus("shared", "failing-node", State.GIVEN_UP,
+                new CompetingConsumerStatus.Failure(new IllegalStateException("start refused"), SINCE)));
+        CompetingConsumerSubscriptionModel workingModel = modelReporting(new CompetingConsumerStatus("shared", "working-node", State.LEASE_HELD, null));
+
+        for (boolean failingFirst : new boolean[]{true, false}) {
+            ApplicationContextRunner runner = failingFirst
+                    ? contextRunner.withBean("first", SubscriptionModel.class, () -> failingModel).withBean("second", SubscriptionModel.class, () -> workingModel)
+                    : contextRunner.withBean("first", SubscriptionModel.class, () -> workingModel).withBean("second", SubscriptionModel.class, () -> failingModel);
+
+            runner.run(context -> {
+                assertThat(competingConsumers(context).stream()).as("failing model first: " + failingFirst).extracting(CompositeHealthContributor.Entry::name).containsExactly("shared");
+                Health health = indicator(competingConsumers(context), "shared").health();
+                assertThat(health.getStatus()).as("status, failing model first: " + failingFirst).isEqualTo(Status.DOWN);
+                assertThat(health.getDetails()).as("details, failing model first: " + failingFirst).containsEntry("state", "GIVEN_UP").containsEntry("subscriberId", "failing-node")
+                        .containsEntry("failure", "java.lang.IllegalStateException: start refused").containsEntry("since", SINCE.toString());
+            });
+        }
+    }
+
+    @Test
+    void a_subscription_id_two_models_share_is_UP_when_neither_model_fails() {
+        CompetingConsumerSubscriptionModel one = modelReporting(new CompetingConsumerStatus("shared", "node-1", State.LEASE_HELD, null));
+        CompetingConsumerSubscriptionModel other = modelReporting(new CompetingConsumerStatus("shared", "node-2", State.STANDBY, null));
+
+        contextRunner.withBean("first", SubscriptionModel.class, () -> one).withBean("second", SubscriptionModel.class, () -> other).run(context -> {
+            assertThat(competingConsumers(context).stream()).extracting(CompositeHealthContributor.Entry::name).containsExactly("shared");
+            assertThat(indicator(competingConsumers(context), "shared").health().getStatus()).isEqualTo(Status.UP);
+        });
+    }
+
+    @Test
+    void a_subscription_id_only_the_second_model_knows_is_listed_and_a_model_that_forgot_the_id_does_not_hide_the_one_that_fails() {
+        CompetingConsumerStatus failing = new CompetingConsumerStatus("shared", "node-2", State.PAUSED,
+                new CompetingConsumerStatus.Failure(new IllegalStateException("refused from its position"), SINCE));
+        CompetingConsumerSubscriptionModel forgetting = mock(CompetingConsumerSubscriptionModel.class);
+        when(forgetting.competingConsumerStatuses()).thenReturn(List.of(new CompetingConsumerStatus("shared", "node-1", State.LEASE_HELD, null), new CompetingConsumerStatus("only-first", "node-1", State.LEASE_HELD, null)));
+        when(forgetting.competingConsumerStatus("shared")).thenReturn(Optional.empty());
+        when(forgetting.competingConsumerStatus("only-first")).thenReturn(Optional.of(new CompetingConsumerStatus("only-first", "node-1", State.LEASE_HELD, null)));
+        CompetingConsumerSubscriptionModel failingModel = modelReporting(failing);
+
+        contextRunner.withBean("first", SubscriptionModel.class, () -> forgetting).withBean("second", SubscriptionModel.class, () -> failingModel).run(context -> {
+            assertThat(competingConsumers(context).stream()).extracting(CompositeHealthContributor.Entry::name).containsExactly("shared", "only-first");
+            assertThat(indicator(competingConsumers(context), "shared").health().getStatus()).isEqualTo(Status.DOWN);
+            assertThat(indicator(competingConsumers(context), "only-first").health().getStatus()).isEqualTo(Status.UP);
+        });
+    }
+
+    private static CompetingConsumerSubscriptionModel modelReporting(CompetingConsumerStatus status) {
+        CompetingConsumerSubscriptionModel model = mock(CompetingConsumerSubscriptionModel.class);
+        when(model.competingConsumerStatuses()).thenReturn(List.of(status));
+        when(model.competingConsumerStatus(status.subscriptionId())).thenReturn(Optional.of(status));
+        return model;
+    }
+
+    @Test
     void a_lease_strategy_whose_refresh_fails_is_DOWN_with_the_failure_and_since_and_one_that_works_is_UP() {
         SpringMongoLeaseCompetingConsumerStrategy failing = mock(SpringMongoLeaseCompetingConsumerStrategy.class);
         when(failing.leaseRefreshFailure()).thenReturn(Optional.of(new LeaseRefreshFailure(new IllegalStateException("MongoDB refuses writes"), SINCE)));

@@ -3253,7 +3253,8 @@ groups.
 | `competingConsumerLeases` | The latest lease refresh attempt failed, for example because MongoDB refuses writes. | A refresh attempt refreshes every lease. |
 
 A node on standby, a subscription you paused and a stopped model are up. The details of a component that is down
-include the failure and since when it has been failing.
+include the failure and since when it has been failing. When two `CompetingConsumerSubscriptionModel`s use the same
+subscription id, its component is down when either of them reports a failure.
 
 ### What to do
 

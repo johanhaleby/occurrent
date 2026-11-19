@@ -40,6 +40,11 @@ A given-up subscription is kept in a map keyed by subscription id, since the mod
 it. A subscribe with the same id removes it, and so do a cancel of that id and a shutdown. The status also reads a
 refusal the wrapped model has reported and the model hasn't acted on yet, so `GIVEN_UP` shows at once.
 
+The model records the given-up status before it frees the id, and frees the id under the monitor that a subscribe
+reserves the id under. A subscribe that finds the id free therefore always finds the given-up status too, and removes
+it. A cancel waits for the subscription's lock, which the model holds while it forgets the subscription. So a given-up
+status never shows after a later subscribe or cancel of the id.
+
 **`CompetingConsumerStrategy` is unchanged.** The two MongoDB lease strategies get `leaseRefreshFailure()`, which
 returns the failure of the latest refresh attempt and when the failures began, or empty once an attempt refreshed every
 lease. The model records its own failures, so the strategy doesn't have to report them through the interface, and a
@@ -47,8 +52,10 @@ strategy written by an application needs nothing new.
 
 **The MongoDB starter adds two health contributors when `spring-boot-health` is on the classpath.**
 
-- `competingConsumers` has one component per subscription id of each `CompetingConsumerSubscriptionModel` it finds by
-  unwrapping the `SubscriptionModel` beans that exist. A component is down when the status has a failure, which is a
+- `competingConsumers` has one component per subscription id of the `CompetingConsumerSubscriptionModel`s it finds by
+  unwrapping the `SubscriptionModel` beans that exist. Nothing stops two models from using the same id, so the component
+  of such an id asks every model that knows it, is down when one of them reports a failure, and shows the details of the
+  first that does. A component is down when the status has a failure, which is a
   given-up subscription, a subscription held after a refusal and a call that failed with no success since. Standby, a
   pause by the user and a stopped model are up while no call fails. The details are `state`, `subscriberId`, `failure` and `since`.
 - `competingConsumerLeases` has one component per `SpringMongoLeaseCompetingConsumerStrategy` bean, down while

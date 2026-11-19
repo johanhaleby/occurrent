@@ -27,23 +27,27 @@ import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthContributor;
 import org.springframework.boot.health.contributor.HealthIndicator;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 
 /**
- * One health indicator per subscription of each {@link CompetingConsumerSubscriptionModel}, named after the
+ * One health indicator per subscription id of the {@link CompetingConsumerSubscriptionModel}s, named after the
  * subscription id, built the way ADR 171 builds the RabbitMQ one.
  * <p>
  * A subscription is down while {@link CompetingConsumerStatus#isFailing()}, which is a subscription given up after the
  * wrapped model refused to start it, one held paused after such a refusal, and one whose last call to the wrapped model
  * or the lease strategy failed with no call succeeding since. Standby, a pause by the user and a stopped model are up
- * while no call fails.
+ * while no call fails. When two models use the same subscription id, the indicator is down while either reports a
+ * failure, and shows the details of the first model that does.
  * <p>
  * The models are found on every health call, among the {@link SubscriptionModel} beans already created, by unwrapping
  * each {@link SubscriptionModelWrapper} until a {@code CompetingConsumerSubscriptionModel} turns up. A health call
@@ -67,32 +71,46 @@ final class CompetingConsumersHealthContributor implements CompositeHealthContri
         return indicators().entrySet().stream().map(entry -> new Entry(entry.getKey(), entry.getValue()));
     }
 
+    // Two models can use the same subscription id, so a component asks every model that knows its id
     private Map<String, HealthIndicator> indicators() {
-        Map<String, HealthIndicator> indicators = new LinkedHashMap<>();
+        Map<String, List<CompetingConsumerSubscriptionModel>> modelsById = new LinkedHashMap<>();
         for (CompetingConsumerSubscriptionModel model : models()) {
             for (CompetingConsumerStatus status : model.competingConsumerStatuses()) {
-                String subscriptionId = status.subscriptionId();
-                indicators.putIfAbsent(subscriptionId, () -> model.competingConsumerStatus(subscriptionId)
-                        .map(CompetingConsumersHealthContributor::health)
-                        .orElseGet(() -> Health.unknown().build()));
+                modelsById.computeIfAbsent(status.subscriptionId(), __ -> new ArrayList<>()).add(model);
             }
         }
+        Map<String, HealthIndicator> indicators = new LinkedHashMap<>();
+        modelsById.forEach((subscriptionId, models) -> indicators.put(subscriptionId, () -> health(subscriptionId, models)));
         return indicators;
     }
 
     // No eager init and containsSingleton, so neither the type check nor the lookup creates a bean. The same model
-    // can sit under two beans, a user bean wrapping the starter's for instance, so each is listed once.
-    private Set<CompetingConsumerSubscriptionModel> models() {
-        Set<CompetingConsumerSubscriptionModel> models = Collections.newSetFromMap(new IdentityHashMap<>());
+    // can sit under two beans, a user bean wrapping the starter's for instance, so each is listed once, in the order
+    // of the bean names.
+    private List<CompetingConsumerSubscriptionModel> models() {
+        Set<CompetingConsumerSubscriptionModel> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<CompetingConsumerSubscriptionModel> models = new ArrayList<>();
         for (String name : beanFactory.getBeanNamesForType(SubscriptionModel.class, false, false)) {
             if (beanFactory.containsSingleton(name)) {
                 CompetingConsumerSubscriptionModel model = competingConsumerModelIn(beanFactory.getBean(name, SubscriptionModel.class));
-                if (model != null) {
+                if (model != null && seen.add(model)) {
                     models.add(model);
                 }
             }
         }
         return models;
+    }
+
+    // Reports the first failing status of the models, so a model that fails is never hidden behind one that doesn't
+    private static Health health(String subscriptionId, List<CompetingConsumerSubscriptionModel> models) {
+        List<CompetingConsumerStatus> statuses = models.stream()
+                .map(model -> model.competingConsumerStatus(subscriptionId))
+                .flatMap(Optional::stream)
+                .toList();
+        return statuses.stream().filter(CompetingConsumerStatus::isFailing).findFirst()
+                .or(() -> statuses.stream().findFirst())
+                .map(CompetingConsumersHealthContributor::health)
+                .orElseGet(() -> Health.unknown().build());
     }
 
     private static @Nullable CompetingConsumerSubscriptionModel competingConsumerModelIn(SubscriptionModel subscriptionModel) {

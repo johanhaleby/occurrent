@@ -17,6 +17,7 @@
 package org.occurrent.subscription.blocking.competingconsumers;
 
 import io.cloudevents.CloudEvent;
+import org.awaitility.core.ConditionTimeoutException;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -44,7 +45,9 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -76,6 +79,7 @@ class CompetingConsumerReportsItsStatusTest {
         wrapped.pausesFail = false;
         strategy.hasLockFails = false;
         wrapped.pauseGate = null;
+        strategy.unregisterGate = null;
         model.shutdown();
     }
 
@@ -463,6 +467,138 @@ class CompetingConsumerReportsItsStatusTest {
         assertThat(status().isFailing()).as("failing, a pause by the user").isFalse();
     }
 
+    @Test
+    void reports_a_refused_start_as_given_up_from_the_moment_its_id_is_free_until_the_lease_is_given_back() throws Exception {
+        // Given a refused start whose forget waits for the lease strategy to take its registration back, which it asks for once the id is free
+        strategy.grantOnRegister = true;
+        subscribe();
+        CountDownLatch inside = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        strategy.unregisterGate = new Gate(inside, release);
+        Thread forget = new Thread(() -> wrapped.refuse(ID));
+        forget.start();
+        try {
+            assertThat(inside.await(10, SECONDS)).as("the forget is waiting for the lease strategy").isTrue();
+
+            // Then the id is free and the subscription is already reported as given up
+            assertThat(model.subscriptionIds()).as("subscription ids, the id is free").doesNotContain(ID);
+            assertThat(model.competingConsumerStatus(ID)).as("status").map(CompetingConsumerStatus::state).contains(State.GIVEN_UP);
+        } finally {
+            release.countDown();
+            forget.join(10_000);
+        }
+        assertThat(status().state()).isEqualTo(State.GIVEN_UP);
+    }
+
+    @Test
+    void does_not_report_a_refused_start_as_given_up_when_the_id_is_subscribed_again_while_the_forget_has_not_returned() throws Exception {
+        // Given a refused start whose forget waits for the lease strategy after it freed the id
+        strategy.grantOnRegister = true;
+        subscribe();
+        CountDownLatch inside = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        strategy.unregisterGate = new Gate(inside, release);
+        Thread forget = new Thread(() -> wrapped.refuse(ID));
+        Thread resubscribe = new Thread(this::subscribe);
+        forget.start();
+        try {
+            assertThat(inside.await(10, SECONDS)).as("the forget is waiting for the lease strategy").isTrue();
+
+            // When the id is subscribed again meanwhile, which reserves it at once and then waits for the lock the forget holds
+            resubscribe.start();
+            await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(model.competingConsumerStatus(ID)).as("status of the id once subscribed again").map(CompetingConsumerStatus::state).isPresent().isNotEqualTo(Optional.of(State.GIVEN_UP)));
+        } finally {
+            // And the forget finishes
+            release.countDown();
+            forget.join(10_000);
+            resubscribe.join(10_000);
+        }
+
+        // Then the subscription that was made last is the one reported
+        assertThat(forget.isAlive()).as("the forget is alive").isFalse();
+        assertThat(resubscribe.isAlive()).as("the subscribe is alive").isFalse();
+        assertThat(status().state()).as("state").isEqualTo(State.LEASE_HELD);
+        assertThat(status().isFailing()).as("failing").isFalse();
+        assertThat(model.subscriptionIds()).as("subscription ids").contains(ID);
+    }
+
+    @Test
+    void does_not_report_a_refused_start_as_given_up_when_it_is_cancelled_while_the_forget_has_not_returned() throws Exception {
+        // Given a refused start whose forget waits for the lease strategy, holding the subscription's lock
+        strategy.grantOnRegister = true;
+        subscribe();
+        CountDownLatch inside = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch cancelWaits = new CountDownLatch(1);
+        model.runBeforeACallWaitsForTheLock(cancelWaits::countDown);
+        strategy.unregisterGate = new Gate(inside, release);
+        Thread forget = new Thread(() -> wrapped.refuse(ID));
+        Thread cancel = new Thread(() -> model.cancelSubscription(ID));
+        forget.start();
+        try {
+            assertThat(inside.await(10, SECONDS)).as("the forget is waiting for the lease strategy").isTrue();
+
+            // When the id is cancelled meanwhile
+            cancel.start();
+            assertThat(cancelWaits.await(10, SECONDS)).as("the cancel waits for the subscription's lock").isTrue();
+        } finally {
+            // And the forget finishes
+            release.countDown();
+            forget.join(10_000);
+            cancel.join(10_000);
+        }
+
+        // Then nothing is reported for the id
+        assertThat(forget.isAlive()).as("the forget is alive").isFalse();
+        assertThat(cancel.isAlive()).as("the cancel is alive").isFalse();
+        assertThat(model.competingConsumerStatus(ID)).as("status").isEmpty();
+        assertThat(model.competingConsumerStatuses()).as("statuses").isEmpty();
+    }
+
+    @Test
+    void reports_the_new_subscription_and_not_given_up_when_the_id_is_subscribed_again_between_freeing_it_and_the_forget_finishing() throws Exception {
+        // Given a subscription whose refused start is forgotten, and a subscribe of the same id that reserves it as soon as it is free
+        strategy.grantOnRegister = true;
+        subscribe();
+        AtomicBoolean reservedInTheGap = new AtomicBoolean();
+        AtomicReference<@Nullable Throwable> subscribeFailure = new AtomicReference<>();
+        Thread subscribeAgain = new Thread(() -> {
+            try {
+                subscribe();
+            } catch (Throwable t) {
+                subscribeFailure.set(t);
+            }
+        });
+        model.runOnceARefusedStartHasFreedTheId(() -> {
+            subscribeAgain.start();
+            // Parked on the subscription's lock, which the forget holds, so it has reserved the id: the reservation
+            // comes before the first lock the subscribe takes
+            try {
+                await().atMost(EVENTUALLY).until(() -> subscribeAgain.getState() == Thread.State.WAITING);
+                reservedInTheGap.set(true);
+            } catch (ConditionTimeoutException ignored) {
+                // Left false, which the assertion below reports
+            }
+        });
+
+        // When the forget has freed the id, the subscribe has reserved it, and only then the forget goes on
+        Thread forget = new Thread(() -> wrapped.refuse(ID));
+        forget.start();
+        forget.join(30_000);
+        if (subscribeAgain.getState() != Thread.State.NEW) {
+            subscribeAgain.join(30_000);
+        }
+
+        // Then the status is the new subscription's
+        assertThat(forget.isAlive()).as("the forget is alive").isFalse();
+        assertThat(subscribeAgain.isAlive()).as("the subscribe is alive").isFalse();
+        assertThat(reservedInTheGap).as("the subscribe reserved the id while the forget was between freeing it and giving the lease back").isTrue();
+        assertThat(subscribeFailure.get()).as("the subscribe failed").isNull();
+        assertThat(status().state()).isEqualTo(State.LEASE_HELD);
+        assertThat(status().isFailing()).as("failing").isFalse();
+        assertThat(model.competingConsumerStatuses()).as("statuses").hasSize(1);
+    }
+
     private void subscribe() {
         model.subscribe(NODE, ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
@@ -567,6 +703,7 @@ class CompetingConsumerReportsItsStatusTest {
         private final Set<String> holders = ConcurrentHashMap.newKeySet();
         private volatile boolean grantOnRegister;
         private volatile boolean hasLockFails;
+        private volatile @Nullable Gate unregisterGate;
 
         @Override
         public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
@@ -579,6 +716,10 @@ class CompetingConsumerReportsItsStatusTest {
 
         @Override
         public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
+            @Nullable Gate gate = unregisterGate;
+            if (gate != null) {
+                gate.pass();
+            }
             holders.remove(subscriptionId);
         }
 
