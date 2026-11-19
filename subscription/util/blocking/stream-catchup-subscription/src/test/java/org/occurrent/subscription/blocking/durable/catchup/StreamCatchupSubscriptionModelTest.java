@@ -2724,8 +2724,7 @@ class StreamCatchupSubscriptionModelTest {
 
             Thread cancel = new Thread(() -> subscription.cancelSubscription("subscription"));
             cancel.start();
-            await().atMost(Duration.ofSeconds(5)).until(() -> !cancel.isAlive() || Arrays.stream(cancel.getStackTrace()).anyMatch(frame -> frame.getMethodName().equals("awaitUninterruptibly")
-                    && cancel.getState() != Thread.State.RUNNABLE));
+            await().atMost(Duration.ofSeconds(5)).until(() -> !cancel.isAlive() || cancel.getState() == Thread.State.WAITING);
             releaseTheSave.countDown();
             cancel.join(5000);
 

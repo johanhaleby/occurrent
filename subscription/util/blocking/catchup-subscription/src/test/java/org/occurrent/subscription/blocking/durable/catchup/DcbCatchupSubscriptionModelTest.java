@@ -59,7 +59,6 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -1283,8 +1282,7 @@ class DcbCatchupSubscriptionModelTest {
 
             Thread cancel = new Thread(() -> subscription.cancelSubscription("subscription"));
             cancel.start();
-            await().atMost(Duration.ofSeconds(5)).until(() -> !cancel.isAlive() || Arrays.stream(cancel.getStackTrace()).anyMatch(frame -> frame.getMethodName().equals("awaitUninterruptibly")
-                    && cancel.getState() != Thread.State.RUNNABLE));
+            await().atMost(Duration.ofSeconds(5)).until(() -> !cancel.isAlive() || cancel.getState() == Thread.State.WAITING);
             releaseTheSave.countDown();
             cancel.join(5000);
 
