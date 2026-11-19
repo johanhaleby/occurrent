@@ -2722,9 +2722,9 @@ replays should treat a projection with no `startAt` as one that can replay.
 ## A blocking cancel no longer promises a rebuild
 
 This applies to the blocking `CatchupThenPushSubscriptionModel` when you give it a `CheckpointStorage` for the catch-up
-marker, and to every `@Projection` or `@Saga` with `source = PUSH` in the blocking Spring Boot starter. The marker keeps
-its 0.34.0 meaning on the blocking stack. A stored marker means the catch-up finished, and a start that finds it skips
-its replay.
+marker, and to every `@Projection` or `@Saga` with `source = PUSH` in the blocking Spring Boot starter, unless it sets
+`catchup = NONE`. The marker keeps its 0.34.0 meaning on the blocking stack. A stored marker means the catch-up
+finished, and a start that finds it skips its replay.
 
 ### What changes
 
@@ -2741,7 +2741,7 @@ then skips its replay. 0.34.0 had the same gap.
   changed projection never sees the history.
 * Rebuild a push `@Saga` under a new id only when its completed instances are kept for as long as the history it
   replays. A new id replays the whole history into the saga, so every instance that its TTL removed is recreated from
-  its start event and dispatches its commands again.
+  its start event and dispatches its commands again. With `catchup = NONE` a new id replays nothing.
 * Don't give a durable subscription and a blocking catch-up-then-push model, `CatchupProjectionFeed` or
   `DomainEventFeed` the same subscription id in the same `CheckpointStorage`. Any checkpoint stored under the id counts
   as the marker, so a checkpoint the durable subscription stored makes the blocking catch-up skip its replay.

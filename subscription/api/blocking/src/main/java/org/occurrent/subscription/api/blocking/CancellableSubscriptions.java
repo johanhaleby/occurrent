@@ -30,8 +30,8 @@ public interface CancellableSubscriptions extends SubscriptionModelCapability {
      * Cancel a subscription so it receives no further events, and release its id for reuse. Cancelling an id that is
      * unknown or already cancelled is a no-op.
      * <p>
-     * A model that stores a checkpoint also discards it here, so the subscription cannot later resume from the
-     * position it reached.
+     * A model that stores a checkpoint also deletes it here, so once the store keeps that delete the subscription
+     * cannot later resume from the position it reached.
      * <p>
      * A catch-up-then-push model deletes its catch-up marker here, as clean-up and not as a promise of a rebuild. A
      * delete the store loses, or a marker write it applies after the delete, leaves the marker stored, and subscribing
