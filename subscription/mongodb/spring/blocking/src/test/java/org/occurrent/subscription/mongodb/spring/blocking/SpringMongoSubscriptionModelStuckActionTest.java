@@ -18,11 +18,19 @@ package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoCommandException;
+import com.mongodb.ServerAddress;
+import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.awaitility.core.ConditionTimeoutException;
+import org.bson.BsonDocument;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +47,8 @@ import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -64,6 +74,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.TEN_SECONDS;
@@ -150,6 +161,74 @@ class SpringMongoSubscriptionModelStuckActionTest {
         waitAtMostFor(TEN_SECONDS, () -> calls.contains("E2 returned"));
         assertThat(calls).as("calls once the stuck call was released").containsExactly("E1 started", "E1 returned", "E1 started", "E1 returned", "E2 started", "E2 returned");
         assertThat(mostInFlight).as("most calls running at once").hasValue(1);
+    }
+
+    @Test
+    void a_history_loss_as_the_resumed_run_opens_makes_the_next_wait_throw_after_the_run_counted_as_started_while_it_waited_for_the_stuck_call() {
+        // Given: the first call for E1 is stuck, and restarts after a history loss are off
+        AtomicBoolean historyLostWhenOpening = new AtomicBoolean();
+        MongoTemplate template = new MongoTemplate(mongoClient, requireNonNull(mongoTemplate.getDb().getName())) {
+            @Override
+            public MongoDatabase getDb() {
+                return historyLostWhenOpening(super.getDb(), historyLostWhenOpening);
+            }
+        };
+        subscriptionModel = new SpringMongoSubscriptionModel(template, withConfig(eventCollectionName, timeRepresentation).restartSubscriptionsOnChangeStreamHistoryLost(false));
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, StartAt.now(), this::action).waitUntilStarted(Duration.ofSeconds(10));
+        mongoEventStore.write("1", 0, serialize(e1));
+        await().atMost(FIVE_SECONDS).until(() -> calls.contains("E1 started"));
+        subscriptionModel.pauseSubscription(subscriptionId);
+
+        // When: resumed, its history is lost as the resumed run opens its change stream, and the stuck call returns
+        historyLostWhenOpening.set(true);
+        Subscription resumed = subscriptionModel.resumeSubscription(subscriptionId);
+        boolean startedWhileWaiting = resumed.waitUntilStarted(Duration.ofSeconds(10));
+        releaseFirstCallOfE1.countDown();
+        waitAtMostFor(TEN_SECONDS, () -> !subscriptionModel.subscriptionIds().contains(subscriptionId));
+
+        // Then: the wait that came while the run waited for the stuck call counted it as started, and the next one throws
+        assertThat(startedWhileWaiting).as("answer while the resumed run waited for the stuck call").isTrue();
+        assertThat(catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(1)))).as("thrown once the history was lost")
+                .isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .hasMessageStartingWith("There was not enough oplog to resume subscription \"" + subscriptionId + "\"")
+                .rootCause().isInstanceOfSatisfying(MongoCommandException.class, e -> assertThat(e.getErrorCode()).isEqualTo(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE));
+        assertThat(subscriptionModel.subscriptionIds()).as("ids the model knows").doesNotContain(subscriptionId);
+    }
+
+    // The next change stream the model opens fails with history lost as its cursor opens, once lostWhenOpening is set
+    private static MongoDatabase historyLostWhenOpening(MongoDatabase database, AtomicBoolean lostWhenOpening) {
+        return proxy(MongoDatabase.class, database, (method, result) -> method.getName().equals("getCollection")
+                ? proxy(MongoCollection.class, result, (m, r) -> m.getName().equals("watch") ? changeStreamLostWhenOpening(r, lostWhenOpening) : r)
+                : result);
+    }
+
+    private static Object changeStreamLostWhenOpening(Object changeStream, AtomicBoolean lostWhenOpening) {
+        return proxy(ChangeStreamIterable.class, changeStream, (method, result) -> {
+            if (method.getName().equals("cursor") && lostWhenOpening.compareAndSet(true, false)) {
+                throw new MongoCommandException(new BsonDocument("ok", new BsonInt32(0)).append("code", new BsonInt32(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE))
+                        .append("codeName", new BsonString("ChangeStreamHistoryLost")), new ServerAddress());
+            }
+            return result instanceof ChangeStreamIterable ? changeStreamLostWhenOpening(result, lostWhenOpening) : result;
+        });
+    }
+
+    @FunctionalInterface
+    private interface AfterCall {
+        Object apply(java.lang.reflect.Method method, Object result);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T proxy(Class<T> type, Object target, AfterCall afterCall) {
+        return (T) java.lang.reflect.Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (proxy, method, args) -> {
+            Object result;
+            try {
+                result = method.invoke(target, args);
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                throw e.getCause();
+            }
+            return afterCall.apply(method, result);
+        });
     }
 
     private void action(CloudEvent cloudEvent) {

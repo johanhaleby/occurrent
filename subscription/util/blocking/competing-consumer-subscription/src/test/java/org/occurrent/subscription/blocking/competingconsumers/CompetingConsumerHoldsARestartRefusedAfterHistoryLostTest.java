@@ -350,7 +350,7 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
 
     @Timeout(value = 60, unit = SECONDS)
     @Test
-    void a_late_report_that_the_wrapped_model_held_a_subscription_paused_does_not_end_the_wait_of_a_handle_for_the_same_id_after_a_lost_history_removed_it_and_a_cancel_freed_the_id() throws Exception {
+    void a_late_report_that_the_wrapped_model_held_a_subscription_paused_does_not_end_the_wait_of_a_handle_for_the_same_id_after_a_lost_history_refused_it_and_the_node_freed_the_id() throws Exception {
         // Given a wrapped model that does not restart on lost history, and generation 1 held paused at a resume at the present, with the report of it blocked
         nodeA.shutdown();
         nodeAOverAWrappedModelThatRestartsOnHistoryLoss(false);
@@ -363,15 +363,16 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
         wrappedA.resumeSubscription(SUBSCRIPTION_ID, StartAt.now());
         assertThat(heldPausedReachedTheTestListener.await(15, SECONDS)).as("the wrapped model reported that it held generation 1 paused").isTrue();
 
-        // And a resume whose run loses its history, which removes the subscription from the wrapped model without telling a listener
+        // And a resume whose run loses its history, which the wrapped model refuses, and the node acted on by giving the lease and the id back
+        refusalsLetThrough = 1;
         presentRefused.set(false);
         historyLost.set(true);
         wrappedA.resumeSubscription(SUBSCRIPTION_ID, StartAt.now());
         await().atMost(15, SECONDS).until(() -> !wrappedA.isRunning(SUBSCRIPTION_ID) && !wrappedA.isPaused(SUBSCRIPTION_ID));
+        await().atMost(15, SECONDS).untilAsserted(() -> assertThat(strategyA.hasLock(SUBSCRIPTION_ID, "A")).as("A gave the lease back after the refusal").isFalse());
 
-        // And a cancel that frees the id in the node, and the id subscribed again with a start the wrapped model refuses and the node not told of yet
+        // And the id subscribed again with a start the wrapped model refuses and the node not told of yet
         refusalGate = new CountDownLatch(1);
-        nodeA.cancelSubscription(SUBSCRIPTION_ID);
         Subscription generation2 = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), refusedStartAt(), (CloudEvent __) -> {
         });
         assertThat(refusalReachedTheTestListener.await(15, SECONDS)).as("the wrapped model refused the start of generation 2").isTrue();
@@ -447,6 +448,28 @@ class CompetingConsumerHoldsARestartRefusedAfterHistoryLostTest {
         assertThat(nodeA.isPaused(SUBSCRIPTION_ID)).as("node A is paused").isFalse();
         assertThat(nodeA.isRunning(SUBSCRIPTION_ID)).as("node A is running").isTrue();
         assertThat(wrappedA.isPaused(SUBSCRIPTION_ID)).as("wrapped model on A is paused").isFalse();
+    }
+
+    @Timeout(value = 60, unit = SECONDS)
+    @Test
+    void a_handle_that_answered_started_throws_the_refusal_from_its_next_wait_when_the_wrapped_model_loses_its_history_on_a_later_read_and_does_not_restart() {
+        // Given a wrapped model that does not restart on lost history, and a subscription whose wait answered started
+        nodeA.shutdown();
+        nodeAOverAWrappedModelThatRestartsOnHistoryLoss(false);
+        Subscription started = nodeA.subscribe("A", SUBSCRIPTION_ID, filter(), StartAt.now(), (CloudEvent __) -> {
+        });
+        assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).as("answer while the change stream was open").isTrue();
+
+        // When its history is lost on a later read
+        historyLost.set(true);
+        await().atMost(15, SECONDS).until(() -> !wrappedA.isRunning(SUBSCRIPTION_ID) && !wrappedA.isPaused(SUBSCRIPTION_ID));
+
+        // Then the next wait throws the refusal, with the MongoDB error beneath it
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(5)))
+                .as("thrown by the timed wait").isExactlyInstanceOf(UnsupportedStartAtException.class)
+                .rootCause().isInstanceOfSatisfying(MongoCommandException.class, e -> assertThat(e.getErrorCode()).isEqualTo(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE)));
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> assertThatThrownBy(started::waitUntilStarted)
+                .as("thrown by the wait with no timeout").isExactlyInstanceOf(UnsupportedStartAtException.class));
     }
 
     private void theReportForGeneration1ReachesTheNodeWhileTheRefusalOfGeneration2IsHeld(Subscription generation2) throws Exception {

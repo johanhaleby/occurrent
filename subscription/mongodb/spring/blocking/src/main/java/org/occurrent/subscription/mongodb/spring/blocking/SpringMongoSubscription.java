@@ -50,21 +50,33 @@ public class SpringMongoSubscription implements Subscription {
     }
 
     /**
-     * Waits until the change stream of the subscription has opened. The wait also ends, with {@code false}, when the
-     * subscription model is shut down.
+     * Waits until the change stream of the subscription has opened. Through a mongos, a subscription that opens at a
+     * stored position, a checkpoint, an operation time or a resume token, or at the position a resumed subscription
+     * read to, such as after a pause, {@code stop()} and {@code start(true)}, or a competing consumer's lease takeover,
+     * counts as opened only once its change stream's first reply came, which can take up to the model's
+     * {@code maxAwaitTime}, or the server's default when none is set. So does a subscription at the present that opens
+     * at the position {@code subscribe(..)} read for it, unless its change stream opens right after that read on the
+     * first try. One made while the model was stopped and started later, one resumed after a pause before its first
+     * reply, and one whose first try to open failed wait, since that position can have left the oplog by then. The wait
+     * also ends, with {@code false}, when the subscription model is shut down.
      * <p>
-     * An open change stream doesn't mean that MongoDB has confirmed it is healthy. A failure right after this returns
-     * is still possible, and the subscription model then restarts the change stream.
+     * An open change stream doesn't mean that MongoDB has confirmed it is healthy. After a failure the model restarts
+     * the change stream, apart from a loss of its history with {@code restartSubscriptionsOnChangeStreamHistoryLost}
+     * off, which refuses the subscription as below.
      * <p>
-     * Throws the {@link org.occurrent.subscription.UnsupportedStartAtException} when the model refused the start
-     * position, since the change stream then never opens.
+     * Throws the {@link org.occurrent.subscription.UnsupportedStartAtException} when the model refused the
+     * subscription, at its start position or after a loss of its change stream's history. A refusal that comes after
+     * this answered {@code true} is thrown from the next call on, since the model no longer runs the subscription. A
+     * subscription held paused, because its restart from the present after a loss of history got no position, throws
+     * its refusal the same way. A refusal reaches every handle of the subscription, the one {@code subscribe(..)}
+     * returned and each one a resume returned. A hold reaches the handles returned up to the held run, so a handle a
+     * later resume returned answers for that later run, and each stops throwing a hold once a resume starts the
+     * subscription again. A handle a resume returned for a run that was paused before it started answers for the next
+     * run that starts, is refused or is held, as the handle {@code subscribe(..)} returned does.
      * <p>
      * It answers {@code true} also for a resumed subscription that waits for an action call from before its pause to
-     * return, so a caller isn't held back by a call that doesn't return. When the change stream of that subscription
-     * lost its history as it opened, the subscription can still stop after this answered {@code true}, or be held
-     * paused when its restart from the present gets no position.
-     * <a href="https://github.com/johanhaleby/occurrent/issues/1502">#1502</a> tracks a subscription that stops after
-     * this answered {@code true}.
+     * return, so a caller isn't held back by a call that doesn't return. A refusal of that subscription is thrown from
+     * the next call on, as for any other.
      */
     @Override
     public boolean waitUntilStarted(Duration timeout) {

@@ -108,13 +108,14 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * once and records the commit time of the event that read returns, or the resume token of an empty read. When the
      * read returns neither, the subscription can't start at the present. {@code subscribe(..)} still returns without
      * waiting for MongoDB, and {@code waitUntilStarted(..)} and {@code start(true)} throw an
-     * {@code UnsupportedStartAtException}. A resume at {@link StartAt#now()} records its own position the same way, when
-     * its change stream opens. A {@code StartAt.dynamic(..)} start does that read at the subscribe too, and when the read
-     * returns neither, the start is refused the same way if its function resolves to the present as the change stream
-     * opens. A resume at the present, or a restart from the present after the history was lost, that gets neither holds
-     * the subscription paused instead, the handle a resume returned throws the {@code UnsupportedStartAtException} from
-     * {@code waitUntilStarted(..)}, and a later resume asks again. A subscription made while this model is stopped opens
-     * at the position recorded at the subscribe, so earlier events count from the subscribe.
+     * {@code UnsupportedStartAtException}. A resume at {@link StartAt#now()} records its own position the same way,
+     * when its change stream opens. A {@code StartAt.dynamic(..)} start does that read at the subscribe too, and when
+     * the read returns neither, the start is refused the same way if its function resolves to the present as the change
+     * stream opens. A resume at the present, or a restart from the present after the history was lost, that gets
+     * neither holds the subscription paused instead, every handle returned up to the held run throws the
+     * {@code UnsupportedStartAtException} from {@code waitUntilStarted(..)}, and a later resume asks again. A
+     * subscription made while this model is stopped opens at the position recorded at the subscribe, so earlier events
+     * count from the subscribe.
      */
     @Override
     public boolean deliversEveryEventInCommitOrder() {
@@ -488,8 +489,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * returns has started. Pausing, cancelling and listing subscriptions keep working while it waits.
      * <p>
      * The wait for a subscription ends early when it's paused or cancelled, when the model shuts down, or when its
-     * change stream won't open at all, because its {@code RetryStrategy} gave up or its change stream history was lost
-     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off. Until one of those happens, a returned
+     * change stream won't open at all because its {@code RetryStrategy} gave up. Until one of those happens, a returned
      * {@code Subscription} that never answers that it has started keeps this method waiting. A subscription whose change
      * stream history was lost as it opened, and which then waits for an action call made before it was paused, counts as
      * started, so this method returns also when that action call is the one that called it. A subscription that isn't
@@ -497,8 +497,14 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * isn't waited for. A subscription that an override already resumed or cancelled while resuming an earlier one is
      * left out.
      * <p>
-     * A wait throws for a start position the model refuses, and for a subscription at the present when MongoDB gives
-     * neither an operation time nor a change stream position. When a resume or a wait throws, every other subscription
+     * A wait throws for a start position the model refuses, for a subscription at the present when MongoDB gives
+     * neither an operation time nor a change stream position, and for a subscription whose change stream history was
+     * lost as it opened, or with its first reply through a mongos, while
+     * {@code restartSubscriptionsOnChangeStreamHistoryLost} is off. Through a mongos, a subscription that starts at a
+     * stored position, or at the present that {@code subscribe(..)} read for it before this call, counts as started
+     * once its change stream's first reply came, so the wait can take up to
+     * {@code maxAwaitTime} longer, or the server's default wait when none is configured. When a resume or a wait
+     * throws, every other subscription
      * is still resumed and waited for, and then this method throws the first exception with the others added as
      * suppressed.
      * <p>
