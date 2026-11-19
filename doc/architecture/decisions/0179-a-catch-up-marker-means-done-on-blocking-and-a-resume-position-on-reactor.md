@@ -96,36 +96,34 @@ Four cases change what a start replays:
   is a marker write the store applies after a delete. "Fed-back events on the reactor stack" lists which failures
   leave such an event.
 
-A catch-up that one of these sources asks for from its own code, such as a view calling `catchUp()` from the code that applies an event,
-reads P and H when it gets its turn to replay, not when it is asked. It then resumes after the marker the catch-up
-that asked has stored.
+A catch-up that one of these sources asks for from its own code, such as a view calling `catchUp()` from the code
+that applies an event, reads P and H when it gets its turn to replay, not when it is asked.
 
-The reactor stack still asks for the marker's delete on some failures, as in 0.34.0, and "Fed-back events on the reactor
-stack" below lists which, and when a later start can skip an event. Its write comes before the live drain, so a catch-up has
-stored H before its drain delivers anything. An event from the broker that the drain fails or does not deliver was
-handed in by a call that has not completed, so its listener does not acknowledge it and the broker delivers it again,
-whether or not a delete removes H. An event a handler fed back is the exception, and the same section says why the
-reactor stack does not write H while one waits in the drain, and what a feed that runs on more than one replica needs
-for such an event.
+The reactor stack still asks for the marker's delete on some failures, as in 0.34.0, and "Fed-back events on the
+reactor stack" below lists which, and when a later start can skip an event. A catch-up that writes H writes it before
+its drain delivers anything. An event from the broker that the drain fails or does not deliver was handed in by a call
+that has not completed, so its listener does not acknowledge it and the broker delivers it again, whether or not a
+delete removes H. An event a handler fed back is the exception, and the same section says when the reactor stack holds
+H back for such an event, and what a feed that runs on more than one replica needs for it.
 
 The write takes no new condition.
 
 ADR 62 rejected a resume watermark that the live feed moves with each delivery. Occurrent reserves positions outside
 the write transaction, so a missing position in the delivery stream is either a hole that fills in later or a
-permanent gap, and the feed cannot tell which. The reactor marker is not that watermark. Only a catch-up reads or
-stores it, it is read before the replay, and it holds a head that was read, never a position derived from
-deliveries. Live resume stays the broker's job, and the overlap between the replay and the live feed is still
+permanent gap, and the feed cannot tell which. The reactor marker is not that watermark. A reactor catch-up stores
+only a head it read before its replay, never a position derived from deliveries. Live resume stays the broker's job, and the overlap between the replay and the live feed is still
 de-duplicated by event id.
 
 A checkpoint stored under the id that is not a global position, such as a resume token a durable subscription stored
-when it used the id before, fails a reactor catch-up with an `IllegalStateException` that names the id and says to delete the
-checkpoint or subscribe under a new id. Reading it as no marker would replay from the beginning and then write H over
-a checkpoint that something else owns, so the catch-up fails instead, and that checkpoint stays stored. On the
+when it used the id before, fails a reactor catch-up that reads it with an `IllegalStateException` that names the id
+and says to delete the checkpoint or subscribe under a new id. Reading it as no marker would replay from the beginning
+and then write H over a checkpoint that something else owns, so that catch-up fails instead and leaves the checkpoint
+stored. On the
 blocking stack any stored checkpoint still reads as a finished catch-up, as in 0.34.0.
 
 The check looks at the stored value, not at who stored it. A durable subscription that stores a global position, such
-as the reactor catch-up subscription while it catches up, leaves a checkpoint the reactor catch-up reads as its marker.
-That catch-up resumes after it and then replaces it with H. So a subscription id must not be shared between a durable
+as the reactor catch-up subscription while it catches up, leaves a checkpoint that a reactor catch-up which reads it
+takes as its marker. That catch-up resumes after it and can then replace it with H. So a subscription id must not be shared between a durable
 subscription and a catch-up-then-push model or a projection feed, and the 0.35.0 migration guide has to say so. 0.34.0
 read any checkpoint under the id as the marker as well.
 [#1564](https://github.com/johanhaleby/occurrent/issues/1564) is about storing markers under a key of their own.
@@ -134,30 +132,29 @@ read any checkpoint under the id as the marker as well.
 
 ### Why the stacks differ
 
-The reactor failure delete is what makes a done flag lose events there. Under a done flag, a marker write the store
-loses or applies after that delete makes the next start skip its replay, so no replay delivers the event whose delivery
-failed again. That is #1150. Under a resume position the same late write stores an H that its own catch-up read
-before its replay. The write comes before the drain, so the live buffer can still hold an event at or below H when the
-store applies it. A start that reads H resumes after it and skips no event from the broker, since the broker delivers again what that
-drain did not deliver, and the fed-back rule below keeps H unwritten while an event this process fed back, and the
-replay did not deliver, waits. An event another replica fed back needs a durable path of its own, which "Fed-back
-events on the reactor stack" describes. The next section shows why that holds.
+The reactor failure delete is what makes a done flag lose events there. Under a done flag, a delete the store loses,
+or a marker write it applies after that delete, leaves a marker stored, and a start that reads it skips its replay and
+does not deliver again the event whose delivery failed. That is #1150. Under a resume position the same late write
+stores an H that its own catch-up read before its replay. The write comes before the drain, so the live buffer can
+still hold an event at or below H when the store applies it. A start that reads H skips no such event that the broker
+delivers again, and the next section shows why. "What a reactor catch-up start replays" says which other events it
+can skip.
 
 The blocking stack has no failure delete, so a done flag loses nothing there that the broker does not deliver again,
 apart from an event a handler fed back with no durable path of its own, which "Fed-back events on the reactor stack"
 describes.
-A resume position would cost it a replay on every restart, of every event written since the previous start, with
-nothing in return. A push `@Saga` runs on the blocking stack only, and such a replay recreates an instance that its
-TTL already removed, from its start event, and dispatches that instance's commands again. The first 0.35.0 start
-would replay everything written since the id first caught up, since that is when a 0.34.0 marker was written.
+A resume position would cost it a replay on restarts, with nothing in return. A push `@Saga` runs on the blocking
+stack only, and such a replay recreates an instance that its TTL already removed, from its start event, and
+dispatches that instance's commands again. The first 0.35.0 start could replay most of the history, since a 0.34.0
+marker is written only after a replay from the beginning.
 
 ### Why H is safe to resume after
 
 `PositionOrderedReader.currentPosition()` says the head isn't a safe place to resume from. On MongoDB an event can
 reserve a position at or below H and commit after H was read, and a read after H never returns it.
 
-The reactor catch-up relies on the live path for that event, which is the same reliance 0.34.0 has on every start
-after the first, when it replays nothing at all:
+The reactor catch-up relies on the live path for that event, which is the same reliance 0.34.0 has on a start that
+finds the marker, which replays nothing at all:
 
 * The reactor push model registers the live feed before the replay starts, and the replay reads H. At `4d1cd8a916` it
   registers at `CatchupThenPushSubscriptionModel.java:273` and launches the replay at `:275`. An event that commits
@@ -171,14 +168,15 @@ Both need a broker that keeps the backlog of a consumer that is offline, which t
 states for a restart. Reading H after the live registration is part of this decision, so a push model that read H
 earlier would break it.
 
-H, and not the head read at mark time, is what gets stored, because H is the head the replay read up to. The
-reactor stack writes the marker before the live drain, so a crash between the write and the drain would leave events
-above H that only the buffer held. With H stored, the next start replays them. With the head at mark time stored, only
-the broker would deliver them again.
+When a start stores a marker it stores H, not the head read at mark time, because H is the head the replay read up
+to. The reactor stack writes the marker before the live drain, so a crash between the write and the drain would leave
+events above H that only the buffer held. With H stored, a start that reads it replays them. With the head at mark
+time stored, only the broker would deliver them again.
 
-Every value a reactor start writes is the head its own replay read up to. So a marker that is older than it should be,
-because a write was lost, or because an old H reached the store after a newer one, makes the next start replay more
-events than it had to. It cannot make a start skip one. The handover's cache de-duplicates the overlap between the
+Every value a reactor start writes is the head its own replay read up to. So a lost marker write, or an old H that
+reaches the store after a newer one, leaves a position stored that is older than it should be, and a start that reads
+it replays more than it had to. "What a reactor catch-up start replays" says when a stored position makes a start skip
+an event. The handover's cache de-duplicates the overlap between the
 replay and the live feed within `CatchupThenLiveOptions.dedupCacheSize()`, and beyond that the at-least-once contract
 already applies.
 
