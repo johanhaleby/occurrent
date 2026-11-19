@@ -777,7 +777,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             List<SkippedInput> first = records.findSkippedInputs(sagaId, quarantineId, 1);
             Instant now = clock.get();
             if (first.isEmpty()) {
-                if (envelopes.compareAndSaveQuarantineEnded(records, SagaExecutionSupport.withReleased(current, now), current.version(), quarantineId)) {
+                if (envelopes.compareAndSaveQuarantineEnded(records, SagaExecutionSupport.withReleased(current, now, config.reorderWindow()), current.version(), quarantineId)) {
                     log.info("Saga '{}' instance '{}' is released and ACTIVE again.", subscriptionId, sagaId);
                     return SagaSubscription.ReleaseResult.RELEASED;
                 }
@@ -835,7 +835,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             try {
                 E event = converter.toDomainEvent(cloudEvent);
                 SagaInput<E> input = SagaInput.event(event, EventMetadata.from(cloudEvent));
-                Outcome<S, C> outcome = SagaExecutionSupport.replay(saga, sagaId, current, record, input, meta, now, config.reorderWindow());
+                Outcome<S, C> outcome = SagaExecutionSupport.replay(saga, sagaId, current, record, input, meta, now);
                 if (outcome.processed()) {
                     dispatcher.dispatchAll(outcome.commands());
                     saved = saveReplayed(records, sagaId, quarantineId, record, current, outcome);

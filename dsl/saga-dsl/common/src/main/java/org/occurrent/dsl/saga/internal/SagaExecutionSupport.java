@@ -429,16 +429,21 @@ public final class SagaExecutionSupport {
      * and keeps its failure record, with {@link SagaFailure#releasedAt()}. The executor deletes the record in the write
      * that applies it. An input that completes the instance ends the release with it.
      * <p>
-     * A record the instance would skip anyway, because it applied the input already or because it is not a start event
-     * and the instance never started, comes back as an outcome that is not {@link Outcome#processed()} and has no
-     * envelope, and the executor deletes the record in a write of {@link #oneVersionUp}.
+     * The release reads and writes the marks with no reorder window, so every version it applies stays in them until the
+     * instance is released. With the configured reorder window, an earlier record that raised the mark of its type
+     * would put a later record of that type behind the window, and the release would delete it without applying it. A
+     * record is written only while its input is new, so without a window a record that is not new names an input the
+     * instance applied, through another record of the same input or through a replay whose delete a crash prevented.
+     * <p>
+     * Such a record, and a record that is not a start event of an instance that never started, which the instance would
+     * skip outside a release too, comes back as an outcome that is not {@link Outcome#processed()} and has no envelope,
+     * and the executor deletes the record in a write of {@link #oneVersionUp}.
      *
      * @throws IllegalStateException when the instance is not releasing, or {@code meta} has no stream id and stream
      *                               version
      */
     public static <E, S extends @Nullable Object, C> Outcome<S, C> replay(Saga<E, S, C> saga, String sagaId, SagaEnvelope<S> current,
-                                                                          SkippedInput record, SagaInput<E> input, EventMeta meta, Instant now,
-                                                                          int reorderWindow) {
+                                                                          SkippedInput record, SagaInput<E> input, EventMeta meta, Instant now) {
         if (!current.isReleasing()) {
             throw new IllegalStateException("Saga instance '" + sagaId + "' is not releasing, so it cannot replay '" + record.key() + "'.");
         }
@@ -447,10 +452,10 @@ public final class SagaExecutionSupport {
         }
         boolean hasStarted = current.started();
         @Nullable E startEvent = startEventOrNull(saga, hasStarted, input);
-        if (!hasStarted && startEvent == null || classify(current, meta, reorderWindow) != Delivery.NEW) {
+        if (!hasStarted && startEvent == null || classify(current, meta, NO_REORDER_WINDOW) != Delivery.NEW) {
             return Outcome.skip();
         }
-        Outcome<S, C> applied = apply(saga, sagaId, current, input, meta, now, reorderWindow, hasStarted, startEvent);
+        Outcome<S, C> applied = apply(saga, sagaId, current, input, meta, now, NO_REORDER_WINDOW, hasStarted, startEvent);
         SagaEnvelope<S> next = Objects.requireNonNull(applied.envelope());
         if (next.isCompleted()) {
             return applied;
@@ -468,14 +473,32 @@ public final class SagaExecutionSupport {
      * {@code current} was read before a read of its records that found none. A skip records its input in a write that
      * raises the version, so a skip recorded after {@code current} was read makes this write lose, and the release reads
      * the records again.
+     * <p>
+     * The released instance keeps no more applied versions per stream and event type than {@code reorderWindow}, as
+     * after a live write, since the release kept every version it applied.
      *
      * @throws IllegalStateException when the instance is not releasing
      */
-    public static <S extends @Nullable Object> SagaEnvelope<S> withReleased(SagaEnvelope<S> current, Instant now) {
+    public static <S extends @Nullable Object> SagaEnvelope<S> withReleased(SagaEnvelope<S> current, Instant now, int reorderWindow) {
         if (!current.isReleasing()) {
             throw new IllegalStateException("Saga instance '" + current.sagaId() + "' is not releasing.");
         }
-        return withBookkeeping(current, SagaStatus.ACTIVE, now, null, current.streamMarks(), null);
+        return withBookkeeping(current, SagaStatus.ACTIVE, now, null, withinWindow(current.streamMarks(), reorderWindow), null);
+    }
+
+    // The marks with no more applied versions than reorderWindow keeps, the way a live write trims them. A release
+    // keeps every version it applies, see replay(..)
+    private static Map<String, StreamMarks> withinWindow(Map<String, StreamMarks> streamMarks, int reorderWindow) {
+        Map<String, StreamMarks> trimmed = new LinkedHashMap<>();
+        streamMarks.forEach((streamId, marks) -> {
+            Map<String, TypeMark> byType = new LinkedHashMap<>();
+            marks.byType().forEach((type, typeMark) -> {
+                long horizon = Math.max(typeMark.horizon(), typeMark.mark() - reorderWindow);
+                byType.put(type, new TypeMark(typeMark.mark(), typeMark.applied().stream().filter(version -> version > horizon).toList(), horizon));
+            });
+            trimmed.put(streamId, new StreamMarks(marks.floor(), byType, marks.pending(), marks.legacyFailed(), marks.pendingSince()));
+        });
+        return trimmed;
     }
 
     /**
@@ -540,7 +563,9 @@ public final class SagaExecutionSupport {
         if (!current.isReleasing() || existing == null) {
             return null;
         }
-        if (classify(current, meta, reorderWindow) != Delivery.NEW) {
+        // With no window, as replay(..) reads the marks, since with one an input an earlier record put behind it would
+        // read as applied and its failure would never be recorded
+        if (classify(current, meta, NO_REORDER_WINDOW) != Delivery.NEW) {
             // Another writer applied it in between, so there is no failure left to record
             return null;
         }
@@ -625,6 +650,9 @@ public final class SagaExecutionSupport {
      * and stream version.
      */
     public static final String EVENT_WITHOUT_STREAM_KEY_FAILURE_TYPE = "EventWithoutStreamKey";
+
+    // A window wider than any stream, so the marks forget no version, see replay(..)
+    private static final int NO_REORDER_WINDOW = Integer.MAX_VALUE;
 
     private static final String MISSING_INPUT_MESSAGE_END = "' is missing from the event store, so the release could not replay it";
 
