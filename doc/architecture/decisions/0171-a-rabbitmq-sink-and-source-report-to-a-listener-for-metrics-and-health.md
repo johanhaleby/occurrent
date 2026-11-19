@@ -83,8 +83,9 @@ An application listener bean replaces the Micrometer one, and an application tha
 sets a listener on the builder.
 
 **Standby on a competing consumer model is not part of this.** A sink cannot see the subscription that feeds it, so it
-cannot tell a standby instance from a stopped one. [#1441](https://github.com/johanhaleby/occurrent/issues/1441) tracks
-that for the framework starter.
+cannot tell a standby instance from a stopped one.
+[ADR 183](0183-a-competing-consumer-reports-its-status-and-the-mongodb-starter-turns-it-into-health.md) covers that for
+the MongoDB framework starter.
 
 ### Alternatives
 

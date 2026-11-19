@@ -26,12 +26,14 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
 import org.occurrent.retry.internal.RetryImpl;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
+import org.occurrent.subscription.mongodb.blocking.ccs.LeaseRefreshFailure;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -156,6 +158,12 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private volatile boolean running;
 
     /**
+     * Set by a refresh attempt that fails, keeping the {@code since} of the failure before it, and cleared by an
+     * attempt that refreshes every lease. See {@link #leaseRefreshFailure()}.
+     */
+    private final AtomicReference<@Nullable LeaseRefreshFailure> leaseRefreshFailure = new AtomicReference<>();
+
+    /**
      * Handed to every retried MongoDB call as its shutdown predicate, so a call that is backing off between
      * attempts stops as soon as {@link #shutdown()} runs instead of sleeping out the rest of its backoff first.
      */
@@ -238,7 +246,15 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             // Empty until an attempt of this round fails, and then the consumers the next attempt refreshes again
             AtomicReference<@Nullable Set<CompetingConsumer>> failedInThisRound = new AtomicReference<>();
             try {
-                retryStrategyToUse.execute(() -> fn.apply(collection -> refreshOrAcquireLease(collection, failedInThisRound)).run(), whileRunning);
+                retryStrategyToUse.execute(() -> {
+                    try {
+                        fn.apply(collection -> refreshOrAcquireLease(collection, failedInThisRound)).run();
+                    } catch (Throwable t) {
+                        recordRefreshFailure(t);
+                        MongoLeaseCompetingConsumerStrategySupport.<RuntimeException>throwAsItIs(t);
+                    }
+                    leaseRefreshFailure.set(null);
+                }, whileRunning);
             } catch (Exception e) {
                 // A round that exhausted cappedRetryStrategy. Anything else it throws, an Error for instance, is logged
                 // by ScheduledRefresh, which also keeps the later rounds running.
@@ -478,6 +494,30 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         }
         Long lastHeld = lastHeldFencingTokens.get(subscriptionId);
         return lastHeld == null ? OptionalLong.empty() : OptionalLong.of(lastHeld);
+    }
+
+    /**
+     * Why the scheduled lease refresh fails, and since when, or empty while it works. A refresh attempt fails when it
+     * cannot write a lease this node holds or competes for, which also covers a database that answers reads while it
+     * refuses writes, and the failure stays until an attempt refreshes every lease. A node that cannot write its
+     * leases cannot take a subscription over, so when no node can, every node waits and no subscription runs.
+     * <p>
+     * Reads a field, so this neither blocks nor reaches MongoDB.
+     *
+     * @return The failure of the latest refresh attempt and when the failures began, or empty when the latest attempt
+     * refreshed every lease or none has failed.
+     */
+    public Optional<LeaseRefreshFailure> leaseRefreshFailure() {
+        return Optional.ofNullable(leaseRefreshFailure.get());
+    }
+
+    // A failure after shutdown is the shutdown cutting the attempt short, which says nothing about the database
+    private void recordRefreshFailure(Throwable failure) {
+        if (!running) {
+            return;
+        }
+        Instant now = Instant.now();
+        leaseRefreshFailure.updateAndGet(was -> new LeaseRefreshFailure(failure, was == null ? now : was.since()));
     }
 
     public void addListener(CompetingConsumerListener listenerConsumer) {
