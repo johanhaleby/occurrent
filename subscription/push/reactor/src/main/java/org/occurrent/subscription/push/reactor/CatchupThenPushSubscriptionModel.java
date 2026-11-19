@@ -318,10 +318,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
         // Set in isAlreadyCaughtUp(), which the handover calls before replay() and markCaughtUp() (ADR 179)
         AtomicReference<ReplayStart> attemptStart = new AtomicReference<>(ReplayStart.FROM_BEGINNING_UNMARKED);
-        // Whether the listener hears this attempt, decided by its first marker read and never changed. The handover
-        // can read the marker again on a catch-up's turn, which moves the replay range and the head but not this, so
-        // catchupStarted goes out at most once and historyRead and alreadyDeliveredByReplay follow the same answer.
-        AtomicReference<Boolean> listenerHearsAttempt = new AtomicReference<>();
+        // Whether the listener hears this attempt, set in replayStarted() from the same read the replay uses. The
+        // handover can read the marker again on a catch-up's turn, and replayStarted() runs once after the last read,
+        // so catchupStarted goes out at most once and only for a replay from the beginning. An attempt whose replay
+        // never starts is not heard.
+        AtomicBoolean listenerHearsAttempt = new AtomicBoolean();
         // Whether this attempt's last marker read refused a checkpoint that is not a catch-up marker. Something else
         // stored it under the id, such as a durable subscription's resume token, so a failed catch-up does not delete
         // it. Kept per attempt, so a refusal that an earlier attempt or a cancel saw cannot spare a marker this
@@ -333,13 +334,16 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // Reads where the replay starts and the head markCaughtUp() would store, see ADR 179's "What a reactor
                 // catch-up start replays". Every attempt replays, possibly nothing.
                 return readReplayStart(subscriptionId, storedIsNotAMarker)
-                        .doOnNext(start -> {
-                            attemptStart.set(start);
-                            if (listenerHearsAttempt.compareAndSet(null, start.fromBeginning()) && start.fromBeginning()) {
-                                announceCatchupStart(subscriptionId, replayDone);
-                            }
-                        })
+                        .doOnNext(attemptStart::set)
                         .thenReturn(false);
+            }
+
+            @Override
+            public void replayStarted() {
+                if (attemptStart.get().fromBeginning()) {
+                    listenerHearsAttempt.set(true);
+                    announceCatchupStart(subscriptionId, replayDone);
+                }
             }
 
             @Override
@@ -385,7 +389,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // The replay itself is the episode, so a listener a later attempt for this id has since started
                 // ignores this and no lock is needed to keep this attempt from speaking for that one.
                 CatchupListener listener = catchupListeners.get(subscriptionId);
-                if (listener != null && Boolean.TRUE.equals(listenerHearsAttempt.get())) {
+                if (listener != null && listenerHearsAttempt.get()) {
                     listener.historyRead(replayDone);
                 }
             }
@@ -399,7 +403,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // block.
                 return Mono.<Void>fromRunnable(() -> {
                     CatchupListener listener = catchupListeners.get(subscriptionId);
-                    if (listener != null && Boolean.TRUE.equals(listenerHearsAttempt.get())) {
+                    if (listener != null && listenerHearsAttempt.get()) {
                         listener.alreadyDeliveredByReplay(event);
                     }
                 }).subscribeOn(Schedulers.boundedElastic());
