@@ -139,7 +139,9 @@ public final class ReactiveHandover<T, K> {
 
         /**
          * The replay is about to start delivering events. Called once, before the first {@link #replay()} item is
-         * folded, and only when a replay actually runs, not when {@link #isAlreadyCaughtUp()} answers {@code true}.
+         * folded, and only when a replay actually runs, not when the first answer of {@link #isAlreadyCaughtUp()} is
+         * {@code true}. It runs after the last read of {@link #isAlreadyCaughtUp()}, so a source can tell from that
+         * read where the replay starts.
          * The default does nothing, so a source with no replay-aware view pays nothing
          * for this hook (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0110-a-replay-tells-the-view-where-it-begins-and-ends.md">ADR 110</a>).
          */

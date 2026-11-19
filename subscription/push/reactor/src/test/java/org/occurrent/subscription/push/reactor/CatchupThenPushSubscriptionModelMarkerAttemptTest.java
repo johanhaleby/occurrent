@@ -146,7 +146,49 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
                 .waitUntilStarted().block(TIMEOUT);
 
         assertThat(delivered).as("replayed after the marker, the payload both replayed and live once").containsExactly("3", "4");
-        assertThat(signals.names).as("signals heard by the listener of a replay after a stored marker").isEmpty();
+        // alreadyDeliveredByReplay is sent from boundedElastic, so a signal still on its way would miss a plain check
+        await().during(Duration.ofMillis(500)).atMost(TIMEOUT).untilAsserted(() ->
+                assertThat(signals.names).as("signals heard by the listener of a replay after a stored marker").isEmpty());
+    }
+
+    // The first attempt replays from the beginning and is stopped while it replays, after it announced its start and
+    // before it read the history. A marker is stored while the model is stopped, so the attempt that start(true)
+    // launches resumes after it and announces nothing. It has to end the episode the stopped attempt left open, or the
+    // listener reads history for good and a recorder never records again.
+    @Test
+    void a_stopped_replay_from_the_beginning_has_its_episode_ended_by_the_next_attempt_that_resumes_after_a_marker_before_it_replays_anything() throws Exception {
+        store.append(List.of(event("1"), event("2")));
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, storage);
+        EpisodeSignals episodes = new EpisodeSignals();
+        model.listenForCatchup("proj", episodes);
+        CountDownLatch firstEventReached = new CountDownLatch(1);
+        CountDownLatch releaseFirstEvent = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        AtomicReference<List<String>> signalsWhenEventTwoWasDelivered = new AtomicReference<>();
+        Function<CloudEvent, Mono<Void>> holdingTheFirstEvent = e -> Mono.fromRunnable(() -> {
+            if (e.getId().equals("1")) {
+                firstEventReached.countDown();
+                awaitQuietly(releaseFirstEvent);
+            } else {
+                signalsWhenEventTwoWasDelivered.set(List.copyOf(episodes.names));
+            }
+            delivered.add(e.getId());
+        });
+
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), holdingTheFirstEvent);
+        assertThat(firstEventReached.await(5, TimeUnit.SECONDS)).as("the first attempt is replaying").isTrue();
+        model.stop();
+        releaseFirstEvent.countDown();
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(model.isCatchingUp("proj")).as("the stopped replay has unwound").isFalse());
+        storage.save("proj", GlobalCheckpoint.of(1)).block(TIMEOUT);
+        model.start(true);
+
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("replayed after the marker").containsExactly("1", "2"));
+        assertThat(episodes.names).as("signals heard from the stopped attempt and the one that resumed after a marker")
+                .containsExactly("catchupStarted#1", "historyRead#1");
+        assertThat(signalsWhenEventTwoWasDelivered.get()).as("signals heard when the resumed attempt first replayed an event")
+                .containsExactly("catchupStarted#1", "historyRead#1");
     }
 
     // The cancel comes before the attempt has read the marker, so the attempt no longer owns the id when it learns
@@ -262,11 +304,6 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
                 feed.accept(e).subscribe();
             }
         }));
-    }
-
-    private static long storedPosition(InMemoryCheckpointStorage storage) {
-        Checkpoint stored = storage.read("X").block(TIMEOUT);
-        return stored == null ? -1 : GlobalCheckpoint.positionOf(stored);
     }
 
     private static PositionOrderedReader decorated(PositionOrderedReader delegate, UnaryOperator<Flux<CloudEvent>> onRead) {

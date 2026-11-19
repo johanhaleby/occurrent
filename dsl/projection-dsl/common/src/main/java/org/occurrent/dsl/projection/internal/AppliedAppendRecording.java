@@ -344,9 +344,10 @@ public final class AppliedAppendRecording {
      * A catch-up has begun. Marks the clear it implies as owed, drops what a previous catch-up was still holding, and
      * suppresses recording until {@link #historyRead(Object)} for this same {@code episode}.
      * <p>
-     * Deliberately performs no store call. It is sent from the thread that registers the catch-up, before whatever
-     * produces the deliveries exists, and blocking that thread on a store round trip would hold up the subscription
-     * itself. The clear happens on the next call that can afford it, a delivery or a poll tick.
+     * Deliberately performs no store call. It is sent before the catch-up delivers anything, from the thread that
+     * registers the catch-up or, in the reactor {@code CatchupThenPushSubscriptionModel}, from the pipeline about to
+     * start the replay, and blocking either on a store round trip would hold up the subscription itself. The clear
+     * happens on the next call that can afford it, a delivery or a poll tick.
      */
     public void catchupStarted(Object episode) {
         requireNonNull(episode, "episode cannot be null");
