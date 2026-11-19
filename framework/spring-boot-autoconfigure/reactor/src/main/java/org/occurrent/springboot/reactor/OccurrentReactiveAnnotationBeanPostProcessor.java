@@ -206,7 +206,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // Before the bean's @PostConstruct method, so a refused bean writes nothing
             @Nullable Method synchronousHandler = unregisteredSynchronousHandler(beanName, userClass);
             if (synchronousHandler != null) {
-                writeAdmission.synchronousBeanCreationStarts(bean, beanName, synchronousHandler);
+                writeAdmission.refuseIfOpen(beanName, synchronousHandler);
             }
             if (startupScanComplete && declaresAnyOccurrentAnnotation(userClass, true)) {
                 @Nullable String liveStart = startPositionSupport.readLateLiveStart();
@@ -250,10 +250,6 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (bean instanceof FactoryBean<?>) {
             return bean;
         }
-        // A bean whose creation began before the gate opened and that the scan didn't register is refused here
-        writeAdmission.synchronousBeanCreationEnds(bean, () -> unregisteredSynchronousHandler(beanName, userClassOf(bean)) != null);
-        Object target = SubscriptionAnnotations.ultimateTarget(bean);
-        writeAdmission.synchronousBeanCreationEnds(target, () -> unregisteredSynchronousHandler(beanName, userClassOf(target)) != null);
         // Every event store bean passes through here as it is created, before anything can write through it
         startPositionSupport.recordStartBoundaryOf(bean, beanName);
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
@@ -266,16 +262,28 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // support initializes a test instance through it under a name it never defined, and isFactoryBean throws
         // NoSuchBeanDefinitionException for a name with no definition behind it.
         if (beanFactory.containsBeanDefinition(beanName) && beanFactory.isFactoryBean(beanName)) {
-            Class<?> productClass = userClassOf(bean);
-            userClassByBeanName.put(beanName, productClass);
-            @Nullable Method synchronousHandler = unregisteredSynchronousHandler(beanName, productClass);
-            if (synchronousHandler != null) {
-                writeAdmission.synchronousProductBuilt(beanName, synchronousHandler);
-            }
+            userClassByBeanName.put(beanName, userClassOf(bean));
         }
+        // Decided on the object this callback received, which an earlier post-processor may have replaced.
+        // While the gate is closed, a bean with an unregistered synchronous handler goes to the drain, whatever thread
+        // built it, and so does any bean another thread finished during the scan. No synchronous handler registers
+        // once the gate is open, so a handler still unregistered then fails the bean's creation.
+        // Both lookups run outside the gate's lock, since getBeanNamesForType can create beans.
+        Object target = SubscriptionAnnotations.ultimateTarget(bean);
+        @Nullable Method synchronousHandler = unregisteredSynchronousHandler(beanName, bean, target);
         Thread scanning = scanningThread;
-        if (!startupScanComplete && scanning != null && scanning != Thread.currentThread()) {
-            builtWhileScanning.add(new BuiltWhileScanning(beanName, bean));
+        boolean builtByAnotherThreadWhileScanning = !startupScanComplete && scanning != null && scanning != Thread.currentThread();
+        boolean handedOver = writeAdmission.runWhileClosed(() -> {
+            if (synchronousHandler != null || builtByAnotherThreadWhileScanning) {
+                builtWhileScanning.add(new BuiltWhileScanning(beanName, bean));
+            }
+        });
+        if (!handedOver && synchronousHandler != null) {
+            // Looked up again, since the drain may have registered it before the gate opened
+            @Nullable Method stillUnregistered = unregisteredSynchronousHandler(beanName, bean, target);
+            if (stillUnregistered != null) {
+                throw StartupWriteAdmission.refusal(beanName, stillUnregistered);
+            }
         }
         // Read again rather than reused, so a bean finishing as the scan ends is registered by whichever of the two
         // sees the flag set. Registering it twice is not possible, since both check the same RegisteredHandlers.
@@ -371,8 +379,10 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 beanNames = applicationContext.getBeanDefinitionNames();
             }
             startupScanComplete = true;
-            drainBeansBuiltWhileScanning();
-            writeAdmission.open();
+            // A bean handed over after the last drain keeps the gate closed for one more
+            do {
+                drainBeansBuiltWhileScanning();
+            } while (!writeAdmission.openIfNothingLeft(builtWhileScanning::isEmpty));
             scanningThread = null;
         }
         startupSubscribes.start();
@@ -412,6 +422,12 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
         }
         return null;
+    }
+
+    // The first unregistered synchronous handler of the bean's class or, for a proxy, of the class it wraps
+    private @Nullable Method unregisteredSynchronousHandler(String beanName, Object bean, Object target) {
+        @Nullable Method handler = unregisteredSynchronousHandler(beanName, userClassOf(bean));
+        return handler != null || target == bean ? handler : unregisteredSynchronousHandler(beanName, userClassOf(target));
     }
 
     private static List<Method> synchronousHandlersOf(Class<?> type) {

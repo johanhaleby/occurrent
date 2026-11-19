@@ -314,14 +314,17 @@ depends on whether Spring calls it before or after the post-processor's, which f
 registered in.
 
 A bean that would register a synchronous handler that isn't registered yet, created once writes are admitted, fails
-its creation with an `IllegalStateException` before its init methods run. The scan builds every bean it sees a
-handler on, `@Lazy` or not, so this is a bean whose declared type hides the annotation, `@Lazy` or under
+its creation with an `IllegalStateException` before its init methods run. The scan builds every bean it sees a handler
+on, `@Lazy` or not, so this is a bean whose declared type hides the annotation, `@Lazy` or under
 `spring.main.lazy-initialization=true`, or one that a held-back replay builds for the first time. A bean whose
-creation began before writes were admitted, and ended after with its handler still unregistered, fails once it is
-initialized. A prototype instance or the target of a scoped proxy whose handler registered at startup is created as
-before. The message says to remove `@Lazy`, to declare the `@Bean` method with the annotated class as its return type,
-or to make the handler asynchronous. 0.34.0 registered such a handler when the bean was built, and it missed every
-write before that.
+creation began before writes were admitted fails once it is initialized, if its handler is still unregistered then. So
+does a bean that another post-processor replaced with an object that declares such a handler, since the check runs on
+the object the starter's post-processor receives once the bean is initialized. Every bean with an unregistered
+synchronous handler that is initialized before writes are admitted, on any thread, registers before they are. Whether
+a handler is registered is read again once writes are admitted, so a prototype instance or the target of a scoped
+proxy whose handler registered at startup is created as before. The message says to remove `@Lazy`, to declare the
+`@Bean` method with the annotated class as its return type, or to make the handler asynchronous. 0.34.0 registered
+such a handler when the bean was built, and it missed every write before that.
 
 The starters refuse such a write also when the application declares no synchronous handler, since the scan that would
 show there is none hasn't run yet either. A write made directly with `EventStore.write` or `DcbEventStore.append` is

@@ -20,6 +20,10 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,6 +32,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class StartupWriteAdmissionTest {
+
+    private static final long WAIT_SECONDS = 10;
 
     @Test
     void admits_no_write_until_it_is_opened_and_every_write_after() {
@@ -41,68 +47,129 @@ class StartupWriteAdmissionTest {
     }
 
     @Test
-    void a_bean_that_starts_its_creation_before_open_is_not_refused() throws Exception {
+    void refuse_if_open_throws_only_once_the_gate_is_open() throws Exception {
         StartupWriteAdmission admission = new StartupWriteAdmission();
-        Object bean = new Object();
 
-        assertThatCode(() -> admission.synchronousBeanCreationStarts(bean, "receiver", handler())).doesNotThrowAnyException();
-        assertThatCode(() -> admission.synchronousBeanCreationEnds(bean, () -> true)).doesNotThrowAnyException();
+        assertThatCode(() -> admission.refuseIfOpen("receiver", handler())).as("[before open()]").doesNotThrowAnyException();
+
+        admission.open();
+
+        assertThatThrownBy(() -> admission.refuseIfOpen("receiver", handler()))
+                .as("[after open()]")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Bean 'receiver' declares the synchronous handler");
     }
 
     @Test
-    void a_bean_that_starts_its_creation_after_open_is_refused_by_name_before_it_is_initialized() throws Exception {
+    void run_while_closed_runs_the_hand_over_and_returns_true_while_the_gate_is_closed() {
+        StartupWriteAdmission admission = new StartupWriteAdmission();
+        AtomicBoolean ran = new AtomicBoolean();
+
+        boolean handedOver = admission.runWhileClosed(() -> ran.set(true));
+
+        assertThat(handedOver).as("[returned]").isTrue();
+        assertThat(ran).as("[hand-over ran]").isTrue();
+        assertThat(admission.admitsWrite()).as("[gate after the hand-over]").isFalse();
+    }
+
+    @Test
+    void run_while_closed_does_not_run_the_hand_over_and_returns_false_once_the_gate_is_open() {
         StartupWriteAdmission admission = new StartupWriteAdmission();
         admission.open();
+        AtomicBoolean ran = new AtomicBoolean();
 
-        assertThatThrownBy(() -> admission.synchronousBeanCreationStarts(new Object(), "lateReceiver", handler()))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("Bean 'lateReceiver' declares the synchronous handler " + Receiver.class.getName() + "#on")
+        boolean handedOver = admission.runWhileClosed(() -> ran.set(true));
+
+        assertThat(handedOver).as("[returned]").isFalse();
+        assertThat(ran).as("[hand-over ran]").isFalse();
+    }
+
+    @Test
+    void open_if_nothing_left_stays_closed_while_the_supplier_says_something_is_left() {
+        StartupWriteAdmission admission = new StartupWriteAdmission();
+
+        boolean opened = admission.openIfNothingLeft(() -> false);
+
+        assertThat(opened).as("[returned]").isFalse();
+        assertThat(admission.admitsWrite()).as("[gate]").isFalse();
+    }
+
+    @Test
+    void open_if_nothing_left_opens_the_gate_once_the_supplier_says_nothing_is_left() {
+        StartupWriteAdmission admission = new StartupWriteAdmission();
+        AtomicBoolean somethingLeft = new AtomicBoolean(true);
+
+        assertThat(admission.openIfNothingLeft(() -> !somethingLeft.get())).as("[returned while something is left]").isFalse();
+        somethingLeft.set(false);
+
+        assertThat(admission.openIfNothingLeft(() -> !somethingLeft.get())).as("[returned once nothing is left]").isTrue();
+        assertThat(admission.admitsWrite()).as("[gate]").isTrue();
+    }
+
+    @Test
+    void a_hand_over_in_progress_keeps_open_if_nothing_left_on_another_thread_waiting_until_it_returns() throws Exception {
+        StartupWriteAdmission admission = new StartupWriteAdmission();
+        List<String> order = new CopyOnWriteArrayList<>();
+        CountDownLatch handOverStarted = new CountDownLatch(1);
+        CountDownLatch handOverMayReturn = new CountDownLatch(1);
+        Thread handingOver = new Thread(() -> admission.runWhileClosed(() -> {
+            handOverStarted.countDown();
+            await(handOverMayReturn);
+            order.add("hand-over returned");
+        }), "hand-over");
+        Thread opening = new Thread(() -> admission.openIfNothingLeft(() -> {
+            order.add("nothing left read");
+            return true;
+        }), "opening");
+        try {
+            handingOver.start();
+            assertThat(handOverStarted.await(WAIT_SECONDS, TimeUnit.SECONDS)).as("[hand-over started]").isTrue();
+
+            opening.start();
+            awaitState(opening, Thread.State.BLOCKED);
+
+            assertThat(admission.admitsWrite()).as("[gate while the hand-over is in progress]").isFalse();
+            assertThat(order).as("[events while the hand-over is in progress]").isEmpty();
+
+            handOverMayReturn.countDown();
+            handingOver.join(TimeUnit.SECONDS.toMillis(WAIT_SECONDS));
+            opening.join(TimeUnit.SECONDS.toMillis(WAIT_SECONDS));
+
+            assertThat(order).as("[order]").containsExactly("hand-over returned", "nothing left read");
+            assertThat(admission.admitsWrite()).as("[gate after the hand-over returned]").isTrue();
+        } finally {
+            handOverMayReturn.countDown();
+        }
+    }
+
+    @Test
+    void the_refusal_names_the_bean_and_the_handler() throws Exception {
+        IllegalStateException refusal = StartupWriteAdmission.refusal("lateReceiver", handler());
+
+        assertThat(refusal).hasMessageContaining("Bean 'lateReceiver' declares the synchronous handler " + Receiver.class.getName() + "#on")
                 .hasMessageContaining("is created after the startup scan of the Spring Boot starter registered the synchronous handlers");
     }
 
-    @Test
-    void a_bean_whose_creation_began_before_open_and_ended_after_with_its_handler_unregistered_is_refused() throws Exception {
-        StartupWriteAdmission admission = new StartupWriteAdmission();
-        Object bean = new Object();
-        admission.synchronousBeanCreationStarts(bean, "slowReceiver", handler());
-        admission.open();
-
-        assertThatThrownBy(() -> admission.synchronousBeanCreationEnds(bean, () -> true))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("Bean 'slowReceiver' declares the synchronous handler");
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
+                throw new AssertionError("Timed out waiting for a latch");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
     }
 
-    @Test
-    void a_bean_whose_creation_began_before_open_and_ended_after_is_not_refused_when_the_scan_registered_its_handler() throws Exception {
-        StartupWriteAdmission admission = new StartupWriteAdmission();
-        Object bean = new Object();
-        admission.synchronousBeanCreationStarts(bean, "registeredReceiver", handler());
-        admission.open();
-        AtomicBoolean handlerUnregistered = new AtomicBoolean(false);
-
-        assertThatCode(() -> admission.synchronousBeanCreationEnds(bean, handlerUnregistered::get)).doesNotThrowAnyException();
-    }
-
-    @Test
-    void a_bean_that_never_started_is_not_refused_when_it_ends() {
-        StartupWriteAdmission admission = new StartupWriteAdmission();
-        admission.open();
-
-        assertThatCode(() -> admission.synchronousBeanCreationEnds(new Object(), () -> true)).doesNotThrowAnyException();
-    }
-
-    @Test
-    void a_factory_bean_product_is_refused_after_open_and_not_before() throws Exception {
-        StartupWriteAdmission admission = new StartupWriteAdmission();
-
-        assertThatCode(() -> admission.synchronousProductBuilt("factoryProduct", handler())).as("[before open()]").doesNotThrowAnyException();
-
-        admission.open();
-
-        assertThatThrownBy(() -> admission.synchronousProductBuilt("factoryProduct", handler()))
-                .as("[after open()]")
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("Bean 'factoryProduct' declares the synchronous handler");
+    // Spins on the thread state instead of sleeping, so it returns as soon as the thread is parked on the monitor
+    private static void awaitState(Thread thread, Thread.State state) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
+        while (thread.getState() != state) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("Thread " + thread.getName() + " is " + thread.getState() + ", expected " + state);
+            }
+            Thread.onSpinWait();
+        }
     }
 
     private static Method handler() throws NoSuchMethodException {

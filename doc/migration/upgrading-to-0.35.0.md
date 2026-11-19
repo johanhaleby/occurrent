@@ -2877,7 +2877,8 @@ An application that uses a Spring Boot starter and has a bean with a `@Synchrono
 
 In 0.34.0 the handler registered when the bean was created, and never got the writes made before that. Now creating
 the bean throws an `IllegalStateException` before its init methods run, so the `getBean` call or the injection that
-asked for it fails. The message names the bean and the handler, for example:
+asked for it fails. When another post-processor replaces the bean with an object that declares such a handler, the
+creation fails once the bean is initialized instead. The message names the bean and the handler, for example:
 
 ```
 Bean 'accountReadModel' declares the synchronous handler com.example.AccountReadModel#on and is created after the startup scan of the Spring Boot starter registered the synchronous handlers. A synchronous handler has no replay and gets only the writes made after it registers, so it would miss the earlier ones. Let the startup scan register it: remove @Lazy from the bean, or declare its @Bean method with the annotated class as the return type rather than an interface or Object. Or make the handler asynchronous, with @Subscription instead of @SynchronousSubscription, or mode = ASYNC on @Projection and @Snapshot.

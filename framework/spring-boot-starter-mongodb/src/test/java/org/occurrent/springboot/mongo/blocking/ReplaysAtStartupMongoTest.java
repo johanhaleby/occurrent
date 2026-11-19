@@ -50,6 +50,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -69,6 +70,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Timeout(180)
 class ReplaysAtStartupMongoTest {
 
+    private static final long HOLD_FIRST_EVENT_MILLIS = 2000;
     private static final URI SOURCE = URI.create("urn:occurrent:replays-at-startup");
     private static final List<String> HISTORY = List.of("s1", "s2", "s3");
     private static final List<String> EVERY_REPLAY_IN_ORDER = List.of("one:s1", "one:s2", "one:s3", "two:s1", "two:s2", "two:s3");
@@ -204,13 +206,17 @@ class ReplaysAtStartupMongoTest {
     }
 
     static class ReplayOne extends Replayer {
+        private final AtomicBoolean firstEvent = new AtomicBoolean(true);
+
         ReplayOne(Log log, ObjectProvider<StartupGap> startupGaps) {
             super("one", log, startupGaps);
         }
 
         @StreamSubscription(id = "replayOne", startAt = StreamSubscription.StartPosition.BEGINNING_OF_TIME, startupMode = StartupMode.WAIT_UNTIL_STARTED)
         void on(Seeded event) throws InterruptedException {
-            Thread.sleep(40);
+            // The first event is held longer than startup takes to reach the application runner, so a runner that
+            // doesn't wait for the replay sees it incomplete
+            Thread.sleep(firstEvent.getAndSet(false) ? HOLD_FIRST_EVENT_MILLIS : 40);
             log.entries.add(entry(event));
         }
     }

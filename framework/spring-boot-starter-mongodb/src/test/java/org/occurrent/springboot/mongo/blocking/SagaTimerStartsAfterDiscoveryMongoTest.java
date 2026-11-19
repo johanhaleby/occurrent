@@ -31,9 +31,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaEffect;
-import org.occurrent.springboot.common.internal.StartupGap;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -93,8 +91,8 @@ class SagaTimerStartsAfterDiscoveryMongoTest {
 
             await().atMost(ofSeconds(30)).pollInterval(ofMillis(50)).untilAsserted(() ->
                     assertThat(dispatcher.dispatched).extracting(Dispatched::command).as("[commands the timer dispatched]").contains(new CancelOrder("order-1")));
-            assertThat(dispatcher.dispatched).extracting(Dispatched::admittedWrites)
-                    .as("[whether the application service admitted writes when the timer dispatched]").containsOnly(true);
+            assertThat(dispatcher.dispatched).extracting(Dispatched::afterTheScanBuiltItsLastBean)
+                    .as("[whether the startup scan had finished building its slow bean when the timer dispatched]").containsOnly(true);
         }
     }
 
@@ -120,24 +118,32 @@ class SagaTimerStartsAfterDiscoveryMongoTest {
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=stream",
                 "--occurrent.saga.timer-poll-interval=50ms",
+                // The first boot cannot release the poller lease while it closes, and a second boot would wait for it to expire
+                "--occurrent.saga.competing-consumer.enabled=false",
                 "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE);
     }
 
-    record Dispatched(OrderCommand command, boolean admittedWrites) {
+    record Dispatched(OrderCommand command, boolean afterTheScanBuiltItsLastBean) {
     }
 
     static class RecordingDispatcher implements CommandDispatcher<OrderCommand> {
         final List<Dispatched> dispatched = new CopyOnWriteArrayList<>();
-        private final ObjectProvider<StartupGap> startupGaps;
+        private final ScanProgress scanProgress;
 
-        RecordingDispatcher(ObjectProvider<StartupGap> startupGaps) {
-            this.startupGaps = startupGaps;
+        // Resolves nothing from the bean factory when it dispatches, since the timer poller thread would then wait for
+        // Spring's singleton lock while the context is still building and hide a timer that fired early
+        RecordingDispatcher(ScanProgress scanProgress) {
+            this.scanProgress = scanProgress;
         }
 
         @Override
         public void dispatch(OrderCommand command) {
-            dispatched.add(new Dispatched(command, startupGaps.orderedStream().allMatch(StartupGap::admitsWrite)));
+            dispatched.add(new Dispatched(command, scanProgress.slowBeanBuilt));
         }
+    }
+
+    static class ScanProgress {
+        volatile boolean slowBeanBuilt;
     }
 
     static class OrderSaga {
@@ -158,8 +164,9 @@ class SagaTimerStartsAfterDiscoveryMongoTest {
     // Built by the startup scan once the saga has registered, and slow, so the scan is still running when a timer poller
     // that started with the saga polls
     static class SlowToBuild {
-        SlowToBuild() throws InterruptedException {
+        SlowToBuild(ScanProgress scanProgress) throws InterruptedException {
             Thread.sleep(3_000);
+            scanProgress.slowBeanBuilt = true;
         }
 
         @Subscription(id = "slowToBuild", startAt = StartPosition.NOW)
@@ -185,8 +192,13 @@ class SagaTimerStartsAfterDiscoveryMongoTest {
         }
 
         @Bean
-        RecordingDispatcher recordingDispatcher(ObjectProvider<StartupGap> startupGaps) {
-            return new RecordingDispatcher(startupGaps);
+        ScanProgress scanProgress() {
+            return new ScanProgress();
+        }
+
+        @Bean
+        RecordingDispatcher recordingDispatcher(ScanProgress scanProgress) {
+            return new RecordingDispatcher(scanProgress);
         }
 
         @Bean
@@ -210,8 +222,8 @@ class SagaTimerStartsAfterDiscoveryMongoTest {
 
         @Bean
         @Lazy
-        SlowToBuild slowToBuild() throws InterruptedException {
-            return new SlowToBuild();
+        SlowToBuild slowToBuild(ScanProgress scanProgress) throws InterruptedException {
+            return new SlowToBuild(scanProgress);
         }
     }
 

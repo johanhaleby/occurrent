@@ -18,8 +18,6 @@
 package org.occurrent.springboot.common.internal;
 
 import java.lang.reflect.Method;
-import java.util.IdentityHashMap;
-import java.util.Map;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -27,19 +25,20 @@ import java.util.function.BooleanSupplier;
  * registered every handler, and refuses the creation of a bean whose synchronous handler would register after that.
  * <p>
  * Every write it admits reaches every synchronous handler the context ever registers, or the bean that declares that
- * handler fails its creation. The starters start no asynchronous subscription before {@link #open()}, so nothing the
- * startup scan starts can write while it runs. A bean that would register a new synchronous handler once the gate is
- * open fails its creation, before its {@code @PostConstruct} method runs, or, when its creation began before the gate
- * opened, once it is initialized.
+ * handler fails its creation. The starters start no asynchronous subscription before the gate opens, so nothing the
+ * startup scan starts can write while it runs. Until the gate opens, the starter takes every bean that declares a
+ * synchronous handler that isn't registered yet and registers it before opening. Once the gate is open, such a bean
+ * fails its creation before its {@code @PostConstruct} method runs. A bean whose initialization began before the gate
+ * opened fails once it is initialized instead, and so does a bean that another post-processor replaced with an object
+ * that declares such a handler.
  * <p>
- * A bean counts here only when it declares a synchronous handler that isn't registered yet, so another instance of a
- * prototype whose handler registered at startup is built as usual.
+ * Whether a handler is registered is read again once the gate is open, so another instance of a prototype whose
+ * handler registered at startup is built as usual.
  */
 public final class StartupWriteAdmission implements StartupGap {
 
     private volatile boolean open;
-    // The synchronous beans in creation, read and changed only while holding its own lock
-    private final Map<Object, Refusable> inCreation = new IdentityHashMap<>();
+    private final Object lock = new Object();
 
     @Override
     public boolean admitsWrite() {
@@ -51,55 +50,54 @@ public final class StartupWriteAdmission implements StartupGap {
      *
      * @throws IllegalStateException when the gate is open, which fails the bean's creation
      */
-    public void synchronousBeanCreationStarts(Object bean, String beanName, Method handler) {
-        synchronized (inCreation) {
-            if (open) {
-                throw refusal(beanName, handler);
-            }
-            inCreation.put(bean, new Refusable(beanName, handler));
-        }
-    }
-
-    /**
-     * Called once a bean passed to {@link #synchronousBeanCreationStarts} is initialized. Takes any object, so a caller
-     * can pass both the instance it got and the target a proxy wraps.
-     *
-     * @param handlerUnregistered Whether the bean's synchronous handler is still unregistered
-     * @throws IllegalStateException when the gate opened while the bean was created and its handler is still
-     *                               unregistered, which fails the bean's creation
-     */
-    public void synchronousBeanCreationEnds(Object bean, BooleanSupplier handlerUnregistered) {
-        Refusable started;
-        synchronized (inCreation) {
-            started = inCreation.remove(bean);
-        }
-        if (started != null && open && handlerUnregistered.getAsBoolean()) {
-            throw refusal(started.beanName(), started.handler());
-        }
-    }
-
-    /**
-     * Called when a {@code FactoryBean}'s product that declares a synchronous handler that isn't registered yet has been
-     * built, since the product is first seen then.
-     *
-     * @throws IllegalStateException when the gate is open, which fails the product's creation
-     */
-    public void synchronousProductBuilt(String beanName, Method handler) {
+    public void refuseIfOpen(String beanName, Method handler) {
         if (open) {
             throw refusal(beanName, handler);
         }
     }
 
     /**
-     * Called once the startup scan has registered every handler, and every write is admitted from then on.
+     * Runs {@code handOver} unless the gate is open, and keeps the gate from opening until it returns.
+     *
+     * @return Whether {@code handOver} ran
      */
-    public void open() {
-        synchronized (inCreation) {
-            open = true;
+    public boolean runWhileClosed(Runnable handOver) {
+        synchronized (lock) {
+            if (open) {
+                return false;
+            }
+            handOver.run();
+            return true;
         }
     }
 
-    private static IllegalStateException refusal(String beanName, Method handler) {
+    /**
+     * Opens the gate when {@code nothingLeft} holds, read while nothing can run through {@link #runWhileClosed}. Every
+     * write is admitted from then on.
+     *
+     * @return Whether the gate is open
+     */
+    public boolean openIfNothingLeft(BooleanSupplier nothingLeft) {
+        synchronized (lock) {
+            if (!nothingLeft.getAsBoolean()) {
+                return false;
+            }
+            open = true;
+            return true;
+        }
+    }
+
+    /**
+     * Opens the gate, and every write is admitted from then on.
+     */
+    public void open() {
+        openIfNothingLeft(() -> true);
+    }
+
+    /**
+     * The exception that fails the creation of a bean whose synchronous handler would register after the gate opened.
+     */
+    public static IllegalStateException refusal(String beanName, Method handler) {
         return new IllegalStateException(("Bean '%s' declares the synchronous handler %s#%s and is created after the startup scan of the Spring Boot " +
                                           "starter registered the synchronous handlers. A synchronous handler has no replay and gets only the writes " +
                                           "made after it registers, so it would miss the earlier ones. Let the startup scan register it: remove @Lazy " +
@@ -107,8 +105,5 @@ public final class StartupWriteAdmission implements StartupGap {
                                           "interface or Object. Or make the handler asynchronous, with @Subscription instead of " +
                                           "@SynchronousSubscription, or mode = ASYNC on @Projection and @Snapshot.")
                 .formatted(beanName, handler.getDeclaringClass().getName(), handler.getName()));
-    }
-
-    private record Refusable(String beanName, Method handler) {
     }
 }
