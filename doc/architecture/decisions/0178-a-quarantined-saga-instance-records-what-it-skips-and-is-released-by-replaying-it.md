@@ -471,7 +471,8 @@ every instance of the saga, not only the events of the quarantined instance.
 
 After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease, so the stall lasts until the instance is
 stored with a status 0.34.0 reads, or deleted, with competing consumers or without. A node whose catch-up stopped on
-the event also has to restart before its subscription goes live. A downgrade that doesn't stall anything goes like this, with steps 1 to 5 on 0.35.0 nodes:
+the event also has to restart before its subscription goes live. A downgrade that doesn't stall anything goes like
+this, with steps 1 to 5 on 0.35.0 nodes:
 
 1. Turn quarantine off on every node, and have that running on every node before step 2. A node that still has
    quarantine on can quarantine another instance after the instances are listed.

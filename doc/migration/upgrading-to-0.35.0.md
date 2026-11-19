@@ -953,7 +953,8 @@ The subscription delivers one event at a time, so the stall holds up every later
 every instance of the saga, not only the events of the quarantined instance.
 
 After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease or to release the instance, so the stall
-lasts until the instance is deleted, with competing consumers or without. A node whose catch-up stopped on the event
+lasts until the instance is stored with a status 0.34.0 reads, as step 6 does, or deleted, with competing consumers or
+without. A node whose catch-up stopped on the event
 also has to restart before its subscription goes live. To downgrade without that stall, do steps 1 to 5 while the
 nodes run 0.35.0:
 
@@ -974,13 +975,25 @@ nodes run 0.35.0:
    longer decodes or an event store read that failed, and release the instance again.
 5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `QUARANTINED_AGAIN` or
    `QUARANTINED_EVENT_MISSING`, or that keeps failing for a cause you can't fix.
-6. Stop every 0.35.0 node. Then list the instances as step 2 does, and delete each one whose failure record has a
-   quarantine id with `SagaStateStore.delete(sagaId)`, from a process that runs no `SagaRunner`. With no `SagaRunner`
-   running, nothing releases an instance or delivers it an input, so each one is still quarantined when you delete it.
+6. Stop every 0.35.0 node. Then, from a process that runs no `SagaRunner`, store every instance that is still
+   `QUARANTINED_RECORDING` as `QUARANTINED`, without its quarantine id, skip count and release time. On MongoDB, run
+   this on each saga's collection:
+
+   ```
+   db.getCollection("saga-order-fulfilment").updateMany(
+     { status: "QUARANTINED_RECORDING" },
+     { $set: { status: "QUARANTINED" }, $unset: { failureQuarantineId: "", quarantineSkipCount: "", failureReleasedAt: "" } })
+   ```
+
+   A store of your own needs the same change in the form it stores. With no `SagaRunner` running, nothing releases an
+   instance or delivers it an input while the update runs.
 7. Start the 0.34.0 nodes.
 
-An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `RELEASED` or `NOT_QUARANTINED` is
-released, so no step deletes it.
+No step deletes an instance. 0.34.0 reads an instance that step 6 updated as one it quarantined itself, with its state
+and the input it stopped on. It skips every input addressed to the instance and fires none of its timers, and the
+instance stays quarantined until you delete it, as in 0.34.0. After a later upgrade to 0.35.0, `release` refuses it,
+because 0.34.0 skipped inputs without recording them. The records of the inputs it skipped on 0.35.0 stay in
+`<sagaCollection>_skipped_inputs`, where nothing reads them. They take up storage and nothing else.
 
 ## A saga timer that keeps failing waits behind the timers already due
 
