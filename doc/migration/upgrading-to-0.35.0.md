@@ -3182,8 +3182,8 @@ What you see:
   checkpoint as a finished catch-up and skipped the replay. Delete that checkpoint, or subscribe under a new id. A
   start that finds no marker replays the whole history. A failed catch-up does not delete that checkpoint, but the
   push model's `cancelSubscription(id)` does. When a durable checkpoint is a position, a catch-up can resume after it
-  and replace it. So don't share a subscription id between a durable subscription and a catch-up model or feed, on
-  either stack.
+  and replace it. So don't share a subscription id between a durable subscription and a catch-up-then-push model,
+  `CatchupProjectionFeed` or `DomainEventFeed`, on either stack.
 - `ReactiveReplayAware`, and a `ReplayAware` view on a reactor feed, hear `replayStarted()`, `replayCompleted()` and
   `replayAbandoned()` only for a replay from the beginning, as in 0.34.0. A replay after a marker delivers its events
   the way the live feed does, without those calls. A `CatchupListener` on the reactor push model follows the same
