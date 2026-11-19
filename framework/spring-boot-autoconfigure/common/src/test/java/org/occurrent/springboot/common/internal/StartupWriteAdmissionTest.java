@@ -25,6 +25,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -47,17 +49,38 @@ class StartupWriteAdmissionTest {
     }
 
     @Test
-    void refuse_if_open_throws_only_once_the_gate_is_open() throws Exception {
+    void refuse_if_open_throws_only_once_the_gate_is_open() {
         StartupWriteAdmission admission = new StartupWriteAdmission();
 
-        assertThatCode(() -> admission.refuseIfOpen("receiver", handler())).as("[before open()]").doesNotThrowAnyException();
+        assertThatCode(() -> admission.refuseIfOpen("receiver", StartupWriteAdmissionTest::handler)).as("[before open()]").doesNotThrowAnyException();
 
         admission.open();
 
-        assertThatThrownBy(() -> admission.refuseIfOpen("receiver", handler()))
+        assertThatThrownBy(() -> admission.refuseIfOpen("receiver", StartupWriteAdmissionTest::handler))
                 .as("[after open()]")
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Bean 'receiver' declares the synchronous handler");
+    }
+
+    @Test
+    void refuse_if_open_does_not_ask_for_the_handler_while_the_gate_is_closed() {
+        StartupWriteAdmission admission = new StartupWriteAdmission();
+        AtomicBoolean asked = new AtomicBoolean();
+
+        admission.refuseIfOpen("receiver", () -> {
+            asked.set(true);
+            return null;
+        });
+
+        assertThat(asked).as("[handler asked for]").isFalse();
+    }
+
+    @Test
+    void refuse_if_open_does_not_refuse_when_the_gate_is_open_and_the_handler_is_no_longer_unregistered() {
+        StartupWriteAdmission admission = new StartupWriteAdmission();
+        admission.open();
+
+        assertThatCode(() -> admission.refuseIfOpen("receiver", () -> null)).doesNotThrowAnyException();
     }
 
     @Test
@@ -143,7 +166,110 @@ class StartupWriteAdmissionTest {
     }
 
     @Test
-    void the_refusal_names_the_bean_and_the_handler() throws Exception {
+    void a_counted_registration_keeps_open_if_nothing_left_on_another_thread_waiting_until_it_ends() throws Exception {
+        StartupWriteAdmission admission = new StartupWriteAdmission();
+        List<String> order = new CopyOnWriteArrayList<>();
+        assertThat(admission.registrationStarts()).as("[registration counted]").isTrue();
+        Thread opening = new Thread(() -> admission.openIfNothingLeft(() -> {
+            order.add("nothing left read");
+            return true;
+        }), "opening");
+        try {
+            opening.start();
+            awaitState(opening, Thread.State.WAITING);
+
+            assertThat(admission.admitsWrite()).as("[gate while the registration is counted]").isFalse();
+            assertThat(order).as("[events while the registration is counted]").isEmpty();
+
+            order.add("registration ended");
+            admission.registrationEnds();
+            opening.join(TimeUnit.SECONDS.toMillis(WAIT_SECONDS));
+
+            assertThat(order).as("[order]").containsExactly("registration ended", "nothing left read");
+            assertThat(admission.admitsWrite()).as("[gate after the registration ended]").isTrue();
+        } finally {
+            opening.interrupt();
+        }
+    }
+
+    @Test
+    void every_counted_registration_has_to_end_before_open_if_nothing_left_reads_the_supplier() throws Exception {
+        StartupWriteAdmission admission = new StartupWriteAdmission();
+        AtomicInteger endedWhenRead = new AtomicInteger(-1);
+        AtomicInteger ended = new AtomicInteger();
+        admission.registrationStarts();
+        admission.registrationStarts();
+        Thread opening = new Thread(() -> admission.openIfNothingLeft(() -> {
+            endedWhenRead.set(ended.get());
+            return true;
+        }), "opening");
+        try {
+            opening.start();
+            awaitState(opening, Thread.State.WAITING);
+
+            ended.incrementAndGet();
+            admission.registrationEnds();
+            ended.incrementAndGet();
+            admission.registrationEnds();
+            opening.join(TimeUnit.SECONDS.toMillis(WAIT_SECONDS));
+
+            assertThat(endedWhenRead).as("[registrations ended when the supplier was read]").hasValue(2);
+            assertThat(admission.admitsWrite()).as("[gate]").isTrue();
+        } finally {
+            opening.interrupt();
+        }
+    }
+
+    @Test
+    void registration_starts_returns_false_and_counts_nothing_once_the_gate_is_open() throws Exception {
+        StartupWriteAdmission admission = new StartupWriteAdmission();
+        admission.open();
+
+        boolean counted = admission.registrationStarts();
+
+        assertThat(counted).as("[registration counted]").isFalse();
+        AtomicBoolean opened = new AtomicBoolean();
+        Thread opening = new Thread(() -> opened.set(admission.openIfNothingLeft(() -> true)), "opening");
+        try {
+            opening.start();
+            opening.join(TimeUnit.SECONDS.toMillis(WAIT_SECONDS));
+
+            assertThat(opening.isAlive()).as("[open_if_nothing_left still waiting]").isFalse();
+            assertThat(opened).as("[open_if_nothing_left returned]").isTrue();
+        } finally {
+            opening.interrupt();
+        }
+    }
+
+    @Test
+    void an_interrupt_while_open_if_nothing_left_waits_for_a_registration_throws_and_keeps_the_interrupt_flag() throws Exception {
+        StartupWriteAdmission admission = new StartupWriteAdmission();
+        admission.registrationStarts();
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        AtomicBoolean interruptedAfter = new AtomicBoolean();
+        Thread opening = new Thread(() -> {
+            try {
+                admission.openIfNothingLeft(() -> true);
+            } catch (Throwable e) {
+                thrown.set(e);
+            }
+            interruptedAfter.set(Thread.currentThread().isInterrupted());
+        }, "opening");
+        opening.start();
+        awaitState(opening, Thread.State.WAITING);
+
+        opening.interrupt();
+        opening.join(TimeUnit.SECONDS.toMillis(WAIT_SECONDS));
+
+        assertThat(thrown.get()).as("[thrown]").isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Interrupted while waiting for another thread to finish registering a handler")
+                .hasCauseInstanceOf(InterruptedException.class);
+        assertThat(interruptedAfter).as("[interrupt flag after the throw]").isTrue();
+        assertThat(admission.admitsWrite()).as("[gate]").isFalse();
+    }
+
+    @Test
+    void the_refusal_names_the_bean_and_the_handler() {
         IllegalStateException refusal = StartupWriteAdmission.refusal("lateReceiver", handler());
 
         assertThat(refusal).hasMessageContaining("Bean 'lateReceiver' declares the synchronous handler " + Receiver.class.getName() + "#on")
@@ -172,8 +298,12 @@ class StartupWriteAdmissionTest {
         }
     }
 
-    private static Method handler() throws NoSuchMethodException {
-        return Receiver.class.getDeclaredMethod("on");
+    private static Method handler() {
+        try {
+            return Receiver.class.getDeclaredMethod("on");
+        } catch (NoSuchMethodException e) {
+            throw new AssertionError(e);
+        }
     }
 
     static class Receiver {

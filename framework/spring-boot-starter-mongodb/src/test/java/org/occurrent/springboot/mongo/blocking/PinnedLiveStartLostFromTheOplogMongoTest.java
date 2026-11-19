@@ -60,7 +60,9 @@ import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.BeanFactoryAware;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.SpringApplication;
+import org.springframework.boot.context.event.ApplicationContextInitializedEvent;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+import org.springframework.context.ApplicationListener;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -78,6 +80,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -101,10 +104,12 @@ import static org.awaitility.Awaitility.await;
  * position, an operation time, and by the time the handler subscribes MongoDB has dropped the history past it. The
  * catch-up refuses to start from it rather than skip what was written in between.
  * <p>
- * Both applications boot in a single boot each, at the same time, against databases of their own. Each is held where
- * the starter turns the live start it read into the checkpoint it pins, and MongoDB drops the history past both with
- * one drop, since a drop takes about a minute. One application leaves {@code startupMode} unset, the other sets
- * {@code BACKGROUND}.
+ * Both applications boot in a single boot each, against databases of their own. The second starts once the first has
+ * initialized its logging, since both would otherwise initialize the one Logback context of the JVM at the same time
+ * and the second can fail on it before it reaches its live start. Each is held where the starter turns the live start
+ * it read into the checkpoint it pins, so the first is still held while the second boots, and MongoDB drops the
+ * history past both with one drop, since a drop takes about a minute. One application leaves {@code startupMode}
+ * unset, the other sets {@code BACKGROUND}.
  */
 @DisplayName("A pinned live start that MongoDB has dropped from its change stream history")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -134,8 +139,17 @@ class PinnedLiveStartLostFromTheOplogMongoTest {
         backgroundPin.hold = hold;
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            Future<ConfigurableApplicationContext> unsetBoot = pool.submit(() -> boot(UNSET_DATABASE, UnsetHandler.class, unsetPin));
-            Future<ConfigurableApplicationContext> backgroundBoot = pool.submit(() -> boot(BACKGROUND_DATABASE, InBackgroundHandler.class, backgroundPin));
+            CompletableFuture<Void> unsetLoggingInitialized = new CompletableFuture<>();
+            Future<ConfigurableApplicationContext> unsetBoot = pool.submit(() -> {
+                try {
+                    return boot(UNSET_DATABASE, UnsetHandler.class, unsetPin, unsetLoggingInitialized);
+                } catch (Throwable e) {
+                    unsetLoggingInitialized.completeExceptionally(e);
+                    throw e;
+                }
+            });
+            awaitLoggingInitialized(unsetLoggingInitialized);
+            Future<ConfigurableApplicationContext> backgroundBoot = pool.submit(() -> boot(BACKGROUND_DATABASE, InBackgroundHandler.class, backgroundPin, null));
             assertThat(hold.bothApplicationsReadTheirLiveStart.await(WAIT_SECONDS, SECONDS))
                     .as("both applications read their live start and are about to pin it").isTrue();
 
@@ -201,8 +215,36 @@ class PinnedLiveStartLostFromTheOplogMongoTest {
         return pinned;
     }
 
-    private static ConfigurableApplicationContext boot(String database, Class<?> handler, Pin pin) {
+    private static void awaitLoggingInitialized(CompletableFuture<Void> loggingInitialized) throws InterruptedException {
+        try {
+            loggingInitialized.get(WAIT_SECONDS, SECONDS);
+        } catch (ExecutionException e) {
+            throw new AssertionError("the application with startupMode unset failed before it initialized its logging: " + e.getCause(), e.getCause());
+        } catch (TimeoutException e) {
+            throw new AssertionError("the application with startupMode unset did not initialize its logging within " + WAIT_SECONDS + " seconds", e);
+        }
+    }
+
+    // LoggingApplicationListener initializes the logging on ApplicationEnvironmentPreparedEvent, which SpringApplication
+    // publishes before it creates the context and publishes this event
+    static final class CompletesWhenLoggingIsInitialized implements ApplicationListener<ApplicationContextInitializedEvent> {
+        private final CompletableFuture<Void> loggingInitialized;
+
+        CompletesWhenLoggingIsInitialized(CompletableFuture<Void> loggingInitialized) {
+            this.loggingInitialized = loggingInitialized;
+        }
+
+        @Override
+        public void onApplicationEvent(ApplicationContextInitializedEvent event) {
+            loggingInitialized.complete(null);
+        }
+    }
+
+    private static ConfigurableApplicationContext boot(String database, Class<?> handler, Pin pin, @Nullable CompletableFuture<Void> loggingInitialized) {
         SpringApplication application = new SpringApplication(PinnedLiveStartApplication.class);
+        if (loggingInitialized != null) {
+            application.addListeners(new CompletesWhenLoggingIsInitialized(loggingInitialized));
+        }
         application.addInitializers(context -> {
             ((GenericApplicationContext) context).registerBean(handler);
             context.getBeanFactory().registerSingleton("pin", pin);

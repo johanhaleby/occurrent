@@ -19,6 +19,7 @@ package org.occurrent.springboot.common.internal;
 
 import java.lang.reflect.Method;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /**
  * Internal, not part of the public API. Refuses every write through the application service until the startup scan has
@@ -32,6 +33,9 @@ import java.util.function.BooleanSupplier;
  * opened fails once it is initialized instead, and so does a bean that another post-processor replaced with an object
  * that declares such a handler.
  * <p>
+ * A registration that another thread starts while the gate is closed keeps it closed until it ends, since a handler
+ * counts as registered from the moment it is claimed, before it subscribes.
+ * <p>
  * Whether a handler is registered is read again once the gate is open, so another instance of a prototype whose
  * handler registered at startup is built as usual.
  */
@@ -39,6 +43,8 @@ public final class StartupWriteAdmission implements StartupGap {
 
     private volatile boolean open;
     private final Object lock = new Object();
+    // Registrations counted by registrationStarts that haven't ended, read and changed only while holding lock
+    private int registering;
 
     @Override
     public boolean admitsWrite() {
@@ -48,11 +54,42 @@ public final class StartupWriteAdmission implements StartupGap {
     /**
      * Called before the initialization of a bean that declares a synchronous handler that isn't registered yet.
      *
-     * @throws IllegalStateException when the gate is open, which fails the bean's creation
+     * @param unregisteredHandler The bean's first synchronous handler that isn't registered, or null, asked only once
+     *                            the gate is open
+     * @throws IllegalStateException when the gate is open and the bean still has an unregistered synchronous handler,
+     *                               which fails the bean's creation
      */
-    public void refuseIfOpen(String beanName, Method handler) {
+    public void refuseIfOpen(String beanName, Supplier<Method> unregisteredHandler) {
         if (open) {
-            throw refusal(beanName, handler);
+            Method handler = unregisteredHandler.get();
+            if (handler != null) {
+                throw refusal(beanName, handler);
+            }
+        }
+    }
+
+    /**
+     * Called before a thread other than the startup thread registers a bean's handlers.
+     *
+     * @return Whether the registration is counted, in which case the gate stays closed until {@link #registrationEnds()}
+     */
+    public boolean registrationStarts() {
+        synchronized (lock) {
+            if (open) {
+                return false;
+            }
+            registering++;
+            return true;
+        }
+    }
+
+    /**
+     * Called once a registration that {@link #registrationStarts()} counted has ended, whether or not it succeeded.
+     */
+    public void registrationEnds() {
+        synchronized (lock) {
+            registering--;
+            lock.notifyAll();
         }
     }
 
@@ -72,13 +109,22 @@ public final class StartupWriteAdmission implements StartupGap {
     }
 
     /**
-     * Opens the gate when {@code nothingLeft} holds, read while nothing can run through {@link #runWhileClosed}. Every
-     * write is admitted from then on.
+     * Waits until every counted registration has ended, then opens the gate when {@code nothingLeft} holds, read while
+     * nothing can run through {@link #runWhileClosed}. Every write is admitted from then on.
      *
      * @return Whether the gate is open
+     * @throws IllegalStateException when the thread is interrupted while it waits
      */
     public boolean openIfNothingLeft(BooleanSupplier nothingLeft) {
         synchronized (lock) {
+            while (registering > 0) {
+                try {
+                    lock.wait();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Interrupted while waiting for another thread to finish registering a handler before writes are admitted", e);
+                }
+            }
             if (!nothingLeft.getAsBoolean()) {
                 return false;
             }

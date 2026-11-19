@@ -24,12 +24,15 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.occurrent.annotation.Mode;
+import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.reactor.ApplicationService;
+import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.internal.CatchupReadScope;
 import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
@@ -61,10 +64,12 @@ import tools.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Queue;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -94,6 +99,7 @@ class ReactiveStartupWriteAdmissionRaceMongoTest {
     private static final long WAIT_SECONDS = 30;
     private static final AtomicBoolean RUN_RETURNED = new AtomicBoolean();
     private static volatile Race race;
+    private static volatile Claim claim;
     private static volatile Hammer hammer;
 
     @Container
@@ -120,6 +126,27 @@ class ReactiveStartupWriteAdmissionRaceMongoTest {
         } finally {
             theRace.release.countDown();
             race = null;
+        }
+    }
+
+    @Test
+    void a_synchronous_handler_another_thread_claimed_but_has_not_subscribed_when_the_startup_thread_drains_gets_the_write_made_after_startup() throws Exception {
+        Claim theClaim = new Claim();
+        claim = theClaim;
+        try (ConfigurableApplicationContext context = boot(ClaimApplication.class, "reactive-claim-then-register")) {
+            assertThat(theClaim.claimed.getCount()).as("[precondition: the other thread claimed the handler and is parked before it subscribes]").isZero();
+            assertThat(theClaim.startupThread.get()).as("[precondition: the startup thread ran the drain]").isNotNull();
+
+            applicationServiceOf(context).execute(UUID.randomUUID().toString(), __ -> List.of(new Written("written-after-startup"))).block();
+            theClaim.release.countDown();
+            assertThat(theClaim.finished.await(WAIT_SECONDS, TimeUnit.SECONDS)).as("[precondition: the other thread finished the creation]").isTrue();
+
+            assertThat(theClaim.deliveries).as("[events given to the handler the other thread claimed before the gate opened]").extracting(TestEvent::name).containsExactly("written-after-startup");
+            assertThat(theClaim.creation.get()).as("[the creation the other thread finished]").isInstanceOf(ClaimingReceiver.class);
+            assertThat(theClaim.startupThreadWaited).as("[the startup thread waited in openIfNothingLeft for the registration]").isTrue();
+        } finally {
+            theClaim.release.countDown();
+            claim = null;
         }
     }
 
@@ -316,6 +343,151 @@ class ReactiveStartupWriteAdmissionRaceMongoTest {
         }
     }
 
+    // The two registrations of the claim test. The queued one blocks the startup thread inside the drain, which is
+    // after startupScanComplete is set and before the gate opens. While it blocks, another thread creates the claiming
+    // bean, whose registration then claims its handler and parks before the handler subscribes. The queued one is
+    // then let go, and the drain skips the claimed handler.
+    static final class Claim {
+        final AtomicInteger queuedBuilt = new AtomicInteger();
+        final AtomicBoolean started = new AtomicBoolean();
+        final AtomicReference<Thread> startupThread = new AtomicReference<>();
+        final AtomicReference<BeanFactory> beanFactory = new AtomicReference<>();
+        final CountDownLatch claimed = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        final CountDownLatch finished = new CountDownLatch(1);
+        final AtomicBoolean startupThreadWaited = new AtomicBoolean();
+        final AtomicReference<Object> creation = new AtomicReference<>();
+        final List<TestEvent> deliveries = new CopyOnWriteArrayList<>();
+    }
+
+    // Registered by the drain on the startup thread. Its descriptor factory creates the claiming bean on another thread,
+    // waits until that thread parked in the claiming bean's descriptor factory, and then returns, which is when the
+    // drain moves on. A third thread releases the parked registration once the startup thread waits for it in
+    // openIfNothingLeft. Without that wait the startup thread moves on, and the test releases the registration only
+    // after it has written.
+    static class QueuedReceiver {
+        @Projection(id = "reactiveQueuedReceiver", mode = Mode.SYNCHRONOUS)
+        org.occurrent.dsl.projection.Projection<Count, TestEvent, String> queued() {
+            Claim theClaim = claim;
+            if (theClaim != null && theClaim.startupThread.compareAndSet(null, Thread.currentThread())) {
+                Thread startup = Thread.currentThread();
+                Thread creating = new Thread(() -> {
+                    Object outcome;
+                    try {
+                        outcome = theClaim.beanFactory.get().getBean("claimingReceiver");
+                    } catch (Throwable e) {
+                        outcome = e;
+                    }
+                    theClaim.creation.set(outcome);
+                    theClaim.finished.countDown();
+                }, "claiming-creation");
+                creating.setDaemon(true);
+                creating.start();
+                Thread releasing = new Thread(() -> {
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
+                    while (theClaim.release.getCount() > 0 && System.nanoTime() < deadline) {
+                        if (waitsInOpenIfNothingLeft(startup)) {
+                            theClaim.startupThreadWaited.set(true);
+                            break;
+                        }
+                        Thread.onSpinWait();
+                    }
+                    theClaim.release.countDown();
+                }, "releasing-the-claim");
+                releasing.setDaemon(true);
+                releasing.start();
+                try {
+                    if (!theClaim.claimed.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("The claiming creation never reached its descriptor factory");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            }
+            return org.occurrent.dsl.projection.Projection.<Count, TestEvent, String>builder(new Count(0))
+                    .id(event -> "queued")
+                    .on(Written.class, (state, event) -> state)
+                    .build();
+        }
+    }
+
+    // Parked by its descriptor factory, which runs after the handler is claimed and before it subscribes
+    static class ClaimingReceiver {
+        @Projection(id = "reactiveClaimingReceiver", mode = Mode.SYNCHRONOUS)
+        org.occurrent.dsl.projection.Projection<Count, TestEvent, String> claiming() {
+            Claim theClaim = claim;
+            theClaim.claimed.countDown();
+            try {
+                if (!theClaim.release.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("The registration was never released");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+            return org.occurrent.dsl.projection.Projection.<Count, TestEvent, String>builder(new Count(0))
+                    .id(event -> "claiming")
+                    .on(Written.class, (state, event) -> {
+                        theClaim.deliveries.add(event);
+                        return state;
+                    })
+                    .build();
+        }
+    }
+
+    private static boolean waitsInOpenIfNothingLeft(Thread thread) {
+        return thread.getState() == Thread.State.WAITING
+               && Arrays.stream(thread.getStackTrace()).anyMatch(frame -> frame.getMethodName().equals("openIfNothingLeft"));
+    }
+
+    // The scan asks the type of every bean definition, which calls this on the startup thread. The first call builds
+    // the queued bean on another thread, which hands it over to the drain, and then a second instance of another class
+    // on the startup thread. The class the starter recorded for the name is then one without a handler, so the scan
+    // never registers the queued handler and the drain does.
+    static class StartsTheQueuedCreation implements FactoryBean<Object>, BeanFactoryAware {
+        private BeanFactory beanFactory;
+
+        @Override
+        public void setBeanFactory(BeanFactory beanFactory) {
+            this.beanFactory = beanFactory;
+            Claim theClaim = claim;
+            if (theClaim != null) {
+                theClaim.beanFactory.set(beanFactory);
+            }
+        }
+
+        @Override
+        public Object getObject() {
+            return "queued-creation-starter";
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            Claim theClaim = claim;
+            if (theClaim != null && insideTheStartupScan() && theClaim.started.compareAndSet(false, true)) {
+                Thread creating = new Thread(() -> beanFactory.getBean("queuedReceiver"), "queued-creation");
+                creating.setDaemon(true);
+                creating.start();
+                try {
+                    creating.join(TimeUnit.SECONDS.toMillis(WAIT_SECONDS));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                beanFactory.getBean("queuedReceiver");
+            }
+            return Object.class;
+        }
+
+        private static boolean insideTheStartupScan() {
+            return StackWalker.getInstance().walk(frames -> frames.anyMatch(frame -> frame.getMethodName().equals("afterSingletonsInstantiated")
+                                                                                     && frame.getClassName().contains("AnnotationBeanPostProcessor")));
+        }
+    }
+
+    record Count(int count) {
+    }
+
     static class SwappedReceiver {
         final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
@@ -488,6 +660,36 @@ class ReactiveStartupWriteAdmissionRaceMongoTest {
         @Bean
         StartsTheRacingCreation startsTheRacingCreation() {
             return new StartsTheRacingCreation();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrentReactive
+    @Import(EventConverters.class)
+    static class ClaimApplication {
+
+        @Bean
+        ViewStateRepository<Count, String> countStore() {
+            ConcurrentHashMap<String, Count> map = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(map::get, map::put);
+        }
+
+        @Bean
+        @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
+        Object queuedReceiver() {
+            return claim.queuedBuilt.getAndIncrement() == 0 ? new QueuedReceiver() : new PlainShell();
+        }
+
+        @Bean
+        @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
+        Object claimingReceiver() {
+            return new ClaimingReceiver();
+        }
+
+        @Bean
+        StartsTheQueuedCreation startsTheQueuedCreation() {
+            return new StartsTheQueuedCreation();
         }
     }
 

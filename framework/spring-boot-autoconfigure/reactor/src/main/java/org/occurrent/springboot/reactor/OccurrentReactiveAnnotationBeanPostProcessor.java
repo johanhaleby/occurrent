@@ -206,7 +206,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // Before the bean's @PostConstruct method, so a refused bean writes nothing
             @Nullable Method synchronousHandler = unregisteredSynchronousHandler(beanName, userClass);
             if (synchronousHandler != null) {
-                writeAdmission.refuseIfOpen(beanName, synchronousHandler);
+                // Looked up again once the gate is open, since the drain may have registered it after the lookup above
+                writeAdmission.refuseIfOpen(beanName, () -> unregisteredSynchronousHandler(beanName, userClass));
             }
             if (startupScanComplete && declaresAnyOccurrentAnnotation(userClass, true)) {
                 @Nullable String liveStart = startPositionSupport.readLateLiveStart();
@@ -298,7 +299,16 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 if (lateLiveStart == null && product && declaresAnyOccurrentAnnotation(userClassOf(bean), true)) {
                     lateLiveStart = startPositionSupport.readLateLiveStart();
                 }
-                scanBuiltAfterStartup(beanFactory, beanName, bean, beanFactory.isSingleton(beanName), false, false, lateLiveStart);
+                // Counted while the gate is closed, because the scan claims a handler before it subscribes it, and the
+                // startup thread's drain would skip a handler claimed here and could open the gate before the subscribe
+                boolean counted = writeAdmission.registrationStarts();
+                try {
+                    scanBuiltAfterStartup(beanFactory, beanName, bean, beanFactory.isSingleton(beanName), false, false, lateLiveStart);
+                } finally {
+                    if (counted) {
+                        writeAdmission.registrationEnds();
+                    }
+                }
             }
         }
         return bean;
