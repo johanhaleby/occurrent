@@ -25,7 +25,7 @@ import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 
-// Refuses a write through the application service until startup has registered the synchronous handlers, before the
+// Refuses a write through the application service while it could miss a synchronous handler that registers later, before the
 // model's own refusals are asked, so the application service needs no startup logic of its own
 record StartupWriteGate(SynchronousEventDispatcher delegate, List<StartupGap> startupGaps) implements SynchronousEventDispatcher {
 
@@ -47,7 +47,7 @@ record StartupWriteGate(SynchronousEventDispatcher delegate, List<StartupGap> st
 
     @Override
     public WriteCheck beforeWrite() {
-        if (startupGaps.stream().anyMatch(StartupGap::isOpen)) {
+        if (!startupGaps.stream().allMatch(StartupGap::admitsWrite)) {
             throw WriteRefusedException.beforeStartupCompleted();
         }
         return delegate.beforeWrite();

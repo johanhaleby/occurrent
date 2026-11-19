@@ -24,11 +24,13 @@ import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.occurrent.springboot.common.internal.StartupGap;
+import org.occurrent.springboot.common.internal.StartupWriteAdmission;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.aop.scope.ScopedProxyUtils;
@@ -59,7 +61,6 @@ import java.util.Set;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -83,10 +84,6 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // the only source that cannot fall short of the real class, see resolveScanType below for why the prediction
     // this replaces can.
     private final Map<String, Class<?>> userClassByBeanName = new ConcurrentHashMap<>();
-    // Counts the recordings above, so the startup scan can tell whether a bean was built since it last registered the
-    // synchronous handlers. Only the startup thread reads recordingsAtLastSynchronousScan.
-    private final AtomicInteger recordings = new AtomicInteger();
-    private int recordingsAtLastSynchronousScan;
     private static final List<Class<? extends Annotation>> HANDLER_ANNOTATIONS = List.of(StreamSubscription.class, Subscription.class,
             DcbSubscription.class, SynchronousSubscription.class, org.occurrent.annotation.Projection.class,
             org.occurrent.annotation.Snapshot.class, org.occurrent.annotation.Saga.class);
@@ -124,8 +121,13 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // is still unknown is not attempted for ever.
     private final Set<String> alreadyBuiltToBeScanned = ConcurrentHashMap.newKeySet();
     private volatile boolean startupScanComplete;
-    // Set once the synchronous pass of the startup scan has registered every synchronous handler it can see
-    private volatile boolean startupGapClosed;
+    // Refuses every write through the application service until the startup scan has registered every handler, and
+    // the creation of a bean whose synchronous handler would register after that
+    private final StartupWriteAdmission writeAdmission = new StartupWriteAdmission();
+    // The asynchronous subscriptions the startup scan registers, started once the gate is open
+    private final StartupSubscribes startupSubscribes = new StartupSubscribes();
+    // The synchronous handler methods each class declares, read once per class, since every bean is checked as it is created
+    private final Map<Class<?>, List<Method>> synchronousHandlersByClass = new ConcurrentHashMap<>();
     // The start boundary each bean built after startup read when it was created, by the instance being created, until
     // it registers. Keyed by identity, so two creations of one prototype at the same moment each keep their own. An
     // entry for a creation that failed stays until the post-processor goes.
@@ -145,10 +147,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // registrars here (rather than lazily) is safe and keeps the lifecycle methods thin.
         this.applicationContext = applicationContext;
         this.startPositionSupport = new StartPositionSupport(applicationContext);
-        this.subscriptionRegistrar = new SubscriptionAnnotationRegistrar(applicationContext, startPositionSupport);
-        this.projectionRegistrar = new ProjectionAnnotationRegistrar(applicationContext, startPositionSupport);
-        this.snapshotRegistrar = new SnapshotAnnotationRegistrar(applicationContext, startPositionSupport);
-        this.sagaRegistrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport);
+        this.subscriptionRegistrar = new SubscriptionAnnotationRegistrar(applicationContext, startPositionSupport, startupSubscribes);
+        this.projectionRegistrar = new ProjectionAnnotationRegistrar(applicationContext, startPositionSupport, startupSubscribes);
+        this.snapshotRegistrar = new SnapshotAnnotationRegistrar(applicationContext, startPositionSupport, startupSubscribes);
+        this.sagaRegistrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport, startupSubscribes);
     }
 
     // The container hands over the raw instance here, before any proxy wraps it, so this is where a bean's real
@@ -186,7 +188,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             // container is building now, not the first one it tried.
             Class<?> userClass = userClassOf(bean);
             userClassByBeanName.put(beanName, userClass);
-            recordings.incrementAndGet();
+            // Before the bean's @PostConstruct method, so a refused bean writes nothing
+            @Nullable Method synchronousHandler = unregisteredSynchronousHandler(beanName, userClass);
+            if (synchronousHandler != null) {
+                writeAdmission.synchronousBeanCreationStarts(bean, beanName, synchronousHandler);
+            }
             if (startupScanComplete && declaresAnyOccurrentAnnotation(userClass)) {
                 @Nullable String liveStart = startPositionSupport.readLateLiveStart();
                 if (liveStart != null) {
@@ -229,6 +235,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (bean instanceof FactoryBean<?>) {
             return bean;
         }
+        // A bean whose creation began before the gate opened and that the scan didn't register is refused here
+        writeAdmission.synchronousBeanCreationEnds(bean, () -> unregisteredSynchronousHandler(beanName, userClassOf(bean)) != null);
+        Object target = SubscriptionAnnotations.ultimateTarget(bean);
+        writeAdmission.synchronousBeanCreationEnds(target, () -> unregisteredSynchronousHandler(beanName, userClassOf(target)) != null);
         // Every event store bean passes through here as it is created, before anything can write through it
         startPositionSupport.recordStartBoundaryOf(bean, beanName);
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
@@ -241,8 +251,12 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // support initializes a test instance through it under a name it never defined, and isFactoryBean throws
         // NoSuchBeanDefinitionException for a name with no definition behind it.
         if (beanFactory.containsBeanDefinition(beanName) && beanFactory.isFactoryBean(beanName)) {
-            userClassByBeanName.put(beanName, userClassOf(bean));
-            recordings.incrementAndGet();
+            Class<?> productClass = userClassOf(bean);
+            userClassByBeanName.put(beanName, productClass);
+            @Nullable Method synchronousHandler = unregisteredSynchronousHandler(beanName, productClass);
+            if (synchronousHandler != null) {
+                writeAdmission.synchronousProductBuilt(beanName, synchronousHandler);
+            }
         }
         Thread scanning = scanningThread;
         if (!startupScanComplete && scanning != null && scanning != Thread.currentThread()) {
@@ -325,54 +339,60 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // that registers nothing has built nothing, so nothing new was recorded for the next pass to find, and the
     // handlers a context declares are finite.
     //
-    // Every synchronous handler registers in a scan of its own, before the scan that registers the rest. A
-    // WAIT_UNTIL_STARTED replay and a saga reaction can write while they register, and a synchronous handler
-    // registered after such a write never sees it, since the application service runs synchronous handlers only on
-    // the writer's thread. The startup gap closes after the synchronous scan rather than after the second one, since
-    // the gate would refuse those writes. The second scan builds beans of its own, so before each registration it
-    // registers the synchronous handlers on every bean built since, see registerSynchronousHandlersBuiltSince.
+    // No asynchronous subscription starts while the scan runs, since a delivery can write through the application
+    // service, and a synchronous handler that registers after a write never sees it. The scan registers every handler
+    // and holds back every asynchronous start, the drain registers what other threads built meanwhile, and only then
+    // does the gate open and the held-back starts run, in the order they registered, each WAIT_UNTIL_STARTED one
+    // finishing its replay before the next starts. A bean that would register a new synchronous handler after the gate
+    // opened, such as one a replay builds for the first time, fails its creation, see StartupWriteAdmission.
     @Override
     public void afterSingletonsInstantiated() {
         synchronized (registrationLock) {
             scanningThread = Thread.currentThread();
-            registerEverySynchronousHandler();
-            startupGapClosed = true;
             String[] beanNames = applicationContext.getBeanDefinitionNames();
             while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true, null, false)) {
                 beanNames = applicationContext.getBeanDefinitionNames();
             }
             startupScanComplete = true;
             drainBeansBuiltWhileScanning();
+            writeAdmission.open();
             scanningThread = null;
         }
-    }
-
-    // Scans for synchronous handlers until a pass registers nothing, and remembers how many beans were recorded by then
-    private void registerEverySynchronousHandler() {
-        int recorded;
-        do {
-            recorded = recordings.get();
-            String[] beanNames = applicationContext.getBeanDefinitionNames();
-            while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true, null, true)) {
-                beanNames = applicationContext.getBeanDefinitionNames();
-            }
-        } while (recorded != recordings.get());
-        recordingsAtLastSynchronousScan = recorded;
-    }
-
-    // Runs before each registration of the startup scan's second scan, since a registration can write, and a bean
-    // built since the synchronous handlers last registered, by the previous registration or at the end of the last
-    // pass, can declare one. A write that builds a bean, or a delivery on another thread that writes while a bean is
-    // being built, still reaches the handlers of that bean only once they register.
-    private void registerSynchronousHandlersBuiltSince() {
-        if (recordings.get() != recordingsAtLastSynchronousScan) {
-            registerEverySynchronousHandler();
-        }
+        startupSubscribes.start();
     }
 
     @Override
-    public boolean isOpen() {
-        return !startupGapClosed;
+    public boolean admitsWrite() {
+        return writeAdmission.admitsWrite();
+    }
+
+    // The first synchronous handler type declares that isn't registered under the name the scan registers beanName
+    // under, or null. A bean the scan never reads, one without a definition, has none. Neither has a class whose
+    // handlers are refused, since the scan reports that refusal itself.
+    private @Nullable Method unregisteredSynchronousHandler(String beanName, Class<?> type) {
+        List<Method> handlers = synchronousHandlersByClass.computeIfAbsent(type, OccurrentBlockingAnnotationBeanPostProcessor::synchronousHandlersOf);
+        if (handlers.isEmpty()) {
+            return null;
+        }
+        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
+        if (!beanFactory.containsBeanDefinition(beanName)) {
+            return null;
+        }
+        String scanName = HandlerScan.isScopedTarget(beanFactory, beanName) ? ScopedProxyUtils.getOriginalBeanName(beanName) : beanName;
+        for (Method handler : handlers) {
+            if (!registeredHandlers.isRegistered(scanName, new HandlerMethod(handler, type))) {
+                return handler;
+            }
+        }
+        return null;
+    }
+
+    private static List<Method> synchronousHandlersOf(Class<?> type) {
+        try {
+            return HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS).stream().filter(HandlerScan::isSynchronousHandler).toList();
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return List.of();
+        }
     }
 
     // Whether a handler invocation for this name can reach the object the container published, rather than the
@@ -568,10 +588,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (!mayBlockForReplay) {
             CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
         }
-        Runnable beforeRegistration = !synchronousOnly && !startupScanComplete && scanningThread == Thread.currentThread() ? this::registerSynchronousHandlersBuiltSince : () -> {
-        };
         for (Map.Entry<String, List<HandlerMethod>> staged : subscriptionMethods.entrySet()) {
-            beforeRegistration.run();
             String beanName = staged.getKey();
             List<HandlerMethod> handlers = staged.getValue();
             // A handler the scoped proxy's class doesn't have, one declared only below the @Bean method's declared type
@@ -591,7 +608,6 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
             }
             Object bean = beanResolver.apply(beanName);
-            beforeRegistration.run();
             registerSubscriptions(beanName, bean, handlers, handlerTargets.apply(beanName, bean), mayBlockForReplay, lateLiveStart);
         }
         if (mayBlockForReplay) {
@@ -605,7 +621,6 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             HandlerMethod handler = (HandlerMethod) pm[1];
             Method method = handler.method();
             org.occurrent.annotation.Projection projection = (org.occurrent.annotation.Projection) pm[2];
-            beforeRegistration.run();
             if (registeredHandlers.markRegistered(beanName, handler)) {
                 registerDescriptor(beanName, handler, lateLiveStart, projection.id(),
                         "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(projection.id(), method.getDeclaringClass().getName(), method.getName()),
@@ -613,14 +628,12 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
         }
         // Catch up each domain-push feed once, after all its projections are registered.
-        beforeRegistration.run();
-        projectionRegistrar.catchUpCollectedFeeds();
+        startupSubscribes.run(projectionRegistrar::catchUpCollectedFeeds);
         for (Object[] sm : snapshotMethods) {
             String beanName = (String) sm[0];
             HandlerMethod handler = (HandlerMethod) sm[1];
             Method method = handler.method();
             org.occurrent.annotation.Snapshot snapshot = (org.occurrent.annotation.Snapshot) sm[2];
-            beforeRegistration.run();
             if (registeredHandlers.markRegistered(beanName, handler)) {
                 registerDescriptor(beanName, handler, lateLiveStart, snapshot.id(),
                         "Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(snapshot.id(), method.getDeclaringClass().getName(), method.getName()),
@@ -632,7 +645,6 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             HandlerMethod handler = (HandlerMethod) gm[1];
             Method method = handler.method();
             org.occurrent.annotation.Saga saga = (org.occurrent.annotation.Saga) gm[2];
-            beforeRegistration.run();
             if (registeredHandlers.markRegistered(beanName, handler)) {
                 registerDescriptor(beanName, handler, lateLiveStart, saga.id(),
                         "Duplicate subscription/projection/snapshot/saga id '%s' (used by @Saga on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(saga.id(), method.getDeclaringClass().getName(), method.getName()),

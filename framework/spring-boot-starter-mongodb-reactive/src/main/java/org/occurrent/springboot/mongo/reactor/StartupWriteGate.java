@@ -26,7 +26,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 
-// Refuses a write through the application service until startup has registered the synchronous handlers, before the
+// Refuses a write through the application service while it could miss a synchronous handler that registers later, before the
 // model's own refusals are asked, so the application service needs no startup logic of its own. The application
 // service turns the throw into a failed Mono.
 record StartupWriteGate(ReactiveSynchronousEventDispatcher delegate, List<StartupGap> startupGaps) implements ReactiveSynchronousEventDispatcher {
@@ -49,7 +49,7 @@ record StartupWriteGate(ReactiveSynchronousEventDispatcher delegate, List<Startu
 
     @Override
     public WriteCheck beforeWrite() {
-        if (startupGaps.stream().anyMatch(StartupGap::isOpen)) {
+        if (!startupGaps.stream().allMatch(StartupGap::admitsWrite)) {
             throw WriteRefusedException.beforeStartupCompleted();
         }
         return delegate.beforeWrite();

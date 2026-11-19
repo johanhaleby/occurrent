@@ -36,6 +36,7 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -61,6 +62,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * Proves that a synchronous handler is registered before every other handler at startup, so a write made while the
@@ -123,31 +125,28 @@ class SynchronousHandlersRegisterFirstMongoTest {
     }
 
     @Test
-    void a_lazy_bean_with_a_synchronous_handler_registers_when_it_is_built_and_its_handler_runs_on_the_next_write() {
+    void a_lazy_bean_with_a_synchronous_handler_is_refused_when_it_is_built_after_the_application_started() {
         try (ConfigurableApplicationContext context = boot(LazyReceiverApplication.class, "lazy-receiver")) {
-            ApplicationService<TestEvent> applicationService = applicationServiceOf(context);
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new Written("before-the-bean-is-built")));
+            Throwable refusal = catchThrowable(() -> context.getBean("lazySynchronousReceiver"));
 
-            LazySynchronousReceiver receiver = context.getBean("lazySynchronousReceiver", LazySynchronousReceiver.class);
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new Written("after-the-bean-is-built")));
-
-            // The write before the bean was built is not replayed to a synchronous handler, so only the later one counts
-            assertThat(receiver.received()).extracting(TestEvent::name).containsExactly("after-the-bean-is-built");
+            assertThat(refusal).as("[getBean of the lazy bean after startup]").isInstanceOf(BeanCreationException.class);
+            assertThat(refusal.getCause()).as("[cause of the refused creation]").isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Bean 'lazySynchronousReceiver' declares the synchronous handler")
+                    .hasMessageContaining("is created after the startup scan of the Spring Boot starter registered the synchronous handlers");
         }
     }
 
     @Test
-    void a_write_made_by_the_replay_of_a_lazy_bean_when_it_is_built_reaches_its_own_synchronous_handler() throws InterruptedException {
+    void a_lazy_bean_with_a_replay_and_a_synchronous_projection_is_refused_when_it_is_built_after_the_application_started() {
         try (ConfigurableApplicationContext context = boot(LazyReplayWritesApplication.class, "lazy-replay-write")) {
             applicationServiceOf(context).execute(UUID.randomUUID().toString(), __ -> List.of(new Seeded("seeded")));
 
-            LazyReplayWriter writer = context.getBean("lazyReplayWriter", LazyReplayWriter.class);
+            Throwable refusal = catchThrowable(() -> context.getBean("lazyReplayWriter"));
 
-            // A bean built after startup replays in the background, so wait for the write the replay makes. The
-            // write returns after every synchronous handler has run, so nothing is awaited past this point.
-            assertThat(writer.replayHasWritten.await(30, TimeUnit.SECONDS)).as("the lazy bean's replay wrote").isTrue();
-            assertThat(context.getBean(WrittenCounts.class).count())
-                    .as("writes the lazy bean's replay made, counted by its synchronous projection").isEqualTo(1);
+            assertThat(refusal).as("[getBean of the lazy bean after startup]").isInstanceOf(BeanCreationException.class);
+            assertThat(refusal.getCause()).as("[cause of the refused creation]").isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Bean 'lazyReplayWriter' declares the synchronous handler")
+                    .hasMessageContaining("is created after the startup scan of the Spring Boot starter registered the synchronous handlers");
         }
     }
 

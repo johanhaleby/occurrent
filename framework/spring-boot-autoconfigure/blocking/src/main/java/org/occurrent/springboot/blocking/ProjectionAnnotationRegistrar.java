@@ -40,6 +40,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.springboot.common.internal.AppliedAppendRecordingRegistry;
 import org.occurrent.springboot.common.internal.PolledCatchupSignals;
 import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
@@ -102,6 +103,7 @@ class ProjectionAnnotationRegistrar {
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
+    private final StartupSubscribes startupSubscribes;
     // Resolves the competing-consumer strategy lazily, on the first checkpoint write a catch-up-then-push projection
     // makes, so this registrar does not force the strategy bean into existence while singletons are still being
     // instantiated (ADR 116).
@@ -145,7 +147,8 @@ class ProjectionAnnotationRegistrar {
     private record BackgroundCatchUp(Future<?> task, Runnable stop) {
     }
 
-    ProjectionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
+    ProjectionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, StartupSubscribes startupSubscribes) {
+        this.startupSubscribes = startupSubscribes;
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
         this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class),
@@ -650,7 +653,7 @@ class ProjectionAnnotationRegistrar {
             MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, dcbSubscriptions.subscriptionModel());
             DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
             startPositionSupport.applyStartupWorkarounds();
-            BackgroundStartup.subscribe(annotation.startupMode(), () -> {
+            BackgroundStartup.subscribe(startupSubscribes, annotation.startupMode(), () -> {
                 var subscription = dcbSubscriptions.subscribeWithMetadata(id, dcbProjection.criteria(), startAt, (dcbMetadata, event) -> materializedView.update(dcbMetadata.eventMetadata(), event));
                 if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext) && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                     subscription.waitUntilStarted();
@@ -683,14 +686,14 @@ class ProjectionAnnotationRegistrar {
             if (stream) {
                 StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
                 MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, streamSubscriptions.getSubscriptionModel());
-                BackgroundStartup.subscribe(annotation.startupMode(), () -> streamSubscriptions.subscribe(id, filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
+                BackgroundStartup.subscribe(startupSubscribes, annotation.startupMode(), () -> streamSubscriptions.subscribe(id, filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
                     materializedView.update(metadata, event);
                     return Unit.INSTANCE;
                 }));
             } else {
                 Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
                 MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, subscriptions.getSubscriptionModel());
-                BackgroundStartup.subscribe(annotation.startupMode(), () -> subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
+                BackgroundStartup.subscribe(startupSubscribes, annotation.startupMode(), () -> subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
                     materializedView.update(metadata, event);
                     return Unit.INSTANCE;
                 }));
@@ -747,21 +750,24 @@ class ProjectionAnnotationRegistrar {
         // immediately either way.
         boolean waitUntilStarted = SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode());
         if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext)) {
-            // With waitUntilStarted the catch-up replay finishes here before handing over to the live push feed;
-            // without it the replay runs on its own thread and this returns straight away.
-            Subscription subscription = runner.project(id, projection, materializedView, null, waitUntilStarted);
-            // Checked after project(), because that is what subscribes, and the model does not refuse a subscribe
-            // once close() has shut it down. It starts a replay instead, and by then the model is out of the queue
-            // and close() cannot stop it a second time.
-            if (stopIfClosing(catchupModel, subscribable, id)) {
-                return;
-            }
-            if (!waitUntilStarted) {
-                // Nobody is left to see this replay fail, so join it on a thread of this registrar's own purely to
-                // record the failure. Stopping it is close()'s job through the model, so this needs no stop of its own.
-                runInBackground("occurrent-push-catchup-watch", id, subscription::waitUntilStarted, () -> {
-                }, false);
-            }
+            // Held until the startup scan is done, like every other asynchronous start
+            startupSubscribes.run(() -> {
+                // With waitUntilStarted the catch-up replay finishes here before handing over to the live push feed.
+                // Without it the replay runs on its own thread and this returns straight away.
+                Subscription subscription = runner.project(id, projection, materializedView, null, waitUntilStarted);
+                // Checked after project(), because that is what subscribes, and the model does not refuse a subscribe
+                // once close() has shut it down. It starts a replay instead, and by then the model is out of the queue
+                // and close() cannot stop it a second time.
+                if (stopIfClosing(catchupModel, subscribable, id)) {
+                    return;
+                }
+                if (!waitUntilStarted) {
+                    // Nobody is left to see this replay fail, so join it on a thread of this registrar's own purely to
+                    // record the failure. Stopping it is close()'s job through the model, so this needs no stop of its own.
+                    runInBackground("occurrent-push-catchup-watch", id, subscription::waitUntilStarted, () -> {
+                    }, false);
+                }
+            });
             return;
         }
         // This feed bypasses the SubscriptionModel bean entirely, so manual mode's own withholding never reaches it.
@@ -836,9 +842,12 @@ class ProjectionAnnotationRegistrar {
             if (catchesUp) {
                 domainFeedsToCatchUp.add(new DomainFeedCatchUp(id, feed, waitUntilStarted));
             } else {
-                // Nothing to replay, so there is nothing to defer to catchUpCollectedFeeds(): go live right away.
-                feed.goLive(id);
-                withPushCatchupStatus(status -> status.recordLive(id));
+                // Nothing to replay, so there is nothing to defer to catchUpCollectedFeeds(). Live once the startup
+                // scan is done, like every other asynchronous start.
+                startupSubscribes.run(() -> {
+                    feed.goLive(id);
+                    withPushCatchupStatus(status -> status.recordLive(id));
+                });
             }
         } else {
             // register(...) alone puts the feed into buffering mode immediately, so deferring only the catch-up would

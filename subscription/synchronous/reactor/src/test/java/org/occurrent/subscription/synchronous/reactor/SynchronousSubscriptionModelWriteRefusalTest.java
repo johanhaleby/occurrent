@@ -214,20 +214,19 @@ class SynchronousSubscriptionModelWriteRefusalTest {
     }
 
     @Test
-    void a_pause_from_another_thread_waits_for_the_write_in_flight_and_the_paused_subscription_still_gets_its_event() throws Exception {
+    void a_pause_from_another_thread_returns_while_the_write_in_flight_is_routed_and_the_paused_subscription_still_gets_its_event() throws Exception {
         HeldHandler held = subscribeHeldHandler("p", Filter.type("NameDefined"));
         Thread writer = start(() -> applicationService.execute(UUID.randomUUID().toString(), events -> List.of(new TestEvent("NameDefined"))).block());
         held.awaitEntered();
 
         Thread pauser = start(() -> model.pauseSubscription("p"));
 
-        assertThat(waitingOrDone(pauser)).as("what the pausing thread does while the write is in flight").isEqualTo(Thread.State.WAITING);
+        assertThat(joined(pauser)).as("the pause returned while the write in flight is still routed").isTrue();
         assertThat(model.isPaused("p")).as("paused while the write is in flight").isFalse();
         held.release();
         assertThat(joined(writer)).as("the write finished").isTrue();
-        assertThat(joined(pauser)).as("the pause returned once the write closed").isTrue();
         assertThat(handled).containsExactly("NameDefined");
-        assertThat(model.isPaused("p")).as("paused once the pause returned").isTrue();
+        assertThat(model.isPaused("p")).as("paused once the write closed").isTrue();
     }
 
     @Test
@@ -267,12 +266,13 @@ class SynchronousSubscriptionModelWriteRefusalTest {
     }
 
     @Test
-    void a_stop_from_another_thread_refuses_a_new_write_and_waits_for_the_write_in_flight() throws Exception {
+    void a_stop_from_another_thread_returns_while_the_write_in_flight_is_routed_and_refuses_a_new_write_until_the_write_closes() throws Exception {
         HeldHandler held = subscribeHeldHandler("p", Filter.type("NameDefined"));
         Thread writer = start(() -> applicationService.execute(UUID.randomUUID().toString(), events -> List.of(new TestEvent("NameDefined"))).block());
         held.awaitEntered();
         Thread stopper = start(() -> model.stop());
-        assertThat(waitingOrDone(stopper)).as("what the stopping thread does while the write is in flight").isEqualTo(Thread.State.WAITING);
+        assertThat(joined(stopper)).as("the stop returned while the write in flight is still routed").isTrue();
+        assertThat(model.isRunning()).as("running while the write is in flight").isTrue();
         String streamIdAfterTheStop = UUID.randomUUID().toString();
 
         StepVerifier.create(applicationService.execute(streamIdAfterTheStop, events -> List.of(new TestEvent("NameDefined"))))
@@ -282,18 +282,18 @@ class SynchronousSubscriptionModelWriteRefusalTest {
         assertThat(eventStore.contains(streamIdAfterTheStop)).as("the refused write was stored").isFalse();
         held.release();
         assertThat(joined(writer)).as("the write in flight finished").isTrue();
-        assertThat(joined(stopper)).as("the stop returned once the write closed").isTrue();
         assertThat(handled).containsExactly("NameDefined");
-        assertThat(model.isRunning()).as("running once the stop returned").isFalse();
+        assertThat(model.isRunning()).as("stopped once the write closed").isFalse();
     }
 
     @Test
-    void while_a_pause_waits_a_new_write_its_subscription_matches_is_refused_and_one_it_does_not_match_goes_through() throws Exception {
+    void after_a_pause_from_another_thread_returns_a_new_write_its_subscription_matches_is_refused_and_one_it_does_not_match_goes_through() throws Exception {
         HeldHandler held = subscribeHeldHandler("orders-projection", Filter.type("NameDefined"));
         Thread writer = start(() -> applicationService.execute(UUID.randomUUID().toString(), events -> List.of(new TestEvent("NameDefined"))).block());
         held.awaitEntered();
         Thread pauser = start(() -> model.pauseSubscription("orders-projection"));
-        assertThat(waitingOrDone(pauser)).as("what the pausing thread does while the write is in flight").isEqualTo(Thread.State.WAITING);
+        assertThat(joined(pauser)).as("the pause returned while the write in flight is still routed").isTrue();
+        assertThat(model.isPaused("orders-projection")).as("paused while the write is in flight").isFalse();
         String matchingStreamId = UUID.randomUUID().toString();
         String otherStreamId = UUID.randomUUID().toString();
 
@@ -306,12 +306,11 @@ class SynchronousSubscriptionModelWriteRefusalTest {
 
         assertThat(eventStore.contains(matchingStreamId)).as("the refused write was stored").isFalse();
         assertThat(eventStore.contains(otherStreamId)).as("the write the pausing subscription does not match was stored").isTrue();
-        assertThat(pauser.isAlive()).as("the pause is still waiting for the write in flight").isTrue();
+        assertThat(model.isPaused("orders-projection")).as("paused while the write is in flight, after the new writes").isFalse();
         held.release();
         assertThat(joined(writer)).as("the write in flight finished").isTrue();
-        assertThat(joined(pauser)).as("the pause returned once the write closed").isTrue();
         assertThat(handled).containsExactly("NameDefined");
-        assertThat(model.isPaused("orders-projection")).as("paused once the pause returned").isTrue();
+        assertThat(model.isPaused("orders-projection")).as("paused once the write closed").isTrue();
     }
 
     @Test
@@ -522,18 +521,6 @@ class SynchronousSubscriptionModelWriteRefusalTest {
 
     private static Executor daemonThreads() {
         return action -> start(action);
-    }
-
-    // Answers once the thread waits on a monitor or has ended, whichever comes first. A thread that blocks only on
-    // the model's own wait is WAITING, so the answer tells a pause or a stop that waits from one that returned.
-    private static Thread.State waitingOrDone(Thread thread) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
-        Thread.State state = thread.getState();
-        while (state != Thread.State.WAITING && state != Thread.State.TERMINATED && System.nanoTime() < deadline) {
-            Thread.sleep(5);
-            state = thread.getState();
-        }
-        return state;
     }
 
     private static boolean joined(Thread thread) throws InterruptedException {

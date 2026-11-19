@@ -45,6 +45,7 @@ import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 /**
  * The reactive counterpart of the blocking {@code RegisteringSubscribable}: shared base for register-only reactive
@@ -195,6 +196,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     private boolean stopping;
     // The thread that opened each write, which a pause or a stop on it must not wait for
     private final Map<Thread, Integer> openWriteWindowsByThread = new HashMap<>();
+    // How many routings of written events are under way. A handler runs on whatever thread the store calls back on, so
+    // a pause or a stop made meanwhile may come from a handler whose own write is open, and must not wait for it.
+    private int writesRouting;
 
     /**
      * Accepts a single consumer. The default because a sink that fans out cannot keep its consumers isolated from one
@@ -286,8 +290,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
 
     /**
      * Stops routing to every subscription. A write {@link #openWriteWindow()} admitted and has not closed yet still
-     * reaches them, and this waits for it and admits no new write meanwhile. On a thread that may not block, or that
-     * opened a write itself, it returns at once instead, and the stop applies when the last open write closes.
+     * reaches them, and this waits for it and admits no new write meanwhile. On a thread that may not block, on one
+     * that opened a write itself, or while written events are being routed, it returns at once instead, and the stop
+     * applies when the last open write closes.
      */
     @Override
     public final void stop() {
@@ -374,9 +379,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
 
     /**
      * Pauses the subscription. A write {@link #openWriteWindow()} admitted before this call and not closed yet still
-     * reaches it, and this waits for it. On a thread that may not block, or that opened a write itself, it returns at
-     * once instead, the subscription stays running until those writes close, and {@link #isPaused(String)} answers
-     * {@code false} until then.
+     * reaches it, and this waits for it. On a thread that may not block, on one that opened a write itself, or while
+     * written events are being routed, it returns at once instead, the subscription stays running until those writes
+     * close, and {@link #isPaused(String)} answers {@code false} until then.
      */
     @Override
     public final void pauseSubscription(String subscriptionId) {
@@ -396,9 +401,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     }
 
     // Called holding writeWindows. A thread with a write open would wait for itself, so it doesn't wait, and neither
-    // does one that may not block or an interrupted one. The writes closing apply what is held back either way.
+    // does one that may not block, an interrupted one, or any thread while written events are being routed, since it
+    // may be the handler the routing waits for. The writes closing apply what is held back either way.
     private void awaitWriteWindowsClosed(BooleanSupplier heldBack) {
-        if (openWriteWindowsByThread.containsKey(Thread.currentThread()) || Schedulers.isInNonBlockingThread()) {
+        if (writesRouting > 0 || openWriteWindowsByThread.containsKey(Thread.currentThread()) || Schedulers.isInNonBlockingThread()) {
             return;
         }
         while (heldBack.getAsBoolean()) {
@@ -437,6 +443,28 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                 closeWriteWindow(epoch, opener);
             }
         };
+    }
+
+    /**
+     * Routes the events of a write that {@link #openWriteWindow()} admitted. A {@link #pauseSubscription(String)} or a
+     * {@link #stop()} made while the routing is under way doesn't wait for the open writes, since it may come from one
+     * of the handlers being routed to, on whatever thread the store called back on. It applies when they close instead.
+     *
+     * @param routing Supplies the routing, called once when the returned {@link Mono} is subscribed.
+     * @return The routing, counted as under way from subscription until it terminates or is cancelled.
+     */
+    protected final Mono<Void> routeWrittenEvents(Supplier<Mono<Void>> routing) {
+        Objects.requireNonNull(routing, "routing cannot be null");
+        return Mono.defer(() -> {
+            synchronized (writeWindows) {
+                writesRouting++;
+            }
+            return routing.get();
+        }).doFinally(__ -> {
+            synchronized (writeWindows) {
+                writesRouting--;
+            }
+        });
     }
 
     // Applies each pause whose writes have all closed, and the stop once every write has

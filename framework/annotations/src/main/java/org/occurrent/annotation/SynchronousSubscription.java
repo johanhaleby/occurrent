@@ -40,12 +40,31 @@ import java.lang.annotation.*;
  * {@code startAtGlobalPosition}, {@code resumeBehavior}, {@code startupMode}) - only an {@link #id()} and the event
  * types to match.
  * </p>
+ *
+ * <h4>What a synchronous handler gets</h4>
  * <p>
- * Registration happens once every singleton in the application is instantiated, so a handler does not receive an
- * event written during singleton construction, {@code @PostConstruct} included, even though delivery is otherwise
- * synchronous. A write from a later startup phase, an {@code ApplicationRunner} for example, or from a bean created
- * after registration such as one marked {@code @Lazy}, is delivered normally, since registration itself precedes
- * both.
+ * A synchronous handler gets the events written through the application service of its own process after it
+ * registered, and no others:
+ * </p>
+ * <ul>
+ * <li>It has no replay, so it doesn't get the events stored before it registered. A synchronous handler added to an
+ * application whose event store already has events starts from nothing. To build a read model from the events already
+ * stored, use an asynchronous handler that starts at the beginning.</li>
+ * <li>An event written directly to the event store, without going through the application service, doesn't reach
+ * it.</li>
+ * <li>An event that another process writes doesn't reach it. Every process that writes through an application service
+ * must run the same synchronous handlers, so add or remove one with every process stopped, or use an asynchronous
+ * handler. During a rolling deploy, a process still running the previous version writes events that a handler only
+ * the new version declares never gets.</li>
+ * <li>Without a transaction executor, delivery is best-effort, as described below.</li>
+ * </ul>
+ * <p>
+ * The Spring Boot starters register every handler in a scan while the application starts, and the application service
+ * they configure refuses a write with {@code WriteRefusedException} until the scan is done. The scan can't see a
+ * handler on a bean whose declared type hides it, such as a {@code @Bean} method that returns an interface or
+ * {@code Object}. When such a bean is created after the scan, a {@code @Lazy} one for example, it fails its creation
+ * with an {@code IllegalStateException}, since its handler would have missed the writes before it. To have the scan
+ * register it, remove {@code @Lazy}, or declare the {@code @Bean} method with the annotated class as its return type.
  * </p>
  *
  * <h4>There is no free lunch</h4>

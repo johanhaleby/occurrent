@@ -51,7 +51,7 @@ import java.lang.annotation.*;
  * <h4>Mode and startup behavior</h4>
  * <p>
  * {@link #mode()} chooses asynchronous maintenance (the default, the snapshot is updated from a catch-up subscription)
- * or synchronous (the snapshot is updated on the write path, so it is current for read-your-writes). Synchronous mode is
+ * or synchronous (the snapshot is updated on the write path, for the writes described on {@link #mode()}). Synchronous mode is
  * mutually exclusive with {@link #startAt()}, {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, and {@link #startupMode()}.
  * </p>
  * <p>
@@ -145,7 +145,10 @@ public @interface Snapshot {
 
     /**
      * The maintenance mode. {@link Mode#ASYNC} (the default) updates the snapshot from a catch-up subscription.
-     * {@link Mode#SYNCHRONOUS} updates it on the write path, so it is current for read-your-writes. Synchronous mode is
+     * {@link Mode#SYNCHRONOUS} updates it as part of each write through the application service of this process, and
+     * gets no other writes, which {@link SynchronousSubscription} lists in full. A write made directly to the event
+     * store, or by another process, doesn't update the stored snapshot, so it stays at an older stream version. The next
+     * update to that stream finds the missing versions and rebuilds the snapshot from the event store. Synchronous mode is
      * mutually exclusive with {@link #startAt()}, {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, and {@link #startupMode()}.
      */
     Mode mode() default Mode.ASYNC;

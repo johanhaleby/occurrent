@@ -311,7 +311,7 @@ class StartPositionSupport {
             return false;
         }
         boolean checkpointAlreadyExisted = checkpointStorage.exists(subscriptionId);
-        StartPositionPin.pin(checkpointStorage, subscriptionId, checkpointAlreadyExisted, boundary);
+        StartPositionPin.pinOrSaveUnconditionally(checkpointStorage, subscriptionId, checkpointAlreadyExisted, boundary);
         return !checkpointAlreadyExisted;
     }
 

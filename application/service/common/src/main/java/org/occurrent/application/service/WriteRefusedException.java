@@ -50,14 +50,14 @@ public class WriteRefusedException extends IllegalStateException {
     }
 
     /**
-     * The Spring Boot starters refuse a write through the application service until they have registered every
-     * synchronous handler the application declares, which happens after all singleton beans are created.
+     * The Spring Boot starters refuse a write through the application service until their startup scan has registered
+     * every handler the application declares, which happens after all singleton beans are created.
      *
      * @return The refusal of a write made while the application is still starting, from a {@code @PostConstruct}
      * method for example.
      */
     public static WriteRefusedException beforeStartupCompleted() {
-        return new WriteRefusedException("The application is still starting and has not registered all of its synchronous handlers, so some of them would never see this write. " +
+        return new WriteRefusedException("The application is still starting and has not registered all of its handlers, so a synchronous handler it registers later would never see this write. " +
                 "Write from an ApplicationRunner or an ApplicationReadyEvent listener, not from a @PostConstruct method, an InitializingBean or a @Bean method.");
     }
 }

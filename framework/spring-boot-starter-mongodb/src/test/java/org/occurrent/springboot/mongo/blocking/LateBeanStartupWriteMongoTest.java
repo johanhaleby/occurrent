@@ -34,6 +34,7 @@ import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.jspecify.annotations.Nullable;
+import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.boot.SpringApplication;
@@ -66,12 +67,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 
 /**
  * A bean built after the context has refreshed reads its start boundary as it is created. An event the bean's own
- * {@code @PostConstruct} method writes must reach the bean's own subscription, except for a synchronous one, which
- * registers after {@code @PostConstruct} and has no replay.
+ * {@code @PostConstruct} method writes must reach the bean's own subscription. A bean with a synchronous handler is
+ * refused before that method runs, since a synchronous handler has no replay.
  * <p>
  * Every bean here is {@code @Lazy} and declared as {@code Object}, so the startup scan cannot see its annotations and
  * the first {@code getBean} after {@code SpringApplication.run} returns builds it. Each test first proves that, by
@@ -210,18 +212,17 @@ class LateBeanStartupWriteMongoTest {
     }
 
     @Test
-    void an_event_written_through_the_application_service_by_the_post_construct_method_is_stored_but_not_given_to_the_beans_own_synchronous_handler() {
+    void a_late_bean_with_a_synchronous_handler_is_refused_before_its_post_construct_method_writes_through_the_application_service() {
         try (ConfigurableApplicationContext context = boot(SynchronousWriteApplication.class, "synchronous-write")) {
             assertThat(context.getBeanFactory().containsSingleton("synchronousWrite")).as("bean exists after refresh").isFalse();
 
-            SynchronousWrite bean = context.getBean("synchronousWrite", SynchronousWrite.class);
+            Throwable refusal = catchThrowable(() -> context.getBean("synchronousWrite"));
 
-            assertThat(bean.builtAfterRunReturned).as("bean was built after SpringApplication.run returned").isTrue();
-            // The write ran in @PostConstruct before getBean returned, so reading it back first keeps the empty check below from passing on a write that never happened
-            assertThat(context.getBean(EventStore.class).read(bean.streamId).events().map(event -> event.getType()).toList())
-                    .as("event stored in the stream the bean wrote to")
-                    .containsExactly(Written.class.getName());
-            assertThat(bean.received).as("events given to the bean's own synchronous handler").isEmpty();
+            assertThat(refusal).as("[getBean of the late bean]").isInstanceOf(BeanCreationException.class);
+            assertThat(refusal.getCause()).as("[cause of the refused creation]").isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Bean 'synchronousWrite' declares the synchronous handler")
+                    .hasMessageContaining("is created after the startup scan of the Spring Boot starter registered the synchronous handlers");
+            assertThat(SynchronousWrite.POST_CONSTRUCT_RAN).as("[post construct method of the refused bean ran]").isFalse();
         }
     }
 
@@ -309,8 +310,9 @@ class LateBeanStartupWriteMongoTest {
         }
     }
 
-    // A synchronous subscription has no replay and registers after @PostConstruct, so the handler never sees this write
+    // A synchronous subscription has no replay, so a late bean that declares one is refused before this method runs
     static class SynchronousWrite extends BuiltAfterRunReturnedProbe {
+        static final AtomicBoolean POST_CONSTRUCT_RAN = new AtomicBoolean();
         final String streamId = UUID.randomUUID().toString();
         private final ApplicationService<TestEvent> applicationService;
 
@@ -320,6 +322,7 @@ class LateBeanStartupWriteMongoTest {
 
         @PostConstruct
         void write() {
+            POST_CONSTRUCT_RAN.set(true);
             applicationService.execute(streamId,__ -> List.of(new Written("written-by-post-construct")));
         }
 

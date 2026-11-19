@@ -47,10 +47,11 @@ public final class StartPositionPin {
     }
 
     /**
-     * Writes {@code position} as the first checkpoint of {@code subscriptionId}, unless a checkpoint is stored already.
-     * A write that loses to a stored checkpoint is settled by {@link CheckpointStorage#resolveFirstCheckpointRace} first.
-     * When the storage can't order the two, a checkpoint that existed before {@code position} was read is kept, and one
-     * that arrived after it must be {@code position} itself.
+     * Writes {@code position} as the first checkpoint of {@code subscriptionId} with
+     * {@link CheckpointWriteCondition#ifAbsent()}, unless a checkpoint is stored already, the way
+     * {@link #pinOrSaveUnconditionally} does, but never falls back to an unconditional write. A storage that can't
+     * evaluate {@code ifAbsent()} for this id throws its own refusal, so a caller that promises the conditional pin
+     * keeps it.
      *
      * @param checkpointStorage        The storage that holds the subscription's checkpoint
      * @param subscriptionId           The subscription whose first position is pinned
@@ -60,9 +61,27 @@ public final class StartPositionPin {
      *                                             can't order the two, and it holds another position
      */
     public static void pin(CheckpointStorage checkpointStorage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
-        requireNonNull(checkpointStorage, CheckpointStorage.class.getSimpleName() + " cannot be null");
-        requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        requireNonNull(position, "position cannot be null");
+        requireArguments(checkpointStorage, subscriptionId, position);
+        pinIfAbsent(checkpointStorage, subscriptionId, checkpointAlreadyExisted, position);
+    }
+
+    /**
+     * Writes {@code position} as the first checkpoint of {@code subscriptionId}, unless a checkpoint is stored already.
+     * A write that loses to a stored checkpoint is settled by {@link CheckpointStorage#resolveFirstCheckpointRace} first.
+     * When the storage can't order the two, a checkpoint that existed before {@code position} was read is kept, and one
+     * that arrived after it must be {@code position} itself. A storage that answers {@code false} from
+     * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} gets an unconditional write with a warning instead,
+     * unless a checkpoint was stored already.
+     *
+     * @param checkpointStorage        The storage that holds the subscription's checkpoint
+     * @param subscriptionId           The subscription whose first position is pinned
+     * @param checkpointAlreadyExisted Whether a checkpoint was stored when the caller read {@code position}, asked before it
+     * @param position                 The position to pin
+     * @throws StartPositionAlreadyPinnedException when a checkpoint arrived after {@code position} was read, the storage
+     *                                             can't order the two, and it holds another position
+     */
+    public static void pinOrSaveUnconditionally(CheckpointStorage checkpointStorage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
+        requireArguments(checkpointStorage, subscriptionId, position);
         // Written with ifAbsent() rather than an exists() check followed by a save(), because those are two calls with
         // nothing holding them together, so two nodes registering the same subscription id at the same moment would
         // both see nothing stored and both write.
@@ -77,6 +96,16 @@ public final class StartPositionPin {
             saveUnconditionally(checkpointStorage, subscriptionId, checkpointAlreadyExisted, position);
             return;
         }
+        pinIfAbsent(checkpointStorage, subscriptionId, checkpointAlreadyExisted, position);
+    }
+
+    private static void requireArguments(CheckpointStorage checkpointStorage, String subscriptionId, Checkpoint position) {
+        requireNonNull(checkpointStorage, CheckpointStorage.class.getSimpleName() + " cannot be null");
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(position, "position cannot be null");
+    }
+
+    private static void pinIfAbsent(CheckpointStorage checkpointStorage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
         try {
             checkpointStorage.save(subscriptionId, position, CheckpointWriteCondition.ifAbsent());
         } catch (CheckpointWriteConditionNotFulfilledException e) {

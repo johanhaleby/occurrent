@@ -85,7 +85,7 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
      * @return A {@link Mono} that completes when dispatch is done.
      */
     public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents) {
-        return route(writtenCloudEvents);
+        return routeWrittenEvents(() -> route(writtenCloudEvents));
     }
 
     /**
@@ -105,7 +105,7 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
      */
     @Override
     public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
-        return transactional ? route(writtenCloudEvents) : routeIsolated(writtenCloudEvents);
+        return routeWrittenEvents(() -> transactional ? route(writtenCloudEvents) : routeIsolated(writtenCloudEvents));
     }
 
     /**

@@ -18,17 +18,17 @@
 package org.occurrent.springboot.common.internal;
 
 /**
- * Internal, not part of the public API. The time between the first bean the context creates and the moment the
- * annotation post-processor has registered every synchronous handler. A write made then, from a {@code @PostConstruct}
- * method for example, reaches only the synchronous handlers already registered, and a handler that misses a write never
- * sees it.
+ * Internal, not part of the public API. The time between the first bean the context creates and the end of the
+ * annotation post-processor's startup scan, which registers every handler. A synchronous handler has no replay, so a
+ * write it misses it never sees.
  * <p>
- * The starter refuses every write through the application service while {@link #isOpen()} returns {@code true}.
+ * The starter asks {@link #admitsWrite()} before every write through the application service and refuses the write
+ * when it answers {@code false}.
  */
 public interface StartupGap {
 
     /**
-     * @return {@code true} until the startup scan has registered the synchronous handlers, then {@code false} for good.
+     * @return {@code false} until the startup scan has registered every handler, then {@code true} for good.
      */
-    boolean isOpen();
+    boolean admitsWrite();
 }
