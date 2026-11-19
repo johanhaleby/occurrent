@@ -2149,10 +2149,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private boolean holdsTheLease(SubscriptionIdAndSubscriberId key) {
         try {
             return hasLock(key.subscriptionId(), key.subscriberId());
-        } catch (Exception e) {
-            // Exception, since a lease strategy written in Kotlin can throw a checked exception. Counts as not held, as
-            // it does for an event waiting for the lease.
-            interruptAgainIfInterrupted(e);
+        } catch (Throwable e) {
+            // Throwable, so a hasLock that throws an Error answers STANDBY instead of failing the status read, and one
+            // written in Kotlin can throw a checked exception. Counts as not held, as it does for an event waiting for
+            // the lease.
+            if (e instanceof Exception exception) {
+                interruptAgainIfInterrupted(exception);
+            }
             return false;
         }
     }
