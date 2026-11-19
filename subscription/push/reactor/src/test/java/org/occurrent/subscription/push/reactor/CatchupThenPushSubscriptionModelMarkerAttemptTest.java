@@ -169,12 +169,12 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
 
     // The first attempt replays and, from its last event, has another thread ask for a second catch-up on the same
     // handover. The second reads no marker, then a marker is stored while it waits for the first one's turn, so its
-    // read on that turn finds one. The handover reads the marker again there, which must not make the listener
-    // miss the end of the history it was told had started.
+    // read on that turn finds one. The replay it runs follows that read and starts after the marker, so the listener
+    // hears nothing from it, and the first catch-up's start and end are the only ones it hears.
     @Test
-    void a_catch_up_that_reads_no_marker_when_asked_and_a_marker_on_its_turn_tells_the_listener_it_started_once_and_that_the_history_was_read() throws Exception {
+    void a_catch_up_that_reads_no_marker_when_asked_and_a_marker_on_its_turn_tells_the_listener_nothing_since_it_replays_after_the_marker() throws Exception {
         store.append(List.of(event("1"), event("2")));
-        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        ReadCountingStorage storage = new ReadCountingStorage();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, storage);
         EpisodeSignals episodes = new EpisodeSignals();
         model.listenForCatchup("proj", episodes);
@@ -183,7 +183,7 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
         Function<CloudEvent, Mono<Void>> askingAfterTheLastEvent = e -> Mono.fromRunnable(() -> {
             if (e.getId().equals("2") && asked.compareAndSet(false, true)) {
                 second.set(askedFromOutsideTheFold(model, "proj"));
-                awaitQuietly(episodes.secondStarted);
+                awaitQuietly(storage.secondReadAnswered);
                 storage.save("proj", GlobalCheckpoint.of(2)).block(TIMEOUT);
             }
         });
@@ -192,17 +192,17 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
         Boolean secondCaughtUp = second.get().asMono().block(TIMEOUT);
 
         assertThat(secondCaughtUp).as("the second catch-up finished").isTrue();
-        assertThat(episodes.names).as("signals heard from the first catch-up and from the second, which read no marker when asked and one on its turn")
-                .containsExactly("catchupStarted#1", "catchupStarted#2", "historyRead#1", "historyRead#2");
+        assertThat(episodes.names).as("signals heard from the first catch-up, and from the second, which read no marker when asked and one on its turn")
+                .containsExactly("catchupStarted#1", "historyRead#1");
     }
 
     // The first attempt replays after a marker and, from its last event, has another thread ask for a second
     // catch-up on the same handover, which reads that marker too. The marker is deleted while the second waits for
-    // the first one's turn, as a failed catch-up would, so its read on that turn finds none. The listener hears
-    // nothing from it, since the read that decided it found a marker, and its replay still starts from the
-    // beginning that the read on its turn gave.
+    // the first one's turn, as a failed catch-up would, so its read on that turn finds none. Its replay starts from
+    // the beginning that the read on its turn gave, so the listener hears it start and end, and hears nothing from
+    // the first, which replayed after the marker.
     @Test
-    void a_catch_up_that_reads_a_marker_when_asked_and_none_on_its_turn_tells_the_listener_nothing_and_replays_from_the_beginning() throws Exception {
+    void a_catch_up_that_reads_a_marker_when_asked_and_none_on_its_turn_tells_the_listener_it_started_and_that_the_history_was_read_and_replays_from_the_beginning() throws Exception {
         store.append(List.of(event("1"), event("2")));
         ReadCountingStorage storage = new ReadCountingStorage();
         storage.save("proj", GlobalCheckpoint.of(1)).block(TIMEOUT);
@@ -225,7 +225,8 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
         Boolean secondCaughtUp = second.get().asMono().block(TIMEOUT);
 
         assertThat(secondCaughtUp).as("the second catch-up finished").isTrue();
-        assertThat(episodes.names).as("signals heard from a catch-up that read a marker when asked and none on its turn").isEmpty();
+        assertThat(episodes.names).as("signals heard from a catch-up that read a marker when asked and none on its turn")
+                .containsExactly("catchupStarted#1", "historyRead#1");
         assertThat(delivered).as("the first catch-up replays after its marker, the second from the beginning").containsExactly("2", "1", "2");
     }
 
@@ -345,16 +346,12 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
     // Names each signal after the catch-up it came from, numbered in the order the catch-ups started
     private static final class EpisodeSignals implements CatchupListener {
         final List<String> names = new CopyOnWriteArrayList<>();
-        final CountDownLatch secondStarted = new CountDownLatch(1);
         private final List<Object> episodes = new CopyOnWriteArrayList<>();
 
         @Override
         public synchronized void catchupStarted(Object episode) {
             episodes.add(episode);
             names.add("catchupStarted#" + episodes.size());
-            if (episodes.size() == 2) {
-                secondStarted.countDown();
-            }
         }
 
         @Override
