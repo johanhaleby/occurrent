@@ -105,8 +105,12 @@ import java.util.function.Supplier;
  * that feeds this model, or the handler writes and feeds it again whenever the event that triggered it is delivered
  * again, also when the write is already stored. Replicas of a subscription share its catch-up marker, and another
  * replica's catch-up can store a marker at or above an event this replica fed back and has not yet handled. Without
- * either path, when this replica then fails to handle that event, or stops first, nothing handles it (ADR 179). An
- * event that reaches this model from the broker has that copy behind it.
+ * either path, nothing handles that event when this replica stops before handling it, or when handling it fails while
+ * the answer to the event that triggered it waits for it, since that failure deletes no marker. Nothing handles it
+ * either when handling it fails with nothing waiting for it and the marker delete that failure makes fails, the store
+ * loses that delete, or the store applies another replica's marker write after it. When that delete holds, the next
+ * catch-up replays from the beginning and handles the event (ADR 179). An event that reaches this model from the
+ * broker has that copy behind it.
  * <p>
  * The events a handler wrote, and those their handlers wrote in turn, are answered for by whatever waits for the
  * event the handler was called for.

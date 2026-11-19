@@ -3060,8 +3060,12 @@ What you see:
   feeds back needs a durable path of its own. Either your forwarder publishes it to the broker queue the listener
   reads, as it does for any other written event, or the handler feeds it again whenever the event that triggered it is
   delivered again, also when the write is already stored. Replicas share the catch-up marker, so another replica's
-  catch-up can store a marker at or above an event this replica fed back and has not handled yet. When this replica
-  then fails to handle that event, or stops first, nothing handles it. 0.34.0 has the same gap.
+  catch-up can store a marker at or above an event this replica fed back and has not handled yet. Without either path,
+  nothing handles that event when this replica stops before handling it, or when handling it fails while the answer to
+  the event that triggered it waits for it, since that failure deletes no marker. Nothing handles it either when
+  handling it fails with nothing waiting for it and the marker delete that failure makes fails, the store loses that
+  delete, or the store applies another replica's marker write after it. When that delete holds, the next catch-up
+  replays from the beginning and handles the event. 0.34.0 has the same gap.
 - `cancelSubscription(id)` still deletes the marker, after it cancels, and the `Mono` it returns completes once the
   delete is done. The next subscribe of the id replays from the beginning when that delete holds. A delete that the
   store loses, on a MongoDB member with the in-memory storage engine for example, or a marker write that the store

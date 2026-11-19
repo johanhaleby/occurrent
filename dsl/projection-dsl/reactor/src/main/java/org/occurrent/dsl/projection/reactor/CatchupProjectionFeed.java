@@ -75,8 +75,12 @@ import java.util.function.Function;
  * and it needs a durable path as well. Either the application's forwarder publishes it to the broker queue this feed's
  * listener reads, or the fold feeds it again whenever the event that triggered it is delivered again, also when the
  * write is already stored. Replicas of one projection share its catch-up marker, and another replica's catch-up can
- * store a marker at or above an event this replica fed back and has not yet folded. Without either path, when this
- * replica then fails to fold that event, or stops first, nothing folds it (ADR 179).
+ * store a marker at or above an event this replica fed back and has not yet folded. Without either path, nothing folds
+ * that event when this replica stops before folding it, or when folding it fails while the answer to the event that
+ * triggered it waits for it, since that failure deletes no marker. Nothing folds it either when folding it fails with
+ * nothing waiting for it and the marker delete that failure makes fails, the store loses that delete, or the store
+ * applies another replica's marker write after it. When that delete holds, the next catch-up replays from the beginning
+ * and folds the event (ADR 179).
  * <p>
  * The replay decodes CloudEvents, so {@link EventMetadata} is available there and is folded with the event. A live
  * domain event arrives with no CloudEvent behind it and is folded with {@link EventMetadata#empty()}. A projection
