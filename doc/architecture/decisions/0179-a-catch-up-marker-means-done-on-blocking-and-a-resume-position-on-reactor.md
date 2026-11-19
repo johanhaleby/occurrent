@@ -335,13 +335,18 @@ id and append id, so an append the projection recorded before the restart costs 
 new document is written for each replayed append that has no record yet, which on the first 0.35.0 start can be most of
 the appends, and the TTL index on `recordedAt` removes them as it removes every other record.
 
-The `CatchupListener` that `listenForCatchup` gives a push model follows the same rule on the reactor stack. The
-reactor push model sends `catchupStarted`, `historyRead` and `alreadyDeliveredByReplay` only for a replay from the
-beginning. A recorder that listens there, as the reactive Spring Boot starter's does, then keeps its records over a
-restart that replays after P, and a wait for an append the projection applied before the restart can still finish.
-In 0.34.0 every reactor start sent `catchupStarted`, and the recorder deleted those records. The blocking push model
-keeps sending both on every start, as in 0.34.0, including a start that finds the marker and replays nothing, so
-there they tell the listener that a catch-up has begun, not that the view is rebuilt.
+The `CatchupListener` that `listenForCatchup` gives a push model follows the same rule on the reactor stack. The reactor
+push model sends `catchupStarted`, `historyRead` and `alreadyDeliveredByReplay` only for a replay from the beginning. A
+start that replays after P sends none of them for itself. Before it replays, it sends `historyRead` for a replay from
+the beginning that a stop, a cancel or a failure cut short, and a start that replays from the beginning does the same
+before its own `catchupStarted`. So every `catchupStarted` the listener hears is followed by `historyRead` for the same
+replay once a later start of the id replays. A replay cut short by a shutdown, or one no later start follows, gets no
+`historyRead`, since the model delivers nothing for the id after it. A recorder that listens there, as the reactive
+Spring Boot starter's does, then keeps its records over a restart that replays after P, and a wait for an append the
+projection applied before the restart can still finish. In 0.34.0 every reactor start sent `catchupStarted`, and the
+recorder deleted those records. The blocking push model keeps sending both on every start, as in 0.34.0, including a
+start that finds the marker and replays nothing, so there they tell the listener that a catch-up has begun, not that the
+view is rebuilt.
 
 ### What was tried and dropped
 
