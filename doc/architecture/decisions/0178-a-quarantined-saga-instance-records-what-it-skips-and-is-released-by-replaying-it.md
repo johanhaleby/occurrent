@@ -527,9 +527,11 @@ The upgrade guide has the procedure for operators, in
   continues a release, the saga's timers wait for at most one batch of records per poll.
 - A skip by a quarantined instance now makes one write, a compare-and-set that raises the skip counter and records the
   input.
-- On MongoDB every saga write waits for a majority of the replica set to journal it, up to 10 seconds an attempt, as
-  ADR 182 says. That slows a skip, the start of a release and every record a release replays by the time a majority
-  takes, and a replica set without a majority available fails them where `w: 1` would have succeeded.
+- On MongoDB every saga write waits for a majority of the replica set to journal it, up to 10 seconds an attempt, or the
+  client's `timeoutMS` when it sets one above 0, as ADR 182 says. With a `timeoutMS` of 0 the commit of a transaction
+  the store runs waits without limit. That slows a skip, the start of a release and every record a release replays by
+  the time a majority takes, and a replica set without a majority available fails them where `w: 1` would have
+  succeeded.
 - A quarantined instance keeps a record of every input it skips, with no limit. The records take space in the store
   until a release replays them, a replayed input completes the instance, or the 0.35.0 store deletes the instance. The
   downgrade in point 8 keeps the records of the instances that stay quarantined in the store, and nothing reads or

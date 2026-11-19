@@ -1327,23 +1327,26 @@ majority read on the new primary can miss an instance the old primary wrote, and
 addressed to it. So the first input of a new instance costs a second read.
 
 The four writes of `SagaStateStoreSkippedInputs` and the `delete` of a quarantined instance run in a transaction that
-commits at `majority` with `j: true` and reads at read concern `snapshot`. The store retries a transaction that fails
-with the `TransientTransactionError` label, and commits again after an `UnknownTransactionCommitResult`, both with its
-`RetryStrategy`. With a strategy built from `RetryStrategy.retry()`, as the default is, the store throws any other
-failure of the transaction at once. A standalone server refuses the transaction, and with such a strategy the store
-throws an `IllegalStateException` on the first attempt that says it needs a replica set and that a single-member one is
-enough. A strategy implemented another way runs its own loop and decides what it retries.
+commits at `majority` with `j: true` and reads at read concern `snapshot`. A commit that a majority doesn't acknowledge
+fails after 10 seconds, or after your `timeoutMS` when it is above 0. On a client with a `timeoutMS` of 0 the commit
+waits without limit, since the driver then sends no `wtimeout` and `MongoTransactionManager` passes it no transaction
+timeout. The store retries a transaction that fails with the `TransientTransactionError` label, and commits again after
+an `UnknownTransactionCommitResult`, both with its `RetryStrategy`. With a strategy built from `RetryStrategy.retry()`,
+as the default is, the store throws any other failure of the transaction at once. A standalone server refuses the
+transaction, and with such a strategy the store throws an `IllegalStateException` on the first attempt that says it
+needs a replica set and that a single-member one is enough. A strategy implemented another way runs its own loop and
+decides what it retries, except inside a MongoDB transaction, as the next paragraph says.
 
 Inside a MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your transaction
-instead of starting their own. In such a transaction the store sends each read and write once, and a failure reaches
-you as MongoDB reported it. MongoDB aborts a transaction when an operation in it fails, so the same operation sent again
-in it fails too. 0.34.0 retried every read and write with the store's `RetryStrategy`, inside your transaction too.
-Retry by running your transaction again. That is a Spring transaction run by a
+instead of starting their own. In such a transaction the store sends each read and write once, whatever `RetryStrategy`
+it has, and a failure reaches you as MongoDB reported it. MongoDB aborts a transaction when an operation in it fails, so
+the same operation sent again in it fails too. 0.34.0 retried every read and write with the store's `RetryStrategy`,
+inside your transaction too. Retry by running your transaction again. That is a Spring transaction run by a
 `MongoTransactionManager`, a Spring transaction of another resource in which a template with
 `SessionSynchronization.ALWAYS` has started a MongoDB transaction, or a transaction on the session of a template from
 `MongoTemplate.withSession`. Your commit's write concern then decides whether they survive a failover. The store can't
-read that concern, so it doesn't check it. When a store call fails inside your transaction, abort the transaction,
-since a commit after the failure may keep what the store wrote before it. With a `MongoTransactionManager` set to
+read that concern, so it doesn't check it. When a store call fails inside your transaction, abort the transaction, since
+a commit after the failure may keep what the store wrote before it. With a `MongoTransactionManager` set to
 `SYNCHRONIZATION_NEVER`, each store call takes part in your transaction with synchronization on for the call, so it
 reads and writes in your transaction as well.
 

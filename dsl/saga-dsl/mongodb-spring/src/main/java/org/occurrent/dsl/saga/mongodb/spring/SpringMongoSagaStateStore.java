@@ -74,6 +74,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -99,8 +100,10 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * Every write waits until a majority of the replica set has it in its on-disk journal ({@code w: majority} and
  * {@code j: true}), whatever write concern the {@code MongoTemplate} has, because the saga acknowledges its input as soon
  * as the write returns. A replica set that cannot reach a majority, such as a primary, a secondary and an arbiter with
- * the secondary down, makes each write fail after 10 seconds. A server without journaling refuses {@code j: true}, and
- * the store throws an {@link IllegalStateException}.
+ * the secondary down, makes each write, and the commit of each transaction the store runs, fail after 10 seconds. On a
+ * client with a {@code timeoutMS} above 0 that {@code timeoutMS} bounds them instead. On a client with a
+ * {@code timeoutMS} of 0 a single write still fails after 10 seconds, and a commit waits without limit. A server without
+ * journaling refuses {@code j: true}, and the store throws an {@link IllegalStateException}.
  * <p>
  * Every read the saga acts on ({@link #find}, {@link #findWithoutState}, {@link #findWithDueTimers},
  * {@link #findByStatus}, {@link #findReleasingSagaIds} and {@link #findSkippedInputs}) goes to the primary at read
@@ -137,9 +140,9 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * to no session. In such a transaction each call of the store takes part in it with the store's own transaction, which
  * turns synchronization on for the call, so the call reads and writes in that transaction too. The single-document
  * writes and the scans go through the template, so a template with {@code SessionSynchronization.NEVER} sends them
- * outside a {@code MongoTransactionManager} transaction, and the store doesn't retry them there either. A {@code RetryStrategy} you implement yourself runs its own loop, so with a
- * template with {@code SessionSynchronization.ALWAYS} in a Spring transaction of another resource, it can send the
- * operation that started the MongoDB transaction again.
+ * outside a {@code MongoTransactionManager} transaction, and the store doesn't retry them there either. A
+ * {@code RetryStrategy} you implement yourself runs its own loop, so once an attempt has failed inside a MongoDB
+ * transaction, the store makes every later attempt throw that failure again without sending anything.
  * <p>
  * Inside a transaction of the caller's, {@link #find} and {@link #findWithoutState} read at the transaction's snapshot,
  * which misses an instance written after the snapshot began. When the read finds no instance, the store inserts a
@@ -317,6 +320,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         this.databaseFactory = mongoTemplate.getMongoDatabaseFactory();
         // A transaction reads a snapshot of what a majority has, which holds while it commits at majority
+        // A client timeoutMS makes the driver drop the wtimeout, so there the commit waits as long as timeoutMS allows,
+        // and with a timeoutMS of 0 without limit. MongoTransactionManager passes no transaction timeout to the driver,
+        // and the driver sends no maxCommitTime under a timeoutMS of 0
         TransactionOptions transactionOptions = TransactionOptions.builder().writeConcern(DURABLE_WRITE_CONCERN).readConcern(ReadConcern.SNAPSHOT).readPreference(ReadPreference.primary()).build();
         this.transactions = new TransactionTemplate(new CommitRetryingTransactionManager(databaseFactory, transactionOptions, retryStrategy));
         // Joins a transaction the caller started on the same MongoDatabaseFactory
@@ -442,7 +448,26 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // again after the failure, since a template with SessionSynchronization.ALWAYS starts the transaction on its first
     // operation
     private <T extends @Nullable Object> T retried(Supplier<T> operation) {
-        return inMongoTransaction() ? operation.get() : retryStrategy.execute(operation);
+        if (inMongoTransaction()) {
+            return operation.get();
+        }
+        // A RetryStrategy implemented elsewhere runs its own loop, which the predicate can't reach, so once the operation
+        // has failed inside a MongoDB transaction every later attempt throws that failure again without sending anything
+        AtomicReference<@Nullable RuntimeException> failedInTransaction = new AtomicReference<>();
+        return retryStrategy.execute(() -> {
+            RuntimeException earlier = failedInTransaction.get();
+            if (earlier != null) {
+                throw earlier;
+            }
+            try {
+                return operation.get();
+            } catch (RuntimeException e) {
+                if (inMongoTransaction()) {
+                    failedInTransaction.set(e);
+                }
+                throw e;
+            }
+        });
     }
 
     // A transaction is bound to the factory, the caller's, the store's own or one a template with
@@ -775,7 +800,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     // Only a strategy built with RetryStrategy.retry() takes a predicate. One implemented elsewhere runs its own loop and
-    // retries what it retries
+    // retries what it retries, except an operation that failed inside a MongoDB transaction, see retried(..)
     private static RetryStrategy retryingOnly(RetryStrategy retryStrategy, Predicate<Throwable> retryable) {
         return retryStrategy instanceof RetryStrategy.Retry retry ? retry.mapRetryPredicate(retryIf -> retryIf.and(retryable)) : retryStrategy;
     }

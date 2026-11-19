@@ -85,6 +85,10 @@ returns normally has made its write durable.
 
 On MongoDB, `SpringMongoSagaStateStore` runs each transition and a delete of a quarantined instance in a transaction of
 its own, which reads at read concern `snapshot` on the primary and commits at `WriteConcern.MAJORITY` with `j: true`.
+A commit that a majority doesn't acknowledge fails after 10 seconds. On a client with a `timeoutMS` above 0, where the
+driver sends no `wtimeout`, that `timeoutMS` bounds it instead, and on a client with a `timeoutMS` of 0 the commit waits
+without limit. `MongoTransactionManager` passes no transaction timeout to the driver, and under a `timeoutMS` of 0 the
+driver sends no `maxCommitTime`, so the store can't bound that commit the way it bounds a single write.
 A majority of the replica set has
 the write in its on-disk journal before the call returns, so a new primary after a failover has it. The single-document
 compare-and-sets of the live path, `compareAndSave` and `compareAndSaveWithoutState`, write at the same concern,
@@ -114,7 +118,7 @@ needs a replica set, and a standalone server refuses it. A server without journa
 each refusal into an `IllegalStateException` that says what the server lacks. With a strategy built from
 `RetryStrategy.retry()`, as the default is, the store throws any other failure of the transaction at once, and throws
 each refusal on the first attempt, since every later attempt would be refused too. A strategy implemented another way
-runs its own loop and decides what it retries.
+runs its own loop and decides what it retries outside a MongoDB transaction, see point 4.
 
 The store needs the `MongoDatabaseFactory` to run a transaction, and only a `MongoTemplate` exposes it. The constructors
 keep their `MongoOperations` parameter, which 0.34.0 shipped, and refuse anything else than a `MongoTemplate` with an
@@ -148,7 +152,8 @@ transaction when an operation in it fails, so the same operation sent again in i
 that later failure in place of the first. The store checks for a bound transaction when a call starts, and, with a
 strategy built from `RetryStrategy.retry()`, again after a failure, since a template with
 `SessionSynchronization.ALWAYS` starts the transaction on the operation that fails. A strategy implemented another way
-runs its own loop, so only the first check reaches it. 0.34.0 retried every read and write, in a caller's transaction
+runs its own loop, so once the operation has failed inside a MongoDB transaction, the store makes every later attempt
+throw that failure again without sending anything. 0.34.0 retried every read and write, in a caller's transaction
 too.
 
 A MongoDB transaction bound to the factory while transaction synchronization is off, as a `MongoTransactionManager`
@@ -197,9 +202,10 @@ the concern is. The SPI and the store's javadoc say that the caller's commit dec
 
 - A quarantined instance's records exist only while it is quarantined under that quarantine id. Nothing is left behind
   to clean up, which settles [#1546](https://github.com/johanhaleby/occurrent/issues/1546) for the stores Occurrent ships.
-- Every saga write on MongoDB waits for a majority of the replica set to journal it, up to 10 seconds an attempt. On a
-  primary, secondary and arbiter replica set with one data-bearing member down, there is no majority to journal to, so
-  saga writes fail until that member is back, where `w: 1` would have succeeded.
+- Every saga write on MongoDB waits for a majority of the replica set to journal it, up to 10 seconds an attempt, or the
+  client's `timeoutMS` when it sets one above 0. On a client with a `timeoutMS` of 0 the commit of the store's own
+  transaction waits without limit. On a primary, secondary and arbiter replica set with one data-bearing member down,
+  there is no majority to journal to, so saga writes fail until that member is back, where `w: 1` would have succeeded.
 - A `MongoTemplate` configured with `w: 1` no longer decides how a saga instance is written. 0.34.0 wrote the instance at
   the template's concern, so this is a breaking change, with a section in the upgrade guide.
 - Quarantine on MongoDB needs a replica set, because a skip runs in a transaction. Occurrent's MongoDB subscription

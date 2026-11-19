@@ -127,12 +127,18 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
     // Not built from RetryStrategy.retry(), so the store cannot give it a predicate and runs its loop as it is
     private static final class CountingRetry implements RetryStrategy {
         private final AtomicInteger attempts = new AtomicInteger();
+        private final List<RuntimeException> failures = new CopyOnWriteArrayList<>();
 
         @Override
         public <T> T execute(Supplier<T> supplier) {
             return loop(() -> {
                 attempts.incrementAndGet();
-                return supplier.get();
+                try {
+                    return supplier.get();
+                } catch (RuntimeException e) {
+                    failures.add(e);
+                    throw e;
+                }
             });
         }
 
@@ -269,6 +275,21 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
             Throwable thrown = failureInside(new TransactionTemplate(new AnotherResourcesTransactionManager()), "insert", () -> SagaEnvelopes.of(store, null).compareAndSave("order-3", payment("order-3"), 0));
 
             assertSentOnceAndFailedAsMongoDbReported("insert", thrown, retries);
+        }
+
+        @Test
+        void compareAndSave_with_a_retry_strategy_implemented_by_the_caller_that_retries_any_failure_sends_once_and_every_later_attempt_throws_the_same_failure() {
+            CountingRetry strategy = new CountingRetry();
+            var store = storeOn(always(), strategy);
+
+            Throwable thrown = failureInside(new TransactionTemplate(new AnotherResourcesTransactionManager()), "insert", () -> SagaEnvelopes.of(store, null).compareAndSave("order-9", payment("order-9"), 0));
+
+            assertAll(
+                    () -> assertThat(sentOf("insert")).as("insert commands sent to the saga collection").isEqualTo(1),
+                    () -> assertThat(strategy.attempts.get()).as("attempts the retry strategy made, so its loop ran").isGreaterThan(1),
+                    () -> assertThat(strategy.failures).as("failures the attempts threw").hasSize(strategy.attempts.get()).containsOnly(strategy.failures.get(0)),
+                    () -> assertThat(thrown == null ? List.<Integer>of() : mongoCodesIn(thrown)).as("MongoDB error codes in the cause chain").contains(HOST_UNREACHABLE).doesNotContain(NO_SUCH_TRANSACTION)
+            );
         }
 
         @Test
