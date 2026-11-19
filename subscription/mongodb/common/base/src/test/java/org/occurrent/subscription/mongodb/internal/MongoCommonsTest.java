@@ -16,7 +16,10 @@
 
 package org.occurrent.subscription.mongodb.internal;
 
+import com.mongodb.MongoCommandException;
+import com.mongodb.ServerAddress;
 import org.bson.BsonDocument;
+import org.bson.BsonInt32;
 import org.bson.BsonString;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
@@ -34,14 +37,18 @@ import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.OptionalLong;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -682,5 +689,87 @@ class MongoCommonsTest {
 
         // Then
         assertThat(resolved).isSameAs(answer);
+    }
+
+    @Test
+    void is_mongos_is_true_when_hello_answers_isdbgrid() {
+        List<Document> sent = new ArrayList<>();
+
+        boolean mongos = MongoCommons.isMongos(recording(sent, command -> new Document("msg", "isdbgrid")));
+
+        assertThat(mongos).isTrue();
+        assertThat(sent).containsExactly(new Document("hello", 1));
+    }
+
+    @Test
+    void is_mongos_is_false_when_hello_answers_a_replica_set() {
+        List<Document> sent = new ArrayList<>();
+
+        boolean mongos = MongoCommons.isMongos(recording(sent, command -> new Document("setName", "rs0")));
+
+        assertThat(mongos).isFalse();
+        assertThat(sent).containsExactly(new Document("hello", 1));
+    }
+
+    @Test
+    void is_mongos_falls_back_to_isMaster_when_hello_fails_with_command_not_found_and_is_true_when_it_answers_isdbgrid() {
+        List<Document> sent = new ArrayList<>();
+        AtomicReference<Boolean> mongos = new AtomicReference<>();
+
+        assertThatCode(() -> mongos.set(MongoCommons.isMongos(oldServerAnswering(sent, new Document("msg", "isdbgrid")))))
+                .as("MongoDB 4.2.0 to 4.2.9 answer hello with code 59, and the check must not fail on that")
+                .doesNotThrowAnyException();
+
+        assertThat(sent).containsExactly(new Document("hello", 1), new Document("isMaster", 1));
+        assertThat(mongos).as("the isMaster answer is from a mongos").hasValue(true);
+    }
+
+    @Test
+    void is_mongos_falls_back_to_isMaster_when_hello_fails_with_command_not_found_and_is_false_when_it_answers_a_replica_set() {
+        List<Document> sent = new ArrayList<>();
+        AtomicReference<Boolean> mongos = new AtomicReference<>();
+
+        assertThatCode(() -> mongos.set(MongoCommons.isMongos(oldServerAnswering(sent, new Document("setName", "rs0")))))
+                .doesNotThrowAnyException();
+
+        assertThat(sent).containsExactly(new Document("hello", 1), new Document("isMaster", 1));
+        assertThat(mongos).as("the isMaster answer is from a replica set").hasValue(false);
+    }
+
+    @Test
+    void is_mongos_propagates_a_failure_of_hello_that_is_not_command_not_found_without_asking_isMaster() {
+        MongoCommandException unauthorized = commandFailed(13);
+        List<Document> sent = new ArrayList<>();
+
+        Throwable thrown = catchThrowable(() -> MongoCommons.isMongos(recording(sent, command -> {
+            throw unauthorized;
+        })));
+
+        assertThat(thrown).isSameAs(unauthorized);
+        assertThat(sent).containsExactly(new Document("hello", 1));
+    }
+
+    // A server that fails hello with code 59, as MongoDB 4.2.0 to 4.2.9 do, and answers isMaster
+    private static Function<Document, Document> oldServerAnswering(List<Document> sent, Document isMasterAnswer) {
+        return recording(sent, command -> {
+            if (command.containsKey("hello")) {
+                throw commandFailed(MongoCommons.COMMAND_NOT_FOUND_ERROR_CODE);
+            }
+            return isMasterAnswer;
+        });
+    }
+
+    private static Function<Document, Document> recording(List<Document> sent, Function<Document, Document> server) {
+        return command -> {
+            sent.add(command);
+            return server.apply(command);
+        };
+    }
+
+    private static MongoCommandException commandFailed(int code) {
+        BsonDocument response = new BsonDocument("ok", new BsonInt32(0))
+                .append("errmsg", new BsonString("command failed"))
+                .append("code", new BsonInt32(code));
+        return new MongoCommandException(response, new ServerAddress());
     }
 }
