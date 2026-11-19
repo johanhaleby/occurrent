@@ -119,7 +119,9 @@ deliver, and the fed-back rule below keeps H unwritten while an event this proce
 deliver, waits. An event another replica fed back needs a durable path of its own, which "Fed-back events on the
 reactor stack" describes. The next section shows why that holds.
 
-The blocking stack has no failure delete, so a done flag loses nothing there that the broker does not deliver again.
+The blocking stack has no failure delete, so a done flag loses nothing there that the broker does not deliver again,
+apart from an event a handler fed back with no durable path of its own, which "Fed-back events on the reactor stack"
+describes.
 A resume position would cost it a replay on every restart, of every event written since the previous start, with
 nothing in return. A push `@Saga` runs on the blocking stack only, and such a replay recreates an instance that its
 TTL already removed, from its start event, and dispatches that instance's commands again. The first 0.35.0 start
