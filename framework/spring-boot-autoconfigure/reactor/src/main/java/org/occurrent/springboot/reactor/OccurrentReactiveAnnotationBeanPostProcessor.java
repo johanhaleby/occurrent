@@ -26,6 +26,7 @@ import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.HandlerScan;
+import org.occurrent.springboot.common.internal.LateLiveStarts;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.occurrent.springboot.common.internal.StartupGap;
 import org.occurrent.springboot.common.internal.StartupWriteAdmission;
@@ -50,9 +51,7 @@ import org.springframework.util.ClassUtils;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -147,10 +146,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // The synchronous handler methods each class declares, read once per class, since every bean is checked as it is created
     private final Map<Class<?>, List<Method>> synchronousHandlersByClass = new ConcurrentHashMap<>();
 
-    // The start boundary each bean built after startup read when it was created, until it registers. Keyed by the
-    // instance, so two creations of one bean name, a prototype or a scoped bean built on two threads, each keep the
-    // boundary they read
-    private final Map<Object, String> lateLiveStarts = Collections.synchronizedMap(new IdentityHashMap<>());
+    // The start boundary each bean built after startup read when it was created, until it registers
+    private final LateLiveStarts lateLiveStarts = new LateLiveStarts();
     // A FactoryBean's read is keyed by its bean name, since its product is a different instance under the same name
     private final Map<String, String> lateFactoryLiveStarts = new ConcurrentHashMap<>();
     private StartPositionSupport startPositionSupport;

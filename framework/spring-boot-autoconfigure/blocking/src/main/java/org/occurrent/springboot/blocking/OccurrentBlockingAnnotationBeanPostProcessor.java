@@ -28,6 +28,7 @@ import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.HandlerScan;
+import org.occurrent.springboot.common.internal.LateLiveStarts;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
 import org.occurrent.springboot.common.internal.StartupGap;
 import org.occurrent.springboot.common.internal.StartupWriteAdmission;
@@ -49,9 +50,7 @@ import org.springframework.util.ClassUtils;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.IdentityHashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -128,10 +127,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private final StartupSubscribes startupSubscribes = new StartupSubscribes();
     // The synchronous handler methods each class declares, read once per class, since every bean is checked as it is created
     private final Map<Class<?>, List<Method>> synchronousHandlersByClass = new ConcurrentHashMap<>();
-    // The start boundary each bean built after startup read when it was created, by the instance being created, until
-    // it registers. Keyed by identity, so two creations of one prototype at the same moment each keep their own. An
-    // entry for a creation that failed stays until the post-processor goes.
-    private final Map<Object, String> lateLiveStarts = Collections.synchronizedMap(new IdentityHashMap<>());
+    // The start boundary each bean built after startup read when it was created, until it registers
+    private final LateLiveStarts lateLiveStarts = new LateLiveStarts();
     // The boundary a FactoryBean built after startup read for its product, by bean name, since the product that
     // reaches postProcessAfterInitialization is not the instance the factory's callback saw
     private final Map<String, String> lateFactoryLiveStarts = new ConcurrentHashMap<>();
