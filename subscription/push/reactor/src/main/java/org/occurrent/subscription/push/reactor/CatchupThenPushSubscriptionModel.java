@@ -746,7 +746,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // once the delete ends.
         Mono<Void> delete = deleteMarker(subscriptionId, catchupMarker);
         delete.subscribe(unused -> {
-        }, error -> log.warn("Could not delete the catch-up marker of cancelled subscription {}. Subscribing it again in this process replays its history, but after a restart it resumes after that marker unless the subscription is cancelled again first.", subscriptionId, error));
+        }, error -> log.warn("Could not delete the catch-up marker of cancelled subscription {}. Subscribing it again in this process replays its history, but after a restart it resumes after the marker if the store still holds it, unless the subscription is cancelled again first.", subscriptionId, error));
         return Mono.when(liveFeedCancelled, delete).cache();
     }
 
