@@ -26,6 +26,12 @@ third case holds for `NOW` only with `resumeBehavior = SAME_AS_START_AT`, never 
 a `SubscriptionResumePoints` bean is declared. Decision 7's sentence that the default start position bypasses the
 catch-up layer no longer holds.
 
+Amended by [ADR 179](0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md). On the reactor
+stack decision 6's rule covers only a replay from the beginning. A reactor catch-up that replays after a stored catch-up
+marker tells the recorder nothing about it, so the recorder records each append that replay applies. The reactor push
+model also sends `historyRead` for a catch-up that a stop, a cancel or a failure cut short, before the next catch-up of
+the id replays, where the body says a subscription model sends nothing for a catch-up a stop truncated.
+
 ## Context
 
 A caller that has just written wants to know when an asynchronous projection has applied that write.
