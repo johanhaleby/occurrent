@@ -39,13 +39,19 @@ failure stays, with the time of the first one, until a try brings the subscripti
 A given-up subscription is kept in a map keyed by subscription id, since the model has forgotten everything else about
 it. A subscribe with the same id removes it, and so do a cancel of that id and a shutdown.
 
-The status is `GIVEN_UP` exactly while the id is free for a new subscribe. The model records the given-up status and
-frees the id in one step under the monitor that a subscribe reserves the id under, and the status is read under that
-monitor too, all but `hasLock`. A subscribe that finds the id free therefore always finds the given-up status, and
-removes it. A cancel waits for the subscription's lock, which the model holds while it forgets the subscription. Before
+The model records the given-up status and frees the id in one step under the monitor that a subscribe reserves the id
+under, and the status is read under that monitor too, all but `hasLock`. What a read takes under the monitor is
+therefore `GIVEN_UP` exactly while the id is free for a new subscribe, and a subscribe that finds the id free always
+finds the given-up status, and removes it. A cancel waits for the subscription's lock, which the model holds while it forgets the subscription. Before
 that step, a refusal the wrapped model has reported is the failure of the state the subscription is in, so the
 component is down from the report on. When the wrapped model made the subscription again after the refusal, the model
 keeps it once it acts on the report, and the refusal stops being the failure.
+
+A status is what the model saw while the read ran. The read calls `hasLock` after it releases the monitor, so a give-up
+that frees the id meanwhile, or a subscribe that takes the id again, can make the read answer `LEASE_HELD` or
+`STANDBY` for a subscription that is gone. The next read answers the change. A counter that the read checks again after
+`hasLock`, with a retry when it moved, would close that gap, at the cost of a loop around a call into the lease strategy,
+for a status a health endpoint shows already out of date.
 
 **`CompetingConsumerStrategy` is unchanged.** The two MongoDB lease strategies get `leaseRefreshFailure()`, which
 returns the failure of the latest refresh attempt and when the failures began, or empty once an attempt refreshed every

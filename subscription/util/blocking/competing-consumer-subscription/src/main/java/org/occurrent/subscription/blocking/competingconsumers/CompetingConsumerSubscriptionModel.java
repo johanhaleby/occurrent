@@ -2034,6 +2034,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * A call to the lease strategy or the wrapped model that throws, and that this model tries again, makes the
      * subscription failing, with that failure, until a try succeeds. A subscription that is
      * failing keeps the {@link CompetingConsumerStatus.Failure#since()} of its first failure.
+     * <p>
+     * The status is what this model saw while the call ran. A change made during the call, such as a give-up that frees
+     * the id, can make it out of date by the time the call returns.
      *
      * @param subscriptionId The id of the subscription.
      * @return The status, or empty for an id this model doesn't know, a subscription that doesn't compete, and once this
@@ -2062,6 +2065,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * The {@link #competingConsumerStatus(String) status} of every competing subscription this model knows, and of every
      * one it has {@link CompetingConsumerStatus.State#GIVEN_UP given up}, ordered by subscription id. Empty once this
      * model is shut down.
+     * <p>
+     * Each status is what this model saw while the call ran. A change made during the call, such as a give-up that frees
+     * an id, can make one out of date by the time the call returns.
      *
      * @return The statuses.
      */
