@@ -475,11 +475,12 @@ only the 0.34.0 node's own subscription stalls, until the node is upgraded or th
 The subscription delivers one event at a time, so the stall holds up every later event of that saga subscription, for
 every instance of the saga, not only the events of the quarantined instance.
 
-After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease. A stall on a `QUARANTINED_RECORDING`
-instance then lasts until the instance is deleted, with competing consumers or without. A stall on an `ACTIVE_MARKED`
-instance also ends once the `updateMany` of ADR 154 gives it its plain status back, since the 0.34.0 node reads the
-instance again on every retry and no 0.35.0 node is left to store it as `ACTIVE_MARKED` again. A node whose catch-up stopped on the event also has to restart before its
-subscription goes live. A downgrade that doesn't stall anything goes like this, with steps 1 to 5 on 0.35.0 nodes:
+After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease, so the stall lasts until the instance is
+stored with a status 0.34.0 reads, or deleted, with competing consumers or without. The 0.34.0 node reads the instance
+again on every retry, so the stall on an `ACTIVE_MARKED` instance ends once it is stored as `ACTIVE`, since no 0.35.0
+node is left to store it as `ACTIVE_MARKED` again. A node whose catch-up stopped on the event also has to restart
+before its subscription goes live. A downgrade that doesn't stall anything goes like this, with steps 1 to 5 on 0.35.0
+nodes:
 
 1. Turn quarantine off on every node, and have that running on every node before step 2. A node that still has
    quarantine on can quarantine another instance after the instances are listed.
@@ -496,16 +497,34 @@ subscription goes live. A downgrade that doesn't stall anything goes like this, 
    longer decodes or an event store read that failed, and release the instance again.
 5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `QUARANTINED_AGAIN` or
    `QUARANTINED_EVENT_MISSING`, or that keeps failing for a cause you can't fix.
-6. Stop every 0.35.0 node. Then list the instances as step 2 does, and delete each one whose failure record has a
-   quarantine id with `SagaStateStore.delete(sagaId)`, from a process that runs no `SagaRunner`. With no `SagaRunner`
-   running, nothing releases an instance or delivers it an input, so each one is still quarantined when it is deleted.
-7. Set every `ACTIVE_MARKED` instance back to `ACTIVE`, released ones included, with the update ADR 154 describes.
-8. Start the 0.34.0 nodes.
+6. Stop every 0.35.0 node. Then, from a process that runs no `SagaRunner`, store every `QUARANTINED_RECORDING`
+   instance as `QUARANTINED` without its quarantine id, skip count and release time, and every `ACTIVE_MARKED` instance,
+   released ones included, as `ACTIVE`, with the update ADR 154 describes. On MongoDB, on each saga collection:
 
-An instance 0.34.0 quarantined needs nothing, and an instance whose release returns `RELEASED` or `NOT_QUARANTINED` is
-released, so no step deletes it. Of what this record adds, only the `QUARANTINED_RECORDING` status is something 0.34.0 can't decode, and no
-instance has it after these steps. ADR 154 stores an instance with stream marks as `ACTIVE_MARKED` for the same reason
-this record stores `QUARANTINED_RECORDING`, and says what step 7 loses.
+   ```
+   db.getCollection("<sagaCollection>").updateMany(
+     { status: "QUARANTINED_RECORDING" },
+     { $set: { status: "QUARANTINED" }, $unset: { failureQuarantineId: "", quarantineSkipCount: "", failureReleasedAt: "" } })
+   db.getCollection("<sagaCollection>").updateMany({ status: "ACTIVE_MARKED" }, { $set: { status: "ACTIVE" } })
+   ```
+
+   With no `SagaRunner` running, nothing releases an instance or delivers it an input while the update runs.
+7. Start the 0.34.0 nodes.
+
+No step deletes an instance. Of what this record adds, only the `QUARANTINED_RECORDING` status is something 0.34.0
+can't decode, and step 6 stores every instance that has it as `QUARANTINED`. 0.34.0 decodes the status with
+`SagaStatus.valueOf` and reads only the fields it names, so it reads such an instance as one it quarantined itself,
+with its state and the input it stopped on. It skips every input addressed to it and fires none of its timers, and only
+a delete takes it out of quarantine, as for any instance 0.34.0 quarantined.
+
+Step 6 removes the quarantine id because 0.34.0 skips inputs without recording them. A release after a later upgrade
+would replay the inputs recorded before the downgrade and miss the ones skipped after it. Without a quarantine id, a
+0.35.0 node reads the instance as one 0.34.0 quarantined, which `release` refuses, as point 4 says. The records of the
+inputs it skipped on 0.35.0 stay in the store, where nothing reads them once the quarantine id is gone. They take up
+storage and nothing else.
+
+ADR 154 stores an instance with stream marks as `ACTIVE_MARKED` for the same reason this record stores
+`QUARANTINED_RECORDING`, and says what setting it back to `ACTIVE` loses.
 
 The upgrade guide has the procedure for operators, in
 [Upgrading from 0.34.0 and rolling back to it](../../migration/upgrading-to-0.35.0.md#upgrading-from-0340-and-rolling-back-to-it).
@@ -549,10 +568,11 @@ The upgrade guide has the procedure for operators, in
   the node stalls the saga's subscription for every later event. In a mixed cluster the stall ends once a 0.35.0 node
   holds the saga's competing-consumer lease, or once a 0.35.0 node deletes the instance. A release doesn't end it,
   since a released instance is stored as `ACTIVE_MARKED` when it holds stream marks (ADR 154). Without competing
-  consumers it ends when the 0.34.0 node stops. After a downgrade only a delete ends it, or, for a released instance,
-  the `updateMany` of ADR 154 that sets `ACTIVE_MARKED` back to `ACTIVE`.
+  consumers it ends when the 0.34.0 node stops. After a downgrade it ends when the instance is stored as `QUARANTINED`
+  again, or as `ACTIVE` for a released instance, or deleted.
   A downgrade that first turns quarantine off on every node and releases those instances, then stops every 0.35.0
-  node, deletes the ones that stay quarantined and sets `ACTIVE_MARKED` back to `ACTIVE`, stalls nothing.
+  node, stores the ones that stay quarantined as `QUARANTINED` and sets `ACTIVE_MARKED` back to `ACTIVE`, stalls
+  nothing and deletes no instance.
 - An application that never configured quarantine starts quarantining on upgrade. One that set
   `occurrent.saga.quarantine-after` blank to keep it off fails at startup instead, with a message that names
   `occurrent.saga.quarantine-enabled=false`.
