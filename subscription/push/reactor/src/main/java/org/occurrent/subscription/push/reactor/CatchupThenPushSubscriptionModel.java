@@ -324,11 +324,13 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
         // Set in isAlreadyCaughtUp(), which the handover calls before replay() and markCaughtUp() (ADR 179)
         AtomicReference<ReplayStart> attemptStart = new AtomicReference<>(ReplayStart.FROM_BEGINNING_UNMARKED);
-        // Whether the listener hears this attempt, set in replayStarted() from the same read the replay uses. The
-        // handover can read the marker again on a catch-up's turn, and replayStarted() runs once after the last read,
-        // so catchupStarted goes out at most once and only for a replay from the beginning. An attempt whose replay
-        // never starts is not heard. An attempt that resumes after a marker is not heard either. Every attempt whose
-        // replay starts ends an episode an earlier attempt left reading history.
+        // Whether the listener hears this attempt, set in replayStarted() from whether it announced the attempt, which
+        // follows the same read the replay uses. A listener registered after that hears nothing about the attempt,
+        // since it never heard catchupStarted for it. The handover can read the marker again on a catch-up's turn, and
+        // replayStarted() runs once after the last read, so catchupStarted goes out at most once and only for a replay
+        // from the beginning. An attempt whose replay never starts is not heard. An attempt that resumes after a marker
+        // is not heard either. Every attempt whose replay starts ends an episode an earlier attempt left reading
+        // history.
         AtomicBoolean listenerHearsAttempt = new AtomicBoolean();
         // Whether this attempt's last marker read refused a checkpoint that is not a catch-up marker. Something else
         // stored it under the id, such as a durable subscription's resume token, so a failed catch-up does not delete
@@ -348,8 +350,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             @Override
             public void replayStarted() {
                 if (attemptStart.get().fromBeginning()) {
-                    listenerHearsAttempt.set(true);
-                    announceCatchupStart(subscriptionId, replayDone);
+                    listenerHearsAttempt.set(announceCatchupStart(subscriptionId, replayDone));
                 } else {
                     endEpisodeStillReadingHistory(subscriptionId, replayDone);
                 }
@@ -640,8 +641,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * marker delivers its events the way the live feed does and sends nothing about itself, so a recording projection
      * keeps what it recorded before the restart (ADR 179). Before the next catch-up of the id replays, whether from the
      * beginning or after a marker, the listener hears {@code historyRead} for a catch-up it heard start and that a
-     * stop, a cancel or a failure cut short. A shutdown sends it nothing. The blocking push model still tells its
-     * listener about every start.
+     * stop, a cancel or a failure cut short. A catch-up a shutdown cuts short gets no {@code historyRead}. The
+     * listener hears nothing about a catch-up that started before it was registered. The blocking push model still
+     * tells its listener about every start.
      */
     @Override
     public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
@@ -826,16 +828,19 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // fresh subscribe cannot slip between the ownership check and the signal. An attempt that no longer owns the id
     // sends nothing, or its start would arrive after its replacement's and the recorder would adopt a catch-up that is
     // already over. The replay itself is the episode, so a later attempt starts its own.
-    private synchronized void announceCatchupStart(String subscriptionId, Sinks.One<Boolean> replayDone) {
+    // Answers whether a listener heard the start.
+    private synchronized boolean announceCatchupStart(String subscriptionId, Sinks.One<Boolean> replayDone) {
         if (catchupOwners.get(subscriptionId) != replayDone) {
-            return;
+            return false;
         }
         endUnfinishedEpisode(subscriptionId);
         CatchupListener startListener = catchupListeners.get(subscriptionId);
-        if (startListener != null) {
-            episodesReadingHistory.put(subscriptionId, replayDone);
-            startListener.catchupStarted(replayDone);
+        if (startListener == null) {
+            return false;
         }
+        episodesReadingHistory.put(subscriptionId, replayDone);
+        startListener.catchupStarted(replayDone);
+        return true;
     }
 
     // Under the same monitor and owner check as announceCatchupStart, so an attempt that has lost the id cannot end the

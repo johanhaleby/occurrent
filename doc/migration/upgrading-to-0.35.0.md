@@ -3191,8 +3191,8 @@ What you see:
   0.34.0 it heard `catchupStarted` on every start, and the applied-append recorder of the reactive Spring Boot starter
   deleted its records then, so a wait for an append applied before a restart could time out. The next start of the id,
   whether it replays from the beginning or resumes after a marker, first sends `historyRead` for a catch-up the listener
-  heard start and that a stop, a cancel or a failure cut short, so the listener stops waiting for it. A shutdown sends
-  no `historyRead`. A listener of your own that counted on hearing every start needs a look.
+  heard start and that a stop, a cancel or a failure cut short, so the listener stops waiting for it. A catch-up a
+  shutdown cuts short gets no `historyRead`. A listener of your own that counted on hearing every start needs a look.
 
 0.34.0 wrote the marker only after a replay from the beginning, and a 0.34.0 start that found it skipped its replay and
 never wrote it again. The first 0.35.0 start that reads that marker resumes after it, so for an id that has run for

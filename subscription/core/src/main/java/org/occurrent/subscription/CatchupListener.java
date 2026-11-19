@@ -58,7 +58,8 @@ public interface CatchupListener {
      * nothing for it, so the next {@link #catchupStarted(Object)} of the subscription supersedes the episode, or sends
      * this once for it before the next catch-up of the subscription replays, as the reactor {@code
      * CatchupThenPushSubscriptionModel} does. Sent that way it means stop waiting for that history and record from
-     * here, and the next catch-up's {@code catchupStarted} can follow at once. A shutdown sends neither.
+     * here, and the next catch-up's {@code catchupStarted} can follow at once. A history a shutdown cuts short gets no
+     * {@code historyRead} either way.
      *
      * @param episode The catch-up whose history has been read, as given to {@link #catchupStarted(Object)}.
      */

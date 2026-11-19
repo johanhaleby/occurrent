@@ -69,7 +69,7 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
      * the end of a replay that no longer runs, and once a later catch-up of the id replays, every
      * {@code catchupStarted} before it has been followed by exactly one {@code historyRead} for the same catch-up. A
      * catch-up that a stop, a cancel or a failure cut short and that no later catch-up of the id follows gets no
-     * {@code historyRead}, and neither does one a shutdown ends, since the model delivers nothing after it.
+     * {@code historyRead}, and neither does one a shutdown cuts short, since the model delivers nothing after it.
      * <p>
      * Register before subscribing. A listener registered after a catch-up has begun misses its start, and a
      * recording projection behind it would then record the history that catch-up is replaying.

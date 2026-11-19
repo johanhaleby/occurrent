@@ -133,6 +133,38 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
         await().atMost(TIMEOUT).untilAsserted(() -> assertThat(signals.names).containsExactly("catchupStarted", "historyRead", "alreadyDeliveredByReplay:2"));
     }
 
+    // The listener is registered after the attempt's replay from the beginning started, so it never heard the attempt
+    // start. The replay is held when it reaches the second payload, the listener is registered, and then the payload
+    // is also delivered live. The listener must not hear that the replay already delivered it, since it heard nothing
+    // else about the attempt.
+    @Test
+    void a_listener_registered_after_a_replay_from_the_beginning_started_is_not_told_which_payloads_that_replay_already_delivered() throws Exception {
+        store.append(List.of(event("1"), event("2")));
+        CountDownLatch overlapReached = new CountDownLatch(1);
+        CountDownLatch releaseOverlap = new CountDownLatch(1);
+        PositionOrderedReader holdingBeforeTheOverlap = decorated(store, replay -> replay.doOnNext(e -> {
+            if (e.getId().equals("2")) {
+                overlapReached.countDown();
+                awaitQuietly(releaseOverlap);
+                feed.accept(e).subscribe();
+            }
+        }));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(holdingBeforeTheOverlap, feed, new InMemoryCheckpointStorage());
+
+        try {
+            Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.empty());
+            assertThat(overlapReached.await(5, TimeUnit.SECONDS)).as("the replay has started and is about to read the overlapping payload").isTrue();
+            model.listenForCatchup("proj", signals);
+            releaseOverlap.countDown();
+            subscription.waitUntilStarted().block(TIMEOUT);
+
+            await().during(Duration.ofMillis(500)).atMost(TIMEOUT).untilAsserted(() ->
+                    assertThat(signals.names).as("signals heard by a listener registered after the replay started").isEmpty());
+        } finally {
+            releaseOverlap.countDown();
+        }
+    }
+
     @Test
     void a_start_that_finds_a_marker_tells_the_listener_nothing_even_when_a_live_payload_was_also_replayed() {
         store.append(List.of(event("1"), event("2")));
@@ -233,10 +265,16 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
         model.listenForCatchup("proj", episodes);
         CountDownLatch lastEventReached = new CountDownLatch(1);
         CountDownLatch releaseLastEvent = new CountDownLatch(1);
+        AtomicBoolean releasedByTheLatch = new AtomicBoolean();
 
         Subscription first = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.fromRunnable(() -> {
             lastEventReached.countDown();
-            awaitQuietly(releaseLastEvent);
+            try {
+                releasedByTheLatch.set(releaseLastEvent.await(30, TimeUnit.SECONDS));
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(ex);
+            }
         }));
         assertThat(lastEventReached.await(5, TimeUnit.SECONDS)).as("the first attempt is replaying its last event").isTrue();
         model.cancelSubscription("proj").block(TIMEOUT);
@@ -244,8 +282,10 @@ class CatchupThenPushSubscriptionModelMarkerAttemptTest {
         assertThat(episodes.names).as("signals heard before the first attempt reaches the end of its history")
                 .startsWith("catchupStarted#1", "historyRead#1", "catchupStarted#2");
         releaseLastEvent.countDown();
+        // Whether the cancelled attempt ends in an error does not matter here, only when it ends
         catchThrowable(() -> first.waitUntilStarted().block(TIMEOUT));
 
+        assertThat(releasedByTheLatch).as("the first attempt was held until the next attempt ended its episode").isTrue();
         assertThat(episodes.names).as("signals heard from the cancelled attempt and the one that replaced it")
                 .containsExactlyInAnyOrder("catchupStarted#1", "historyRead#1", "catchupStarted#2", "historyRead#2")
                 .startsWith("catchupStarted#1", "historyRead#1", "catchupStarted#2");
