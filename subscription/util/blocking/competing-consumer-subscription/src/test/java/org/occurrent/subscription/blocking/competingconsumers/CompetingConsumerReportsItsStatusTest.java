@@ -255,7 +255,7 @@ class CompetingConsumerReportsItsStatusTest {
     }
 
     @Test
-    void reports_a_refused_start_as_given_up_while_the_call_that_holds_the_subscription_has_not_returned() throws Exception {
+    void reports_a_refused_start_as_failing_with_the_refusal_and_not_given_up_while_the_call_that_holds_the_subscription_has_not_returned() throws Exception {
         // Given a pause by the user that waits inside the wrapped model, holding the subscription
         strategy.grantOnRegister = true;
         subscribe();
@@ -276,16 +276,20 @@ class CompetingConsumerReportsItsStatusTest {
             // When the wrapped model refuses the start meanwhile
             wrapped.refuse(ID);
 
-            // Then it is reported at once, which the pause that holds the subscription cannot hold up
+            // Then it is reported at once as the failure of the subscription, which the pause that holds the subscription cannot hold up, and it is not given up while the id is still in use
             assertThat(pause.isAlive()).as("the pause still waits").isTrue();
-            await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(model.competingConsumerStatus(ID)).map(CompetingConsumerStatus::state).contains(State.GIVEN_UP));
-            assertThat(status().isFailing()).as("failing").isTrue();
+            await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(model.competingConsumerStatus(ID)).map(CompetingConsumerStatus::isFailing).contains(true));
+            CompetingConsumerStatus failing = status();
+            assertThat(failing.state()).as("state while the id is in use").isNotEqualTo(State.GIVEN_UP);
+            assertThat(failing.failure().cause()).isInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("Refused the start of " + ID);
+            assertThat(model.subscriptionIds()).as("subscription ids, the id is in use").contains(ID);
         } finally {
             release.countDown();
             pause.join(10_000);
         }
         await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(model.subscriptionIds()).as("subscription ids, once the pause returned").doesNotContain(ID));
         assertThat(status().state()).isEqualTo(State.GIVEN_UP);
+        assertThat(status().isFailing()).as("failing").isTrue();
     }
 
     @Test
@@ -728,6 +732,54 @@ class CompetingConsumerReportsItsStatusTest {
         assertThat(subscribeFailure.get()).as("the subscribe failed").isNull();
         assertThat(status().state()).isEqualTo(State.LEASE_HELD);
         assertThat(status().isFailing()).as("failing").isFalse();
+        assertThat(model.competingConsumerStatuses()).as("statuses").hasSize(1);
+    }
+
+    @Test
+    void reports_given_up_only_when_the_id_is_free_for_a_new_subscribe_from_the_moment_the_given_up_status_is_recorded() throws Exception {
+        // Given a refused start, and an observer that starts reading the status as soon as the given-up status is recorded, while the id is not yet freed
+        strategy.grantOnRegister = true;
+        subscribe();
+        AtomicReference<@Nullable State> observed = new AtomicReference<>();
+        AtomicBoolean listedWhenGivenUp = new AtomicBoolean();
+        AtomicReference<@Nullable Throwable> subscribeFailure = new AtomicReference<>();
+        Thread observer = new Thread(() -> {
+            try {
+                State state = model.competingConsumerStatus(ID).map(CompetingConsumerStatus::state).orElse(null);
+                observed.set(state);
+                if (state == State.GIVEN_UP) {
+                    listedWhenGivenUp.set(model.subscriptionIds().contains(ID));
+                    subscribe();
+                }
+            } catch (Throwable t) {
+                subscribeFailure.set(t);
+            }
+        });
+        model.runOnceAGivenUpStatusIsRecorded(() -> {
+            observer.start();
+            // Either the observer is held back by the monitor the hook runs under, or it has run to its end. Only then does the hook return.
+            try {
+                await().atMost(EVENTUALLY).until(() -> observer.getState() == Thread.State.BLOCKED || observer.getState() == Thread.State.TERMINATED);
+            } catch (ConditionTimeoutException ignored) {
+                // Left to the assertions below
+            }
+        });
+
+        // When the refused start is forgotten
+        Thread forget = new Thread(() -> wrapped.refuse(ID));
+        forget.start();
+        forget.join(30_000);
+        if (observer.getState() != Thread.State.NEW) {
+            observer.join(30_000);
+        }
+
+        // Then the observer saw the status as given up only with the id free, and could subscribe it
+        assertThat(forget.isAlive()).as("the forget is alive").isFalse();
+        assertThat(observer.isAlive()).as("the observer is alive").isFalse();
+        assertThat(observed.get()).as("status the observer read").isEqualTo(State.GIVEN_UP);
+        assertThat(listedWhenGivenUp).as("the id is listed in subscription ids while the status is given up").isFalse();
+        assertThat(subscribeFailure.get()).as("the subscribe of the id the status reports as given up failed").isNull();
+        assertThat(status().state()).isEqualTo(State.LEASE_HELD);
         assertThat(model.competingConsumerStatuses()).as("statuses").hasSize(1);
     }
 

@@ -376,6 +376,31 @@ class OccurrentMongoAutoConfigurationCompetingConsumerHealthTest {
         });
     }
 
+    @Test
+    void an_indicator_obtained_while_one_model_knew_the_id_is_DOWN_with_the_details_of_a_model_that_subscribed_the_id_and_failed_afterwards() {
+        CompetingConsumerSubscriptionModel first = modelReporting(new CompetingConsumerStatus("shared", "node-1", State.LEASE_HELD, null));
+        CompetingConsumerSubscriptionModel second = mock(CompetingConsumerSubscriptionModel.class);
+        when(second.competingConsumerStatuses()).thenReturn(List.of());
+        when(second.competingConsumerStatus("shared")).thenReturn(Optional.empty());
+
+        contextRunner.withBean("first", SubscriptionModel.class, () -> first).withBean("second", SubscriptionModel.class, () -> second).run(context -> {
+            HealthIndicator held = indicator(competingConsumers(context), "shared");
+            assertThat(held.health().getStatus()).as("status while only the first model knows the id").isEqualTo(Status.UP);
+
+            // When the second model subscribes the same id and its status fails
+            CompetingConsumerStatus failing = new CompetingConsumerStatus("shared", "node-2", State.LEASE_HELD,
+                    new CompetingConsumerStatus.Failure(new IllegalStateException("pause fails"), SINCE));
+            when(second.competingConsumerStatuses()).thenReturn(List.of(failing));
+            when(second.competingConsumerStatus("shared")).thenReturn(Optional.of(failing));
+
+            // Then the indicator obtained earlier reports it
+            Health health = held.health();
+            assertThat(health.getStatus()).as("status of the indicator obtained earlier").isEqualTo(Status.DOWN);
+            assertThat(health.getDetails()).containsEntry("state", "LEASE_HELD").containsEntry("subscriberId", "node-2")
+                    .containsEntry("failure", "java.lang.IllegalStateException: pause fails").containsEntry("since", SINCE.toString());
+        });
+    }
+
     private static CompetingConsumerSubscriptionModel modelReporting(CompetingConsumerStatus status) {
         CompetingConsumerSubscriptionModel model = mock(CompetingConsumerSubscriptionModel.class);
         when(model.competingConsumerStatuses()).thenReturn(List.of(status));

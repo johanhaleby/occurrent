@@ -37,13 +37,15 @@ failure stays, with the time of the first one, until a try brings the subscripti
 `competingConsumerStatuses()` lists every status.
 
 A given-up subscription is kept in a map keyed by subscription id, since the model has forgotten everything else about
-it. A subscribe with the same id removes it, and so do a cancel of that id and a shutdown. The status also reads a
-refusal the wrapped model has reported and the model hasn't acted on yet, so `GIVEN_UP` shows at once.
+it. A subscribe with the same id removes it, and so do a cancel of that id and a shutdown.
 
-The model records the given-up status before it frees the id, and frees the id under the monitor that a subscribe
-reserves the id under. A subscribe that finds the id free therefore always finds the given-up status too, and removes
-it. A cancel waits for the subscription's lock, which the model holds while it forgets the subscription. So a given-up
-status never shows after a later subscribe or cancel of the id.
+The status is `GIVEN_UP` exactly while the id is free for a new subscribe. The model records the given-up status and
+frees the id in one step under the monitor that a subscribe reserves the id under, and the status is read under that
+monitor too, all but `hasLock`. A subscribe that finds the id free therefore always finds the given-up status, and
+removes it. A cancel waits for the subscription's lock, which the model holds while it forgets the subscription. Before
+that step, a refusal the wrapped model has reported is the failure of the state the subscription is in, so the
+component is down from the report on. When the wrapped model made the subscription again after the refusal, the model
+keeps it once it acts on the report, and the refusal stops being the failure.
 
 **`CompetingConsumerStrategy` is unchanged.** The two MongoDB lease strategies get `leaseRefreshFailure()`, which
 returns the failure of the latest refresh attempt and when the failures began, or empty once an attempt refreshed every

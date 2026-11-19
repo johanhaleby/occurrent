@@ -71,16 +71,15 @@ final class CompetingConsumersHealthContributor implements CompositeHealthContri
         return indicators().entrySet().stream().map(entry -> new Entry(entry.getKey(), entry.getValue()));
     }
 
-    // Two models can use the same subscription id, so a component asks every model that knows its id
+    // An indicator finds the models again on each call, so one an actuator caller holds on to also asks a model that
+    // took the id later
     private Map<String, HealthIndicator> indicators() {
-        Map<String, List<CompetingConsumerSubscriptionModel>> modelsById = new LinkedHashMap<>();
+        Map<String, HealthIndicator> indicators = new LinkedHashMap<>();
         for (CompetingConsumerSubscriptionModel model : models()) {
             for (CompetingConsumerStatus status : model.competingConsumerStatuses()) {
-                modelsById.computeIfAbsent(status.subscriptionId(), __ -> new ArrayList<>()).add(model);
+                indicators.computeIfAbsent(status.subscriptionId(), subscriptionId -> () -> health(subscriptionId));
             }
         }
-        Map<String, HealthIndicator> indicators = new LinkedHashMap<>();
-        modelsById.forEach((subscriptionId, models) -> indicators.put(subscriptionId, () -> health(subscriptionId, models)));
         return indicators;
     }
 
@@ -101,9 +100,10 @@ final class CompetingConsumersHealthContributor implements CompositeHealthContri
         return models;
     }
 
-    // Reports the first failing status of the models, so a model that fails is never hidden behind one that doesn't
-    private static Health health(String subscriptionId, List<CompetingConsumerSubscriptionModel> models) {
-        List<CompetingConsumerStatus> statuses = models.stream()
+    // Two models can use the same subscription id. Every model that knows it is asked and the first failing status is
+    // reported, so a model that fails is never hidden behind one that doesn't
+    private Health health(String subscriptionId) {
+        List<CompetingConsumerStatus> statuses = models().stream()
                 .map(model -> model.competingConsumerStatus(subscriptionId))
                 .flatMap(Optional::stream)
                 .toList();
