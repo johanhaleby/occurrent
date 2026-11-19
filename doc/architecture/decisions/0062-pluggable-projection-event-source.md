@@ -67,7 +67,7 @@ domain-event-level `Consumer<E>`. A separate per-projection feed factory would d
 ## Decision: replay-then-push catch-up (v1, broker owns live-resume)
 
 A push feed cannot backfill a new or rebuilt projection, because a broker is not a log. `CatchupThenPushSubscriptionModel`
-(blocking and reactor) fills that gap with a one-time catch-up in front of a `PushSubscriptionModel`. It splits
+(blocking and reactor) fills that gap with a catch-up in front of a `PushSubscriptionModel`. It splits
 responsibility deliberately:
 
 - **Catch-up is Occurrent's job.** On subscribe it registers on the live feed first and
@@ -121,7 +121,7 @@ store (CloudEvents) and decodes each event once, never a double round trip.
 
 - `Projections.domainEventFeed(projection, repository)` returns the live-only domain feed (a `Consumer<E>` blocking, a
   `Function<E, Mono<Void>>` reactor), a named form of the existing `materializedView(...)::update` / `reactiveUpdate(...)`.
-- `CatchupProjectionFeed` adds the one-time catch-up to a domain feed: buffer live, replay the store
+- `CatchupProjectionFeed` adds the catch-up to a domain feed: buffer live, replay the store
   (decode once), drain, go live, de-duplicating the replay-to-live overlap by a caller-supplied `Function<E,String>`
   event-id applied in domain space (so it does not depend on the CloudEvent id). Same v1 contract as the CloudEvent
   handover: broker owns live-resume, the catch-up marker described above, at-least-once idempotent folds, bounded
@@ -147,7 +147,7 @@ bean, compose a routing model that sends each subscription to exactly one source
 Making live-resume independent of broker retention is a deliberate non-goal, and may never be built. The decision is a
 boundary of responsibility: delivery guarantees for the live feed, ordering and no-loss redelivery, belong to the
 transport that already provides them (RabbitMQ, Kafka), not to Occurrent reconstructing them. The push source is meant to
-be driven by a transport that guarantees ordering. Occurrent's job is the one-time catch-up from the event store, not to
+be driven by a transport that guarantees ordering. Occurrent's job is the catch-up from the event store, not to
 compensate for a transport that drops or reorders messages.
 
 Should broker-independent resume ever be needed, it belongs with the push transport integration (the push module or a
@@ -167,9 +167,9 @@ bean-post-processor wraps in `CatchupThenPushSubscriptionModel` with the event s
 framework's `CheckpointStorage` as the catch-up marker. The default `Source.EVENT_STORE` keeps the existing behavior.
 An explicit attribute was chosen over auto-detecting a push bean, since a durable public annotation should not change its
 event source implicitly based on which beans happen to be present. Push source is rejected together with
-`mode = SYNCHRONOUS` and the catch-up start knobs (the catch-up marker decides where the replay starts, and live-resume
-is the broker's job), and with a `DcbProjection` (a DCB boundary cannot be catch-up-replayed in position order). Implemented on
-both the blocking and reactor stacks.
+`mode = SYNCHRONOUS` and the catch-up start knobs (the catch-up marker decides whether a replay runs on the blocking
+stack and where it starts on the reactor stack, and live-resume is the broker's job), and with a `DcbProjection` (a
+DCB boundary cannot be catch-up-replayed in position order). Implemented on both the blocking and reactor stacks.
 
 ## Amendment (2026-07-25): the catch-up handover is one shared engine per stack
 
