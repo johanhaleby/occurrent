@@ -62,7 +62,8 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * <p>
      * An empty result has to hold every write acknowledged before the call started. The executor skips an input
      * addressed to no instance without writing anything, so no compare-and-set catches an instance this read misses, and
-     * the input is acknowledged unapplied. An instance this returns may be an older version than the stored one, since
+     * the input is acknowledged unapplied. A store that can't give that answer, such as a read at a transaction snapshot
+     * that began before the write, throws instead of returning empty. An instance this returns may be an older version than the stored one, since
      * the executor writes it back with a compare-and-set that such a version loses. {@link #findWithoutState(String)}
      * answers under the same rule.
      */

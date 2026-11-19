@@ -1327,13 +1327,20 @@ addressed to it. So the first input of a new instance costs a second read.
 The four writes of `SagaStateStoreSkippedInputs` and the `delete` of a quarantined instance run in a transaction that
 commits at `majority` with `j: true` and reads at read concern `snapshot`. The store retries a transaction that fails
 with the `TransientTransactionError` label, and commits again after an `UnknownTransactionCommitResult`, both with its
-`RetryStrategy`, and throws any other failure of the transaction at once. A standalone server refuses the transaction,
-and the store throws an `IllegalStateException` on the first attempt that says it needs a replica set and that a
-single-member one is enough.
+`RetryStrategy`. With a strategy built from `RetryStrategy.retry()`, as the default is, the store throws any other
+failure of the transaction at once. A standalone server refuses the transaction, and with such a strategy the store
+throws an `IllegalStateException` on the first attempt that says it needs a replica set and that a single-member one is
+enough. A strategy implemented another way runs its own loop and decides what it retries.
 
 Inside a Spring MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your
 transaction instead of starting their own, and the store doesn't retry them. Your commit's write concern then decides
 whether they survive a failover. The store can't read that concern, so it doesn't check it.
+
+In such a transaction, `find` and `findWithoutState` read at your transaction's snapshot, which misses an instance
+inserted after it began. When neither read finds the instance, the store reads it once more outside your transaction,
+at read concern `linearizable`. If it is there, the store throws a `MongoException` with the `TransientTransactionError`
+label instead of returning empty, translated as the template translates its own failures. Run your transaction again
+when a failure has that label, as you would for a write conflict, and the next attempt reads the instance.
 
 Every constructor throws an `IllegalArgumentException` for a `MongoOperations` that isn't a `MongoTemplate`, since the
 store runs its transactions on the template's `MongoDatabaseFactory`. The message says to pass the `MongoTemplate`

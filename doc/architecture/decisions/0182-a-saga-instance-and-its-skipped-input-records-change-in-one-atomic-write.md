@@ -100,7 +100,8 @@ something a read did not find, and each reads again where nothing is missed:
 - `find` and `findWithoutState` read an instance they don't find again at read concern `linearizable`, which returns
   every write a majority acknowledged before the read started, as
   [MongoDB documents](https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/). The executor skips an input addressed to no instance
-  without writing anything, so an instance the read missed would lose that input.
+  without writing anything, so an instance the read missed would lose that input. Point 4 covers the read inside a
+  caller's transaction.
 - `compareAndSaveQuarantineEnded`, for an instance the release doesn't complete, reads the records again inside its
   transaction and writes nothing while one is there. A release ends the quarantine after a read of the records finds
   none, and the write deletes every record under the quarantine id, so a record the read missed would be deleted
@@ -108,10 +109,12 @@ something a read did not find, and each reads again where nothing is missed:
   majority acknowledged.
 
 A transaction aborted with the `TransientTransactionError` label runs again through the store's `RetryStrategy`. A
-commit that ends with `UnknownTransactionCommitResult` is committed again through the same strategy. Any other failure
-of the transaction is thrown at once. The transaction needs a replica set. A standalone server refuses it, and the store
-then throws an `IllegalStateException` that says so, on the first attempt, since every later attempt would be refused
-too. A server without journaling refuses `j: true`, and the store throws on the first attempt for that as well.
+commit that ends with `UnknownTransactionCommitResult` is committed again through the same strategy. The transaction
+needs a replica set, and a standalone server refuses it. A server without journaling refuses `j: true`. The store turns
+each refusal into an `IllegalStateException` that says what the server lacks. With a strategy built from
+`RetryStrategy.retry()`, as the default is, the store throws any other failure of the transaction at once, and throws
+each refusal on the first attempt, since every later attempt would be refused too. A strategy implemented another way
+runs its own loop and decides what it retries.
 
 The store needs the `MongoDatabaseFactory` to run a transaction, and only a `MongoTemplate` exposes it. The constructors
 keep their `MongoOperations` parameter, which 0.34.0 shipped, and refuse anything else than a `MongoTemplate` with an
@@ -126,6 +129,15 @@ A transition called while a Spring MongoDB transaction on the same `MongoDatabas
 the store's transaction propagates as `REQUIRED`. The instance and its records then change together because they are in
 that transaction, and they are durable only as far as the commit's write concern makes them. The store doesn't retry a
 transition it joined, and a failure reaches the caller's transaction.
+
+Inside that transaction, `find` and `findWithoutState` read at its snapshot, which misses an instance inserted after
+the snapshot began. A found instance needs nothing more, since the executor writes it back through a compare-and-set,
+and a write inside the transaction to an instance changed after its snapshot fails with a write conflict. An absence
+has no such write, so when neither read finds the instance, the store reads it once more outside the transaction, at
+read concern `linearizable`. If it is there, the store throws a `MongoException` with the `TransientTransactionError`
+label instead of returning empty, and the executor doesn't skip the input. A caller that runs its transaction again on
+that label gets a snapshot that has the instance. Refusing a caller's transaction outright would break every saga run
+inside one, the case this point is about.
 
 The store doesn't check that write concern. Spring keeps the transaction's `ClientSession` in a package-private
 `MongoResourceHolder`, so the store can tell that a transaction is active but can't read the concern it commits at. A

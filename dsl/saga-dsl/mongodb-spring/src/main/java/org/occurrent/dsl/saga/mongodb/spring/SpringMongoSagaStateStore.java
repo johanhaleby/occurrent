@@ -341,7 +341,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         // Decoding happens outside the retried supplier, and in the caller, so a stored state that no longer reads back
         // throws once instead of being attempted ten times.
-        return Optional.ofNullable(findInstance(() -> Query.query(where(ID).is(sagaId)))).map(this::toStoredSaga);
+        return Optional.ofNullable(findInstance(sagaId, () -> Query.query(where(ID).is(sagaId)))).map(this::toStoredSaga);
     }
 
     // An instance found at read concern majority is acted on through a compare-and-set on its version, which a stale
@@ -351,9 +351,38 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // maxTimeMS. MongoDB documents that such a read returns every write a majority acknowledged before the read
     // started, see
     // https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/
-    private @Nullable Document findInstance(Supplier<Query> query) {
+    // Inside a transaction the caller started, both reads go through its session and see its snapshot, which misses an
+    // instance inserted after the snapshot began. So an absence there is read once more outside the session. An instance
+    // found that way throws with the TransientTransactionError label, translated as the template translates, so a caller
+    // that retries on the label runs the transaction again with a snapshot that has the instance
+    private @Nullable Document findInstance(String sagaId, Supplier<Query> query) {
         Document found = retryStrategy.execute(() -> mongoOperations.findOne(majorityRead(query.get()), Document.class, collectionName));
-        return found != null ? found : retryStrategy.execute(() -> mongoOperations.findOne(linearizableRead(query.get()), Document.class, collectionName));
+        if (found != null) {
+            return found;
+        }
+        Document linearizable = retryStrategy.execute(() -> mongoOperations.findOne(linearizableRead(query.get()), Document.class, collectionName));
+        if (linearizable == null && MongoDatabaseUtils.isTransactionActive(databaseFactory) && existsOutsideTheSession(sagaId)) {
+            throw translated(newerThanTheCallersSnapshot(sagaId));
+        }
+        return linearizable;
+    }
+
+    // The database from the factory itself is bound to no session, so this read is not part of the caller's transaction
+    private boolean existsOutsideTheSession(String sagaId) {
+        return retryStrategy.execute(() -> databaseFactory.getMongoDatabase().getCollection(collectionName)
+                .withReadPreference(ReadPreference.primary())
+                .withReadConcern(ReadConcern.LINEARIZABLE)
+                .find(Filters.eq(ID, sagaId))
+                .projection(Projections.include(ID))
+                .maxTime(WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                .first() != null);
+    }
+
+    private MongoException newerThanTheCallersSnapshot(String sagaId) {
+        MongoException e = new MongoException("Saga instance '" + sagaId + "' in collection '" + collectionName + "' was written after the snapshot of the caller's "
+                                              + "MongoDB transaction began, so the transaction can't read it. Run the transaction again.");
+        e.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+        return e;
     }
 
     @Override
@@ -386,7 +415,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public Optional<StoredSaga> findWithoutState(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        return Optional.ofNullable(findInstance(() -> {
+        return Optional.ofNullable(findInstance(sagaId, () -> {
             Query query = Query.query(where(ID).is(sagaId));
             project(query, SagaCodec.fieldsWithoutState());
             return query;
@@ -812,7 +841,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return primary(query).withReadConcern(ReadConcern.MAJORITY);
     }
 
-    // Bounded by the write timeout, since the read waits for a majority as a write does
+    // Bounded by the write timeout, as MongoDB advises for a linearizable read, which can't complete without a majority
     private static Query linearizableRead(Query query) {
         return primary(query).withReadConcern(ReadConcern.LINEARIZABLE).maxTime(WRITE_TIMEOUT);
     }
