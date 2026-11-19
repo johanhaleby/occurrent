@@ -228,7 +228,7 @@ class StreamCatchupLiveEventWaitsForEndedReplayMongoTest {
     // Whether a live call is parked in the wait for the replays a cancel or a stop ended
     private static boolean liveCallWaitsForTheEndedReplays() {
         return Thread.getAllStackTraces().entrySet().stream()
-                .anyMatch(thread -> thread.getKey().getState() != Thread.State.RUNNABLE && Arrays.stream(thread.getValue()).anyMatch(frame -> frame.getMethodName().equals("awaitEndedReplays")));
+                .anyMatch(thread -> thread.getKey().getState() != Thread.State.RUNNABLE && Arrays.stream(thread.getValue()).anyMatch(frame -> frame.getMethodName().equals("acceptAfterEndedReplays")));
     }
 
     private static void awaitLatch(CountDownLatch latch) {

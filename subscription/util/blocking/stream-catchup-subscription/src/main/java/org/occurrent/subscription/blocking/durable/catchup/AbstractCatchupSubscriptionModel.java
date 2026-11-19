@@ -564,8 +564,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * action, each call the live delegate makes to the action first waits for that replay to return, on the live
      * delegate's thread, so the action never runs alongside itself. The subscribe itself returns without that wait. The
      * wait ends once the subscription is gone, and the event then doesn't reach the action. A cancel that throws keeps
-     * the subscription, so the event waits on and reaches the action once the replay has returned. An interrupt doesn't
-     * end the wait. It is set again once the wait is over.
+     * the subscription, so the event waits on and reaches the action once the replay has returned. An interrupt that comes
+     * during the wait doesn't end it. It is kept from the action and set again once the action has returned or thrown.
      */
     protected Subscription subscribeInTheWrappedModel(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         Consumer<CloudEvent> afterEndedReplays = afterEndedReplaysReturned(subscriptionId, action);
@@ -582,15 +582,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         if (endedReplaysReturned.isDone()) {
             return action;
         }
-        return event -> {
-            if (awaitEndedReplays(subscriptionId, endedReplaysReturned)) {
-                action.accept(event);
-            }
-        };
+        return event -> acceptAfterEndedReplays(subscriptionId, endedReplaysReturned, action, event);
     }
 
-    // Whether the wait ended because the replays returned, rather than because the subscription is no longer wanted
-    private boolean awaitEndedReplays(String subscriptionId, CompletableFuture<Void> endedReplaysReturned) {
+    // Hands event to action once the replays have returned, and not at all once the subscription is no longer wanted
+    private void acceptAfterEndedReplays(String subscriptionId, CompletableFuture<Void> endedReplaysReturned, Consumer<CloudEvent> action, CloudEvent event) {
         boolean interrupted = false;
         try {
             while (!endedReplaysReturned.isDone()) {
@@ -599,18 +595,20 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // delegate that still runs the subscription won't deliver the event again. Throwing here would end the
                 // live delegate's delivery of the id, and returning would let it store its position past the event.
                 if (!subscribed.containsKey(subscriptionId)) {
-                    return false;
+                    return;
                 }
                 try {
                     endedReplaysReturned.get(EARLIER_ATTEMPT_POLL_MILLIS, TimeUnit.MILLISECONDS);
                 } catch (TimeoutException | ExecutionException ignored) {
                     // Checked again on the next round
                 } catch (InterruptedException e) {
-                    // Waited on rather than thrown, for the same reason, and set again once the wait is over
+                    // Waited on rather than thrown, for the same reason. Set again only once the action has returned or
+                    // thrown, since an action that reads it could skip the event as cancelled and the live delegate
+                    // would then store its position past the event
                     interrupted = true;
                 }
             }
-            return true;
+            action.accept(event);
         } finally {
             if (interrupted) {
                 Thread.currentThread().interrupt();
