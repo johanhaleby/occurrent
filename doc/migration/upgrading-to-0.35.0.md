@@ -2866,14 +2866,19 @@ the subscriber's action that is under way.
 * A subscribe that goes straight to the live delegate, such as one with `StartAt.now()`, also returns at once. Each
   event the live delegate then delivers for it waits on the live delegate's thread, with no time limit, until the
   cancelled replay's call to the action has returned. An interrupt doesn't end that wait. When the thread's interrupt
-  status was set, the event reaches the action with it clear, and it is set again once the action has returned. An
-  event of a subscription that was cancelled while the event waited doesn't reach the action.
+  status was set, the event reaches the action with it clear, and it is set again once the action has returned.
+* A call the live delegate makes for a subscription once its cancel has forgotten it doesn't reach the action, and
+  the action the catch-up gave the live delegate throws `AttemptNotMade` instead. That holds whether the call waited
+  or not, and also for a subscription that went live from its replay. Once the catch-up has begun to shut down, such
+  a call reaches the action. When it waits as above, it does so once the cancelled replay's call has returned, and
+  throws `AttemptNotMade` when the live delegate's shutdown interrupts its thread first.
 * The live subscription model a catch-up wraps must not wait, in its `cancelSubscription`, for a call to the action
   that is under way. That call can be the wait above, so such a cancel returns only once the cancelled replay's
   action has, and never when that action cancels the same subscription. Its `pauseSubscription` must not wait for such
   a call without a time limit either. The catch-up holds a lock the cancelled replay needs to return while the live
   model pauses, so the pause takes as long as the live model's own wait for the action, and the event reaches the
-  action after the pause has returned.
+  action after the pause has returned. It also must not store its position past an event whose action threw
+  `AttemptNotMade`. `InMemorySubscriptionModel` drops such an event and logs it at `DEBUG`.
 
 ### What to do
 
@@ -2881,7 +2886,8 @@ Nothing, unless the action waits for the cancel or the stop to return. Then the 
 the `WARN`. Release what the action waits for before you cancel or stop, or don't make the action wait for the call.
 With `PersistCheckpointDuringCatchupPhase` configured, a cancel also waits for as long as a position store under way
 runs, so give a checkpoint storage that can block a timeout of its own. A live subscription model of your own that a
-catch-up wraps must return from `cancelSubscription` without waiting for a call to the action under way.
+catch-up wraps must return from `cancelSubscription` without waiting for a call to the action under way, and must
+not store its position past an event whose action threw `AttemptNotMade`.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 

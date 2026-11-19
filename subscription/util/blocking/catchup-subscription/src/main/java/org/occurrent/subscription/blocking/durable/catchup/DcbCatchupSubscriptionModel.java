@@ -140,7 +140,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // A replay that stop() cut short runs again from the last position it stored, as a restart would, so the
         // stored position does not move back
         Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId,
-                lastStored -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, lastStored == null ? firstStartAt : StartAt.checkpoint(lastStored)), holdPaused);
+                lastStored -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, lastStored == null ? firstStartAt : StartAt.checkpoint(lastStored)), holdPaused, made);
         return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
     }
 

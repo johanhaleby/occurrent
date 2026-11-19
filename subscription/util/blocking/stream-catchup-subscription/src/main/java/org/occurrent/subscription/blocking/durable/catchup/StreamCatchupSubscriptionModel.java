@@ -86,7 +86,8 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * {@code InMemorySubscriptionModel} calls the action of one subscription from one thread. A later subscribe of the
  * same id after a cancel is a new subscription there, whose calls can run beside a call of the cancelled one. Since a
  * cancel doesn't wait, such a call can still be in the action when the cancel returns. This model lets a call reach
- * the action only while the subscription is still the one subscribed, and a later subscribe of the same id calls the
+ * the action only while the subscription is still the one subscribed, or while this model shuts down, also when a
+ * replay handed the subscription to the wrapped model once it had caught up. A later subscribe of the same id calls the
  * action only once every call from before the cancel has returned. A call it doesn't let through throws
  * {@code AttemptNotMade}, and the wrapped model must not store its position past an event whose action threw. What
  * this model does over a wrapped model that breaks any of these rules is unspecified.
@@ -234,7 +235,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             return subscribeLiveUnlessItsStartIsLost(subscriptionId, firstStartAt, holdPaused,
                     paused -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, firstStartAt), action, paused, made));
         }
-        return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, replay, holdPaused));
+        return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, replay, holdPaused, made));
     }
 
     // A store that writes no position has no global position above 0 to replay after, and the wrapped model refuses to

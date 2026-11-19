@@ -2929,11 +2929,11 @@ class StreamCatchupSubscriptionModelTest {
 
     /**
      * A cancel that returned has forgotten the subscription, so the live event waiting for the replay a cancel ended has
-     * nothing to be handed to and ends its wait instead of waiting for that replay.
+     * nothing to be handed to and ends its wait by throwing AttemptNotMade instead of waiting for that replay.
      */
     @Test
     @Timeout(30)
-    void a_live_event_waiting_for_an_ended_replay_is_skipped_without_reaching_the_action_once_a_cancel_of_its_subscription_has_returned() throws InterruptedException {
+    void a_live_event_waiting_for_an_ended_replay_throws_without_reaching_the_action_once_a_cancel_of_its_subscription_has_returned() throws InterruptedException {
         // Given
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
         NameDefined history = nameDefined("history");
@@ -2975,8 +2975,12 @@ class StreamCatchupSubscriptionModelTest {
             // When the replay's call is released
             releaseReplayCall.countDown();
 
-            // Then the live event never reaches the action. The double acknowledges it all the same, since its callback returned and the subscription is gone.
-            await().during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).as("the events the action was given").containsExactly(history.eventId()));
+            // Then the live call threw AttemptNotMade and the live event never reached the action
+            await().atMost(Duration.ofSeconds(5)).until(() -> liveModel.liveCallsEnded() > 0);
+            assertAll(
+                    () -> assertThat(liveModel.thrownByTheCallback()).as("what the live call threw").singleElement().isInstanceOf(AttemptNotMade.class),
+                    () -> assertThat(received).as("the events the action was given").containsExactly(history.eventId())
+            );
         } finally {
             releaseReplayCall.countDown();
             if (subscribeLive != null) {
@@ -3178,6 +3182,149 @@ class StreamCatchupSubscriptionModelTest {
 
     @Test
     @Timeout(30)
+    void a_live_call_of_a_subscription_that_went_live_from_its_replay_is_waited_for_before_the_next_subscribe_of_the_id_delivers() throws InterruptedException {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        NameDefined history = nameDefined("history");
+        NameDefined live1 = nameDefined("live1");
+        NameDefined live2 = nameDefined("live2");
+        write(eventStore, history);
+        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(liveModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        AtomicInteger inTheAction = new AtomicInteger();
+        AtomicInteger mostInTheAction = new AtomicInteger();
+        CountDownLatch firstLiveCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirstLiveCall = new CountDownLatch(1);
+        Consumer<CloudEvent> action = cloudEvent -> {
+            mostInTheAction.accumulateAndGet(inTheAction.incrementAndGet(), Math::max);
+            try {
+                received.add(cloudEvent.getId());
+                if (cloudEvent.getId().equals(live1.eventId())) {
+                    firstLiveCallEntered.countDown();
+                    awaitLatch(releaseFirstLiveCall);
+                }
+            } finally {
+                inTheAction.decrementAndGet();
+            }
+        };
+        Call cancel = null;
+
+        try {
+            assertThat(subscription.subscribe("subscription", StartAtTime.beginningOfTime(), action).waitUntilStarted(Duration.ofSeconds(5))).as("the subscription went live from its replay").isTrue();
+            await().atMost(Duration.ofSeconds(5)).until(() -> !subscription.isCatchingUp("subscription"));
+            write(eventStore, live1);
+            assertThat(firstLiveCallEntered.await(5, TimeUnit.SECONDS)).as("the live call is in the action").isTrue();
+            cancel = Call.start(() -> subscription.cancelSubscription("subscription"));
+            assertThat(cancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned while the live call is still in the action").isTrue();
+            assertThat(cancel.failure()).as("what the cancel threw").isNull();
+
+            // When
+            subscription.subscribe("subscription", StartAt.now(), action);
+            write(eventStore, live2);
+
+            // Then the second subscription's call is not in the action beside the first one's
+            await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).as("the events the action was given while the first live call is still in it").containsExactly(history.eventId(), live1.eventId()));
+
+            // When the first live call returns
+            releaseFirstLiveCall.countDown();
+
+            // Then
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).as("the events the action was given").containsExactly(history.eventId(), live1.eventId(), live2.eventId()));
+            assertThat(mostInTheAction.get()).as("the most calls that were in the action at once").isEqualTo(1);
+        } finally {
+            releaseFirstLiveCall.countDown();
+            if (cancel != null) {
+                cancel.join();
+            }
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_live_call_that_did_not_wait_for_a_replay_throws_without_reaching_the_action_when_it_is_made_after_a_cancel_of_its_subscription() throws InterruptedException {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(liveModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        io.cloudevents.CloudEvent late = io.cloudevents.core.builder.CloudEventBuilder.v1().withId("late").withSource(java.net.URI.create("urn:test")).withType("late").build();
+
+        try {
+            subscription.subscribe("subscription", StartAt.now(), cloudEvent -> received.add(cloudEvent.getId()));
+            subscription.cancelSubscription("subscription");
+
+            // When
+            Throwable thrown = catchThrowable(() -> liveModel.deliverToTheCancelled("subscription", late));
+
+            // Then
+            assertAll(
+                    () -> assertThat(thrown).as("what the live call threw").isInstanceOf(AttemptNotMade.class),
+                    () -> assertThat(received).as("the events the action was given").isEmpty()
+            );
+        } finally {
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_live_event_that_waits_for_an_ended_replay_reaches_the_action_after_that_replays_call_returned_when_it_returns_while_the_catchup_model_shuts_down() throws InterruptedException {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        NameDefined history = nameDefined("history");
+        NameDefined live = nameDefined("live");
+        write(eventStore, history);
+        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel).stampingCheckpoints();
+        DurableSubscriptionModel durableLiveModel = new DurableSubscriptionModel(liveModel, new InMemoryCheckpointStorage());
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(durableLiveModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(new InMemoryCheckpointStorage()).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        CopyOnWriteArrayList<String> trace = new CopyOnWriteArrayList<>();
+        CountDownLatch replayCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplayCall = new CountDownLatch(1);
+        Consumer<CloudEvent> action = cloudEvent -> {
+            trace.add("enter " + cloudEvent.getId());
+            if (cloudEvent.getId().equals(history.eventId())) {
+                replayCallEntered.countDown();
+                awaitLatch(releaseReplayCall);
+            }
+            trace.add("exit " + cloudEvent.getId());
+        };
+        Call cancel = null;
+        Call shutdown = null;
+
+        try {
+            subscription.subscribe("subscription", StartAtTime.beginningOfTime(), action);
+            assertThat(replayCallEntered.await(5, TimeUnit.SECONDS)).as("the replay's call is in the action").isTrue();
+            cancel = Call.start(() -> subscription.cancelSubscription("subscription"));
+            assertThat(cancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned while the replay's call is still in the action").isTrue();
+            subscription.subscribe("subscription", StartAt.now(), action);
+            write(eventStore, live);
+            await().atMost(Duration.ofSeconds(5)).until(() -> liveCallWaitsForTheEndedReplays(liveModel));
+            shutdown = Call.start(subscription::shutdown);
+            await().atMost(Duration.ofSeconds(10)).until(liveModel::shutdownBegan);
+
+            // When the replay's call returns before the live delegate interrupts the waiting call
+            releaseReplayCall.countDown();
+
+            // Then
+            await().atMost(Duration.ofSeconds(3)).untilAsserted(() -> assertThat(trace).as("what the action was given, in order").containsExactly("enter " + history.eventId(), "exit " + history.eventId(), "enter " + live.eventId(), "exit " + live.eventId()));
+            assertThat(liveModel.thrownByTheCallback()).as("what the live call threw").isEmpty();
+        } finally {
+            releaseReplayCall.countDown();
+            if (cancel != null) {
+                cancel.join();
+            }
+            if (shutdown != null) {
+                shutdown.join();
+            }
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
     void a_live_event_that_waits_for_an_ended_replay_is_not_stored_past_when_the_catchup_model_shuts_down() throws InterruptedException {
         // Given
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
@@ -3213,11 +3360,24 @@ class StreamCatchupSubscriptionModelTest {
 
             // When
             shutdown = Call.start(subscription::shutdown);
-            await().atMost(Duration.ofSeconds(5)).until(() -> liveModel.liveCallsEnded() > 0);
+            await().atMost(Duration.ofSeconds(10)).until(liveModel::shutdownBegan);
+
+            // Then the live call keeps waiting until the live delegate interrupts it, which the in-memory model does after it waited 5 seconds for its threads
+            await().during(Duration.ofMillis(700)).atMost(Duration.ofSeconds(3)).untilAsserted(() -> assertAll(
+                    () -> assertThat(liveModel.liveCallsEnded()).as("the live calls that ended before the live delegate interrupted the waiting one").isZero(),
+                    () -> assertThat(liveModel.thrownByTheCallback()).as("what the live call threw before the live delegate interrupted it").isEmpty(),
+                    () -> assertThat(received).as("the events the action was given before the live delegate interrupted the waiting call").containsExactly(history.eventId())
+            ));
+
+            // When the live delegate interrupts the waiting call
+            await().atMost(Duration.ofSeconds(15)).until(() -> liveModel.liveCallsEnded() > 0);
 
             // Then
-            assertThat(liveStorage.read("subscription")).as("the checkpoint stored for the live event that was never given to the action").isNull();
-            assertThat(received).as("the events the action was given while the replay's call is still in it").containsExactly(history.eventId());
+            assertAll(
+                    () -> assertThat(liveModel.thrownByTheCallback()).as("what the live call threw once interrupted").singleElement().isInstanceOf(AttemptNotMade.class),
+                    () -> assertThat(liveStorage.read("subscription")).as("the checkpoint stored for the live event that was never given to the action").isNull(),
+                    () -> assertThat(received).as("the events the action was given while the replay's call is still in it").containsExactly(history.eventId())
+            );
         } finally {
             releaseReplayCall.countDown();
             if (cancel != null) {
@@ -3277,7 +3437,6 @@ class StreamCatchupSubscriptionModelTest {
             // Then
             assertAll(
                     () -> assertThat(liveModel.thrownByTheCallback()).as("what the live call threw").singleElement().isInstanceOf(AttemptNotMade.class),
-                    () -> assertThat(liveStorage.read("subscription")).as("the checkpoint stored for the live event that was never given to the action").isNull(),
                     () -> assertThat(received).as("the events the action was given while the replay's call is still in it").containsExactly(history.eventId())
             );
         } finally {
@@ -4485,6 +4644,9 @@ class StreamCatchupSubscriptionModelTest {
         private final AtomicInteger liveCallsEnded = new AtomicInteger();
         // Gives each event a checkpoint, as a live model that reads a stream does, so a durable model over this one can store it
         private volatile boolean stampsCheckpoints = false;
+        private volatile boolean shutdownBegan = false;
+        // The callback each id was last subscribed with, kept after a cancel, for a call a live delegate makes late
+        private final ConcurrentHashMap<String, Consumer<CloudEvent>> everSubscribed = new ConcurrentHashMap<>();
         private final ConcurrentHashMap<String, LiveSubscription> subscriptions = new ConcurrentHashMap<>();
         // What a cancel that cancelled and then threw left for resumeSubscription to subscribe again
         private final ConcurrentHashMap<String, LiveSubscription> keptByAFailedCancel = new ConcurrentHashMap<>();
@@ -4522,6 +4684,7 @@ class StreamCatchupSubscriptionModelTest {
             liveStarts.add(String.valueOf(resolved));
             StartAt startAtToUse = resolved != null && resolved.isDefault() ? StartAt.subscriptionModelDefault() : StartAt.now();
             subscriptions.put(subscriptionId, new LiveSubscription(filter, action));
+            everSubscribed.put(subscriptionId, action);
             Consumer<CloudEvent> tracked = cloudEvent -> {
                 deliveryThread = Thread.currentThread();
                 if (interruptBeforeTheNextDelivery) {
@@ -4643,9 +4806,21 @@ class StreamCatchupSubscriptionModelTest {
         // wrapper while it shuts down reaches the durable model's save before that model stops writing
         @Override
         public void shutdown() {
+            shutdownBegan = true;
             if (stampsCheckpoints) {
                 delegate.shutdown();
             }
+        }
+
+        // Calls the callback the id was last subscribed with on the calling thread, as a live delegate whose delivery was
+        // already under way when the cancel returned does, and lets what it throws through
+        private void deliverToTheCancelled(String subscriptionId, CloudEvent cloudEvent) {
+            everSubscribed.get(subscriptionId).accept(cloudEvent);
+        }
+
+        // Whether the catch-up model, which marks itself as shutting down first, has asked this model to shut down
+        private boolean shutdownBegan() {
+            return shutdownBegan;
         }
 
         private List<Throwable> thrownByTheCallback() {

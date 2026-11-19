@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
@@ -45,6 +49,7 @@ import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubsc
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -66,6 +71,7 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 
@@ -179,6 +185,56 @@ class StreamCatchupLiveEventWaitsForEndedReplayMongoTest {
             await("the action is given the event written after the subscribe").atMost(10, TimeUnit.SECONDS)
                     .untilAsserted(() -> assertThat(received).containsExactly("history", "live1", "live2"));
         } finally {
+            releaseReplayCall.countDown();
+        }
+    }
+
+    /**
+     * A shutdown forgets every record before the live delegate closes its runs, and a live call that threw into a run
+     * still open would make the MongoDB model restart it. The call waits on instead, until the live delegate's
+     * shutdown has closed the run and interrupts it.
+     */
+    @Test
+    void a_live_event_waiting_for_an_ended_replay_does_not_make_the_mongodb_run_restart_when_the_catchup_model_shuts_down() throws InterruptedException {
+        // Given an ended replay still inside the action, and a live event that waits for it
+        String subscriptionId = UUID.randomUUID().toString();
+        append(nameDefined("history", 0));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        CountDownLatch replayCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplayCall = new CountDownLatch(1);
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        java.util.function.Consumer<CloudEvent> action = event -> {
+            received.add(nameOf(event));
+            if (firstCall.getAndSet(false)) {
+                replayCallEntered.countDown();
+                awaitLatch(releaseReplayCall);
+            }
+        };
+        Logger changeStreamLog = (Logger) LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        changeStreamLog.addAppender(logged);
+
+        try {
+            catchup.subscribe(subscriptionId, StartAtTime.beginningOfTime(), action);
+            assertThat(replayCallEntered.await(10, TimeUnit.SECONDS)).as("the replay's call is in the action").isTrue();
+            catchup.cancelSubscription(subscriptionId);
+            catchup.subscribe(subscriptionId, StartAt.now(), action).waitUntilStarted();
+            append(nameDefined("live1", 1));
+            await("the live event waits for the ended replay").atMost(10, TimeUnit.SECONDS).until(StreamCatchupLiveEventWaitsForEndedReplayMongoTest::liveCallWaitsForTheEndedReplays);
+
+            // When the catch-up model shuts down while the replay's call is still in the action
+            catchup.shutdown();
+
+            // Then the run ends without a restart
+            List<ILoggingEvent> events = List.copyOf(logged.list);
+            assertAll(
+                    () -> assertThat(events).as("the warnings that a run restarts").filteredOn(event -> event.getLevel() == Level.WARN && event.getFormattedMessage().contains("Will restart")).isEmpty(),
+                    () -> assertThat(events).as("the errors logged by the MongoDB subscription model").filteredOn(event -> event.getLevel() == Level.ERROR).isEmpty(),
+                    () -> assertThat(received).as("the events the action was given while the replay's call is still in it").containsExactly("history")
+            );
+        } finally {
+            changeStreamLog.detachAppender(logged);
             releaseReplayCall.countDown();
         }
     }
