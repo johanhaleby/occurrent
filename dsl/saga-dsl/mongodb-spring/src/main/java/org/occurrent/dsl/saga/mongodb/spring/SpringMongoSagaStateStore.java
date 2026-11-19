@@ -113,7 +113,9 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * template's {@link MongoDatabaseFactory}. So quarantine needs a replica set or a sharded cluster, and the store throws an
  * {@link IllegalStateException} when the server refuses a transaction. Such a transaction that fails with the
  * {@code TransientTransactionError} label is run again from the start with the store's {@link RetryStrategy}, and a
- * commit that fails with the {@code UnknownTransactionCommitResult} label is committed again.
+ * commit that fails with the {@code UnknownTransactionCommitResult} label is committed again. With a strategy built from
+ * {@link RetryStrategy#retry()}, as the default is, any other failure of such a transaction is thrown at once, and so is
+ * a server's refusal of a transaction or of journaling on any call.
  * <p>
  * Called inside a Spring transaction on the same {@link MongoDatabaseFactory}, those writes join it and are not retried.
  * The commit of that transaction then decides whether they survive a failover, with the write concern it commits with.
@@ -199,6 +201,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private final Class<S> stateType;
     private final boolean flowSaga;
     private final RetryStrategy retryStrategy;
+    private final RetryStrategy transactionRetry;
     private final SagaStateCodec<S> stateCodec = new SagaStateCodec<>() {
         @Override
         public Object encode(S state) {
@@ -267,7 +270,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      *                                  {@code _skipped_inputs}. Pass the {@code MongoTemplate} bean.
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter, RetryStrategy retryStrategy) {
-        this.retryStrategy = Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
+        Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
+        // A server that refuses the durability the store needs refuses it on every attempt, so it fails at once
+        this.retryStrategy = retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer));
+        // A transaction is run again only when MongoDB labels its failure transient, as the class javadoc says
+        this.transactionRetry = retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer) && hasCause(failure, SpringMongoSagaStateStore::isTransientTransactionError));
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
         if (!(mongoOperations instanceof MongoTemplate mongoTemplate)) {
             throw new IllegalArgumentException("SpringMongoSagaStateStore needs a MongoTemplate, and was given a " + mongoOperations.getClass().getName() + ". "
@@ -339,9 +346,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (expectedVersion == 0) {
             // Caught inside the retried supplier, because another writer getting there first is an outcome and
             // retrying it would lose the same race nine more times. A failure arriving after MongoDB already stored
-            // the document hits this catch on the next attempt and reports the save as lost, which the caller answers
-            // by re-reading and skipping an input its watermarks already cover. An input that has no redelivery key
-            // has no watermark, so it re-dispatches, which is the multiplicity a lost compare-and-set already has.
+            // the document hits this catch on the next attempt and reports the save as lost. The caller reads again at
+            // read concern majority, so it reads no instance and loses its insert again until a majority has the
+            // document, and then skips an input its watermarks already cover. A failover that rolls the document back
+            // lets the next insert through. An input that has no redelivery key has no watermark, so it re-dispatches,
+            // which is the multiplicity a lost compare-and-set already has.
             Supplier<Boolean> insert = () -> {
                 try {
                     writeDurably(collectionName, collection -> collection.insertOne(document));
@@ -540,10 +549,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         T apply(MongoDatabase database, TransactionStatus status);
     }
 
-    // Run again from the start when it fails, like every other call this store makes. A rolled back attempt left nothing
-    // behind. One that committed and failed to say so loses its compare-and-set when it is run again, so it returns false,
-    // and the executor reads the instance again and finds its own write there. Inside a transaction the caller started,
-    // a failure is the caller's to retry, since this store cannot run the caller's earlier writes again
+    // Run again from the start when the failure has the TransientTransactionError label, which says the transaction did
+    // not commit, so the attempt left nothing behind. Inside a transaction the caller started, a failure is the caller's to retry, since
+    // this store cannot run the caller's earlier writes again
     private <T> T inTransaction(TransactionWork<T> work) {
         boolean joinsCallersTransaction = MongoDatabaseUtils.isTransactionActive(databaseFactory);
         // The database comes from MongoDatabaseUtils rather than the template, so it is bound to the transaction's
@@ -555,7 +563,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 throw translated(e);
             }
         };
-        return joinsCallersTransaction ? attempt.get() : retryStrategy.execute(attempt);
+        return joinsCallersTransaction ? attempt.get() : transactionRetry.execute(attempt);
     }
 
     private MongoCollection<Document> instances(MongoDatabase database) {
@@ -588,16 +596,33 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // is translated, as the template does
     private RuntimeException translated(RuntimeException e) {
         if (hasCause(e, SpringMongoSagaStateStore::isJournalNotSupported)) {
-            return new IllegalStateException(JOURNALING_REQUIRED_MESSAGE, e);
+            return new RefusedByServer(JOURNALING_REQUIRED_MESSAGE, e);
         }
         if (hasCause(e, SpringMongoSagaStateStore::isTransactionNotSupported)) {
-            return new IllegalStateException(REPLICA_SET_REQUIRED_MESSAGE, e);
+            return new RefusedByServer(REPLICA_SET_REQUIRED_MESSAGE, e);
         }
         if (e instanceof MongoException mongoException) {
             DataAccessException translated = databaseFactory.getExceptionTranslator().translateExceptionIfPossible(mongoException);
             return translated == null ? e : translated;
         }
         return e;
+    }
+
+    // Only a strategy built with RetryStrategy.retry() takes a predicate. One implemented elsewhere runs its own loop and
+    // retries what it retries
+    private static RetryStrategy retryingOnly(RetryStrategy retryStrategy, Predicate<Throwable> retryable) {
+        return retryStrategy instanceof RetryStrategy.Retry retry ? retry.mapRetryPredicate(retryIf -> retryIf.and(retryable)) : retryStrategy;
+    }
+
+    private static boolean isTransientTransactionError(Throwable cause) {
+        return cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+    }
+
+    // The server refuses what the store needs, and refuses it again on every attempt
+    private static final class RefusedByServer extends IllegalStateException {
+        private RefusedByServer(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     private static boolean hasCause(Throwable throwable, Predicate<Throwable> matches) {
@@ -628,7 +653,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     public void delete(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         // An instance without a quarantine id has no skipped inputs, so it goes in a write of its own, which needs no
-        // replica set
+        // replica set. A retry after a timed out attempt that deleted the document on the primary deletes nothing, and
+        // MongoDB still waits for a majority to have everything the primary has before it returns, that deletion included
         Bson withoutQuarantineId = Filters.and(Filters.eq(ID, sagaId), Filters.eq(FAILURE_QUARANTINE_ID, null));
         if (retryStrategy.execute(() -> writeDurably(collectionName, collection -> collection.deleteOne(withoutQuarantineId)).getDeletedCount()) > 0) {
             return;
@@ -731,9 +757,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
         private CommitRetryingTransactionManager(MongoDatabaseFactory databaseFactory, TransactionOptions options, RetryStrategy retryStrategy) {
             super(databaseFactory, options);
-            this.commitRetry = retryStrategy instanceof RetryStrategy.Retry retry
-                    ? retry.mapRetryPredicate(retryIf -> retryIf.and(failure -> hasCause(failure, CommitRetryingTransactionManager::hasUnknownCommitResult)))
-                    : retryStrategy;
+            this.commitRetry = retryingOnly(retryStrategy, failure -> hasCause(failure, CommitRetryingTransactionManager::hasUnknownCommitResult));
         }
 
         private static boolean hasUnknownCommitResult(Throwable cause) {

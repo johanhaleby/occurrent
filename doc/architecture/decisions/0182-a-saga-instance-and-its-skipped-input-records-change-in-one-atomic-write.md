@@ -92,8 +92,10 @@ whatever write concern the `MongoTemplate` has. Every other read of the store go
 write whose majority acknowledgement timed out.
 
 A transaction aborted with the `TransientTransactionError` label runs again through the store's `RetryStrategy`. A
-commit that ends with `UnknownTransactionCommitResult` is committed again through the same strategy. The transaction
-needs a replica set. A standalone server refuses it, and the store then throws an `IllegalStateException` that says so.
+commit that ends with `UnknownTransactionCommitResult` is committed again through the same strategy. Any other failure
+of the transaction is thrown at once. The transaction needs a replica set. A standalone server refuses it, and the store
+then throws an `IllegalStateException` that says so, on the first attempt, since every later attempt would be refused
+too. A server without journaling refuses `j: true`, and the store throws on the first attempt for that as well.
 
 The store needs the `MongoDatabaseFactory` to run a transaction, and only a `MongoTemplate` exposes it. The constructors
 keep their `MongoOperations` parameter, which 0.34.0 shipped, and refuse anything else than a `MongoTemplate` with an

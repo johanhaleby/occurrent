@@ -1288,8 +1288,9 @@ at read concern `majority` don't return it until a majority has it, so the saga 
 The four writes of `SagaStateStoreSkippedInputs` and the `delete` of a quarantined instance run in a transaction that
 commits at `majority` with `j: true` and reads at read concern `snapshot`. The store retries a transaction that fails
 with the `TransientTransactionError` label, and commits again after an `UnknownTransactionCommitResult`, both with its
-`RetryStrategy`. A standalone server refuses the transaction, and the store throws an `IllegalStateException` that says
-it needs a replica set and that a single-member one is enough.
+`RetryStrategy`, and throws any other failure of the transaction at once. A standalone server refuses the transaction,
+and the store throws an `IllegalStateException` on the first attempt that says it needs a replica set and that a
+single-member one is enough.
 
 Inside a Spring MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your
 transaction instead of starting their own, and the store doesn't retry them. Your commit's write concern then decides

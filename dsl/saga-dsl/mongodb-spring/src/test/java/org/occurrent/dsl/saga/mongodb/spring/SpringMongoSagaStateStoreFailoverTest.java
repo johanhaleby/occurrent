@@ -18,8 +18,11 @@ package org.occurrent.dsl.saga.mongodb.spring;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
+import com.mongodb.ReadConcern;
+import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.model.Filters;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -147,6 +150,68 @@ class SpringMongoSagaStateStoreFailoverTest {
     private static SagaEnvelope<Payment> releasing(String sagaId, long version) {
         return new SagaEnvelope<>(sagaId, new Payment(12L), SagaStatus.QUARANTINED, version, List.of(), Map.of(), null, NOW.minusSeconds(600), NOW, null, null, true,
                 new SagaFailure("order-1@7", 7L, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom", NOW, QUARANTINE_ID), Map.of(), 1L);
+    }
+
+    private static SagaEnvelope<Payment> active(String sagaId, long version) {
+        return new SagaEnvelope<>(sagaId, new Payment(12L), SagaStatus.ACTIVE, version, List.of(), Map.of(), null, NOW.minusSeconds(600), NOW, null, null, true, null, Map.of(), null);
+    }
+
+    private static void pause(List<Integer> members) {
+        members.forEach(i -> MEMBERS.get(i).getDockerClient().pauseContainerCmd(MEMBERS.get(i).getContainerId()).exec());
+    }
+
+    private static void unpauseAndAwaitTheReplicaSet(List<Integer> members) {
+        members.forEach(i -> MEMBERS.get(i).getDockerClient().unpauseContainerCmd(MEMBERS.get(i).getContainerId()).exec());
+        await().atMost(Duration.ofSeconds(60)).until(() -> primary() >= 0 && secondaries() == 2);
+    }
+
+    // So that the primary that has lost both secondaries stays primary for as long as a test needs it to, since a primary that steps down gives a different failure
+    private static void setElectionTimeout(Duration timeout) {
+        try (MongoClient admin = direct(primary())) {
+            Document config = admin.getDatabase("admin").runCommand(new Document("replSetGetConfig", 1)).get("config", Document.class);
+            config.get("settings", Document.class).put("electionTimeoutMillis", (int) timeout.toMillis());
+            config.put("version", config.getInteger("version") + 1);
+            admin.getDatabase("admin").runCommand(new Document("replSetReconfig", config));
+        }
+    }
+
+    private static com.mongodb.client.MongoCollection<Document> collectionOn(MongoClient client, String database) {
+        return client.getDatabase(database).getCollection(COLLECTION);
+    }
+
+    @Test
+    void a_delete_does_not_return_before_the_deletion_is_on_a_majority() {
+        String database = "failover_" + UUID.randomUUID().toString().substring(0, 8);
+        int primary = primary();
+        SpringMongoSagaStateStore<Payment> store = storeOn(primary, database, RetryStrategy.fixed(1).maxAttempts(2));
+        assertThat(SagaEnvelopes.of(store, null).compareAndSave("order-1", active("order-1", 1), 0)).isTrue();
+        List<Integer> secondaries = java.util.stream.IntStream.range(0, 3).filter(i -> i != primary).boxed().toList();
+        setElectionTimeout(Duration.ofMinutes(5));
+
+        Throwable whileTheDeletionIsOnThePrimaryAlone;
+        Throwable afterTheSecondariesAreBack;
+        Document readAtMajority;
+        try (MongoClient direct = direct(primary)) {
+            pause(secondaries);
+            try {
+                // What the first attempt of a delete leaves behind when its write concern times out after the primary applied it
+                long deleted = collectionOn(direct, database).withWriteConcern(WriteConcern.W1).deleteOne(Filters.eq("_id", "order-1")).getDeletedCount();
+                assertThat(deleted).as("the deletion on the primary alone").isEqualTo(1);
+                whileTheDeletionIsOnThePrimaryAlone = catchThrowable(() -> store.delete("order-1"));
+            } finally {
+                unpauseAndAwaitTheReplicaSet(secondaries);
+            }
+            afterTheSecondariesAreBack = catchThrowable(() -> store.delete("order-1"));
+            readAtMajority = collectionOn(direct, database).withReadConcern(ReadConcern.MAJORITY).find(Filters.eq("_id", "order-1")).first();
+        } finally {
+            setElectionTimeout(Duration.ofSeconds(10));
+        }
+
+        assertAll(
+                () -> assertThat(whileTheDeletionIsOnThePrimaryAlone).as("a delete whose deletion only the primary has must not return normally").isNotNull(),
+                () -> assertThat(afterTheSecondariesAreBack).as("the delete returns once the secondaries have the deletion").isNull(),
+                () -> assertThat(readAtMajority).as("the instance read at majority").isNull()
+        );
     }
 
     @Test
