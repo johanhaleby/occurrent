@@ -27,17 +27,24 @@ import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -917,6 +924,102 @@ class InMemorySagaStateStoreTest {
             assertAll(
                     () -> assertThat(find("s1")).isEmpty(),
                     () -> recordsOf("s1"));
+        }
+    }
+
+    @Nested
+    class ReadsConcurrentWithWrites {
+
+        private static final int ROUNDS = 300;
+        private static final int RECORDS_PER_ROUND = 100;
+        private static final int READERS = 3;
+
+        private record Round(String sagaId, long versionBeforeTheWrites) {
+        }
+
+        // A writer does RECORDS_PER_ROUND writes to a fresh saga in each round, and READERS threads read the saga of the current
+        // round without a pause until it is done. The count is fixed, so the test ends after the same amount of work every run
+        private void writesWhileReading(Consumer<String> setUp, BiConsumer<String, Integer> write, Function<Round, String> readerViolation) throws Exception {
+            AtomicReference<Round> current = new AtomicReference<>();
+            AtomicBoolean writing = new AtomicBoolean(true);
+            Queue<String> violations = new ConcurrentLinkedQueue<>();
+            ExecutorService executor = Executors.newFixedThreadPool(READERS + 1);
+            try {
+                List<Future<?>> readers = new ArrayList<>();
+                for (int reader = 0; reader < READERS; reader++) {
+                    readers.add(executor.submit(() -> {
+                        while (writing.get()) {
+                            Round round = current.get();
+                            String violation = round == null ? null : readerViolation.apply(round);
+                            if (violation != null) {
+                                violations.add(violation);
+                            }
+                        }
+                        return null;
+                    }));
+                }
+                Future<?> writer = executor.submit(() -> {
+                    try {
+                        for (int round = 0; round < ROUNDS; round++) {
+                            String sagaId = "saga-" + round;
+                            setUp.accept(sagaId);
+                            current.set(new Round(sagaId, store.find(sagaId).orElseThrow().version()));
+                            for (int record = 0; record < RECORDS_PER_ROUND; record++) {
+                                write.accept(sagaId, record);
+                            }
+                        }
+                    } finally {
+                        writing.set(false);
+                    }
+                });
+                writer.get(120, TimeUnit.SECONDS);
+                for (Future<?> reader : readers) {
+                    reader.get(120, TimeUnit.SECONDS);
+                }
+            } finally {
+                executor.shutdownNow();
+            }
+
+            assertThat(violations).isEmpty();
+        }
+
+        @Test
+        void that_miss_a_replayed_record_are_followed_by_an_instance_read_at_the_version_that_replayed_it() throws Exception {
+            writesWhileReading(
+                    sagaId -> {
+                        instance(sagaId);
+                        for (int record = 0; record < RECORDS_PER_ROUND; record++) {
+                            skip(sagaId, "q1", new SkippedInput(record, "a@" + record));
+                        }
+                    },
+                    (sagaId, record) -> assertThat(replayed(sagaId, "q1", new SkippedInput(record, "a@" + record))).isTrue(),
+                    round -> {
+                        long firstVersion = store.find(round.sagaId()).orElseThrow().version();
+                        List<SkippedInput> lowest = store.findSkippedInputs(round.sagaId(), "q1", 1);
+                        long secondVersion = store.find(round.sagaId()).orElseThrow().version();
+                        int replayedRecords = lowest.isEmpty() ? RECORDS_PER_ROUND : (int) lowest.get(0).seq();
+                        long versionThatReplayedTheLastMissingRecord = round.versionBeforeTheWrites() + replayedRecords;
+                        boolean missesARecordTheInstanceHasNotReplayed = replayedRecords > 0 && secondVersion < versionThatReplayedTheLastMissingRecord;
+                        return secondVersion < firstVersion || missesARecordTheInstanceHasNotReplayed
+                                ? round.sagaId() + ": " + replayedRecords + " records replayed by the records read, instance v" + firstVersion + " before it and v" + secondVersion + " after it, below v" + versionThatReplayedTheLastMissingRecord
+                                : null;
+                    });
+        }
+
+        @Test
+        void that_find_a_skipped_record_are_followed_by_an_instance_read_at_the_version_that_skipped_it() throws Exception {
+            writesWhileReading(
+                    sagaId -> instance(sagaId),
+                    (sagaId, record) -> assertThat(skip(sagaId, "q1", new SkippedInput(record, "a@" + record))).isTrue(),
+                    round -> {
+                        long firstVersion = store.find(round.sagaId()).orElseThrow().version();
+                        int skippedRecords = store.findSkippedInputs(round.sagaId(), "q1", RECORDS_PER_ROUND).size();
+                        long secondVersion = store.find(round.sagaId()).orElseThrow().version();
+                        long versionThatSkippedTheLastFoundRecord = round.versionBeforeTheWrites() + skippedRecords;
+                        return secondVersion < firstVersion || secondVersion < versionThatSkippedTheLastFoundRecord
+                                ? round.sagaId() + ": " + skippedRecords + " skipped records found, instance v" + firstVersion + " before it and v" + secondVersion + " after it, below v" + versionThatSkippedTheLastFoundRecord
+                                : null;
+                    });
         }
     }
 

@@ -99,7 +99,8 @@ The store needs the `MongoDatabaseFactory` to run a transaction, and only a `Mon
 keep their `MongoOperations` parameter, which 0.34.0 shipped, and refuse anything else than a `MongoTemplate` with an
 `IllegalArgumentException` that names the fix.
 
-`InMemorySagaStateStore` runs every write, the transitions included, under one lock.
+`InMemorySagaStateStore` keeps an instance and its records as one value and replaces it in one write, so a read
+sees the instance and its records as one write left them.
 
 ### 4. Inside a caller's transaction, the caller's commit decides
 
