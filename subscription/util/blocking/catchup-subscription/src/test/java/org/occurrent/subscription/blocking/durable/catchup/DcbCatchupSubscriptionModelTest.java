@@ -460,6 +460,7 @@ class DcbCatchupSubscriptionModelTest {
      * action to return, so its first call to the action never runs alongside the earlier one.
      */
     @Test
+    @Timeout(30)
     void a_replay_started_after_a_cancel_and_a_stop_waits_for_the_cancelled_replays_action_that_outlasts_both_waits() throws Exception {
         appendTagged("name:1", nameDefined("event1"));
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
@@ -498,6 +499,7 @@ class DcbCatchupSubscriptionModelTest {
         } finally {
             releaseFirstAction.countDown();
             catchupLog.detachAppender(logged);
+            subscription.shutdown();
         }
     }
 

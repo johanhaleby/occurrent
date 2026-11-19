@@ -2833,6 +2833,9 @@ only happens once that cancel or stop has returned. An example is an action that
 that the thread calling `cancelSubscription(id)` or `stop()` releases afterwards. An action that returns on its own
 only makes the call wait until it has returned.
 
+Also a live subscription model of your own that a catch-up wraps, when its `cancelSubscription` waits for a call to
+the subscriber's action that is under way.
+
 ### What changes
 
 * `cancelSubscription(id)` waits up to a second for a call to the action that the replay of `id` already started,
@@ -2841,8 +2844,11 @@ only makes the call wait until it has returned.
 * With `PersistCheckpointDuringCatchupPhase` configured, `cancelSubscription(id)` also waits for a position store the
   replay began before the cancel took effect, so that store has returned before the cancel deletes the stored
   position. That wait has no time limit, since only the wait for the action ends after a second. A slow or stuck
-  checkpoint storage holds the cancel back for as long as the store runs. A pause or a stop doesn't wait for the
-  store. A `resumeSubscription(id, startAt)` that comes after the stop waits up to 10 seconds for that
+  checkpoint storage holds the cancel back for as long as the store runs, and interrupting the thread that cancels
+  doesn't end the wait. The cancel holds the subscription's claim all that time, so a `subscribe`,
+  `pauseSubscription(id)`, `resumeSubscription(..)` or `cancelSubscription(id)` of the same id on another thread waits
+  up to 10 seconds for it and then throws `IllegalStateException`. A `stop()` waits the same way and throws once it
+  has stopped the model. A pause or a stop doesn't wait for the store. A `resumeSubscription(id, startAt)` that comes after the stop waits up to 10 seconds for that
   store before it stores the position it was given, and throws `IllegalStateException` when the store takes longer.
 * `stop()` waits up to a second in all for the replays it parks, before the live delegate stops.
 * The public `cancelRunningCatchup(id)` and `stopReplay()` of `StreamCatchupSubscriptionModel` wait the same way.
@@ -2857,13 +2863,25 @@ only makes the call wait until it has returned.
 * A subscribe of an id right after a cancel of it returns at once, as in 0.34.0. Its replay waits on its own thread
   until the cancelled replay's call to the action has returned, also when a `stop()` came between the cancel and the
   subscribe.
+* A subscribe that goes straight to the live delegate, such as one with `StartAt.now()`, also returns at once. Each
+  event the live delegate then delivers for it waits on the live delegate's thread, with no time limit, until the
+  cancelled replay's call to the action has returned. An interrupt doesn't end that wait. When the thread's interrupt
+  status was set, the event reaches the action with it clear, and it is set again once the action has returned. An
+  event of a subscription that was cancelled while the event waited doesn't reach the action.
+* The live subscription model a catch-up wraps must not wait, in its `cancelSubscription`, for a call to the action
+  that is under way. That call can be the wait above, so such a cancel returns only once the cancelled replay's
+  action has, and never when that action cancels the same subscription. Its `pauseSubscription` must not wait for such
+  a call without a time limit either. The catch-up holds a lock the cancelled replay needs to return while the live
+  model pauses, so the pause takes as long as the live model's own wait for the action, and the event reaches the
+  action after the pause has returned.
 
 ### What to do
 
 Nothing, unless the action waits for the cancel or the stop to return. Then the call takes a second longer and logs
 the `WARN`. Release what the action waits for before you cancel or stop, or don't make the action wait for the call.
 With `PersistCheckpointDuringCatchupPhase` configured, a cancel also waits for as long as a position store under way
-runs, so give a checkpoint storage that can block a timeout of its own.
+runs, so give a checkpoint storage that can block a timeout of its own. A live subscription model of your own that a
+catch-up wraps must return from `cancelSubscription` without waiting for a call to the action under way.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 

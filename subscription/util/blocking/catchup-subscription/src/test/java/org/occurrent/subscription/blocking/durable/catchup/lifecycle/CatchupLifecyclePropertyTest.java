@@ -48,6 +48,11 @@ class CatchupLifecyclePropertyTest {
     }
 
     @Provide
+    Arbitrary<Scenario> subscribeCancelAndStopScenarios() {
+        return LifecycleScripts.subscribeCancelAndStopScenarios();
+    }
+
+    @Provide
     Arbitrary<Scenario> mixedScenariosWithoutPauseAndWithoutAStopTogetherWithAStartOrAResumeOrAStartTrueAfterEffect() {
         return LifecycleScripts.withoutAStartTrueThatThrowsAfterItTookEffect(LifecycleScripts.withoutAStopTogetherWithAStartOrAResume(LifecycleScripts.mixedScenariosWithoutPause()));
     }
@@ -125,6 +130,12 @@ class CatchupLifecyclePropertyTest {
 
     @Property(tries = 3000)
     void s2_with_only_subscribe_and_stop_calls_no_action_starts_after_a_stop_has_returned(@ForAll("subscribeAndStopScenarios") Scenario scenario) {
+        Run run = InterleavingRunner.run(scenario, false);
+        assertThat(run.monitor.s2Violations).as(run.toString()).isEmpty();
+    }
+
+    @Property(tries = 3000)
+    void s2_with_only_subscribe_cancel_and_stop_calls_no_action_starts_after_a_cancel_or_a_stop_has_returned(@ForAll("subscribeCancelAndStopScenarios") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
         assertThat(run.monitor.s2Violations).as(run.toString()).isEmpty();
     }

@@ -171,7 +171,7 @@ The rule needs one lock for each scope, taken in a fixed order:
 | 1 | `ManualStartSubscriptionModel` model lock | its `start(..)`, `stop()` and registration |
 | 2 | catch-up model lock, read and write | `start(..)`, `stop()` and `shutdown()` exclusively, across the loop over every id and the wrapped model's own `start(..)` or `stop()`. Every per-id call shared, around its claim. Replay threads never take it. The composite `CatchupSubscriptionModel` and its children share one model lock, as they share the claims. Its `start(..)` and `stop()` take it exclusively across every child's `beginStart()` or `stopReplay()` and the wrapped model's call |
 | 3 | per-id claim (`lifecycleClaims`) | each lifecycle call on X, as today |
-| 4 | per-id handover lock | the replay thread at every step it takes on its own, including the check that lets each event through to the action and the check and the write of a catch-up checkpoint, but never while it runs the action |
+| 4 | per-id handover lock | the replay thread at every step it takes on its own, including the check that lets each event through to the action and the check that decides to store a catch-up checkpoint and records the store as under way, but never while it runs the action or while the checkpoint storage writes |
 | 5 | `lifecycleLock` | short reads and writes of shared fields, nothing taken under it |
 
 The model lock replaces the reasoning behind `lifecycleGeneration`, `liveDelegateResumes` and `stoppedByFailedStart`.
@@ -195,7 +195,8 @@ because it would wait for a per-id call that can only finish on that thread.
 
 Handover locks are counted and removed like claims. ADR 131 says its registry of handover locks is never reclaimed.
 Under this rule it keeps an entry only while a call or a replay thread uses it ([#1257](https://github.com/johanhaleby/occurrent/issues/1257)).
-A replay thread holds the lock for one event or one save at a time, so between two events the entry is gone, and a
+A replay thread holds the lock for one decision at a time, to let one event through or to begin one store, so between
+two events the entry is gone, and a
 cancel, a pause or a stop takes the lock even when no entry exists.
 
 ### Reactor catch-up

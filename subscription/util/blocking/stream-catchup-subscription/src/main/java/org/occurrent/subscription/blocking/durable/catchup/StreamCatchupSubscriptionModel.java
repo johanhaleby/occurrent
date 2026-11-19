@@ -77,8 +77,9 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * has one, must answer truthfully at every moment. Its {@code cancelSubscription} must not wait for a call to the
  * subscriber's action that is under way. That call can be waiting for a replay a cancel or a stop ended to return from
  * the action, and the cancel would then not return before that replay does, or never when that replay's action
- * cancels the same subscription. What this model does over a wrapped model that breaks any of these rules is
- * unspecified.
+ * cancels the same subscription. Its {@code pauseSubscription} must not wait for such a call without a time limit
+ * either. This model holds a lock that replay needs to return while it calls that method, so such a pause would never
+ * return. What this model does over a wrapped model that breaks any of these rules is unspecified.
  */
 @NullMarked
 public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {

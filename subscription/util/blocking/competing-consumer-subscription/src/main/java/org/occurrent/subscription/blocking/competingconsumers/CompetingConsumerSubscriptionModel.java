@@ -2924,7 +2924,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * {@link UnwantedDelivery} that it no longer wants the event, as a catch-up model does when a cancel or a stop ends
      * the replay that delivered the event. It throws then even when the wrapped model tells it while the lease strategy is
      * asked and the lease strategy answers that this node holds the lease. That catch-up model reads the event again when
-     * it runs the replay again.
+     * it runs the replay again. Over a wrapped model that doesn't declare {@link RedeliveringSubscriptions} with
+     * {@code true}, this holds only until one of the causes below lets the event through. A cancel or a stop this model
+     * makes is such a cause, and it begins before the wrapped model can tell it, so the event is then delivered without
+     * the lease.
      * <p>
      * Over any other wrapped model it also returns without the lease strategy reporting the lease held, and the event is
      * then delivered as it would be without the lease strategy. It is never dropped, but the node that holds the lease

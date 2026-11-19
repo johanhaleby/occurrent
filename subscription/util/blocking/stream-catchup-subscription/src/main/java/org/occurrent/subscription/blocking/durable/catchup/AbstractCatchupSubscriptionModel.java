@@ -175,6 +175,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // and before the call to the action. Exists so a test can stand there, which nothing outside this model can.
     private volatile Runnable betweenHandoverLockAndAction = () -> {
     };
+    // Runs on the replay thread for each store saveIfStillSafe begins, after the handover lock is released and before
+    // the checkpoint storage is called. Exists for the same reason.
+    private volatile Runnable betweenHandoverLockAndStore = () -> {
+    };
     // One claim per subscriptionId, held by a lifecycle call for as long as it runs, see claim(..). An entry exists
     // while a thread holds the claim or waits for it, and is removed once none does, so the map holds nothing for an id
     // whose calls have all returned.
@@ -389,6 +393,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             this(owner, filter, startAt, action, CompletableFuture.completedFuture(null), new AtomicReference<>(), new HistoryLost(), new AtomicBoolean());
         }
+
+        // Put by the same subscribe as made, also as the copy a cancel that threw kept in its place, which takes over
+        // made's historyLost
+        private boolean isFromTheSameSubscribeAs(Subscribed made) {
+            return historyLost == made.historyLost;
+        }
     }
 
     // The position the live delegate lost the history from, whether it is the live start a replay would go live from,
@@ -563,12 +573,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * the handover lock held. When a replay that a cancel or a stop ended for the id can still be in the subscriber's
      * action, each call the live delegate makes to the action first waits for that replay to return, on the live
      * delegate's thread, so the action never runs alongside itself. The subscribe itself returns without that wait. The
-     * wait ends once the subscription is gone, and the event then doesn't reach the action. A cancel that throws keeps
-     * the subscription, so the event waits on and reaches the action once the replay has returned. An interrupt that comes
-     * during the wait doesn't end it. Each of those calls hands the event to the action with the thread's interrupt status
-     * clear, whenever the status was set, and sets it again once the action has returned or thrown. When no such replay
-     * is left as the subscribe runs, the live delegate gets the action itself, and calls it with whatever interrupt
-     * status its thread has.
+     * wait ends once the subscription this subscribe made is gone, also when a later subscribe of the id has made a new
+     * one, and the event then doesn't reach the action. A cancel that throws keeps the subscription, so the event waits
+     * on and reaches the action once the replay has returned. An interrupt that comes during the wait doesn't end it.
+     * Each of those calls hands the event to the action with the thread's interrupt status clear, whenever the status
+     * was set, and sets it again once the action has returned or thrown. When no such replay is left as the subscribe
+     * runs, the live delegate gets the action itself, and calls it with whatever interrupt status its thread has.
      */
     protected Subscription subscribeInTheWrappedModel(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         Consumer<CloudEvent> afterEndedReplays = afterEndedReplaysReturned(subscriptionId, action);
@@ -578,27 +588,41 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     // The action, or, while a replay a cancel or a stop ended for subscriptionId can still be in it, the action called
-    // only once that replay has returned. The wait ends early once the subscription is gone, and the event is then not
-    // handed to the action, since nothing wants it any more. Called with the handover lock held.
+    // only once that replay has returned. The wait ends early once the subscription the caller made is gone, and the
+    // event is then not handed to the action, since nothing wants it any more. Called with the handover lock held.
     private Consumer<CloudEvent> afterEndedReplaysReturned(String subscriptionId, Consumer<CloudEvent> action) {
         CompletableFuture<Void> endedReplaysReturned = endedReplaysReturned(subscriptionId, null);
         if (endedReplaysReturned.isDone()) {
             return action;
         }
-        return event -> acceptAfterEndedReplays(subscriptionId, endedReplaysReturned, action, event);
+        // The record the subscribe that is handing the id to the live delegate put, so a later subscribe of the same
+        // id doesn't count as this subscription still being wanted
+        @Nullable Subscribed made = subscribed.get(subscriptionId);
+        return event -> acceptAfterEndedReplays(subscriptionId, made, endedReplaysReturned, action, event);
+    }
+
+    // Whether the record made put for subscriptionId is still there, and only whether the id has a record when made is
+    // null
+    private boolean isStillSubscribed(String subscriptionId, @Nullable Subscribed made) {
+        Subscribed now = subscribed.get(subscriptionId);
+        return now != null && (made == null || now.isFromTheSameSubscribeAs(made));
     }
 
     // Hands event to action once the replays have returned, and not at all once the subscription is no longer wanted
-    private void acceptAfterEndedReplays(String subscriptionId, CompletableFuture<Void> endedReplaysReturned, Consumer<CloudEvent> action, CloudEvent event) {
+    private void acceptAfterEndedReplays(String subscriptionId, @Nullable Subscribed made, CompletableFuture<Void> endedReplaysReturned, Consumer<CloudEvent> action, CloudEvent event) {
         boolean interrupted = false;
         try {
-            while (!endedReplaysReturned.isDone()) {
+            while (true) {
                 // Gone only once a cancel has returned, since a cancel forgets the subscription after the live delegate's
                 // cancel and keeps it when that throws. The event then waits on and reaches the action, because a live
                 // delegate that still runs the subscription won't deliver the event again. Throwing here would end the
                 // live delegate's delivery of the id, and returning would let it store its position past the event.
-                if (!subscribed.containsKey(subscriptionId)) {
+                // Looked at once more after the replays have returned, since they can return between two looks.
+                if (!isStillSubscribed(subscriptionId, made)) {
                     return;
+                }
+                if (endedReplaysReturned.isDone()) {
+                    break;
                 }
                 try {
                     endedReplaysReturned.get(EARLIER_ATTEMPT_POLL_MILLIS, TimeUnit.MILLISECONDS);
@@ -2264,6 +2288,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             replay.storeUnderWay = stored;
         }
         try {
+            betweenHandoverLockAndStore.run();
             saveCatchupCheckpoint(subscriptionId, cfg, checkpoint);
         } finally {
             stored.complete(null);
@@ -2524,6 +2549,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // contract.
     void runBetweenHandoverLockAndAction(Runnable hook) {
         this.betweenHandoverLockAndAction = Objects.requireNonNull(hook, "hook cannot be null");
+    }
+
+    // Package-private for the same reason as runBetweenHandoverLockAndAction
+    void runBetweenHandoverLockAndStore(Runnable hook) {
+        this.betweenHandoverLockAndStore = Objects.requireNonNull(hook, "hook cannot be null");
     }
 
     boolean hasParkedReplay(String subscriptionId) {
@@ -3453,6 +3483,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (cancelled != null && cancelled.owner == this && cancelled != CURRENT_ATTEMPT.get()) {
                 admitted = new ActionInFlight(subscriptionId, cancelled.actionReturned, cancelled.actionUnwanted);
                 storesUnderWay = cancelled.replay.storeUnderWay;
+            }
+            // Kept until the attempt and every earlier one it waits for have returned, whichever path removes it from
+            // currentAttempt later. The wait for the action above gives up after a second, and an attempt that never
+            // reached the action removes itself at once, so without this a later replay or live event of the id could
+            // reach the action while an earlier replay is still in it.
+            if (cancelled != null) {
+                waitForTheDroppedReplay(subscriptionId, cancelled.done);
             }
             pauseRequestedDuringCatchup.remove(subscriptionId);
             // So a loss of the live start it handed over is left to the live delegate, which cancels the subscription
