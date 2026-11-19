@@ -51,7 +51,8 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * The models are found on every health call, among the {@link SubscriptionModel} beans already created, by unwrapping
  * each {@link SubscriptionModelWrapper} until a {@code CompetingConsumerSubscriptionModel} turns up. A health call
- * creates no bean.
+ * creates no bean. A model that a {@code FactoryBean} makes is not found, since the bean factory can't say whether
+ * the product exists without making it.
  */
 final class CompetingConsumersHealthContributor implements CompositeHealthContributor {
 
@@ -83,15 +84,16 @@ final class CompetingConsumersHealthContributor implements CompositeHealthContri
         return indicators;
     }
 
-    // No eager init and containsSingleton, so neither the type check nor the lookup creates a bean. The same model
-    // can sit under two beans, a user bean wrapping the starter's for instance, so each is listed once, in the order
-    // of the bean names.
+    // No eager init, and getSingleton instead of getBean, so neither the type check nor the lookup creates a bean.
+    // getSingleton answers the factory for a FactoryBean, not its product, so a model a FactoryBean makes is never
+    // asked. The same model can sit under two beans, a user bean wrapping the starter's for instance, so each is listed
+    // once, in the order of the bean names.
     private List<CompetingConsumerSubscriptionModel> models() {
         Set<CompetingConsumerSubscriptionModel> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         List<CompetingConsumerSubscriptionModel> models = new ArrayList<>();
         for (String name : beanFactory.getBeanNamesForType(SubscriptionModel.class, false, false)) {
-            if (beanFactory.containsSingleton(name)) {
-                CompetingConsumerSubscriptionModel model = competingConsumerModelIn(beanFactory.getBean(name, SubscriptionModel.class));
+            if (beanFactory.getSingleton(name) instanceof SubscriptionModel subscriptionModel) {
+                CompetingConsumerSubscriptionModel model = competingConsumerModelIn(subscriptionModel);
                 if (model != null && seen.add(model)) {
                     models.add(model);
                 }

@@ -31,6 +31,8 @@ import org.springframework.boot.health.contributor.HealthContributor;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.health.registry.HealthContributorRegistry;
+import org.springframework.beans.factory.FactoryBean;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.assertj.AssertableApplicationContext;
@@ -44,6 +46,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -243,6 +247,46 @@ class OccurrentMongoAutoConfigurationCompetingConsumerHealthTest {
     }
 
     @Test
+    void a_health_call_does_not_ask_a_FactoryBean_for_the_subscription_model_it_makes() {
+        AtomicInteger getObjectCalls = new AtomicInteger();
+        CountingFactoryBean<CompetingConsumerSubscriptionModel> factory = new CountingFactoryBean<>(CompetingConsumerSubscriptionModel.class, getObjectCalls, () -> mock(CompetingConsumerSubscriptionModel.class));
+
+        contextRunner.withBean("modelFactory", CountingFactoryBean.class, () -> factory).run(context -> {
+            ConfigurableListableBeanFactory beanFactory = context.getBeanFactory();
+            assertThat(beanFactory.containsSingleton("modelFactory")).as("the factory exists, so the bean factory says it is a singleton").isTrue();
+            assertThat(beanFactory.getBeanNamesForType(SubscriptionModel.class, false, false)).as("names of subscription models, the factory among them").contains("modelFactory");
+            assertThat(getObjectCalls).as("calls to getObject before the health call").hasValue(0);
+
+            List<CompositeHealthContributor.Entry> listed = competingConsumers(context).stream().toList();
+            HealthContributor looked = competingConsumers(context).getContributor("modelFactory");
+
+            assertThat(getObjectCalls).as("calls to getObject made by a health call").hasValue(0);
+            assertThat(listed).as("listed").isEmpty();
+            assertThat(looked).as("contributor for the factory").isNull();
+        });
+    }
+
+    @Test
+    void a_health_call_does_not_ask_a_FactoryBean_for_the_lease_strategy_it_makes() {
+        AtomicInteger getObjectCalls = new AtomicInteger();
+        CountingFactoryBean<SpringMongoLeaseCompetingConsumerStrategy> factory = new CountingFactoryBean<>(SpringMongoLeaseCompetingConsumerStrategy.class, getObjectCalls, () -> mock(SpringMongoLeaseCompetingConsumerStrategy.class));
+
+        contextRunner.withBean("strategyFactory", CountingFactoryBean.class, () -> factory).run(context -> {
+            ConfigurableListableBeanFactory beanFactory = context.getBeanFactory();
+            assertThat(beanFactory.containsSingleton("strategyFactory")).as("the factory exists, so the bean factory says it is a singleton").isTrue();
+            assertThat(beanFactory.getBeanNamesForType(SpringMongoLeaseCompetingConsumerStrategy.class, false, false)).as("names of lease strategies, the factory among them").contains("strategyFactory");
+            assertThat(getObjectCalls).as("calls to getObject before the health call").hasValue(0);
+
+            List<CompositeHealthContributor.Entry> listed = competingConsumerLeases(context).stream().toList();
+            HealthContributor looked = competingConsumerLeases(context).getContributor("strategyFactory");
+
+            assertThat(getObjectCalls).as("calls to getObject made by a health call").hasValue(0);
+            assertThat(listed).as("listed").isEmpty();
+            assertThat(looked).as("contributor for the factory").isNull();
+        });
+    }
+
+    @Test
     void the_competingConsumers_contributor_lists_nothing_when_there_is_no_competing_consumer_model() {
         contextRunner.run(context -> assertThat(competingConsumers(context).stream()).isEmpty());
     }
@@ -437,6 +481,29 @@ class OccurrentMongoAutoConfigurationCompetingConsumerHealthTest {
             assertThat(indicator.health().getStatus()).isEqualTo(Status.DOWN);
             assertThat(indicator.health().getStatus()).isEqualTo(Status.UP);
         });
+    }
+
+    private static final class CountingFactoryBean<T> implements FactoryBean<T> {
+        private final Class<T> type;
+        private final AtomicInteger getObjectCalls;
+        private final Supplier<T> product;
+
+        private CountingFactoryBean(Class<T> type, AtomicInteger getObjectCalls, Supplier<T> product) {
+            this.type = type;
+            this.getObjectCalls = getObjectCalls;
+            this.product = product;
+        }
+
+        @Override
+        public T getObject() {
+            getObjectCalls.incrementAndGet();
+            return product.get();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return type;
+        }
     }
 
     private static CompositeHealthContributor competingConsumers(AssertableApplicationContext context) {

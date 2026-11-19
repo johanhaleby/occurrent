@@ -40,7 +40,8 @@ import static java.util.Objects.requireNonNull;
  * while no node can take a lease and every subscription waits.
  * <p>
  * The beans are looked up on every health call, and only those already created are listed, so a health call creates
- * no bean.
+ * no bean. A strategy that a {@code FactoryBean} makes is not listed, since the bean factory can't say whether the
+ * product exists without making it.
  */
 final class CompetingConsumerLeasesHealthContributor implements CompositeHealthContributor {
 
@@ -60,12 +61,13 @@ final class CompetingConsumerLeasesHealthContributor implements CompositeHealthC
         return indicators().entrySet().stream().map(entry -> new Entry(entry.getKey(), entry.getValue()));
     }
 
-    // No eager init and containsSingleton, so neither the type check nor the lookup creates a bean
+    // No eager init, and getSingleton instead of getBean, so neither the type check nor the lookup creates a bean.
+    // getSingleton answers the factory for a FactoryBean, not its product, so a strategy a FactoryBean makes is never
+    // asked.
     private Map<String, HealthIndicator> indicators() {
         Map<String, HealthIndicator> indicators = new LinkedHashMap<>();
         for (String name : beanFactory.getBeanNamesForType(SpringMongoLeaseCompetingConsumerStrategy.class, false, false)) {
-            if (beanFactory.containsSingleton(name)) {
-                SpringMongoLeaseCompetingConsumerStrategy strategy = beanFactory.getBean(name, SpringMongoLeaseCompetingConsumerStrategy.class);
+            if (beanFactory.getSingleton(name) instanceof SpringMongoLeaseCompetingConsumerStrategy strategy) {
                 indicators.put(name, () -> strategy.leaseRefreshFailure()
                         .map(CompetingConsumerLeasesHealthContributor::down)
                         .orElseGet(() -> Health.up().build()));

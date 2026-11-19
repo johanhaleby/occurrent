@@ -531,7 +531,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // and the forget of a refused start and a subscribe of the id again remove it under the monitor.
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, CompetingConsumerStatus.Failure> failing = new ConcurrentHashMap<>();
     // Per competing consumer held paused after the wrapped model refused it, the refusal, until a resume by the user or
-    // a start(true)
+    // a start(true) moves the consumer out of that pause
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, CompetingConsumerStatus.Failure> heldAfterARefusal = new ConcurrentHashMap<>();
     // Per subscription id forgotten after the wrapped model refused its start, until the id is subscribed again or
     // cancelled, or this model is shut down
@@ -2022,7 +2022,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * {@code hasLock} throws.</li>
      * <li>{@link CompetingConsumerStatus.State#PAUSED} when the user paused the subscription, or this model holds it
      * paused because the wrapped model refused to start or resume it from its position. The refusal is then the
-     * failure, until the subscription is resumed, by {@link #resumeSubscription(String)} or by {@code start(true)}.</li>
+     * failure, until the subscription is resumed, by {@link #resumeSubscription(String)} or by {@code start(true)}. A
+     * resume that throws before it takes the subscription out of that pause, such as one refused because the wrapped
+     * model already runs it, keeps the refusal as the failure.</li>
      * <li>{@link CompetingConsumerStatus.State#STOPPED} while this model is stopped, unless the user resumed the
      * subscription since {@link #stop()}.</li>
      * <li>{@link CompetingConsumerStatus.State#GIVEN_UP} once the wrapped model has refused to start the subscription
@@ -2159,8 +2161,6 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // a subscription handed over can come after a later stop() began, which must still pause it after that resume.
     private Subscription resume(String subscriptionId, boolean askedForByTheUser) {
         logDebug("Trying to resume CompetingConsumer subscription (subscriptionId={})", subscriptionId);
-        // Ends a hold after a refusal, also when a start(true) resumes it
-        heldAfterARefusal.keySet().removeIf(key -> key.subscriptionId().equals(subscriptionId));
         long stopSeen;
         @Nullable SubscriptionLock held = subscriptionLocks.get(subscriptionId);
         synchronized (wrappedModelStart) {
@@ -2236,7 +2236,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                         // onConsumeGranted synchronously on this thread, and that callback only starts a consumer
                         // it finds Waiting in the map.
                         competingConsumer = competingConsumer.restoreWaiting();
-                        competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer);
+                        putOutOfTheHold(competingConsumer);
                     }
                     String subscriberId = competingConsumer.getSubscriberId();
                     SubscriptionIdAndSubscriberId resumed = competingConsumer.subscriptionIdAndSubscriberId;
@@ -2253,7 +2253,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                             if (competingConsumer.isWaiting()) {
                                 return handleOf(resumed, startWaitingConsumer(competingConsumer));
                             }
-                            competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
+                            putOutOfTheHold(competingConsumer.registerRunning());
                             // Paused here, or recorded as running here although the wrapped model does not run it,
                             // since the isRunning check above asks the wrapped model
                             return handleOf(resumed, giveTheLeaseBackIfItThrows(resumed, paused.state, () -> resumeInTheWrappedModel(resumed)));
@@ -2278,7 +2278,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                         // A stop() that comes after this call pauses it as by the user, as it would have had this call run it
                         CompetingConsumer current = competingConsumers.get(resumed);
                         if (current != null && current.state instanceof CompetingConsumerState.Paused p && (p.pausedByUser || p.laterStops == null)) {
-                            competingConsumers.put(resumed, new CompetingConsumer(resumed, new CompetingConsumerState.Paused(false, stopsAfter(resumed, e))));
+                            putOutOfTheHold(new CompetingConsumer(resumed, new CompetingConsumerState.Paused(false, stopsAfter(resumed, e))));
                         } else if (current != null && current.state instanceof CompetingConsumerState.Waiting waiting && waiting.laterStops == null) {
                             competingConsumers.put(resumed, new CompetingConsumer(resumed, waiting.meantToRunBefore(stopsAfter(resumed, e))));
                         }
@@ -5903,7 +5903,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      */
     private boolean registerAsRunning(CompetingConsumer competingConsumer) {
         SubscriptionIdAndSubscriberId key = competingConsumer.subscriptionIdAndSubscriberId;
-        competingConsumers.put(key, competingConsumer.registerRunning());
+        putOutOfTheHold(competingConsumer.registerRunning());
         final boolean acquired;
         final long stopsBeforeTheRegister;
         synchronized (wrappedModelStart) {
@@ -5929,6 +5929,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     private boolean hasLock(String subscriptionId, String subscriberId) {
         return competingConsumerStrategy.hasLock(subscriptionId, subscriberId);
+    }
+
+    // A resume ends a hold after a refusal where it moves the consumer out of the pause the hold put it in, and not
+    // before, so a resume that throws first or waits keeps the refusal as the failure. Under the monitor the status is
+    // read under, so a status never sees the pause without the hold.
+    private synchronized void putOutOfTheHold(CompetingConsumer resumed) {
+        competingConsumers.put(resumed.subscriptionIdAndSubscriberId, resumed);
+        heldAfterARefusal.remove(resumed.subscriptionIdAndSubscriberId);
     }
 
     /**

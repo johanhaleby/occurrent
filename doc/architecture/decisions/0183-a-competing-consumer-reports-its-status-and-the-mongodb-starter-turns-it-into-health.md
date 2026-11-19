@@ -28,7 +28,7 @@ has the subscriber id, a state and an optional failure with the time the failure
 | --- | --- |
 | `LEASE_HELD` | The wrapped model runs the subscription and `hasLock` answers `true`. |
 | `STANDBY` | The subscription competes for the lease and this node doesn't run it. A node that lost the lease is on standby, although `isPaused` answers `true` for it. |
-| `PAUSED` | The user paused the subscription, or the model holds it paused because the wrapped model refused to start or resume it from its position. The refusal is the failure in the second case, until `resumeSubscription` or `start(true)` resumes it. |
+| `PAUSED` | The user paused the subscription, or the model holds it paused because the wrapped model refused to start or resume it from its position. The refusal is the failure in the second case, until `resumeSubscription` or `start(true)` resumes it. A resume that throws before it takes the subscription out of that pause, such as one refused because the wrapped model already runs it, keeps the refusal as the failure. |
 | `STOPPED` | The model is stopped and the user hasn't resumed the subscription since. |
 | `GIVEN_UP` | The wrapped model refused the start after `subscribe` returned, so the model forgot the subscription and freed its id as ADR 181 describes. The refusal is the failure. |
 
@@ -69,7 +69,9 @@ strategy written by an application needs nothing new.
 - `competingConsumerLeases` has one component per `SpringMongoLeaseCompetingConsumerStrategy` bean, down while
   `leaseRefreshFailure()` returns a failure.
 
-Both follow ADR 171. They look up the beans on every health call and never create one, they turn off with
+Both follow ADR 171. They look up the beans on every health call and never create one. A model or strategy that a
+`FactoryBean` makes is left out, because the bean factory can't say whether that product exists without making it. They
+turn off with
 `management.health.competingconsumers.enabled=false` and `management.health.competingconsumerleases.enabled=false`, and
 an application bean under one of the three names Spring Boot maps to the contributor name replaces the starter's. The
 starter imports them through a `DeferredImportSelector`, as the RabbitMQ broker starter imports its configuration, so

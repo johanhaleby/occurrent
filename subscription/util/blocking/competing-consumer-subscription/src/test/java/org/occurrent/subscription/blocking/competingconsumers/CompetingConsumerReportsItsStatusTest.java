@@ -28,6 +28,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
@@ -83,6 +84,7 @@ class CompetingConsumerReportsItsStatusTest {
         wrapped.pauseFailureMessage = "The wrapped model's pause fails";
         strategy.hasLockFails = false;
         wrapped.pauseGate = null;
+        wrapped.isRunningGate.set(null);
         strategy.unregisterGate = null;
         model.shutdown();
     }
@@ -216,8 +218,11 @@ class CompetingConsumerReportsItsStatusTest {
         strategy.hasLockFails = false;
 
         // Then the try runs the subscription, and it is no longer failing
-        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(status().state()).isEqualTo(State.LEASE_HELD));
-        assertThat(status().isFailing()).as("failing").isFalse();
+        // The try clears the failure after it has run the subscription, so LEASE_HELD can show for a moment with it
+        await().atMost(EVENTUALLY).untilAsserted(() -> {
+            assertThat(status().state()).isEqualTo(State.LEASE_HELD);
+            assertThat(status().isFailing()).as("failing").isFalse();
+        });
     }
 
     @Test
@@ -401,6 +406,81 @@ class CompetingConsumerReportsItsStatusTest {
         // Then
         assertThat(status().state()).isEqualTo(State.PAUSED);
         assertThat(status().isFailing()).as("failing").isTrue();
+    }
+
+    @Test
+    void keeps_the_refusal_of_a_held_subscription_when_a_resume_throws_before_it_takes_effect_and_ends_it_once_a_later_resume_succeeds() {
+        // Given a held subscription that the wrapped model also runs, and reports paused there
+        strategy.grantOnRegister = false;
+        subscribe();
+        wrapped.refusing = true;
+        strategy.holders.add(ID);
+        model.onConsumeGranted(ID, NODE);
+        wrapped.refusing = false;
+        wrapped.subscribePaused(ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+        wrapped.reportsPausedAsRunning = true;
+        assertThat(status().isFailing()).as("failing while held").isTrue();
+
+        // When a resume is refused since the wrapped model runs it
+        assertThatThrownBy(() -> model.resumeSubscription(ID)).isInstanceOf(SubscriptionAlreadyRunningException.class);
+
+        // Then the refusal is still its failure
+        CompetingConsumerStatus status = status();
+        assertThat(status.state()).isEqualTo(State.PAUSED);
+        assertThat(status.isFailing()).as("failing after the refused resume").isTrue();
+        assertThat(status.failure().cause()).isInstanceOf(CatchupCannotResumeException.class);
+
+        // And a later resume that takes effect ends it
+        wrapped.reportsPausedAsRunning = false;
+        wrapped.cancelSubscription(ID);
+        strategy.grantOnRegister = true;
+        model.resumeSubscription(ID);
+        assertThat(status().state()).isEqualTo(State.LEASE_HELD);
+        assertThat(status().isFailing()).as("failing after the resume that took effect").isFalse();
+    }
+
+    @Test
+    void keeps_the_refusal_of_a_held_subscription_while_a_resume_waits_before_it_takes_effect_and_ends_it_once_the_resume_completes() throws Exception {
+        // Given a held subscription, and a resume that waits in its first call to the wrapped model
+        strategy.grantOnRegister = false;
+        subscribe();
+        wrapped.refusing = true;
+        strategy.holders.add(ID);
+        model.onConsumeGranted(ID, NODE);
+        wrapped.refusing = false;
+        strategy.grantOnRegister = true;
+        CountDownLatch inside = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        wrapped.isRunningGate.set(new Gate(inside, release));
+        AtomicReference<@Nullable Throwable> resumeFailure = new AtomicReference<>();
+        Thread resume = new Thread(() -> {
+            try {
+                model.resumeSubscription(ID);
+            } catch (Throwable e) {
+                resumeFailure.set(e);
+            }
+        });
+        resume.start();
+        try {
+            assertThat(inside.await(10, SECONDS)).as("the resume is waiting in the wrapped model").isTrue();
+
+            // When the status is read while the resume waits
+            CompetingConsumerStatus whileWaiting = status();
+
+            // Then the refusal is still its failure
+            assertThat(whileWaiting.state()).isEqualTo(State.PAUSED);
+            assertThat(whileWaiting.isFailing()).as("failing while the resume waits").isTrue();
+            assertThat(whileWaiting.failure().cause()).isInstanceOf(CatchupCannotResumeException.class);
+        } finally {
+            release.countDown();
+            resume.join(10_000);
+        }
+
+        // And it ends once the resume has completed
+        assertThat(resumeFailure.get()).as("failure of the resume").isNull();
+        assertThat(status().state()).isEqualTo(State.LEASE_HELD);
+        assertThat(status().isFailing()).as("failing after the resume").isFalse();
     }
 
     @Test
@@ -820,6 +900,7 @@ class CompetingConsumerReportsItsStatusTest {
         private volatile boolean refusing;
         private volatile boolean subscribesFail;
         private volatile @Nullable Gate pauseGate;
+        private final AtomicReference<@Nullable Gate> isRunningGate = new AtomicReference<>();
 
         private Wrapped() {
             super(RetryStrategy.none());
@@ -880,6 +961,10 @@ class CompetingConsumerReportsItsStatusTest {
 
         @Override
         public boolean isRunning(String subscriptionId) {
+            @Nullable Gate gate = isRunningGate.getAndSet(null);
+            if (gate != null) {
+                gate.pass();
+            }
             return super.isRunning(subscriptionId) || (reportsPausedAsRunning && isPaused(subscriptionId));
         }
 
