@@ -219,8 +219,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private final Set<String> repositioning;
     // What each subscription asked for when it was last made through this model or another child of the same
     // dispatcher, so a resume can replay from a position a catch-up stored for it. Removed once the live delegate has
-    // cancelled it, and kept through a cancel the live delegate fails.
+    // cancelled it, and kept through a cancel the live delegate fails. Every write that puts a record in it holds its
+    // monitor, as does markShuttingDown while it marks and forgets the records, so a record is put either before that,
+    // and gets marked and forgotten, or after, and is never forgotten by the shutdown without the mark.
     private final ConcurrentMap<String, Subscribed> subscribed;
+    // Run by markShuttingDown between marking the records and forgetting them, a no-op outside tests, so a test can hold
+    // the shutdown there while a subscribe runs
+    volatile Runnable betweenShutdownMarksAndClear = () -> {
+    };
     // The replays a cancel that hasn't returned yet ended for each id. Kept from before the cancel takes them away until
     // it returns, and then moved to what is kept for the subscription when the cancel threw, so start(true) and every
     // resume find them all through the cancel, also when the subscription wasn't made through this model.
@@ -578,7 +584,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 }
                 // Before the live delegate opens, since it can report a loss from another thread before subscribe returns
                 Subscribed made = new Subscribed(this, filter, startAt, action);
-                Subscribed before = subscribed.put(subscriptionId, made);
+                Subscribed before;
+                synchronized (subscribed) {
+                    before = subscribed.put(subscriptionId, made);
+                }
                 if (before != null) {
                     waitForTheLiveCallsOf(subscriptionId, before);
                 }
@@ -587,7 +596,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 } catch (Throwable e) {
                     // Throwable, since a live model written in Kotlin can throw a checked exception
                     // Puts back the record this one replaced, of a subscription no longer in use, as before the subscribe
-                    if (subscribed.compute(subscriptionId, (id, now) -> now == made ? before : now) == before) {
+                    Subscribed putBack;
+                    synchronized (subscribed) {
+                        putBack = subscribed.compute(subscriptionId, (id, now) -> now == made ? before : now);
+                    }
+                    if (putBack == before) {
                         waitForTheLiveCallsOf(subscriptionId, made);
                     }
                     throw e;
@@ -3610,7 +3623,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // Before the cancel under way is removed, so one of them always has the replay. Kept in place, also when
                 // a cancel the live delegate's cancel made for the same id on this thread went through.
                 Subscribed kept = new Subscribed(made.owner(), made.filter(), made.startAt(), made.action(), current.replaysReturned, made.lostLiveStart(), made.historyLost(), made.didNotGoLive(), made.liveCalls());
-                if (subscribed.compute(subscriptionId, (id, now) -> now == null || now == made ? kept : now) == kept) {
+                Subscribed now;
+                synchronized (subscribed) {
+                    now = subscribed.compute(subscriptionId, (id, was) -> was == null || was == made ? kept : was);
+                }
+                if (now == kept) {
                     current.kept = kept;
                 }
             }
@@ -4009,9 +4026,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         currentAttempt.values().forEach(attempt -> attempt.actionUnwanted.complete(null));
         currentAttempt.clear();
         pauseRequestedDuringCatchup.clear();
-        // Marked before the clear, so a live call that finds its record gone after the clear finds the mark too
-        subscribed.values().forEach(made -> made.liveCalls().forgetForShutdown());
-        subscribed.clear();
+        // Marked before the clear, so a live call that finds its record gone after the clear finds the mark too. Under
+        // the monitor every write that puts a record holds, so no record is put between the marks and the clear
+        synchronized (subscribed) {
+            subscribed.values().forEach(made -> made.liveCalls().forgetForShutdown());
+            betweenShutdownMarksAndClear.run();
+            subscribed.clear();
+        }
         handedOver.values().removeIf(made -> made.owner() == this);
         HistoryLossReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.removeHistoryLossListener(historyLossListener));
         parkedReplays.values().forEach(parked -> parked.replay().result.cancel(false));
