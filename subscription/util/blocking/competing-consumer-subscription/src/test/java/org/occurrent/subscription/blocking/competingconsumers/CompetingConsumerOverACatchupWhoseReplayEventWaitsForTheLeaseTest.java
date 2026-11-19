@@ -81,7 +81,8 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
     private final List<String> received = new CopyOnWriteArrayList<>();
     private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
     private final Logger catchupLog = (Logger) LoggerFactory.getLogger("org.occurrent.subscription.blocking.durable.catchup.AbstractCatchupSubscriptionModel");
-    // Counted down when the replay closes the stream of its event, which it does once the action call has returned
+    // Counted down when the replay closes the stream of its event, which it does after the action call has returned and
+    // so possibly after the cancel or stop has returned, hence the checks await it with a bound
     private final CountDownLatch theActionHasExited = new CountDownLatch(1);
     private CatchupSubscriptionModel catchup;
     private CompetingConsumerSubscriptionModel competing;
@@ -117,7 +118,7 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
         // Then
         assertAll(
                 () -> assertThat(took).as("how long the cancel took with the replay event waiting for the lease").isLessThan(PROMPTLY),
-                () -> assertThat(theActionHasExited.getCount()).as("the action has left its wait for the lease when the cancel returns").isZero(),
+                () -> assertThat(theActionHasExited.await(5, TimeUnit.SECONDS)).as("the action has left its wait for the lease within 5 seconds of the cancel returning").isTrue(),
                 () -> assertThat(stillRanWarnings()).as("the warnings logged").isEmpty(),
                 () -> assertThat(received).as("the events the action received").isEmpty());
     }
@@ -135,7 +136,7 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
         // Then
         assertAll(
                 () -> assertThat(took).as("how long the stop took with the replay event waiting for the lease").isLessThan(PROMPTLY),
-                () -> assertThat(theActionHasExited.getCount()).as("the action has left its wait for the lease when the stop returns").isZero(),
+                () -> assertThat(theActionHasExited.await(5, TimeUnit.SECONDS)).as("the action has left its wait for the lease within 5 seconds of the stop returning").isTrue(),
                 () -> assertThat(stillRanWarnings()).as("the warnings logged").isEmpty(),
                 () -> assertThat(received).as("the events the action received").isEmpty());
     }
@@ -158,7 +159,7 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
             // Then
             assertThat(cancel.isAlive()).as("the cancel returned").isFalse();
             assertAll(
-                    () -> assertThat(theActionHasExited.getCount()).as("the action has left its wait for the lease when the cancel returns").isZero(),
+                    () -> assertThat(theActionHasExited.await(5, TimeUnit.SECONDS)).as("the action has left its wait for the lease within 5 seconds of the cancel returning").isTrue(),
                     () -> assertThat(stillRanWarnings()).as("the warnings logged").isEmpty(),
                     () -> assertThat(received).as("the events the action received").isEmpty());
         } finally {

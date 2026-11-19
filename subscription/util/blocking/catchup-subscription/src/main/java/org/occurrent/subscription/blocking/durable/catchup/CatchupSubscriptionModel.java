@@ -635,6 +635,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @PreDestroy
     @Override
     public void shutdown() {
+        // Every child flagged before any forgets the state they share, see flagShuttingDown
+        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::flagShuttingDown);
         if (streamCatchupSubscriptionModel != null) {
             streamCatchupSubscriptionModel.markShuttingDown();
         }

@@ -99,7 +99,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     }
 
     @Override
-    protected Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, Subscribed made) {
+    protected Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
+        @Nullable Subscribed made = recordOfThisSubscribe(subscriptionId);
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
         // A dynamic start that resolves to the model default takes the same resume decision as the default itself,
         // so a replay that stopped in the middle resumes from the position it stored instead of going live
@@ -158,7 +159,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      * before this while a catch-up for the id is in progress, under the same per-id lock as that catch-up's handover,
      * and a cancelled catch-up doesn't hand over.
      */
-    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, Subscribed made) {
+    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, @Nullable Subscribed made) {
         return subscribeInTheWrappedModel(subscriptionId, filter, startAt, dcbLiveConsumer(action, null), holdPaused, made);
     }
 

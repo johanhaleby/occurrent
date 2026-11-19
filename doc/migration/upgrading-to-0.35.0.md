@@ -2872,8 +2872,9 @@ the subscriber's action that is under way.
   status was set, the event reaches the action with it clear, and it is set again once the action has returned.
 * A call the live delegate makes for a subscription once its cancel has forgotten it doesn't reach the action, and
   the action the catch-up gave the live delegate throws `AttemptNotMade` instead. That holds whether the call waited
-  or not, and also for a subscription that went live from its replay. Once the catch-up has begun to shut down, such
-  a call reaches the action. When it waits as above, it does so once the cancelled replay's call has returned, and
+  or not, also for a subscription that went live from its replay, and also once the catch-up has begun to shut down.
+  A call for a subscription the catch-up still had when its shutdown began reaches the action. When it waits as above,
+  it does so once the cancelled replay's call has returned, and
   throws `AttemptNotMade` when that call still runs a second after the shutdown began. A live delegate whose own
   shutdown hasn't begun by then may still have the run open, and may restart it. An interrupt doesn't end that wait
   either.

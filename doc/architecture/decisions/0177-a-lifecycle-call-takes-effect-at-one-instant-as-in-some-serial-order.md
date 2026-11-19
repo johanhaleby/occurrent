@@ -171,7 +171,7 @@ The rule needs one lock for each scope, taken in a fixed order:
 | 1 | `ManualStartSubscriptionModel` model lock | its `start(..)`, `stop()` and registration |
 | 2 | catch-up model lock, read and write | `start(..)`, `stop()` and `shutdown()` exclusively, across the loop over every id and the wrapped model's own `start(..)` or `stop()`. Every per-id call shared, around its claim. Replay threads never take it. The composite `CatchupSubscriptionModel` and its children share one model lock, as they share the claims. Its `start(..)` and `stop()` take it exclusively across every child's `beginStart()` or `stopReplay()` and the wrapped model's call |
 | 3 | per-id claim (`lifecycleClaims`) | each lifecycle call on X, as today |
-| 4 | per-id handover lock | the replay thread at every step it takes on its own, including the check that lets each event through to the action and the check that decides to store a catch-up checkpoint and records the store as under way, but never while it runs the action or while the checkpoint storage writes |
+| 4 | per-id handover lock | the replay thread at every step it takes on its own, including the check that lets each event through to the action and the check that decides to store a catch-up checkpoint and records the store as under way, but never while it runs the action or across a catch-up checkpoint store |
 | 5 | `lifecycleLock` | short reads and writes of shared fields, nothing taken under it |
 
 The model lock replaces the reasoning behind `lifecycleGeneration`, `liveDelegateResumes` and `stoppedByFailedStart`.
@@ -326,9 +326,10 @@ These are disabled today:
 
 Each disabled serial-order property has an enabled copy that runs the same check on scripts without the calls its
 issues need, such as a second pause of one id, or a `stop()` in the same script as a `start(..)` or a resume. The
-copy's name says which calls it drops. Both S1 properties are enabled. Of the S2 properties only
-`s2_with_only_subscribe_and_stop_calls_no_action_starts_after_a_stop_has_returned` is enabled, which runs scripts of
-only subscribes and a `stop()`, so no property checks S2 after a cancel.
+copy's name says which calls it drops. Both S1 properties are enabled. Of the S2 properties two are enabled.
+`s2_with_only_subscribe_and_stop_calls_no_action_starts_after_a_stop_has_returned` runs scripts of only subscribes and
+a `stop()`, and `s2_with_only_subscribe_cancel_and_stop_calls_no_action_starts_after_a_cancel_or_a_stop_has_returned`
+adds cancels to them, so S2 after a cancel is checked only without a pause, a start or a resume in the script.
 
 The reactor harness comes with L3.
 
