@@ -42,10 +42,8 @@ public interface CancellableSubscriptions extends SubscriptionModelCapability {
      * <p>
      * A model that stores a checkpoint, a catch-up marker, or anything else a later subscribe under the same id would
      * resume from also deletes it here. The returned {@code Mono} completes once every such delete for this id has
-     * succeeded, in this model and in every model it wraps, and fails when one of them fails. Once it completes, no
-     * store holds such state that the cancelled subscription wrote, so a later subscribe under the same id
-     * does not resume from where the cancelled one got to. It is cached, so subscribing to it more than once waits for
-     * the same deletes rather than running them again.
+     * succeeded, in this model and in every model it wraps, and fails when one of them fails. It is cached, so
+     * subscribing to it more than once waits for the same deletes rather than running them again.
      * <p>
      * A store can still lose a delete it acknowledged, for example when a MongoDB member with the in-memory storage
      * engine rolls back, and a write still in flight can reach the store after the delete. For a catch-up marker the

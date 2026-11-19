@@ -33,7 +33,7 @@ import org.occurrent.cloudevents.EventMetadata;
  * than needing to be unwrapped itself, so there is still nothing here that needs a {@code findIn}.
  * <p>
  * The callbacks run only for a replay from the beginning, which a catch-up does when no catch-up marker is stored. A
- * blocking catch-up that finds a stored marker skips its replay. A reactor catch-up that finds one resumes after it
+ * blocking catch-up that finds a stored marker skips its replay. A reactor catch-up that reads one resumes after it
  * and delivers those events the way live events are delivered, with none of these callbacks, so a view that rebuilds
  * itself between {@link #replayStarted()} and {@link #replayCompleted()} sees a rebuild only when it gets one.
  * <p>
@@ -48,16 +48,15 @@ public interface ReplayAware {
 
     /**
      * The replay finished delivering every event; anything buffered since {@link #replayStarted()} must be written
-     * before this method returns, because the driver stores the catch-up marker immediately afterwards.
+     * before this method returns, because the driver can store the catch-up marker afterwards.
      */
     void replayCompleted();
 
     /**
      * The replay was stopped before it finished. Anything buffered since {@link #replayStarted()} must be discarded
-     * rather than written: the replay that would have produced a complete batch never finished, and it stored no
-     * catch-up marker, so the next catch-up delivers those events again and a partial write here would only store
-     * state that delivery recomputes anyway. Must not throw: a failure here must not mask whatever the replay was
-     * already unwinding from.
+     * rather than written, since the replay that would have produced a complete batch never finished and stored no
+     * catch-up marker. Must not throw, since a failure here must not mask whatever the replay was already
+     * unwinding from.
      */
     void replayAbandoned();
 

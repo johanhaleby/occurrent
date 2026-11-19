@@ -50,8 +50,8 @@ public interface ReactiveReplayAware {
 
     /**
      * The replay finished delivering every event; anything buffered since {@link #replayStarted()} must be written
-     * before the returned {@link Mono} completes, because the driver stores the catch-up marker afterwards. Before it
-     * does, it folds the events this call, {@link #replayStarted()} and the replayed folds fed it. When one of those
+     * before the returned {@link Mono} completes, because the driver can store the catch-up marker afterwards. Before
+     * it does, it folds the events this call, {@link #replayStarted()} and the replayed folds fed it. When one of those
      * fails or is refused, the catch-up fails and stores no marker, see
      * {@link CatchupProjectionFeed#catchUp()}.
      */
@@ -59,10 +59,9 @@ public interface ReactiveReplayAware {
 
     /**
      * The replay was stopped before it finished. Anything buffered since {@link #replayStarted()} must be discarded
-     * rather than written: the replay that would have produced a complete batch never finished, and it stored no
-     * catch-up marker, so the next catch-up delivers those events again and a partial write here would only store
-     * state that delivery recomputes anyway. Must not throw: a failure here must not mask whatever the replay was
-     * already unwinding from.
+     * rather than written, since the replay that would have produced a complete batch never finished and stored no
+     * catch-up marker. Must not throw, since a failure here must not mask whatever the replay was already
+     * unwinding from.
      */
     void replayAbandoned();
 

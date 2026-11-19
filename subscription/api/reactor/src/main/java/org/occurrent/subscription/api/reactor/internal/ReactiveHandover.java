@@ -1042,10 +1042,10 @@ public final class ReactiveHandover<T, K> {
     // Whether a payload fed from code this handover runs is queued for the live sink and was not delivered by the
     // replay that just ran. Its event can sit at or below the head that replay read without the replay having read it,
     // when the write that stored it committed after the replay passed its position. If it is never folded, a start that
-    // reads that head skips it, so the marker waits (ADR 179's "Fed-back events on the reactor stack"). That holds whether or not the payload whose
-    // fold fed it waits for it, since that payload's answer can have gone out before this one is delivered. A payload
-    // the replay delivered was folded before the marker, whatever happens to its live copy. One a stop dropped is never
-    // delivered, so it no longer counts.
+    // reads that head skips it, so the marker waits (ADR 179's "Fed-back events on the reactor stack"). That holds
+    // whether or not the payload whose fold fed it waits for it, since that payload's answer can have gone out before
+    // this one is delivered. A payload the replay delivered was folded before the marker, whatever happens to its live
+    // copy. One a stop dropped is never delivered, so it no longer counts.
     private boolean unfoldedOwnCodePayloadQueued() {
         fedByOwnCodeInLiveSink.keySet().removeIf(LiveAck::dropped);
         for (K key : fedByOwnCodeInLiveSink.values()) {
@@ -1209,7 +1209,7 @@ public final class ReactiveHandover<T, K> {
     }
 
     /**
-     * Run the catch-up: replay the source's history, then start delivering the live feed. Whether it records the
+     * Run the catch-up. It replays the source's history, then starts delivering the live feed. Whether it records the
      * catch-up marker is below. The returned {@link Mono} completes when the replay and marker are done (see the class
      * javadoc for how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
      * {@code false} when {@link Source#keepReplaying()} stopped it partway. A failure errors it instead, and so does a

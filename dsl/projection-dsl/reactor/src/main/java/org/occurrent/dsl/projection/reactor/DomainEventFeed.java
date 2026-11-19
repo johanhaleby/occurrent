@@ -71,10 +71,10 @@ import java.util.function.Predicate;
  * share it, and a projection that keeps failing would hold up every projection behind it. Declare one feed per
  * projection, each fed by its own queue. See ADR 90.
  * <p>
- * Given a {@link CheckpointStorage}, the feed stores the head read before each projection's replay as its catch-up
- * marker, so the next catch-up replays only the events after it. Without one, every catch-up replays the whole
- * history. The marker is stored under the projection's id alone, so a projection whose filter or logic changes is
- * registered under a new id.
+ * Given a {@link CheckpointStorage}, a later catch-up of a projection can resume after a position an earlier catch-up
+ * stored as its catch-up marker. Without one, every catch-up replays the whole history. ADR 179's "What a reactor
+ * catch-up start replays" says what a start replays. The marker is stored under the projection's id alone, so a
+ * projection whose filter or logic changes is registered under a new id.
  * <p>
  * An event the projection's fold writes to the event store and feeds back through {@link #acceptAndWait(Object)} is an early copy,
  * and it needs a durable path as well. Either the application's forwarder publishes it to the broker queue this feed's
@@ -356,10 +356,10 @@ public final class DomainEventFeed<E> {
      * {@link RoutingOutcome#DELIVERED}: delivery is still at-least-once overall, so the fold itself must stay
      * idempotent, the de-dup cache {@link CatchupThenLiveOptions} bounds absorbs only the replay-to-live overlap
      * this handover already tracks, not an unbounded broker redelivery window. For a {@link #catchUpAll()}/
-     * {@link #catchUp(String)} registration, an interrupted attempt writes no catch-up marker, so the next
-     * {@link #catchUpAll()} replays the events after the marker stored before it, or the whole history when none was
-     * stored. A {@link RoutingOutcome#DEFERRED} event in that range comes back from the store even when the broker
-     * never delivers it again, and one at or below the stored marker comes back only through the broker. That guarantee
+     * {@link #catchUp(String)} registration, an interrupted attempt writes no catch-up marker. A
+     * {@link RoutingOutcome#DEFERRED} event after the marker a later catch-up reads, or any such event when it reads
+     * none, comes back from the store even when the broker never delivers it again, and one at or below that marker
+     * comes back only through the broker. That guarantee
      * does not extend to a {@link #goLive(String)} registration, which has no store replay behind it at all
      * (see {@link #goLive(String)}'s own javadoc). A {@link RoutingOutcome#DEFERRED} event there is only safe if
      * the caller's own source, the broker or listener feeding this method, actually redelivers it. Losing it there
@@ -518,9 +518,9 @@ public final class DomainEventFeed<E> {
     /**
      * Stop a catch-up replay that is still in flight, so a shutting-down application does not leave one folding into
      * a store that is closing with it. The replay notices at its next event and unwinds without writing the catch-up
-     * marker, so the next start replays again from where the stopped one started. The {@link Mono}
-     * {@link #acceptAndWait(Object)} returned for an event waiting on a replay that started before the feed went live
-     * errors rather than completing when that replay notices the stop, so its listener does not acknowledge the event. A replay with no event left
+     * marker. The {@link Mono} {@link #acceptAndWait(Object)} returned for an event waiting on a replay that started
+     * before the feed went live errors rather than completing when that replay notices the stop, so its listener does
+     * not acknowledge the event. A replay with no event left
      * to hand to the projection does not notice it, see {@link CatchupProjectionFeed#stopCatchUp()}, and the feed goes
      * live and folds the event. One waiting on a replay started after {@link #goLive(String)} completes once the event
      * is folded, since the feed still applies the events that arrived while that replay ran.
@@ -576,8 +576,7 @@ public final class DomainEventFeed<E> {
     /**
      * Go live without a catch-up: skip the replay for the single projection registered under {@code id}.
      * Use this instead of {@link #catchUp(String)} when this feed's events are not in the local event store, so
-     * there is nothing to replay. No catch-up marker is written, so a later {@link #catchUp(String)} on the same
-     * projection replays from the marker stored before, or the whole history when none was stored.
+     * there is nothing to replay. No catch-up marker is written.
      * <p>
      * The lookup happens when the returned {@link Mono} is subscribed, the same as {@link #catchUp(String)}. An id
      * that matches nothing fails the {@link Mono} with an {@link IllegalArgumentException} rather than throwing here.

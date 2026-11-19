@@ -69,6 +69,6 @@ public final class CatchupMarkers {
     static String notACatchupMarker(String subscriptionId, String stored) {
         return "The checkpoint stored for subscription id \"" + subscriptionId + "\" is not a catch-up marker: " + stored
                 + ". Something other than a catch-up stored it, such as a durable subscription that used this id before."
-                + " Delete the checkpoint stored for this id so the catch-up replays the whole history, or subscribe under a new id.";
+                + " Delete the checkpoint stored for this id, or subscribe under a new id.";
     }
 }

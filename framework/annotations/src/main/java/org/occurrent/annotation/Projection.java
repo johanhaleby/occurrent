@@ -192,8 +192,8 @@ public @interface Projection {
      * Whether a {@link Source#PUSH} projection is backfilled from the event store before it goes live.
      * {@link Catchup#FROM_EVENT_STORE} (the default) replays history and hands over. On the blocking stack it replays
      * from the beginning once, and a start that finds the stored catch-up marker skips the replay. On the reactor
-     * stack it replays each time the projection starts, from the beginning, or after the stored marker when there is
-     * one. {@link Catchup#NONE} takes
+     * stack it replays each time the projection starts, from the beginning, or after the stored marker when it reads
+     * one, and ADR 179's "What a reactor catch-up start replays" says which. {@link Catchup#NONE} takes
      * live events only and touches no event store at all, which is what a projection fed by another application's
      * broker needs, since the local event store holds none of those events. With a {@code PushSubscriptionModel} feed
      * that skips the catch-up wrapper entirely, and with a {@code DomainEventFeed} the projection registers and goes
