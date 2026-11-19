@@ -644,6 +644,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * stop, a cancel or a failure cut short. A catch-up a shutdown cuts short gets no {@code historyRead}. The
      * listener hears nothing about a catch-up that started before it was registered. The blocking push model still
      * tells its listener about every start.
+     * <p>
+     * This model calls {@code catchupStarted} and {@code historyRead} while it holds its own lock, so a listener that
+     * blocks holds up {@code subscribe}, {@code cancelSubscription}, {@code stop}, {@code start},
+     * {@code pauseSubscription}, {@code resumeSubscription} and the catch-up of every other id on this model, and a
+     * listener that waits for another thread calling one of those methods never returns.
      */
     @Override
     public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
