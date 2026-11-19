@@ -21,7 +21,9 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStateStoreQueries;
+import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.codec.SagaCodec;
 
 import java.time.Instant;
@@ -85,6 +87,30 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
             return store.compareAndSave(codec.encode(envelope), expectedVersion);
         }
         return store.compareAndSaveWithoutState(codec.encodeWithoutState(envelope), expectedVersion);
+    }
+
+    /** Skip an input, see {@link SagaStateStoreSkippedInputs#compareAndSaveSkipped}. {@code envelope}'s state is not written. */
+    public boolean compareAndSaveSkipped(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope, long expectedVersion, String quarantineId, SkippedInput input) {
+        requireNonNull(records, "records cannot be null");
+        return records.compareAndSaveSkipped(codec.encodeWithoutState(envelope), expectedVersion, quarantineId, input);
+    }
+
+    /** Start a release, see {@link SagaStateStoreSkippedInputs#compareAndSaveReleaseStarted}. {@code envelope}'s state is not written. */
+    public boolean compareAndSaveReleaseStarted(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope, long expectedVersion, String quarantineId, SkippedInput head) {
+        requireNonNull(records, "records cannot be null");
+        return records.compareAndSaveReleaseStarted(codec.encodeWithoutState(envelope), expectedVersion, quarantineId, head);
+    }
+
+    /** Apply or drop a replayed input, see {@link SagaStateStoreSkippedInputs#compareAndSaveReplayed}. The whole envelope is written. */
+    public boolean compareAndSaveReplayed(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope, long expectedVersion, String quarantineId, SkippedInput replayed) {
+        requireNonNull(records, "records cannot be null");
+        return records.compareAndSaveReplayed(codec.encode(envelope), expectedVersion, quarantineId, replayed);
+    }
+
+    /** End a quarantine, see {@link SagaStateStoreSkippedInputs#compareAndSaveQuarantineEnded}. The whole envelope is written. */
+    public boolean compareAndSaveQuarantineEnded(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope, long expectedVersion, String quarantineId) {
+        requireNonNull(records, "records cannot be null");
+        return records.compareAndSaveQuarantineEnded(codec.encode(envelope), expectedVersion, quarantineId);
     }
 
     public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {

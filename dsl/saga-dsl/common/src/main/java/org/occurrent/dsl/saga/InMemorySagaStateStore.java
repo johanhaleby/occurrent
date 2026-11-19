@@ -30,8 +30,9 @@ import java.util.concurrent.ConcurrentMap;
 import static java.util.Objects.requireNonNull;
 
 /**
- * An in-memory {@link SagaStateStore} backed by a {@link ConcurrentHashMap}, for tests and single-node use. The
- * compare-and-set save is atomic per instance via {@link ConcurrentMap#compute}. It keeps every field in the form
+ * An in-memory {@link SagaStateStore} backed by a {@link ConcurrentHashMap}, for tests and single-node use. Every write
+ * holds one lock, so a compare-and-set save and a write of an instance together with its skipped-input records are
+ * atomic with respect to each other. Reads take no lock. It keeps every field in the form
  * {@link SagaCodec} gives it, so an instance goes through the codec on every save and read as it does in any other
  * store. The state of a core saga is that state object as it is, and the state of a flow saga is the map
  * {@link SagaCodec} encodes it to, which the codec rebuilds on every read.
@@ -42,9 +43,12 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
 
     private final ConcurrentMap<String, StoredSaga> store = new ConcurrentHashMap<>();
     // One immutable map from key to record per instance and quarantine id, replaced whole on every write. A read then
-    // takes every record written before it, so the lowest seq it returns is the lowest recorded, also while skips record
-    // concurrently. Iterating one map shared by every instance could miss a record written before one it does see
+    // takes every record written before it, so the lowest seq it returns is the lowest recorded. Iterating one map shared
+    // by every instance could miss a record written before one it does see
     private final ConcurrentMap<Quarantine, Map<String, SkippedInput>> skippedInputs = new ConcurrentHashMap<>();
+    // Held by every write. A write that changes records changes them before the instance, so a read that finds the
+    // instance at a version finds its records as of that version or later
+    private final Object writeLock = new Object();
 
     private record Quarantine(String sagaId, String quarantineId) {
     }
@@ -68,16 +72,63 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     @Override
     public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
         requireNonNull(saga, "saga cannot be null");
-        return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga));
+        return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga), () -> {
+        });
     }
 
     @Override
     public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
         requireNonNull(saga, "saga cannot be null");
+        return compareAndSet(saga, expectedVersion, withoutState(saga, expectedVersion), () -> {
+        });
+    }
+
+    @Override
+    public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
+        requireNonNull(saga, "saga cannot be null");
+        requireNonNull(input, "input cannot be null");
+        Quarantine quarantine = quarantine(saga.sagaId(), quarantineId);
+        return compareAndSet(saga, expectedVersion, withoutState(saga, expectedVersion), () ->
+                skippedInputs.compute(quarantine, (ignored, records) -> records != null && records.containsKey(input.key()) ? records : with(records, input)));
+    }
+
+    @Override
+    public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
+        requireNonNull(saga, "saga cannot be null");
+        requireNonNull(head, "head cannot be null");
+        Quarantine quarantine = quarantine(saga.sagaId(), quarantineId);
+        return compareAndSet(saga, expectedVersion, withoutState(saga, expectedVersion), () ->
+                skippedInputs.compute(quarantine, (ignored, records) -> with(records, head)));
+    }
+
+    @Override
+    public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+        requireNonNull(saga, "saga cannot be null");
+        requireNonNull(replayed, "replayed cannot be null");
+        Quarantine quarantine = quarantine(saga.sagaId(), quarantineId);
+        return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga), () ->
+                skippedInputs.computeIfPresent(quarantine, (ignored, records) -> {
+                    if (!replayed.equals(records.get(replayed.key()))) {
+                        return records;
+                    }
+                    Map<String, SkippedInput> remaining = new HashMap<>(records);
+                    remaining.remove(replayed.key());
+                    return remaining.isEmpty() ? null : Map.copyOf(remaining);
+                }));
+    }
+
+    @Override
+    public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+        requireNonNull(saga, "saga cannot be null");
+        Quarantine quarantine = quarantine(saga.sagaId(), quarantineId);
+        return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga), () -> skippedInputs.remove(quarantine));
+    }
+
+    private static java.util.function.UnaryOperator<@Nullable StoredSaga> withoutState(StoredSaga saga, long expectedVersion) {
         if (expectedVersion == 0) {
             throw new IllegalArgumentException("compareAndSaveWithoutState cannot insert saga " + saga.sagaId() + ", since it holds no state. Insert it with compareAndSave.");
         }
-        return compareAndSet(saga, expectedVersion, existing -> {
+        return existing -> {
             // A positive expected version only matches an instance that is stored
             Map<String, Object> stored = requireNonNull(existing).encoded().fields();
             // The stored state and the step derived from it stay as they are, and stay absent when nothing is stored
@@ -89,7 +140,7 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                 }
             }
             return indexed(new EncodedSaga(fields), saga);
-        });
+        };
     }
 
     // Derived from the encoded form rather than taken from the caller, so a query sees what a store that reads its index
@@ -98,17 +149,19 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         return new StoredSaga(saga.sagaId(), saga.version(), encoded, SagaCodec.indexOf(encoded));
     }
 
-    private boolean compareAndSet(StoredSaga saga, long expectedVersion, java.util.function.UnaryOperator<@Nullable StoredSaga> next) {
-        boolean[] saved = {false};
-        store.compute(saga.sagaId(), (id, existing) -> {
+    // The records are written before the instance, see writeLock
+    private boolean compareAndSet(StoredSaga saga, long expectedVersion, java.util.function.UnaryOperator<@Nullable StoredSaga> next, Runnable writeRecords) {
+        synchronized (writeLock) {
+            StoredSaga existing = store.get(saga.sagaId());
             long current = existing == null ? 0 : existing.version();
             if (current != expectedVersion) {
-                return existing;
+                return false;
             }
-            saved[0] = true;
-            return next.apply(existing);
-        });
-        return saved[0];
+            StoredSaga saved = next.apply(existing);
+            writeRecords.run();
+            store.put(saga.sagaId(), requireNonNull(saved));
+            return true;
+        }
     }
 
     @Override
@@ -143,13 +196,6 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     }
 
     @Override
-    public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-        requireNonNull(input, "input cannot be null");
-        skippedInputs.compute(quarantine(sagaId, quarantineId), (ignored, records) ->
-                records != null && records.containsKey(input.key()) ? records : with(records, input));
-    }
-
-    @Override
     public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
         requireNonNull(sagaId, "sagaId cannot be null");
         requireNonNull(quarantineId, "quarantineId cannot be null");
@@ -161,32 +207,6 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                 .sorted(SkippedInput.ORDER)
                 .limit(limit)
                 .toList();
-    }
-
-    @Override
-    public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
-        requireNonNull(head, "head cannot be null");
-        skippedInputs.compute(quarantine(sagaId, quarantineId), (ignored, records) -> with(records, head));
-    }
-
-    @Override
-    public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-        requireNonNull(input, "input cannot be null");
-        skippedInputs.computeIfPresent(quarantine(sagaId, quarantineId), (ignored, records) -> {
-            if (!input.equals(records.get(input.key()))) {
-                return records;
-            }
-            Map<String, SkippedInput> remaining = new HashMap<>(records);
-            remaining.remove(input.key());
-            return remaining.isEmpty() ? null : Map.copyOf(remaining);
-        });
-    }
-
-    @Override
-    public void deleteSkippedInputs(String sagaId, String quarantineId) {
-        requireNonNull(sagaId, "sagaId cannot be null");
-        requireNonNull(quarantineId, "quarantineId cannot be null");
-        skippedInputs.remove(new Quarantine(sagaId, quarantineId));
     }
 
     private static Quarantine quarantine(String sagaId, String quarantineId) {
@@ -220,12 +240,13 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     @Override
     public void delete(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
-        StoredSaga removed = store.remove(sagaId);
-        // Only the records of the instance removed here, so a later instance with the same id keeps the ones it wrote
-        // under a quarantine id of its own
-        String quarantineId = removed == null ? null : removed.index().quarantineId();
-        if (quarantineId != null) {
-            deleteSkippedInputs(sagaId, quarantineId);
+        synchronized (writeLock) {
+            StoredSaga existing = store.get(sagaId);
+            String quarantineId = existing == null ? null : existing.index().quarantineId();
+            if (quarantineId != null) {
+                skippedInputs.remove(new Quarantine(sagaId, quarantineId));
+            }
+            store.remove(sagaId);
         }
     }
 }
