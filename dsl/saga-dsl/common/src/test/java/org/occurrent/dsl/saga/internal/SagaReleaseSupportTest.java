@@ -430,10 +430,14 @@ class SagaReleaseSupportTest {
         }
 
         private SagaEnvelope<OrderState> withTypeMarks(Map<String, TypeMark> byType) {
+            return withTypeMarks(1, byType);
+        }
+
+        private SagaEnvelope<OrderState> withTypeMarks(long floor, Map<String, TypeMark> byType) {
             SagaEnvelope<OrderState> base = quarantined(releasingOn(9), 3L);
             return new SagaEnvelope<>(base.sagaId(), base.state(), base.status(), base.version(), base.timers(), base.streamWatermarks(), base.positionWatermark(),
                     base.createdAt(), base.updatedAt(), base.completedAt(), base.currentStep(), base.started(), base.failure(),
-                    Map.of("o1", new StreamMarks(1, byType, Map.of(), List.of(), Map.of())), base.quarantineSkipCount());
+                    Map.of("o1", new StreamMarks(floor, byType, Map.of(), List.of(), Map.of())), base.quarantineSkipCount());
         }
 
         @Test
@@ -465,6 +469,32 @@ class SagaReleaseSupportTest {
                     () -> assertThat(afterV5).as("v5 applied").isNotNull(),
                     () -> assertThat(afterV5.streamMarks().get("o1").byType().get("").applied()).as("v3 kept").contains(3L),
                     () -> assertThat(again.processed()).as("the second record of v3").isFalse()
+            );
+        }
+
+        @Test
+        void applies_a_record_more_than_an_int_below_the_version_it_applied_before_and_skips_both_when_replayed_again() {
+            long high = 3_000_000_000L;
+            SagaEnvelope<OrderState> current = withTypeMarks(0, Map.of());
+
+            SagaEnvelope<OrderState> afterHigh = SagaExecutionSupport.replay(saga(), "o1", current, new SkippedInput(0, "o1@" + high),
+                    SagaInput.event(new OrderPlaced("o1")), at(high), NOW).envelope();
+            Outcome<OrderState, OrderCommand> low = SagaExecutionSupport.replay(saga(), "o1", afterHigh, new SkippedInput(1, "o1@1"),
+                    SagaInput.event(new OrderPlaced("o1")), at(1), NOW);
+            SagaEnvelope<OrderState> afterLow = low.envelope() == null ? afterHigh : low.envelope();
+            Outcome<OrderState, OrderCommand> highAgain = SagaExecutionSupport.replay(saga(), "o1", afterLow, new SkippedInput(2, "o1@" + high),
+                    SagaInput.event(new OrderPlaced("o1")), at(high), NOW);
+            Outcome<OrderState, OrderCommand> lowAgain = SagaExecutionSupport.replay(saga(), "o1", afterLow, new SkippedInput(3, "o1@1"),
+                    SagaInput.event(new OrderPlaced("o1")), at(1), NOW);
+
+            assertAll(
+                    () -> assertThat(afterHigh).as("the high version applied").isNotNull(),
+                    () -> assertThat(low.processed()).as("the low version applied").isTrue(),
+                    () -> assertThat(low.envelope()).as("the low version written").isNotNull(),
+                    () -> assertThat(afterLow.streamMarks().get("o1").byType().get("").mark()).as("mark").isEqualTo(high),
+                    () -> assertThat(afterLow.streamMarks().get("o1").byType().get("").applied()).as("applied").contains(1L),
+                    () -> assertThat(highAgain.processed()).as("the high version again").isFalse(),
+                    () -> assertThat(lowAgain.processed()).as("the low version again").isFalse()
             );
         }
 
