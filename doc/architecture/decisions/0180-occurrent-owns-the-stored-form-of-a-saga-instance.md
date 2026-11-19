@@ -10,7 +10,8 @@ Accepted, for [#1259](https://github.com/johanhaleby/occurrent/issues/1259). Sup
 accepts it. ADR 70 gets a pointer in its Status section.
 
 Amends [ADR 154](0154-a-saga-tells-a-late-stream-event-from-a-redelivery-per-event-type.md) in place, since it hasn't
-shipped, and adds an amendment note to [ADR 63](0063-saga-dsl.md).
+shipped, and amends [ADR 63](0063-saga-dsl.md) by reference, since ADR 63 shipped in 0.33.0. ADR 63 gets a pointer in
+its Status section.
 
 ## Context
 
@@ -167,9 +168,12 @@ Axon and NServiceBus also keep the values a lookup needs next to the serialized 
   every store gets it.
 - `SagaEnvelope` is no longer the `SagaStateStore` type, so the reason ADR 70 gave for why it can't move no longer
   applies. `SagaCodec`'s public methods still take and return it, and this decision doesn't move it.
-- No store reads or builds `FlowStateImpl` any more, so ADR 63's reason for making it `public` no longer applies.
-  It stays `public`, since `SagaCodec` and `FlowSagaImpl`, each in another package of `saga-dsl-common`, still use
-  it. Making it non-public is left for a later change.
+- No store reads or builds `FlowStateImpl` any more, so the bookkeeping fields ADR 63 describes are no longer a store
+  concern. Their meaning can still change between versions, and the codec is what has to read the data an earlier
+  version wrote. The codec casts `FlowState` to `FlowStateImpl` where the store did.
+- ADR 63's reason for making `FlowStateImpl` `public` no longer applies. It stays `public`, since `SagaCodec` and
+  `FlowSagaImpl`, each in another package of `saga-dsl-common`, still use it. Making it non-public is left for a later
+  change.
 - `SagaExecution` no longer reads an instance back after a quarantine or after the start of a release, so each of
   them takes one store read fewer.
 
