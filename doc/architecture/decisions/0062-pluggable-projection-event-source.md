@@ -70,7 +70,7 @@ A push feed cannot backfill a new or rebuilt projection, because a broker is not
 (blocking and reactor) fills that gap with a one-time catch-up in front of a `PushSubscriptionModel`. It splits
 responsibility deliberately:
 
-- **Catch-up is Occurrent's job**, run once per subscription id. On subscribe it registers on the live feed first and
+- **Catch-up is Occurrent's job.** On subscribe it registers on the live feed first and
   buffers, replays the projection's history from the event store in position order (`PositionOrderedReader`), then drains
   the buffer and goes live, de-duplicating the replay-to-live overlap by event id. Because buffering starts before the
   head is read, an event committing during the replay is delivered either by the replay or by the buffered feed, and no
@@ -80,8 +80,13 @@ responsibility deliberately:
   `accept(...)` returns, so an unprocessed event is redelivered. The model persists no live position watermark, which is
   what sidesteps the watermark problem below entirely. Delivery is at-least-once, so the fold must be idempotent, the
   same contract as the change-stream path.
-- **A one-shot catch-up-complete marker** (an optional `CheckpointStorage`) records that the replay finished, so a
-  restart skips it and lets the broker resume. The stored value marks completion, it is not a moving resume watermark.
+- **A catch-up marker** (an optional `CheckpointStorage`) is stored once the replay finishes. Its meaning depends on the
+  stack.
+  - On the blocking stack it marks completion, so a restart that finds it skips the replay and lets the broker resume.
+    The stored value is not a moving resume watermark.
+  - On the reactor stack it is a resume position, and a start that reads it resumes after it. ADR 179's
+    ["What a reactor catch-up start replays"](0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md#what-a-reactor-catch-up-start-replays)
+    says what a start reads and replays.
 
 **Why no feed-derived resume watermark.** Occurrent reserves global positions from a shared counter outside the write
 transaction (`MongoEventStore.java:282-284`), so an abandoned or rolled-back write leaves a permanent gap, and a
@@ -119,7 +124,8 @@ store (CloudEvents) and decodes each event once, never a double round trip.
 - `CatchupProjectionFeed` adds the one-time catch-up to a domain feed: buffer live, replay the store
   (decode once), drain, go live, de-duplicating the replay-to-live overlap by a caller-supplied `Function<E,String>`
   event-id applied in domain space (so it does not depend on the CloudEvent id). Same v1 contract as the CloudEvent
-  handover: broker owns live-resume, one-shot catch-up marker, at-least-once idempotent folds, bounded fail-loud buffer.
+  handover: broker owns live-resume, the catch-up marker described above, at-least-once idempotent folds, bounded
+  fail-loud buffer.
 - `DomainEventFeed<E>` is the application-owned fan-out sink (the domain twin of `PushSubscriptionModel`) that drives
   several projections from one source. It carries the domain-specific event-id function as a constructor argument, which
   is why `@Projection(source = PUSH, subscriptionModelName = "...")` needs no event-id annotation attribute and no
@@ -161,8 +167,8 @@ bean-post-processor wraps in `CatchupThenPushSubscriptionModel` with the event s
 framework's `CheckpointStorage` as the catch-up marker. The default `Source.EVENT_STORE` keeps the existing behavior.
 An explicit attribute was chosen over auto-detecting a push bean, since a durable public annotation should not change its
 event source implicitly based on which beans happen to be present. Push source is rejected together with
-`mode = SYNCHRONOUS` and the catch-up start knobs (the catch-up always replays from the beginning and live-resume is the
-broker's job), and with a `DcbProjection` (a DCB boundary cannot be catch-up-replayed in position order). Implemented on
+`mode = SYNCHRONOUS` and the catch-up start knobs (the catch-up marker decides where the replay starts, and live-resume
+is the broker's job), and with a `DcbProjection` (a DCB boundary cannot be catch-up-replayed in position order). Implemented on
 both the blocking and reactor stacks.
 
 ## Amendment (2026-07-25): the catch-up handover is one shared engine per stack
@@ -226,7 +232,7 @@ replay-to-live transition. `catchup` would also have read as the change-stream c
 head, machinery these engines neither have nor need.
 
 **One difference is preserved on purpose.** The reactor stack completes its catch-up signal and persists the
-catch-up-complete marker before the buffered live events are folded, whereas the blocking stack returns only after the
+catch-up marker before the buffered live events are folded, whereas the blocking stack returns only after the
 drain. Each is self-consistent with its own acknowledgement model: a blocking `accept` returns before the fold, so the
 marker must wait for the drain to keep the store the backstop, while a reactor ack completes only after its fold. The
 engines state this explicitly rather than leaving it to be inferred from the pipeline shape.
