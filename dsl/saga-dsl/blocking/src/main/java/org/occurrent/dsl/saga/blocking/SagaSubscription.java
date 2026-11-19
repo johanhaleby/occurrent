@@ -138,9 +138,10 @@ public final class SagaSubscription implements AutoCloseable {
      * the poller skips it, on this node or another, and goes on with one that failed on an input or was
      * interrupted. The poller can still replay the input a release is on, and its commands are then dispatched twice,
      * when the release takes longer than {@code timerPollInterval} over one input, and when this call comes while the
-     * poller replays the instance, since it then goes on beside the poller. A release that spends longer than
-     * {@code timerPollInterval} on inputs the stream marks show as applied writes nothing, so the poller goes on
-     * beside it too. Neither dispatches anything for those inputs, so only the first input that isn't applied can be
+     * poller replays the instance, since it then goes on beside the poller. Two pollers can replay it together too.
+     * Without a competing-consumer strategy every node polls, and with one, two nodes can poll at once while the timer
+     * lease moves from one to the other. A release that spends longer than {@code timerPollInterval} on inputs the
+     * stream marks show as applied doesn't write the instance, so the poller goes on beside it too. Neither dispatches anything for those inputs, so only the first input that isn't applied can be
      * dispatched twice.
      * <p>
      * The input the instance was quarantined on gets a full quarantine budget again, measured from the start of the
