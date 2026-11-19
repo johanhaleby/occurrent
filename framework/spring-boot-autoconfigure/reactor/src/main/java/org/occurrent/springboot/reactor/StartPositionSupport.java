@@ -57,7 +57,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 /**
  * Start-position and startup logic for the reactive stack. The reactive catch-up model replays only by position (or,
@@ -76,7 +76,7 @@ class StartPositionSupport {
 
     private final ApplicationContext applicationContext;
 
-    private record Boundary(Supplier<@Nullable String> reader, @Nullable String liveStart) {
+    private record Boundary(UnaryOperator<@Nullable String> reader, @Nullable String liveStart) {
     }
 
     // The boundary each unproxied bean that opens catch-up read scopes reported when it was created, by bean name
@@ -105,11 +105,11 @@ class StartPositionSupport {
         if (target == null) {
             return;
         }
-        @Nullable Supplier<@Nullable String> reader = liveStartReaderOf(target);
+        @Nullable UnaryOperator<@Nullable String> reader = liveStartReaderOf(target);
         if (reader == null) {
             return;
         }
-        boundaries.putIfAbsent(beanName, new Boundary(reader, reader.get()));
+        boundaries.putIfAbsent(beanName, new Boundary(reader, reader.apply(null)));
         createBoundaryStoreOnce();
     }
 
@@ -185,11 +185,11 @@ class StartPositionSupport {
         return name == null ? null : boundaries.get(name);
     }
 
-    private static @Nullable Supplier<@Nullable String> liveStartReaderOf(Object bean) {
+    private static @Nullable UnaryOperator<@Nullable String> liveStartReaderOf(Object bean) {
         if (bean instanceof CatchupReads reads) {
-            return () -> Mono.usingWhen(requireScope(reads.openCatchupReadScope(null), bean, "openCatchupReadScope"), scope -> Mono.justOrEmpty(scope.liveStart()), CatchupReadScope::close).block();
+            return notBefore -> Mono.usingWhen(requireScope(reads.openCatchupReadScope(notBefore), bean, "openCatchupReadScope"), scope -> Mono.justOrEmpty(scope.liveStart()), CatchupReadScope::close).block();
         } else if (bean instanceof DcbCatchupReads reads) {
-            return () -> Mono.usingWhen(requireScope(reads.openDcbCatchupReadScope(null), bean, "openDcbCatchupReadScope"), scope -> Mono.justOrEmpty(scope.liveStart()), DcbCatchupReadScope::close).block();
+            return notBefore -> Mono.usingWhen(requireScope(reads.openDcbCatchupReadScope(notBefore), bean, "openDcbCatchupReadScope"), scope -> Mono.justOrEmpty(scope.liveStart()), DcbCatchupReadScope::close).block();
         }
         return null;
     }
@@ -203,13 +203,14 @@ class StartPositionSupport {
         return scope;
     }
 
-    // The boundary for a bean built after startup, read from the same event store, or null when there is none
-    @Nullable String readLateLiveStart() {
+    // The boundary for a bean built after startup, read from the same event store, or null when there is none. A store
+    // that reports one never returns one earlier than notBefore
+    @Nullable String readLateLiveStart(@Nullable String notBefore) {
         if (Schedulers.isInNonBlockingThread()) {
             return null;
         }
         @Nullable Boundary boundary = boundaryOfTheStore();
-        return boundary == null ? null : boundary.reader().get();
+        return boundary == null ? null : boundary.reader().apply(notBefore);
     }
 
     void startAtLateBoundary(String subscriptionId, @Nullable String liveStart) {

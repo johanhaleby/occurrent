@@ -65,7 +65,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -83,7 +83,7 @@ import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME;
  */
 class StartPositionSupport {
 
-    private record Boundary(Supplier<@Nullable String> reader, @Nullable String liveStart) {
+    private record Boundary(UnaryOperator<@Nullable String> reader, @Nullable String liveStart) {
     }
 
     private static final Logger log = LoggerFactory.getLogger(StartPositionSupport.class);
@@ -115,11 +115,11 @@ class StartPositionSupport {
         if (target == null) {
             return;
         }
-        @Nullable Supplier<@Nullable String> reader = liveStartReaderOf(target);
+        @Nullable UnaryOperator<@Nullable String> reader = liveStartReaderOf(target);
         if (reader == null) {
             return;
         }
-        boundaries.putIfAbsent(beanName, new Boundary(reader, reader.get()));
+        boundaries.putIfAbsent(beanName, new Boundary(reader, reader.apply(null)));
         createBoundaryStoreOnce();
     }
 
@@ -174,16 +174,16 @@ class StartPositionSupport {
         return name == null ? null : boundaries.get(name);
     }
 
-    private static @Nullable Supplier<@Nullable String> liveStartReaderOf(Object bean) {
+    private static @Nullable UnaryOperator<@Nullable String> liveStartReaderOf(Object bean) {
         if (bean instanceof CatchupReads reads) {
-            return () -> {
-                try (CatchupReadScope scope = requireScope(reads.openCatchupReadScope(null), bean, "openCatchupReadScope")) {
+            return notBefore -> {
+                try (CatchupReadScope scope = requireScope(reads.openCatchupReadScope(notBefore), bean, "openCatchupReadScope")) {
                     return scope.liveStart();
                 }
             };
         } else if (bean instanceof DcbCatchupReads reads) {
-            return () -> {
-                try (DcbCatchupReadScope scope = requireScope(reads.openDcbCatchupReadScope(null), bean, "openDcbCatchupReadScope")) {
+            return notBefore -> {
+                try (DcbCatchupReadScope scope = requireScope(reads.openDcbCatchupReadScope(notBefore), bean, "openDcbCatchupReadScope")) {
                     return scope.liveStart();
                 }
             };
@@ -200,10 +200,11 @@ class StartPositionSupport {
         return scope;
     }
 
-    // The boundary for a bean built after startup, read from the same event store, or null when there is none
-    @Nullable String readLateLiveStart() {
+    // The boundary for a bean built after startup, read from the same event store, or null when there is none. A store
+    // that reports one never returns one earlier than notBefore
+    @Nullable String readLateLiveStart(@Nullable String notBefore) {
         @Nullable Boundary boundary = boundaryOfTheStore();
-        return boundary == null ? null : boundary.reader().get();
+        return boundary == null ? null : boundary.reader().apply(notBefore);
     }
 
     void startAtLateBoundary(String subscriptionId, @Nullable String liveStart) {

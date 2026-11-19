@@ -46,8 +46,10 @@ import java.util.Map;
  *     own name, one asked for with {@code getBean} of the factory itself, or one whose creation failed and that isn't
  *     collected yet. The product then also gets every event written since that older factory was created.</li>
  * </ul>
- * This assumes the boundaries one thread reads never go back, so the oldest is the earliest. A product whose factory
- * was built before the startup scan ended takes none, and starts at the boundary of the context.
+ * A new prototype factory reads its boundary with {@link #newestUnclaimedLiveStart(String)} as the earliest the event
+ * store may return, so of those factories the oldest is the earliest even when two reads of the store could go back,
+ * as two MongoDB sessions can when the primary changes. A product whose factory was built before the startup scan
+ * ended takes none, and starts at the boundary of the context.
  * <p>
  * Keyed by the factory instance and held weakly, so a factory whose creation failed, or a prototype factory whose
  * product is built, takes its boundary with it once it's collected. The boundary itself goes at the next access after
@@ -87,6 +89,26 @@ public final class LateFactoryLiveStarts {
      */
     public @Nullable String liveStartOf(Object factory) {
         return liveStartByFactory.get(factory);
+    }
+
+    /**
+     * @return The boundary of the newest unclaimed, uncollected factory under {@code beanName} on this thread that read
+     * one, for the next factory under that name to read its own from, or null when there is none
+     */
+    public @Nullable String newestUnclaimedLiveStart(String beanName) {
+        Map<String, List<WeakReference<Object>>> unclaimedByName = unclaimedPrototypeFactoriesOfThisThread.get();
+        List<WeakReference<Object>> unclaimed = unclaimedByName == null ? null : unclaimedByName.get(beanName);
+        if (unclaimed == null) {
+            return null;
+        }
+        for (int i = unclaimed.size() - 1; i >= 0; i--) {
+            @Nullable Object factory = unclaimed.get(i).get();
+            @Nullable String liveStart = factory == null ? null : liveStartByFactory.get(factory);
+            if (liveStart != null) {
+                return liveStart;
+            }
+        }
+        return null;
     }
 
     /**

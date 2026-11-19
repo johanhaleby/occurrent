@@ -175,7 +175,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (startupScanComplete) {
                 ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
                 boolean prototype = beanFactory.containsBeanDefinition(beanName) && beanFactory.getMergedBeanDefinition(beanName).isPrototype();
-                lateFactoryLiveStarts.factoryCreated(beanName, bean, prototype, startPositionSupport.readLateLiveStart());
+                // Never earlier than a factory of this name a product on this thread can still take the boundary of
+                @Nullable String notBefore = prototype ? lateFactoryLiveStarts.newestUnclaimedLiveStart(beanName) : null;
+                lateFactoryLiveStarts.factoryCreated(beanName, bean, prototype, startPositionSupport.readLateLiveStart(notBefore));
             }
         } else {
             // put rather than putIfAbsent, because a creation that failed is retried and the retry can produce a
@@ -190,7 +192,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 writeAdmission.refuseIfOpen(beanName, () -> unregisteredSynchronousHandler(beanName, userClass));
             }
             if (startupScanComplete && declaresAnyOccurrentAnnotation(userClass)) {
-                @Nullable String liveStart = startPositionSupport.readLateLiveStart();
+                @Nullable String liveStart = startPositionSupport.readLateLiveStart(null);
                 if (liveStart != null) {
                     lateLiveStarts.put(bean, liveStart);
                 }
