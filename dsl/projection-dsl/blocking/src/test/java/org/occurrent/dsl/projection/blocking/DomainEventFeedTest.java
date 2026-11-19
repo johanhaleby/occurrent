@@ -37,6 +37,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.UnreadableLiveFilterException;
@@ -373,6 +374,48 @@ class DomainEventFeedTest {
         restarted.catchUpAll();
 
         assertThat(repo.get("counter")).isEqualTo(2);
+    }
+
+    @Test
+    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+
+        DomainEventFeed<Counted> first = new DomainEventFeed<>(store, converter, Counted::eventId, marker);
+        first.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        first.catchUpAll();
+        assertThat(repo.get("counter")).isEqualTo(2);
+
+        // Restart: a fresh feed over the same store, repository, and marker. The replay is skipped, so the persisted
+        // count is not re-folded (which would double it to 4).
+        DomainEventFeed<Counted> restarted = new DomainEventFeed<>(store, converter, Counted::eventId, marker);
+        restarted.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        restarted.catchUpAll();
+        assertThat(repo.get("counter")).isEqualTo(2);
+
+        restarted.acceptAndWait(new Counted("3"));
+        assertThat(repo.get("counter")).isEqualTo(3);
+    }
+
+    @Test
+    void a_checkpoint_another_component_stored_under_the_id_makes_the_catch_up_skip_the_replay() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        marker.save("counter", new StringBasedCheckpoint("resume-token-xyz"));
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId, marker);
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        feed.catchUpAll();
+
+        assertThat(repo.get("counter")).as("nothing replayed").isNull();
+        feed.acceptAndWait(new Counted("3"));
+        assertThat(repo.get("counter")).isEqualTo(1);
     }
 
     @Test

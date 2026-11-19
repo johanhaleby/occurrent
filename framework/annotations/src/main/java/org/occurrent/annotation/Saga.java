@@ -214,6 +214,10 @@ public @interface Saga {
      * {@link Catchup#FROM_EVENT_STORE} (the default) replays history once and hands over,
      * {@link Catchup#NONE} goes straight to the live feed and needs no event store at all. Setting this on a
      * {@link Source#EVENT_STORE} saga is rejected, since that saga chooses its history with {@link #startAt()}.
+     * <p>
+     * A start that finds the stored catch-up marker skips the replay, so a rebuild needs a new {@link #id()}. That new
+     * id replays the whole history into the saga, and every instance its TTL removed is recreated from its start event
+     * and dispatches its commands again. Keep completed instances for as long as the history a rebuild replays.
      */
     Catchup catchup() default Catchup.FROM_EVENT_STORE;
 

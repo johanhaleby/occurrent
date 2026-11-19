@@ -7,6 +7,11 @@ Date: 2026-07-18
 Accepted. The push subscription model and the v1 replay-then-push catch-up (broker owns live-resume) are
 implemented. Broker-independent resume (v2) is a deliberate non-goal, see the section below.
 
+Amended by [ADR 179](0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md) for the
+reactor stack. There the catch-up marker is a position that a start resumes after. The one-shot catch-up-complete
+marker, the one-time catch-up run once per subscription id, and the catch-up that always replays from the beginning
+hold on the blocking stack only.
+
 ## Context
 
 A projection built with the Projection DSL (ADR 58) or declared with `@Projection` (ADR 59) is fed only by a

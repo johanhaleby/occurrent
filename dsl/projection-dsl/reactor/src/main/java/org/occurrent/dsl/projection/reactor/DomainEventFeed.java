@@ -71,6 +71,19 @@ import java.util.function.Predicate;
  * share it, and a projection that keeps failing would hold up every projection behind it. Declare one feed per
  * projection, each fed by its own queue. See ADR 90.
  * <p>
+ * Given a {@link CheckpointStorage}, a later catch-up of a projection can resume after a position an earlier catch-up
+ * stored as its catch-up marker. Without one, every catch-up replays the whole history. ADR 179's "What a reactor
+ * catch-up start replays" says what a start replays. The marker is stored under the projection's id alone, so a
+ * projection whose filter or logic changes is registered under a new id.
+ * <p>
+ * An event the projection's fold writes to the event store and feeds back through {@link #acceptAndWait(Object)} is an early copy,
+ * and it needs a durable path as well. Either the application's forwarder publishes it to the broker queue this feed's
+ * listener reads, or the fold feeds it again whenever the event that triggered it is delivered again, also when the
+ * write is already stored. Replicas of one projection share its catch-up marker, and another replica's catch-up can
+ * store a marker at or above an event this replica fed back and has not yet folded. Without either path, a projection
+ * that runs on more than one replica can lose such an event, and ADR 179's "Fed-back events on the reactor stack"
+ * lists when.
+ * <p>
  * The {@code occurrent.subscription.catchup-then-live.*} properties do <strong>not</strong> reach this feed. Your
  * application declares this bean, so tune its catch-up by passing {@link CatchupThenLiveOptions} to the constructor.
  */
@@ -343,9 +356,10 @@ public final class DomainEventFeed<E> {
      * {@link RoutingOutcome#DELIVERED}: delivery is still at-least-once overall, so the fold itself must stay
      * idempotent, the de-dup cache {@link CatchupThenLiveOptions} bounds absorbs only the replay-to-live overlap
      * this handover already tracks, not an unbounded broker redelivery window. For a {@link #catchUpAll()}/
-     * {@link #catchUp(String)} registration, nothing is lost when a {@link RoutingOutcome#DEFERRED} event is never
-     * redelivered either: the completion marker is never recorded for an interrupted attempt, so the next
-     * {@link #catchUpAll()} replays the whole history again, including this event, from the store. That guarantee
+     * {@link #catchUp(String)} registration, an interrupted attempt writes no catch-up marker. A
+     * {@link RoutingOutcome#DEFERRED} event after the marker a later catch-up reads, or any such event when it reads
+     * none, comes back from the store even when the broker never delivers it again, and one at or below that marker
+     * comes back only through the broker. That guarantee
      * does not extend to a {@link #goLive(String)} registration, which has no store replay behind it at all
      * (see {@link #goLive(String)}'s own javadoc). A {@link RoutingOutcome#DEFERRED} event there is only safe if
      * the caller's own source, the broker or listener feeding this method, actually redelivers it. Losing it there
@@ -480,7 +494,7 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Run the one-time catch-up of the registered projection. The returned {@link Mono} completes once it has caught
+     * Run the catch-up of the registered projection. The returned {@link Mono} completes once it has caught
      * up and gone live, and fails with an {@link IllegalStateException} when nothing is registered. It used to complete
      * empty in that case, which meant a feed nobody registered on caught up "successfully" and then silently fed
      * nothing.
@@ -503,10 +517,10 @@ public final class DomainEventFeed<E> {
 
     /**
      * Stop a catch-up replay that is still in flight, so a shutting-down application does not leave one folding into
-     * a store that is closing with it. The replay notices at its next event and unwinds without recording the
-     * completion marker, so the next start replays the whole history again. The {@link Mono} {@link #acceptAndWait(Object)}
-     * returned for an event waiting on a replay that started before the feed went live errors rather than completing
-     * when that replay notices the stop, so its listener does not acknowledge the event. A replay with no event left
+     * a store that is closing with it. The replay notices at its next event and unwinds without writing the catch-up
+     * marker. The {@link Mono} {@link #acceptAndWait(Object)} returned for an event waiting on a replay that started
+     * before the feed went live errors rather than completing when that replay notices the stop, so its listener does
+     * not acknowledge the event. A replay with no event left
      * to hand to the projection does not notice it, see {@link CatchupProjectionFeed#stopCatchUp()}, and the feed goes
      * live and folds the event. One waiting on a replay started after {@link #goLive(String)} completes once the event
      * is folded, since the feed still applies the events that arrived while that replay ran.
@@ -534,7 +548,7 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Run the one-time catch-up of the single projection registered under {@code id}. Use this instead of
+     * Run the catch-up of the single projection registered under {@code id}. Use this instead of
      * {@link #catchUpAll()} when a projection is registered well after the others on this feed already went live, so
      * that catching it up does not re-run the catch-up of a projection that already ran it.
      *
@@ -560,10 +574,9 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Go live without a catch-up: skip the one-time replay for the single projection registered under {@code id}.
+     * Go live without a catch-up: skip the replay for the single projection registered under {@code id}.
      * Use this instead of {@link #catchUp(String)} when this feed's events are not in the local event store, so
-     * there is nothing to replay. No completion marker is recorded, so a later {@link #catchUp(String)} on the same
-     * projection still replays the full history.
+     * there is nothing to replay. No catch-up marker is written.
      * <p>
      * The lookup happens when the returned {@link Mono} is subscribed, the same as {@link #catchUp(String)}. An id
      * that matches nothing fails the {@link Mono} with an {@link IllegalArgumentException} rather than throwing here.
