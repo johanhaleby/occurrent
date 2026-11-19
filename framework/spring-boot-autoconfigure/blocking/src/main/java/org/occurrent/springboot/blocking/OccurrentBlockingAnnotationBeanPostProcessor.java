@@ -360,8 +360,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // service, and a synchronous handler that registers after a write never sees it. The scan registers every handler
     // and holds back every asynchronous start, the drain registers what other threads built meanwhile, and only then
     // does the gate open and the held-back starts run, in the order they registered, each WAIT_UNTIL_STARTED one
-    // finishing its replay before the next starts. A bean that would register a new synchronous handler after the gate
-    // opened, such as one a replay builds for the first time, fails its creation, see StartupWriteAdmission.
+    // finishing its replay before the next starts. With both stacks' post-processors in the context, the held-back
+    // starts of both run once the second scan opened its gate, see StartupGap. A bean that would register a new
+    // synchronous handler after the gate opened, such as one a replay builds for the first time, fails its creation,
+    // see StartupWriteAdmission.
     @Override
     public void afterSingletonsInstantiated() {
         synchronized (registrationLock) {
@@ -377,12 +379,17 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             } while (!writeAdmission.openIfNothingLeft(builtWhileScanning::isEmpty));
             scanningThread = null;
         }
-        startupSubscribes.start();
+        StartupGap.startHeldBackOnceEveryGapAdmitsWrites(this, applicationContext.getBeanProvider(StartupGap.class).orderedStream().toList());
     }
 
     @Override
     public boolean admitsWrite() {
         return writeAdmission.admitsWrite();
+    }
+
+    @Override
+    public void startHeldBack() {
+        startupSubscribes.start();
     }
 
     // The first synchronous handler type declares that isn't registered under the name the scan registers beanName

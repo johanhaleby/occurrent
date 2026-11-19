@@ -629,6 +629,12 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
     }
 
     private static final class FailingOnceDispatcher implements SynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private @Nullable Throwable failure;
 
         FailingOnceDispatcher(Throwable failure) {
@@ -651,6 +657,12 @@ class GenericDcbApplicationServiceFailureAfterWriteTest {
     }
 
     private static final class RecordingDispatcher implements SynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final List<String> dispatchedEventIds = new ArrayList<>();
 
         @Override

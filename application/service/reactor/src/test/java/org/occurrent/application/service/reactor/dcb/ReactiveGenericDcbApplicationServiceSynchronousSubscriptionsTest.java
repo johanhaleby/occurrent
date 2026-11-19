@@ -208,6 +208,12 @@ class ReactiveGenericDcbApplicationServiceSynchronousSubscriptionsTest {
     }
 
     private static final class RegimeRecordingDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private @Nullable Boolean toldTransactional;
 
         @Override

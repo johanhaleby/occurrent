@@ -192,6 +192,12 @@ class SpringReactiveTransactionExecutorFailureAfterWriteTest {
 
     // Fails the first dispatch, which would make a second attempt succeed if the retry ran the command again
     private static final class FailingOnceDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final AtomicBoolean failed = new AtomicBoolean();
         private final RuntimeException failure;
 

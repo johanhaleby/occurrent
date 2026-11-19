@@ -366,6 +366,12 @@ class SnapshotDcbDeciderApplicationServiceTest {
         AtomicBoolean refuseAfterAppend = new AtomicBoolean();
         DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(criteria(), Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by a synchronous subscription (test double)");
         SynchronousEventDispatcher refusingDispatcher = new SynchronousEventDispatcher() {
+
+            @Override
+            public WriteCheck beforeWrite() {
+                return WriteCheck.NONE;
+            }
+
             @Override
             public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
                 if (refuseAfterAppend.get()) {
@@ -411,6 +417,12 @@ class SnapshotDcbDeciderApplicationServiceTest {
         AtomicBoolean callOtherService = new AtomicBoolean();
         Function<List<DomainEvent>, List<DomainEvent>> otherServicesFunction = events -> List.of();
         SynchronousEventDispatcher dispatcherCallingOtherService = new SynchronousEventDispatcher() {
+
+            @Override
+            public WriteCheck beforeWrite() {
+                return WriteCheck.NONE;
+            }
+
             @Override
             public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
                 if (callOtherService.get()) {
@@ -614,6 +626,12 @@ class SnapshotDcbDeciderApplicationServiceTest {
             }
         };
         SynchronousEventDispatcher dispatcherWithoutEffect = new SynchronousEventDispatcher() {
+
+            @Override
+            public WriteCheck beforeWrite() {
+                return WriteCheck.NONE;
+            }
+
             @Override
             public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
             }

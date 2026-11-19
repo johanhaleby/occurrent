@@ -27,6 +27,9 @@ other sections compile fine and behave differently, so read them first.
   record component. **Breaks the build** if you use a record pattern over it.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
+- [A synchronous event dispatcher you implement breaks on `beforeWrite()`](#a-synchronous-event-dispatcher-you-implement-breaks-on-beforewrite).
+  **Breaks the build** if you implement `SynchronousEventDispatcher` or `ReactiveSynchronousEventDispatcher` yourself,
+  and an implementation compiled against 0.34.0 throws `AbstractMethodError`.
 - [A record pattern over `NativeMongoSubscription` stops compiling](#a-record-pattern-over-nativemongosubscription-stops-compiling).
   `NativeMongoSubscription` gains a third record component. **Breaks the build** if you use a record pattern over it.
 - [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
@@ -211,6 +214,9 @@ other sections compile fine and behave differently, so read them first.
   starts live, `@Projection` and `@Saga` by default among them, gets what is written directly to the event store
   while the application starts. A write while the synchronous subscription model is stopped, or one a paused
   synchronous subscription matches, is refused, also without a starter. Compiles unchanged.
+- [A synchronous event dispatcher you implement breaks on `beforeWrite()`](#a-synchronous-event-dispatcher-you-implement-breaks-on-beforewrite).
+  **Breaks the build** if you implement `SynchronousEventDispatcher` or `ReactiveSynchronousEventDispatcher` yourself,
+  and an implementation compiled against 0.34.0 throws `AbstractMethodError`.
 - [A synchronous handler the startup scan can't see fails the creation of its bean](#a-synchronous-handler-the-startup-scan-cant-see-fails-the-creation-of-its-bean).
   A `@Lazy` bean whose declared type hides its synchronous handler, created after the startup scan, throws an
   `IllegalStateException`. Compiles unchanged.
@@ -2737,7 +2743,8 @@ is when it subscribes, which is once the startup scan is done, in these cases:
 - The application uses neither MongoDB starter. Only those two turn where the event store is into a checkpoint, with
   the internal `LiveStartCheckpoints` bean they declare.
 - It would store that position as its first checkpoint, which every live start but `NOW` with
-  `resumeBehavior = SAME_AS_START_AT` does, and the context doesn't have exactly one `CheckpointStorage` bean.
+  `resumeBehavior = SAME_AS_START_AT` does, and Spring can't pick one `CheckpointStorage` bean, as it does with a
+  single one or a `@Primary` one among several.
 
 Such a handler misses an event written directly to the event store while the scan runs, for example from the
 `@PostConstruct` method of a bean the scan creates. In 0.34.0 it subscribed as the scan registered it, so it got that
@@ -2773,7 +2780,9 @@ write through the application service runs the synchronous handlers.
 
 The application service also throws `WriteRefusedException` for a write while the synchronous subscription model is
 stopped and has a handler registered, and for a write whose events match a paused synchronous subscription. That
-holds with or without a starter. In 0.34.0 that write was stored and the stopped or paused handler never got its
+holds with or without a starter, as long as a dispatcher you implement yourself passes `beforeWrite()` on, see
+[A synchronous event dispatcher you implement breaks on `beforeWrite()`](#a-synchronous-event-dispatcher-you-implement-breaks-on-beforewrite).
+In 0.34.0 that write was stored and the stopped or paused handler never got its
 events. The match uses the stream id and the stream version that the write gives the events, so a filter on either
 one works. A filter on the position or on the append id can't match before the event store writes the events, so a
 paused subscription with such a filter doesn't stop the write.
@@ -2853,6 +2862,40 @@ through for as long as Spring keeps the test context cached, so every test class
 behaviour.
 
 In the application, resume a paused synchronous subscription before writing events it matches, or cancel it.
+
+## A synchronous event dispatcher you implement breaks on `beforeWrite()`
+
+`SynchronousEventDispatcher` in `org.occurrent.application.service.blocking` and `ReactiveSynchronousEventDispatcher`
+in `org.occurrent.application.service.reactor` gain an abstract method:
+
+```java
+WriteCheck beforeWrite();
+```
+
+A class that implements either interface doesn't compile until it implements the method. A class compiled against
+0.34.0 and not compiled again throws `AbstractMethodError` when the application service calls the method. The
+application service calls it once per write, before it reads anything. `SynchronousSubscriptionModel` answers with the
+refusal and the wait that
+[A write through the application service is refused while the application starts](#a-write-through-the-application-service-is-refused-while-the-application-starts)
+describes.
+
+### What to do
+
+A dispatcher that passes the written events on to a `SynchronousSubscriptionModel`, or to another dispatcher, passes
+`beforeWrite()` on as well:
+
+```java
+@Override
+public WriteCheck beforeWrite() {
+    return synchronousSubscriptionModel.beforeWrite();
+}
+```
+
+`WriteCheck.NONE` is right only for a dispatcher that never wraps a model that can be stopped or paused. There's no
+default implementation, because a dispatcher that wraps the model and doesn't pass the call on lets a write through
+while the model is stopped or a matching subscription is paused, and that handler never gets its events. For the same
+reason the rewrite recipe doesn't add the method, since a generated `return WriteCheck.NONE` would bring that loss
+back.
 
 ## A synchronous handler the startup scan can't see fails the creation of its bean
 

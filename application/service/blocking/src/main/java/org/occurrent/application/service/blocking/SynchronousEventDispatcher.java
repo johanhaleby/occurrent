@@ -65,13 +65,14 @@ public interface SynchronousEventDispatcher {
      * written when either throws. The application service closes it once the write and its dispatch are done or have
      * failed, and a pause or a stop that came after this call waits for that.
      * <p>
-     * The default refuses nothing.
+     * A dispatcher that passes the written events on to a subscription model passes this on too. Otherwise a write
+     * goes through while the model is stopped or a matching subscription is paused, and that handler never gets its
+     * events. A dispatcher with nothing to refuse returns {@link WriteCheck#NONE}. There's no default, so a
+     * dispatcher written for an earlier version doesn't compile until it answers.
      *
      * @return The check for the events of this write.
      */
-    default WriteCheck beforeWrite() {
-        return WriteCheck.NONE;
-    }
+    WriteCheck beforeWrite();
 
     /**
      * The check {@link #beforeWrite()} returns for the events of one write.

@@ -123,10 +123,11 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         // executor is entered only when synchronous dispatch must commit atomically with the write; otherwise the
         // write keeps exactly its prior semantics and applications without synchronous subscriptions pay no transaction
         // overhead. The side-effect is composed after the retry so it runs once on success, not per attempt.
-        return Mono.defer(() -> {
-            // Asked per subscription and before anything is read, see beforeWrite(), so a Mono built before a stop or
-            // before the first synchronous handler registered answers for the moment it runs
-            ReactiveSynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
+        // Asked per subscription and before anything is read, see beforeWrite(), so a Mono built before a stop or before
+        // the first synchronous handler registered answers for the moment it runs. Closed before the result or the
+        // error reaches the subscriber, and when building the rest throws, so a pause or a stop that the subscriber
+        // makes once the write is done doesn't wait for it
+        return Mono.using(() -> synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite(), writeCheck -> {
             boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
             FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
             // Asked inside the transaction, since the answer depends on what's open, and before the write, so a failure here undoes nothing
@@ -175,10 +176,8 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                             return Mono.just(result.writeResult());
                         }
                         return sideEffect.apply(result.newDomainEvents()).thenReturn(result.writeResult());
-                    })
-                    // A pause or a stop meanwhile waits for this, or applies now when it couldn't block
-                    .doFinally(__ -> writeCheck.close());
-        });
+                    });
+        }, ReactiveSynchronousEventDispatcher.WriteCheck::close, true);
     }
 
     private Mono<Boolean> reportsTransaction(boolean dispatchSynchronously) {

@@ -17,6 +17,9 @@
 
 package org.occurrent.springboot.common.internal;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Internal, not part of the public API. The time between the first bean the context creates and the end of the
  * annotation post-processor's startup scan, which registers every handler. A synchronous handler has no replay, so a
@@ -31,4 +34,29 @@ public interface StartupGap {
      * @return {@code false} until the startup scan has registered every handler, then {@code true} for good.
      */
     boolean admitsWrite();
+
+    /**
+     * Runs the asynchronous subscriptions the startup scan held back. Called once every gap in the context admits writes,
+     * and a second call runs nothing.
+     */
+    void startHeldBack();
+
+    /**
+     * Runs the held-back subscriptions of every gap in the context, {@code self} included, when every one of them admits
+     * writes, and otherwise nothing. A context with both the blocking and the reactor post-processor has two gaps, and a
+     * write through either application service is refused while one of them is closed, so a replay that writes through
+     * one may start only once both scans have opened theirs. The post-processor whose gap opens last starts them all.
+     *
+     * @param self              The gap whose scan just opened it
+     * @param gapsInTheContext  Every gap the context holds, in the order their held-back subscriptions start
+     */
+    static void startHeldBackOnceEveryGapAdmitsWrites(StartupGap self, List<StartupGap> gapsInTheContext) {
+        List<StartupGap> gaps = new ArrayList<>(gapsInTheContext);
+        if (!gaps.contains(self)) {
+            gaps.add(self);
+        }
+        if (gaps.stream().allMatch(StartupGap::admitsWrite)) {
+            gaps.forEach(StartupGap::startHeldBack);
+        }
+    }
 }

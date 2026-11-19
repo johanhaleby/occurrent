@@ -37,6 +37,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.internal.LiveStartCheckpoints;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -64,6 +65,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * The reactive counterpart of {@code StartBoundaryEventStoreChoiceMongoTest}: the start boundary of a handler that
@@ -100,6 +102,25 @@ class ReactiveStartBoundaryEventStoreChoiceMongoTest {
 
             assertThat(Observed.liveStartsTurnedIntoCheckpoints).as("live starts the handler's first checkpoint was made of")
                     .containsOnly(primaryLiveStart);
+        }
+    }
+
+    @Test
+    void a_creation_cycle_at_the_first_boundary_callback_does_not_fail_startup() {
+        ConfigurableApplicationContext[] context = new ConfigurableApplicationContext[1];
+        try {
+            assertThatCode(() -> context[0] = boot(DependentPrimaryStoreApplication.class, "dependent-primary"))
+                    .as("starting an application whose primary store is created for the first store's boundary callback and needs that store")
+                    .doesNotThrowAnyException();
+
+            String primaryLiveStart = Observed.firstLiveStart.get("primary");
+            assertThat(primaryLiveStart).as("the live start the primary store reported when it was created").isNotNull();
+            assertThat(Observed.liveStartsTurnedIntoCheckpoints).as("live starts the handler's first checkpoint was made of")
+                    .containsOnly(primaryLiveStart);
+        } finally {
+            if (context[0] != null) {
+                context[0].close();
+            }
         }
     }
 
@@ -230,6 +251,23 @@ class ReactiveStartBoundaryEventStoreChoiceMongoTest {
         @Bean
         @Primary
         RecordingMongoEventStore primaryEventStore(ReactiveMongoTemplate template, EventStoreConfig config) {
+            moveTheClusterTimeOn(template);
+            return new RecordingMongoEventStore("primary", template, config);
+        }
+    }
+
+    // The first store the starter sees is the auto-configured one, and its callback creates the @Primary store. The
+    // @Primary store needs the auto-configured one, which is still in creation at that point.
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrentReactive
+    @Import(Probe.class)
+    static class DependentPrimaryStoreApplication {
+
+        @Bean
+        @Primary
+        RecordingMongoEventStore primaryEventStore(ReactiveMongoTemplate template, EventStoreConfig config,
+                                                   @Qualifier("occurrentReactorMongoEventStore") ReactorMongoEventStore autoConfigured) {
             moveTheClusterTimeOn(template);
             return new RecordingMongoEventStore("primary", template, config);
         }

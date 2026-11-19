@@ -141,10 +141,11 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
-        return Mono.defer(() -> {
-            // Asked per subscription and before anything is read, see beforeWrite(), so a Mono built before a stop or
-            // before the first synchronous handler registered answers for the moment it runs
-            ReactiveSynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
+        // Asked per subscription and before anything is read, see beforeWrite(), so a Mono built before a stop or before
+        // the first synchronous handler registered answers for the moment it runs. Closed before the result or the
+        // error reaches the subscriber, and when building the rest throws, so a pause or a stop that the subscriber
+        // makes once the write is done doesn't wait for it
+        return Mono.using(() -> synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite(), writeCheck -> {
             boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
             FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
             // Given what the executor set up for the attempt the read runs in
@@ -202,10 +203,8 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                             return Mono.just(result.appendResult());
                         }
                         return Mono.defer(() -> sideEffect.apply(result.newDomainEvents())).thenReturn(result.appendResult());
-                    })
-                    // A pause or a stop meanwhile waits for this, or applies now when it couldn't block
-                    .doFinally(__ -> writeCheck.close());
-        });
+                    });
+        }, ReactiveSynchronousEventDispatcher.WriteCheck::close, true);
     }
 
     private Mono<Boolean> reportsTransaction(boolean dispatchSynchronously) {

@@ -62,16 +62,17 @@ public interface ReactiveSynchronousEventDispatcher {
      * the chain with the events the command decided on, before they are written, and throws one when a handler that
      * would never see them matches them. Nothing is written when either throws. A refusal is an error signal, so a
      * caller that subscribes without an error consumer stores nothing and gets no exception. The application service
-     * closes the check when the {@link Mono} terminates or is cancelled, and a pause or a stop that came after this
-     * call waits for that, or applies then when it can't block.
+     * closes the check before the {@link Mono} emits its result or its error, or when it's cancelled, and a pause or a
+     * stop that came after this call waits for that, or applies then when it can't block.
      * <p>
-     * The default refuses nothing.
+     * A dispatcher that passes the written events on to a subscription model passes this on too. Otherwise a write
+     * goes through while the model is stopped or a matching subscription is paused, and that handler never gets its
+     * events. A dispatcher with nothing to refuse returns {@link WriteCheck#NONE}. There's no default, so a
+     * dispatcher written for an earlier version doesn't compile until it answers.
      *
      * @return The check for the events of this write.
      */
-    default WriteCheck beforeWrite() {
-        return WriteCheck.NONE;
-    }
+    WriteCheck beforeWrite();
 
     /**
      * The check {@link #beforeWrite()} returns for the events of one write. It must not block, since it runs inside

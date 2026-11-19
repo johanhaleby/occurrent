@@ -212,6 +212,12 @@ class GenericApplicationServiceSynchronousSubscriptionsTest {
     }
 
     private static final class RecordingDispatcher implements SynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final List<CloudEvent> dispatched = new ArrayList<>();
         private boolean hasSubscriptions = true;
 
@@ -227,6 +233,12 @@ class GenericApplicationServiceSynchronousSubscriptionsTest {
     }
 
     private static final class RegimeRecordingDispatcher implements SynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private @Nullable Boolean toldTransactional;
 
         @Override

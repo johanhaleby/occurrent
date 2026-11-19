@@ -231,14 +231,14 @@ begins there. That answers the question #979 left open, whether `@Projection`, `
 the startup writes too. They start live the same way, and a `@Projection` and a `@Saga` start at `DEFAULT` unless
 they set `startAt`.
 
-- With exactly one `CheckpointStorage`, the starter stores the live start as the subscription's first checkpoint,
-  with `CheckpointWriteCondition.ifAbsent()`, and starts it at the subscription model's default, which resumes from
-  that checkpoint. A storage that answers `false` from `evaluatesWriteConditionsFor` gets an unconditional write with
-  a warning instead, as `DurableSubscriptionModel` gives it, since refusing would take out a storage that worked in
-  0.34.0.
+- With a `CheckpointStorage` that Spring can pick, a single one or a `@Primary` one among several, the starter stores
+  the live start as the subscription's first checkpoint, with `CheckpointWriteCondition.ifAbsent()`, and starts it at
+  the subscription model's default, which resumes from that checkpoint. A storage that answers `false` from
+  `evaluatesWriteConditionsFor` gets an unconditional write with a warning instead, as `DurableSubscriptionModel`
+  gives it, since refusing would take out a storage that worked in 0.34.0.
 - At `NOW` with `resumeBehavior = SAME_AS_START_AT`, nothing is stored and the live subscription model starts there.
 - A subscription that has a checkpoint stored already, or whose start the application's `SubscriptionResumePoints`
-  gives, starts as in 0.34.0. So does any other one without exactly one `CheckpointStorage`.
+  gives, starts as in 0.34.0. So does any other one when Spring can't pick a `CheckpointStorage`.
 
 A subscription starts where the event store is when it subscribes, which decision point 3 places after the startup
 scan, also in three cases where the starter has no live start to give it. On the reactor starter a bean built on a Reactor non-blocking thread reads none,
@@ -271,9 +271,10 @@ factory writes while it builds the product.
 The post-processors keep each bean's live start from before its initialization to after it by the bean instance, not
 by its name, so two concurrent creations of one prototype bean each start from their own.
 
-A `@SynchronousSubscription` on a bean built after startup registers once the bean's `@PostConstruct` method has run,
-and it has no replay. A write that method makes through the application service is stored, and that bean's own
-synchronous handler never gets it. 0.34.0 registered such a handler at the same point and behaved the same.
+A bean built after startup that declares a synchronous handler the scan didn't register fails its creation before its
+`@PostConstruct` method runs, see decision point 3, so that method writes nothing the handler would miss. 0.34.0
+registered such a handler once the bean's `@PostConstruct` method had run, and a write that method made through the
+application service was stored without reaching it.
 
 ### 3. A write through the application service waits for the synchronous handlers
 
@@ -281,9 +282,12 @@ Each post-processor registers every handler in one scan, which runs again until 
 registering a handler can build beans. Then it registers the handlers of the beans other threads built during the
 scan. A synchronous handler, `@SynchronousSubscription` and a synchronous `@Projection` or `@Snapshot`, registers
 during the scan. Every asynchronous handler is held back until both are done, a `@Saga`, a push projection and a
-domain feed's catch-up included. Then the post-processor admits writes and starts the held-back handlers on the
-thread that ran the scan, in the order it registered them, and each `WAIT_UNTIL_STARTED` replay ends before the next
-handler starts. So a write that a replay or a saga makes reaches every synchronous handler the scan registered. In
+domain feed's catch-up included. Then the post-processor admits writes and starts the held-back handlers on the thread
+that ran the scan, in the order it registered them, and each `WAIT_UNTIL_STARTED` replay ends before the next handler
+starts. A context with both starters' post-processors holds the handlers of both until the second has admitted writes,
+since `StartupWriteGate` refuses a write while either post-processor says no, and a replay that writes through the
+application service before then would fail the start. The post-processor whose scan ends last starts the held-back
+handlers of both. So a write that a replay or a saga makes reaches every synchronous handler the scan registered. In
 0.34.0 each handler started as the scan registered it, and a replay ran before the handlers registered after it. A
 subscription that starts live begins at the boundary of decision point 2 where there is one, so starting it later
 skips nothing.
@@ -291,11 +295,11 @@ skips nothing.
 Where decision point 2 gives no boundary, a subscription that starts live begins where the event store is when it
 subscribes, which is now after the scan. Decision point 2 gives none for a bean built on a Reactor non-blocking
 thread, for an event store bean behind a proxy without a single target, for an application with neither MongoDB
-starter, and, except at `NOW` with `resumeBehavior = SAME_AS_START_AT`, for a context without exactly one
-`CheckpointStorage`. Such a subscription misses an event written directly to the event store while the scan runs,
-for example from the `@PostConstruct` method of a bean the scan creates, which 0.34.0 delivered when that bean was
-created after the subscription had subscribed. A write through the application service can't be made then, since the
-starters refuse it.
+starter, and, except at `NOW` with `resumeBehavior = SAME_AS_START_AT`, for a context where Spring can't pick a
+`CheckpointStorage`. Such a subscription misses an event written directly to the event store while the scan runs, for
+example from the `@PostConstruct` method of a bean the scan creates, which 0.34.0 delivered when that bean was created
+after the subscription had subscribed. A write through the application service can't be made then, since the starters
+refuse it.
 
 Until then the starters refuse every write through the application service, from any thread. They wrap the
 synchronous dispatcher of the `ApplicationService` and `DcbApplicationService` they create in `StartupWriteGate`. Its

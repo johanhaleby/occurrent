@@ -39,14 +39,16 @@ import java.util.function.Supplier;
  * Whether a handler is registered is read again once the gate is open, so another instance of a prototype whose
  * handler registered at startup is built as usual.
  */
-public final class StartupWriteAdmission implements StartupGap {
+public final class StartupWriteAdmission {
 
     private volatile boolean open;
     private final Object lock = new Object();
     // Registrations counted by registrationStarts that haven't ended, read and changed only while holding lock
     private int registering;
 
-    @Override
+    /**
+     * @return {@code false} until the gate opens, then {@code true} for good
+     */
     public boolean admitsWrite() {
         return open;
     }

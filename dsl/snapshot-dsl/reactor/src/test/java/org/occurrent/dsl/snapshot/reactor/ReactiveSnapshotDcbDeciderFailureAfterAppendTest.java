@@ -162,6 +162,12 @@ class ReactiveSnapshotDcbDeciderFailureAfterAppendTest {
     }
 
     private static final class FailingOnceDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final AtomicReference<@Nullable RuntimeException> failure = new AtomicReference<>();
 
         void failWith(RuntimeException failure) {
