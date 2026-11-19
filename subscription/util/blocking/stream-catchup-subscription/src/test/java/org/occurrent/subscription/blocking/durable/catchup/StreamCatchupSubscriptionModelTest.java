@@ -2777,8 +2777,7 @@ class StreamCatchupSubscriptionModelTest {
 
             Thread cancel = new Thread(() -> subscription.cancelSubscription("subscription"));
             cancel.start();
-            await().atMost(Duration.ofSeconds(5)).until(() -> !cancel.isAlive() || Arrays.stream(cancel.getStackTrace()).anyMatch(frame -> frame.getMethodName().equals("awaitUninterruptibly")
-                    && cancel.getState() != Thread.State.RUNNABLE));
+            await().atMost(Duration.ofSeconds(5)).until(() -> !cancel.isAlive() || cancel.getState() == Thread.State.WAITING);
             assertThat(cancel.isAlive()).as("the cancel is still waiting while the store is held at the hook").isTrue();
             assertThat(saves.get()).as("the stores that have been made while the first is held at the hook").isZero();
 
@@ -3092,9 +3091,9 @@ class StreamCatchupSubscriptionModelTest {
             assertThat(firstCallEntered.await(5, TimeUnit.SECONDS)).as("the first replay's call is in the action").isTrue();
             firstCancel = Call.start(() -> subscription.cancelSubscription("subscription"));
             assertThat(firstCancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned while the replay's call is still in the action").isTrue();
-            subscription.subscribe("subscription", StartAtTime.beginningOfTime(), action);
+            Subscription secondReplay = subscription.subscribe("subscription", StartAtTime.beginningOfTime(), action);
             subscription.cancelSubscription("subscription");
-            Thread.sleep(300);
+            assertThat(secondReplay.waitUntilStarted(Duration.ofSeconds(5))).as("the second replay, which never reached the action, has ended").isFalse();
 
             // When
             subscription.subscribe("subscription", StartAtTime.beginningOfTime(), action);
@@ -3110,6 +3109,67 @@ class StreamCatchupSubscriptionModelTest {
             releaseFirstCall.countDown();
             if (firstCancel != null) {
                 firstCancel.join();
+            }
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void a_pause_and_a_resume_while_a_live_event_waits_for_an_ended_replay_do_not_let_a_second_live_event_call_the_action_beside_the_replay() throws InterruptedException {
+        // Given
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        NameDefined history = nameDefined("history");
+        NameDefined live1 = nameDefined("live1");
+        NameDefined live2 = nameDefined("live2");
+        write(eventStore, history);
+        CheckpointAwareInMemorySubscriptionModel liveModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(liveModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        AtomicInteger inTheAction = new AtomicInteger();
+        AtomicInteger mostInTheAction = new AtomicInteger();
+        AtomicInteger calls = new AtomicInteger();
+        CountDownLatch replayCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplayCall = new CountDownLatch(1);
+        Consumer<CloudEvent> action = cloudEvent -> {
+            mostInTheAction.accumulateAndGet(inTheAction.incrementAndGet(), Math::max);
+            try {
+                received.add(cloudEvent.getId());
+                if (calls.incrementAndGet() == 1) {
+                    replayCallEntered.countDown();
+                    awaitLatch(releaseReplayCall);
+                }
+            } finally {
+                inTheAction.decrementAndGet();
+            }
+        };
+        Call cancel = null;
+
+        try {
+            subscription.subscribe("subscription", StartAtTime.beginningOfTime(), action);
+            assertThat(replayCallEntered.await(5, TimeUnit.SECONDS)).as("the replay's call is in the action").isTrue();
+            cancel = Call.start(() -> subscription.cancelSubscription("subscription"));
+            assertThat(cancel.returnsWithin(Duration.ofSeconds(5))).as("the cancel returned while the replay's call is still in the action").isTrue();
+            subscription.subscribe("subscription", StartAt.now(), action);
+            write(eventStore, live1);
+            await().atMost(Duration.ofSeconds(5)).until(() -> liveCallWaitsForTheEndedReplays(liveModel));
+
+            // When
+            subscription.pauseSubscription("subscription");
+            subscription.resumeSubscription("subscription");
+            write(eventStore, live2);
+            assertThat(received).as("the events the action was given while the replay's call is still in it").containsExactly(history.eventId());
+            releaseReplayCall.countDown();
+
+            // Then
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).as("the events the action was given").containsExactly(history.eventId(), live1.eventId(), live2.eventId()));
+            assertThat(mostInTheAction.get()).as("the most calls that were in the action at once").isEqualTo(1);
+        } finally {
+            releaseReplayCall.countDown();
+            if (cancel != null) {
+                cancel.join();
             }
             subscription.shutdown();
         }

@@ -596,16 +596,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             return action;
         }
         // The record the subscribe that is handing the id to the live delegate put, so a later subscribe of the same
-        // id doesn't count as this subscription still being wanted
+        // id doesn't count as this subscription still being wanted. Read on the subscribing thread under the claim and
+        // the handover lock, after the put in subscribeAndRemember. Null only when markShuttingDown cleared it in
+        // between, and the subscription is then gone
         @Nullable Subscribed made = subscribed.get(subscriptionId);
         return event -> acceptAfterEndedReplays(subscriptionId, made, endedReplaysReturned, action, event);
     }
 
-    // Whether the record made put for subscriptionId is still there, and only whether the id has a record when made is
-    // null
+    // Whether the record made put for subscriptionId is still there. Never when made is null, since a record a later
+    // subscribe put isn't this subscription
     private boolean isStillSubscribed(String subscriptionId, @Nullable Subscribed made) {
         Subscribed now = subscribed.get(subscriptionId);
-        return now != null && (made == null || now.isFromTheSameSubscribeAs(made));
+        return made != null && now != null && now.isFromTheSameSubscribeAs(made);
     }
 
     // Hands event to action once the replays have returned, and not at all once the subscription is no longer wanted
@@ -3478,8 +3480,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 attempt.replay.cancelled = true;
                 return attempt;
             });
-            // Waited for only by the child that runs the attempt, since the children share currentAttempt and a
-            // dispatcher cancels on each of them
+            // The action and the store waited for only by the child that runs the attempt, since the children share
+            // currentAttempt and a dispatcher cancels on each of them. Any child that finds the attempt records the
+            // dropped replay below, which is one shared record whichever child adds it
             if (cancelled != null && cancelled.owner == this && cancelled != CURRENT_ATTEMPT.get()) {
                 admitted = new ActionInFlight(subscriptionId, cancelled.actionReturned, cancelled.actionUnwanted);
                 storesUnderWay = cancelled.replay.storeUnderWay;
