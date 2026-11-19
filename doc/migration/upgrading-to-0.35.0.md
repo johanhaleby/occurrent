@@ -321,7 +321,9 @@ is gone from that instance's document after its next save. A document without th
 
 0.35.0 reads a document that 0.34.0 saved. 0.34.0 can't read an instance that 0.35.0 stored as `ACTIVE_MARKED`, and
 going back to 0.34.0 needs one step for those, as
-[the stored saga state for late versions](#stored-saga-state-1) describes.
+[the stored saga state for late versions](#stored-saga-state-1) describes. Stop every 0.34.0 node that runs
+sagas before any 0.35.0 node starts, and stop every 0.35.0 node before 0.34.0 starts again, as
+[Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) says.
 
 A failure record whose input is `position:N` was written for a position-only event. On an `ACTIVE` instance 0.35.0
 treats it as no record, so the next failure starts a fresh budget and the next successful delivery clears it.
