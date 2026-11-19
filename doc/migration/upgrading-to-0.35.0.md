@@ -1314,7 +1314,7 @@ MongoDB needs a replica set.
 
 `compareAndSave` and `compareAndSaveWithoutState` stay a single-document write each, and wait until a majority of the
 replica set has the write in its on-disk journal. When a majority doesn't acknowledge it within 10 seconds, the write
-throws, and the store's `RetryStrategy` tries it again. On a client with a `timeoutMS` above 0, where the driver sends
+throws, and outside a transaction of yours the store's `RetryStrategy` tries it again. On a client with a `timeoutMS` above 0, where the driver sends
 no `wtimeout`, your `timeoutMS` bounds each attempt instead. A write that timed out can still be on the primary. Reads
 at read concern `majority` don't return it until a majority has it, so the saga doesn't act on it before then.
 
@@ -1333,7 +1333,10 @@ throws an `IllegalStateException` on the first attempt that says it needs a repl
 enough. A strategy implemented another way runs its own loop and decides what it retries.
 
 Inside a MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your transaction
-instead of starting their own, and the store doesn't retry them. That is a Spring transaction run by a
+instead of starting their own. In such a transaction the store sends each read and write once, and a failure reaches
+you as MongoDB reported it. MongoDB aborts a transaction when an operation in it fails, so the same operation sent again
+in it fails too. 0.34.0 retried every read and write with the store's `RetryStrategy`, inside your transaction too.
+Retry by running your transaction again. That is a Spring transaction run by a
 `MongoTransactionManager`, a Spring transaction of another resource in which a template with
 `SessionSynchronization.ALWAYS` has started a MongoDB transaction, or a transaction on the session of a template from
 `MongoTemplate.withSession`. Your commit's write concern then decides whether they survive a failover. The store can't

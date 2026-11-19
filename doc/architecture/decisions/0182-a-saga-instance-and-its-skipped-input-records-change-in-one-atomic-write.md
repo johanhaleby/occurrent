@@ -143,6 +143,14 @@ transition it joined, and a failure reaches the caller, whose transaction should
 fails under a `MongoTransactionManager`, which the store marks rollback-only, and may keep the writes made before the
 failure in the other two cases, where it can't mark the transaction.
 
+Nor does the store retry any other read or write while a MongoDB transaction is bound to the factory. MongoDB aborts a
+transaction when an operation in it fails, so the same operation sent again in it fails too, and the caller would get
+that later failure in place of the first. The store checks for a bound transaction when a call starts, and, with a
+strategy built from `RetryStrategy.retry()`, again after a failure, since a template with
+`SessionSynchronization.ALWAYS` starts the transaction on the operation that fails. A strategy implemented another way
+runs its own loop, so only the first check reaches it. 0.34.0 retried every read and write, in a caller's transaction
+too.
+
 A MongoDB transaction bound to the factory while transaction synchronization is off, as a `MongoTransactionManager`
 with `SYNCHRONIZATION_NEVER` runs it, gives a database bound to no session, from `MongoDatabaseUtils` and from the
 template alike. A transition would still join it, since the store's transaction manager takes part in it and turns

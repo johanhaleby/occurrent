@@ -124,8 +124,10 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * {@link RetryStrategy#retry()}, as the default is, any other failure of such a transaction is thrown at once, and so is
  * a server's refusal of a transaction or of journaling on any call.
  * <p>
- * Called inside a MongoDB transaction of the caller's on the same {@link MongoDatabaseFactory}, those writes join it and
- * are not retried. That is a Spring transaction that synchronizes its resources, as a {@link MongoTransactionManager}
+ * Called inside a MongoDB transaction of the caller's on the same {@link MongoDatabaseFactory}, those writes join it.
+ * Inside such a transaction the store sends each read and write once, and a failure reaches the caller as MongoDB
+ * reported it, since MongoDB has aborted the transaction on the server and the same operation sent again in it would
+ * fail too. Only the caller can run the transaction again. That is a Spring transaction that synchronizes its resources, as a {@link MongoTransactionManager}
  * does by default, a Spring transaction of another resource in which a template with
  * {@code SessionSynchronization.ALWAYS} has started a MongoDB transaction, or a transaction on the session of a template
  * from {@link MongoTemplate#withSession}. The commit of that transaction then decides whether they survive a failover,
@@ -133,7 +135,11 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * failure may keep what the store wrote before it. A {@code MongoTransactionManager} with
  * {@code SYNCHRONIZATION_NEVER} binds its transaction with synchronization off, so a template hands out a database bound
  * to no session. In such a transaction each call of the store takes part in it with the store's own transaction, which
- * turns synchronization on for the call, so the call reads and writes in that transaction too.
+ * turns synchronization on for the call, so the call reads and writes in that transaction too. The single-document
+ * writes and the scans go through the template, so a template with {@code SessionSynchronization.NEVER} sends them
+ * outside a {@code MongoTransactionManager} transaction, and the store doesn't retry them there either. A {@code RetryStrategy} you implement yourself runs its own loop, so with a
+ * template with {@code SessionSynchronization.ALWAYS} in a Spring transaction of another resource, it can send the
+ * operation that started the MongoDB transaction again.
  * <p>
  * Inside a transaction of the caller's, {@link #find} and {@link #findWithoutState} read at the transaction's snapshot,
  * which misses an instance written after the snapshot began. When the read finds no instance, the store inserts a
@@ -249,7 +255,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     /**
      * Creates a store for a core saga, whose state serializes with the application's {@code MongoConverter}.
      * A failing call to MongoDB is retried with exponential backoff from 100 ms up to 2 seconds, giving up after
-     * {@value #DEFAULT_MAX_ATTEMPTS} attempts.
+     * {@value #DEFAULT_MAX_ATTEMPTS} attempts. A call inside a MongoDB transaction isn't retried, as the class javadoc
+     * says.
      *
      * @param mongoOperations the {@link MongoOperations} used to read and write instance documents
      * @param collectionName  the collection the instances are stored in, which must not end in {@code _skipped_inputs}
@@ -283,7 +290,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     /**
      * Creates a store that retries a failing call to MongoDB with {@code retryStrategy} instead of the default.
-     * Pass {@link RetryStrategy#none()} to have every failure reach the caller on the first attempt.
+     * Pass {@link RetryStrategy#none()} to have every failure reach the caller on the first attempt. A call inside a
+     * MongoDB transaction isn't retried, as the class javadoc says.
      *
      * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
      * @param collectionName      the collection the instances are stored in, which must not end in {@code _skipped_inputs}
@@ -297,8 +305,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter, RetryStrategy retryStrategy) {
         Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
-        // A server that refuses the durability the store needs refuses it on every attempt, so it fails at once
-        this.retryStrategy = retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer));
+        // A server that refuses the durability the store needs refuses it on every attempt, so it fails at once. So does
+        // an operation that failed inside a MongoDB transaction, which the server has aborted, see retried(..)
+        this.retryStrategy = retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer) && !inMongoTransaction());
         // A transaction is run again only when MongoDB labels its failure transient, as the class javadoc says
         this.transactionRetry = retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer) && hasCause(failure, SpringMongoSagaStateStore::isTransientTransactionError));
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
@@ -377,8 +386,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (joinsCallersTransaction()) {
             return findInCallersTransaction(sagaId, query.get());
         }
-        Document found = retryStrategy.execute(() -> readInstance(query.get(), ReadConcern.MAJORITY));
-        return found != null ? found : retryStrategy.execute(() -> readInstance(query.get(), ReadConcern.LINEARIZABLE));
+        Document found = retried(() -> readInstance(query.get(), ReadConcern.MAJORITY));
+        return found != null ? found : retried(() -> readInstance(query.get(), ReadConcern.LINEARIZABLE));
     }
 
     // From the primary, on the database MongoDatabaseUtils hands out, which is bound to no session here. A template with
@@ -427,6 +436,23 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                || TransactionSynchronizationManager.isSynchronizationActive() && MongoDatabaseUtils.isTransactionActive(databaseFactory);
     }
 
+    // Outside a MongoDB transaction an operation that fails is sent again, with the store's RetryStrategy. Inside one,
+    // MongoDB aborts the transaction on the server when an operation in it fails, so the same operation sent again in it
+    // fails too, and the failure goes to the caller as it was thrown. The strategy's predicate reads inMongoTransaction()
+    // again after the failure, since a template with SessionSynchronization.ALWAYS starts the transaction on its first
+    // operation
+    private <T extends @Nullable Object> T retried(Supplier<T> operation) {
+        return inMongoTransaction() ? operation.get() : retryStrategy.execute(operation);
+    }
+
+    // A transaction is bound to the factory, the caller's, the store's own or one a template with
+    // SessionSynchronization.ALWAYS started, or the factory is bound to a session with an active transaction, as
+    // MongoTemplate.withSession gives. A bound transaction counts after the server aborted it, since its owner still has
+    // to end it
+    private boolean inMongoTransaction() {
+        return databaseFactory.isTransactionActive() || TransactionSynchronizationManager.hasResource(databaseFactory);
+    }
+
     // A MongoDB transaction bound to the factory while synchronization is off, as a MongoTransactionManager with
     // SYNCHRONIZATION_NEVER runs it, hands out a database bound to no session, so an operation would read and write
     // outside that transaction. The store's own transaction then takes part in the caller's and turns synchronization
@@ -462,10 +488,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                         return false;
                     }
                 };
-                return retryStrategy.execute(insert);
+                return retried(insert);
             }
             // A lost compare-and-set matches nothing rather than throwing, so the retry never sees it
-            return retryStrategy.execute(() -> writeDurably(collectionName, collection -> collection.replaceOne(versionIs(saga.sagaId(), expectedVersion), document)).getMatchedCount() > 0);
+            return retried(() -> writeDurably(collectionName, collection -> collection.replaceOne(versionIs(saga.sagaId(), expectedVersion), document)).getMatchedCount() > 0);
         });
     }
 
@@ -489,7 +515,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 throw new IllegalArgumentException("compareAndSaveWithoutState cannot insert saga " + saga.sagaId() + ", since it holds no state. Insert it with compareAndSave.");
             }
             Bson update = withoutState(saga);
-            return retryStrategy.execute(() -> writeDurably(collectionName, collection -> collection.updateOne(versionIs(saga.sagaId(), expectedVersion), update)).getMatchedCount() > 0);
+            return retried(() -> writeDurably(collectionName, collection -> collection.updateOne(versionIs(saga.sagaId(), expectedVersion), update)).getMatchedCount() > 0);
         });
     }
 
@@ -523,7 +549,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             // before it processes a timer, which is the authoritative read the fire acts on.
             project(query, SagaCodec.instanceFields());
             Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
-            return retryStrategy.execute(read).stream().map(this::toStoredSaga).toList();
+            return retried(read).stream().map(this::toStoredSaga).toList();
         });
     }
 
@@ -543,7 +569,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             // Projected like the due-timer query, so a page doesn't read the state of every instance it lists
             project(query, SagaCodec.instanceFields());
             Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
-            return retryStrategy.execute(read).stream().map(this::toStoredSaga).toList();
+            return retried(read).stream().map(this::toStoredSaga).toList();
         });
     }
 
@@ -563,7 +589,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     .limit(limit);
             query.fields().include(ID);
             Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
-            return retryStrategy.execute(read).stream().map(document -> document.getString(ID)).toList();
+            return retried(read).stream().map(document -> document.getString(ID)).toList();
         });
     }
 
@@ -584,7 +610,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     .with(Sort.by(Sort.Direction.ASC, SKIPPED_SEQ, SKIPPED_KEY))
                     .limit(limit);
             Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, skippedInputsCollectionName);
-            return retryStrategy.execute(read).stream().map(SpringMongoSagaStateStore::toSkippedInput).toList();
+            return retried(read).stream().map(SpringMongoSagaStateStore::toSkippedInput).toList();
         });
     }
 
@@ -797,13 +823,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             // replica set. A retry after a timed out attempt that deleted the document on the primary deletes nothing, and
             // MongoDB still waits for a majority to have everything the primary has before it returns, that deletion included
             Bson withoutQuarantineId = Filters.and(Filters.eq(ID, sagaId), Filters.eq(FAILURE_QUARANTINE_ID, null));
-            if (retryStrategy.execute(() -> writeDurably(collectionName, collection -> collection.deleteOne(withoutQuarantineId)).getDeletedCount()) > 0) {
+            if (retried(() -> writeDurably(collectionName, collection -> collection.deleteOne(withoutQuarantineId)).getDeletedCount()) > 0) {
                 return null;
             }
             // Read at the local read concern, so an instance whose insert is on the primary alone is still deleted
             Query exists = Query.query(where(ID).is(sagaId));
             exists.fields().include(ID);
-            if (retryStrategy.execute(() -> mongoOperations.findOne(primary(exists), Document.class, collectionName)) == null) {
+            if (retried(() -> mongoOperations.findOne(primary(exists), Document.class, collectionName)) == null) {
                 return null;
             }
             FindOneAndDeleteOptions quarantineIdOnly = new FindOneAndDeleteOptions().projection(Projections.include(FAILURE_QUARANTINE_ID));
