@@ -2369,8 +2369,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * event through are one step under the handover lock, and the action runs after the lock is released. A cancel or a
      * stop that takes effect before that step lets no event through, and one that takes effect after it waits up to a
      * second for the action to return. That cancel or stop first completes the stage this sets for the call through
-     * {@link UnwantedDelivery}, so an action that waits on it can withdraw the event and return. Only meaningful on the virtual thread {@link #startCatchupAsync} started for
-     * this attempt.
+     * {@link UnwantedDelivery}, so an action that waits on it can withdraw the event and return. A shutdown completes
+     * the stage too, and doesn't wait for the action. Only meaningful on the virtual thread {@link #startCatchupAsync}
+     * started for this attempt.
      */
     private boolean deliverIfStillWanted(String subscriptionId, Runnable delivery) {
         CatchupAttempt attempt = CURRENT_ATTEMPT.get();
@@ -2382,6 +2383,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             }
             attempt.actionReturned = actionReturned;
             attempt.actionUnwanted = actionUnwanted;
+        }
+        // markShuttingDown takes no handover lock. It writes shuttingDown before it reads the stage, and this writes the
+        // stage before it reads shuttingDown, so a shutdown racing the lines above is seen by one of the two.
+        if (shuttingDown) {
+            actionUnwanted.complete(null);
         }
         try {
             betweenHandoverLockAndAction.run();
@@ -3597,8 +3603,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * When the replay has already let an event through to the subscriber's action, and a stop hasn't parked it since,
      * this waits up to a second for the action to return, and logs a {@code WARN} and returns when it hasn't by then.
      * It doesn't wait when called from that action. The replay lets no further event through either way. It then waits,
-     * with no time limit, for a catch-up checkpoint store the replay has begun, so that store has returned before the
-     * stored position is deleted.
+     * with no time limit, for a catch-up checkpoint store the replay has begun, so that store has returned before
+     * {@link #cancelSubscription(String)} deletes the stored position. The store and the delete go to the same
+     * checkpoint storage, and the delete has no time limit either, so a storage that doesn't answer holds the wait back
+     * until it answers, as it would hold the delete back. With their default {@code RetryStrategy} the MongoDB and Redis
+     * checkpoint storages retry both until the storage answers or is shut down. The wait comes before the live delegate
+     * cancels the subscription, and the delete after it.
      */
     public void cancelRunningCatchup(String subscriptionId) {
         // Locked, so this call lands either strictly before or strictly after a handover attempt's own lockHandover
@@ -3945,6 +3955,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         shuttingDown = true;
         runningCatchupSubscriptions.clear();
         catchupListeners.clear();
+        // Every attempt the clear removes, a sibling's included, since a composite shuts its children down together.
+        // An action that waits on the stage returns instead of waiting for a lease no one releases. A delivery that
+        // sets its stage after this read sees shuttingDown in deliverIfStillWanted and completes the stage there.
+        currentAttempt.values().forEach(attempt -> attempt.actionUnwanted.complete(null));
         currentAttempt.clear();
         pauseRequestedDuringCatchup.clear();
         subscribed.clear();

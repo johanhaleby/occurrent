@@ -81,13 +81,16 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
     private final List<String> received = new CopyOnWriteArrayList<>();
     private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
     private final Logger catchupLog = (Logger) LoggerFactory.getLogger("org.occurrent.subscription.blocking.durable.catchup.AbstractCatchupSubscriptionModel");
+    // Counted down when the replay closes the stream of its event, which it does once the action call has returned
+    private final CountDownLatch theActionHasExited = new CountDownLatch(1);
+    private CatchupSubscriptionModel catchup;
     private CompetingConsumerSubscriptionModel competing;
 
     @BeforeEach
     void a_competing_consumer_model_whose_replay_event_waits_for_the_lease() throws InterruptedException {
         logged.start();
         catchupLog.addAppender(logged);
-        CatchupSubscriptionModel catchup = new CatchupSubscriptionModel(new RedeliveringLiveModel(), new HistoryOfOneEvent(() -> strategy.fenced = true),new CatchupSubscriptionModelConfig(100));
+        catchup = new CatchupSubscriptionModel(new RedeliveringLiveModel(), new HistoryOfOneEvent(() -> strategy.fenced = true, theActionHasExited::countDown), new CatchupSubscriptionModelConfig(100));
         competing = new CompetingConsumerSubscriptionModel(catchup, strategy);
         competing.start();
         competing.subscribe(NODE, ID, null, StartAt.dynamic(context -> context.hasSubscriptionModelType(CatchupSubscriptionModel.class) ? StartAtTime.beginningOfTime() : StartAt.now()),
@@ -103,6 +106,9 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
 
     @Test
     void a_cancel_of_the_subscription_returns_promptly_and_logs_no_warning_about_an_action_that_still_ran() {
+        // Given
+        assertThat(theActionHasExited.getCount()).as("the action is still in its wait for the lease").isEqualTo(1);
+
         // When
         long before = System.nanoTime();
         competing.cancelSubscription(ID);
@@ -111,12 +117,16 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
         // Then
         assertAll(
                 () -> assertThat(took).as("how long the cancel took with the replay event waiting for the lease").isLessThan(PROMPTLY),
+                () -> assertThat(theActionHasExited.getCount()).as("the action has left its wait for the lease when the cancel returns").isZero(),
                 () -> assertThat(stillRanWarnings()).as("the warnings logged").isEmpty(),
                 () -> assertThat(received).as("the events the action received").isEmpty());
     }
 
     @Test
     void a_stop_returns_promptly_and_logs_no_warning_about_an_action_that_still_ran() {
+        // Given
+        assertThat(theActionHasExited.getCount()).as("the action is still in its wait for the lease").isEqualTo(1);
+
         // When
         long before = System.nanoTime();
         competing.stop();
@@ -125,6 +135,7 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
         // Then
         assertAll(
                 () -> assertThat(took).as("how long the stop took with the replay event waiting for the lease").isLessThan(PROMPTLY),
+                () -> assertThat(theActionHasExited.getCount()).as("the action has left its wait for the lease when the stop returns").isZero(),
                 () -> assertThat(stillRanWarnings()).as("the warnings logged").isEmpty(),
                 () -> assertThat(received).as("the events the action received").isEmpty());
     }
@@ -146,11 +157,28 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
 
             // Then
             assertThat(cancel.isAlive()).as("the cancel returned").isFalse();
-            assertThat(received).as("the events the action received").isEmpty();
+            assertAll(
+                    () -> assertThat(theActionHasExited.getCount()).as("the action has left its wait for the lease when the cancel returns").isZero(),
+                    () -> assertThat(stillRanWarnings()).as("the warnings logged").isEmpty(),
+                    () -> assertThat(received).as("the events the action received").isEmpty());
         } finally {
             strategy.releaseTheLook.countDown();
             cancel.join(5000);
         }
+    }
+
+    @Test
+    void a_shutdown_of_the_catchup_model_itself_ends_the_wait_of_the_replay_event_for_the_lease() throws InterruptedException {
+        // Given
+        assertThat(theActionHasExited.getCount()).as("the action is still in its wait for the lease").isEqualTo(1);
+
+        // When
+        catchup.shutdown();
+
+        // Then
+        assertAll(
+                () -> assertThat(theActionHasExited.await(2, TimeUnit.SECONDS)).as("the action has left its wait for the lease within 2 seconds of the shutdown").isTrue(),
+                () -> assertThat(received).as("the events the action received").isEmpty());
     }
 
     private List<String> stillRanWarnings() {
@@ -289,13 +317,19 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
     // The history a replay reads: one event, read by time, since this store writes no position
     private static final class HistoryOfOneEvent implements EventStoreQueries, CatchupReads {
         private final Runnable whenTheReplayReadsIt;
+        private final Runnable whenTheReplayClosesTheStream;
 
-        private HistoryOfOneEvent(Runnable whenTheReplayReadsIt) {
+        private HistoryOfOneEvent(Runnable whenTheReplayReadsIt, Runnable whenTheReplayClosesTheStream) {
             this.whenTheReplayReadsIt = whenTheReplayReadsIt;
+            this.whenTheReplayClosesTheStream = whenTheReplayClosesTheStream;
         }
 
         private static CloudEvent event() {
             return CloudEventBuilder.v1().withId("history1").withSource(URI.create("urn:test")).withType("Tested").build();
+        }
+
+        private Stream<CloudEvent> theEvent() {
+            return Stream.of(event()).onClose(whenTheReplayClosesTheStream);
         }
 
         @Override
@@ -319,7 +353,7 @@ class CompetingConsumerOverACatchupWhoseReplayEventWaitsForTheLeaseTest {
 
                 @Override
                 public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
-                    return Stream.of(event());
+                    return theEvent();
                 }
 
                 @Override

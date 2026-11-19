@@ -2843,9 +2843,12 @@ the subscriber's action that is under way.
   already parked that replay, the cancel doesn't wait again.
 * With `PersistCheckpointDuringCatchupPhase` configured, `cancelSubscription(id)` also waits for a position store the
   replay began before the cancel took effect, so that store has returned before the cancel deletes the stored
-  position. That wait has no time limit, since only the wait for the action ends after a second. A slow or stuck
-  checkpoint storage holds the cancel back for as long as the store runs, and interrupting the thread that cancels
-  doesn't end the wait. The cancel holds the subscription's claim all that time, so a `subscribe`,
+  position. That wait has no time limit, and interrupting the thread that cancels doesn't end it. The store goes to
+  the same checkpoint storage as the delete that follows, which had no time limit in 0.34.0 either, so a storage that
+  doesn't answer holds the cancel back until it answers, as it would hold the delete back. With their default
+  `RetryStrategy` the MongoDB and Redis checkpoint storages retry both the store and the delete until the storage
+  answers or is shut down. The wait comes before the cancel in the live delegate, and the delete after it, so when
+  the live delegate's cancel throws, nothing is deleted but the wait has already run. The cancel holds the subscription's claim all that time, so a `subscribe`,
   `pauseSubscription(id)`, `resumeSubscription(..)` or `cancelSubscription(id)` of the same id on another thread waits
   up to 10 seconds for it and then throws `IllegalStateException`. A `stop()` waits the same way and throws once it
   has stopped the model. A pause or a stop doesn't wait for the store. A `resumeSubscription(id, startAt)` that comes after the stop waits up to 10 seconds for that

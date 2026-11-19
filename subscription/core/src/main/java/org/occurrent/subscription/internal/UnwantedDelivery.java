@@ -25,9 +25,9 @@ import java.util.concurrent.CompletionStage;
  * <p>
  * Tells the action a subscription model calls that the model no longer wants the event the call delivers. The
  * catch-up subscription model sets a stage around each call to the action that a replay makes. It completes the stage
- * once a cancel or a stop has ended the replay and begins to wait for the action to return. The competing consumer
- * subscription model reads the stage while an event waits for the lease, and withdraws the event once the stage is
- * complete.
+ * once a cancel or a stop has ended the replay and begins to wait for the action to return, and once the catch-up
+ * model begins to shut down. The competing consumer subscription model reads the stage while an event waits for the
+ * lease, and withdraws the event once the stage is complete.
  * <p>
  * Read on the thread that calls the action. A call that a model makes on a thread of its own never sees it.
  */
