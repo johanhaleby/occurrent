@@ -71,6 +71,13 @@ import java.util.function.Function;
  * message and has the broker deliver it again, as {@link RoutingOutcome.Disposition#HOLD} describes. Not acknowledging
  * is not enough on its own.
  * <p>
+ * An event the fold writes to the event store and feeds back through {@link #acceptAndWait(Object)} is an early copy,
+ * and it needs a durable path as well. Either the application's forwarder publishes it to the broker queue this feed's
+ * listener reads, or the fold feeds it again whenever the event that triggered it is delivered again, also when the
+ * write is already stored. Replicas of one projection share its catch-up marker, and another replica's catch-up can
+ * store a marker at or above an event this replica fed back and has not yet folded. Without either path, when this
+ * replica then fails to fold that event, or stops first, nothing folds it (ADR 179).
+ * <p>
  * The replay decodes CloudEvents, so {@link EventMetadata} is available there and is folded with the event. A live
  * domain event arrives with no CloudEvent behind it and is folded with {@link EventMetadata#empty()}. A projection
  * keyed by metadata therefore resolves its instance from the metadata during the replay and from the event alone once

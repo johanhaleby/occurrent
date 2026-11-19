@@ -76,6 +76,13 @@ import java.util.function.Predicate;
  * history. The marker is stored under the projection's id alone, so a projection whose filter or logic changes is
  * registered under a new id.
  * <p>
+ * An event the projection's fold writes to the event store and feeds back through {@link #acceptAndWait(Object)} is an early copy,
+ * and it needs a durable path as well. Either the application's forwarder publishes it to the broker queue this feed's
+ * listener reads, or the fold feeds it again whenever the event that triggered it is delivered again, also when the
+ * write is already stored. Replicas of one projection share its catch-up marker, and another replica's catch-up can
+ * store a marker at or above an event this replica fed back and has not yet folded. Without either path, when this
+ * replica then fails to fold that event, or stops first, nothing folds it (ADR 179).
+ * <p>
  * The {@code occurrent.subscription.catchup-then-live.*} properties do <strong>not</strong> reach this feed. Your
  * application declares this bean, so tune its catch-up by passing {@link CatchupThenLiveOptions} to the constructor.
  */

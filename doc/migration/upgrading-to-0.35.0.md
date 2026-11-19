@@ -3050,11 +3050,18 @@ What you see:
   application before the marker is written, and the next start replays the same events again. Set
   `startupMode = BACKGROUND` so the application starts while the catch-up runs.
 - A catch-up keeps the marker it found, and does not store the head, while an event a handler wrote to the event store
-  and fed back waits to be handled and its replay did not read it. No broker delivers such an event again, so the next
-  start has to replay it. On `CatchupProjectionFeed` and `DomainEventFeed`, where a catch-up can run again after
+  and fed back in the same process waits to be handled and its replay did not read it, so the next start replays it.
+  On `CatchupProjectionFeed` and `DomainEventFeed`, where a catch-up can run again after
   `goLive()`, a handler that feeds back an event whenever it handles one, under steady live traffic, can keep the
   marker from moving on, and each start then replays everything after the marker an earlier start stored.
-  `CatchupThenPushSubscriptionModel` runs its catch-up before any live event is handled, so it does not meet that cost.
+  `CatchupThenPushSubscriptionModel` runs its catch-up before its own process handles any live event, so it does not
+  meet that cost.
+- When a reactor feed or push model runs on more than one replica, an event a handler writes to the event store and
+  feeds back needs a durable path of its own. Either your forwarder publishes it to the broker queue the listener
+  reads, as it does for any other written event, or the handler feeds it again whenever the event that triggered it is
+  delivered again, also when the write is already stored. Replicas share the catch-up marker, so another replica's
+  catch-up can store a marker at or above an event this replica fed back and has not handled yet. When this replica
+  then fails to handle that event, or stops first, nothing handles it. 0.34.0 has the same gap.
 - `cancelSubscription(id)` still deletes the marker, after it cancels, and the `Mono` it returns completes once the
   delete is done. The next subscribe of the id replays from the beginning when that delete holds. A delete that the
   store loses, on a MongoDB member with the in-memory storage engine for example, or a marker write that the store

@@ -100,6 +100,14 @@ import java.util.function.Supplier;
  * {@link org.occurrent.subscription.RoutingOutcome#NOT_DELIVERABLE}, since it could only report the event as queued
  * rather than applied. The event the handler was called for is not failed with it.
  * <p>
+ * An event a handler writes and feeds back through {@code accept(..)} on its own thread is an early copy with no broker
+ * copy behind it, and it needs a durable path as well. Either the application's forwarder publishes it to the broker
+ * that feeds this model, or the handler writes and feeds it again whenever the event that triggered it is delivered
+ * again, also when the write is already stored. Replicas of a subscription share its catch-up marker, and another
+ * replica's catch-up can store a marker at or above an event this replica fed back and has not yet handled. Without
+ * either path, when this replica then fails to handle that event, or stops first, nothing handles it (ADR 179). An
+ * event that reaches this model from the broker has that copy behind it.
+ * <p>
  * The events a handler wrote, and those their handlers wrote in turn, are answered for by whatever waits for the
  * event the handler was called for.
  * <ul>
