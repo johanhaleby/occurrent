@@ -35,10 +35,15 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.assertj.AssertableApplicationContext;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.mongodb.MongoDatabaseFactory;
+import org.springframework.data.mongodb.core.MongoTemplate;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -57,7 +62,7 @@ class OccurrentMongoAutoConfigurationCompetingConsumerHealthTest {
     private static final Instant SINCE = Instant.parse("2026-11-19T10:15:30Z");
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
-            .withUserConfiguration(OccurrentMongoAutoConfiguration.HealthConfiguration.class)
+            .withUserConfiguration(OccurrentMongoHealthConfiguration.class)
             .withConfiguration(AutoConfigurations.of(HealthContributorRegistryAutoConfiguration.class));
 
     @Test
@@ -73,7 +78,7 @@ class OccurrentMongoAutoConfigurationCompetingConsumerHealthTest {
     @Test
     void neither_contributor_is_configured_without_spring_boot_health() {
         new ApplicationContextRunner()
-                .withUserConfiguration(OccurrentMongoAutoConfiguration.HealthConfiguration.class)
+                .withUserConfiguration(OccurrentMongoHealthConfiguration.class)
                 .withClassLoader(new FilteredClassLoader(CompositeHealthContributor.class))
                 .run(context -> {
                     assertThat(context).hasNotFailed();
@@ -124,6 +129,117 @@ class OccurrentMongoAutoConfigurationCompetingConsumerHealthTest {
                 assertThat(context.getBean(HealthContributorRegistry.class).getContributor("competingConsumerLeases")).as(name).isSameAs(applicationIndicator);
             });
         }
+    }
+
+    @Test
+    void an_application_bean_declared_next_to_EnableOccurrent_under_any_of_the_three_names_replaces_the_competingConsumers_contributor() {
+        for (Class<?> application : List.of(ApplicationWithCompetingConsumers.class, ApplicationWithCompetingConsumersHealthIndicator.class, ApplicationWithCompetingConsumersHealthContributor.class)) {
+            enabledOccurrentRunner(application).run(context -> {
+                assertThat(context).as(application.getSimpleName()).hasNotFailed();
+                assertThat(context.getBeansOfType(CompetingConsumersHealthContributor.class)).as(application.getSimpleName()).isEmpty();
+                assertThat(context.getBean(HealthContributorRegistry.class).getContributor("competingConsumers")).as(application.getSimpleName()).isSameAs(context.getBean(ApplicationHealth.class).indicator);
+            });
+        }
+    }
+
+    @Test
+    void an_application_bean_declared_next_to_EnableOccurrent_under_any_of_the_three_names_replaces_the_competingConsumerLeases_contributor() {
+        for (Class<?> application : List.of(ApplicationWithCompetingConsumerLeases.class, ApplicationWithCompetingConsumerLeasesHealthIndicator.class, ApplicationWithCompetingConsumerLeasesHealthContributor.class)) {
+            enabledOccurrentRunner(application).run(context -> {
+                assertThat(context).as(application.getSimpleName()).hasNotFailed();
+                assertThat(context.getBeansOfType(CompetingConsumerLeasesHealthContributor.class)).as(application.getSimpleName()).isEmpty();
+                assertThat(context.getBean(HealthContributorRegistry.class).getContributor("competingConsumerLeases")).as(application.getSimpleName()).isSameAs(context.getBean(ApplicationHealth.class).indicator);
+            });
+        }
+    }
+
+    // The application class is annotated with @EnableOccurrent, so the starter is imported with a plain @Import, with
+    // no application bean registered before it, which withBean would do
+    private static ApplicationContextRunner enabledOccurrentRunner(Class<?> application) {
+        return new ApplicationContextRunner()
+                .withUserConfiguration(application)
+                .withConfiguration(AutoConfigurations.of(HealthContributorRegistryAutoConfiguration.class))
+                .withBean(MongoDatabaseFactory.class, () -> mock(MongoDatabaseFactory.class))
+                .withBean(MongoTemplate.class, () -> mock(MongoTemplate.class))
+                .withPropertyValues(
+                        "occurrent.event-store.enabled=false",
+                        "occurrent.subscription.enabled=false",
+                        "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:test",
+                        "occurrent.application-service.enable-default-retry-strategy=false");
+    }
+
+    static final class ApplicationHealth {
+        final HealthIndicator indicator = () -> Health.up().withDetail("from", "application").build();
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableOccurrent
+    static class ApplicationWithCompetingConsumers {
+        @Bean ApplicationHealth applicationHealth() { return new ApplicationHealth(); }
+        @Bean HealthIndicator competingConsumers(ApplicationHealth health) { return health.indicator; }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableOccurrent
+    static class ApplicationWithCompetingConsumersHealthIndicator {
+        @Bean ApplicationHealth applicationHealth() { return new ApplicationHealth(); }
+        @Bean HealthIndicator competingConsumersHealthIndicator(ApplicationHealth health) { return health.indicator; }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableOccurrent
+    static class ApplicationWithCompetingConsumersHealthContributor {
+        @Bean ApplicationHealth applicationHealth() { return new ApplicationHealth(); }
+        @Bean HealthIndicator competingConsumersHealthContributor(ApplicationHealth health) { return health.indicator; }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableOccurrent
+    static class ApplicationWithCompetingConsumerLeases {
+        @Bean ApplicationHealth applicationHealth() { return new ApplicationHealth(); }
+        @Bean HealthIndicator competingConsumerLeases(ApplicationHealth health) { return health.indicator; }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableOccurrent
+    static class ApplicationWithCompetingConsumerLeasesHealthIndicator {
+        @Bean ApplicationHealth applicationHealth() { return new ApplicationHealth(); }
+        @Bean HealthIndicator competingConsumerLeasesHealthIndicator(ApplicationHealth health) { return health.indicator; }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableOccurrent
+    static class ApplicationWithCompetingConsumerLeasesHealthContributor {
+        @Bean ApplicationHealth applicationHealth() { return new ApplicationHealth(); }
+        @Bean HealthIndicator competingConsumerLeasesHealthContributor(ApplicationHealth health) { return health.indicator; }
+    }
+
+    @Test
+    void a_health_call_creates_no_subscription_model_bean_and_lists_none_that_is_not_created() {
+        AtomicBoolean created = new AtomicBoolean();
+
+        contextRunner.withBean("lazyModel", SubscriptionModel.class, () -> {
+            created.set(true);
+            return mock(CompetingConsumerSubscriptionModel.class);
+        }, definition -> definition.setLazyInit(true)).run(context -> {
+            assertThat(competingConsumers(context).stream()).isEmpty();
+            assertThat(competingConsumers(context).getContributor("anything")).isNull();
+            assertThat(created).as("the lazy subscription model bean was created by a health call").isFalse();
+        });
+    }
+
+    @Test
+    void a_health_call_creates_no_lease_strategy_bean_and_lists_none_that_is_not_created() {
+        AtomicBoolean created = new AtomicBoolean();
+
+        contextRunner.withBean("lazyStrategy", SpringMongoLeaseCompetingConsumerStrategy.class, () -> {
+            created.set(true);
+            return mock(SpringMongoLeaseCompetingConsumerStrategy.class);
+        }, definition -> definition.setLazyInit(true)).run(context -> {
+            assertThat(competingConsumerLeases(context).stream()).isEmpty();
+            assertThat(competingConsumerLeases(context).getContributor("lazyStrategy")).isNull();
+            assertThat(created).as("the lazy lease strategy bean was created by a health call").isFalse();
+        });
     }
 
     @Test

@@ -71,14 +71,11 @@ import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptio
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig;
 import org.occurrent.subscription.synchronous.blocking.SynchronousSubscriptionModel;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEnabledHealthIndicator;
-import org.springframework.boot.health.contributor.CompositeHealthContributor;
 import org.springframework.boot.mongodb.autoconfigure.MongoAutoConfiguration;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.*;
@@ -103,7 +100,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 @AutoConfiguration(after = MongoAutoConfiguration.class)
 @ConditionalOnClass({SpringMongoEventStore.class, SpringMongoSubscriptionModel.class})
 @EnableConfigurationProperties(OccurrentProperties.class)
-@Import({Jackson3CloudEventConverterConfiguration.class, OccurrentBlockingAnnotationConfiguration.class})
+@Import({Jackson3CloudEventConverterConfiguration.class, OccurrentBlockingAnnotationConfiguration.class, OccurrentMongoHealthImportSelector.class})
 public class OccurrentMongoAutoConfiguration<E> {
 
     /**
@@ -539,40 +536,6 @@ public class OccurrentMongoAutoConfiguration<E> {
         @SuppressWarnings({"rawtypes"})
         StreamIdResolver occurrentAnnotationStreamIdResolver() {
             return new AnnotationStreamIdResolver<>();
-        }
-    }
-
-    /**
-     * Two health contributors when {@code spring-boot-health} is on the classpath. {@code competingConsumers} has one
-     * indicator per subscription of each competing consumer subscription model, down when the wrapped model refused
-     * the subscription and while a call for it keeps failing. {@code competingConsumerLeases} has one indicator per MongoDB
-     * lease strategy bean, down while its scheduled lease refresh fails. Each is turned off by
-     * {@code management.health.competingconsumers.enabled=false} and
-     * {@code management.health.competingconsumerleases.enabled=false}, or by {@code management.health.defaults.enabled=false}
-     * unless its own key is {@code true}. Neither is in a probe group unless the application adds it to one.
-     */
-    @Configuration(proxyBeanMethods = false)
-    @ConditionalOnClass(CompositeHealthContributor.class)
-    static class HealthConfiguration {
-
-        // On the method, since Spring loads every condition class on the configuration class before evaluating any,
-        // which fails without spring-boot-health before @ConditionalOnClass can skip it. Spring Boot names a
-        // contributor after the bean without its HealthContributor suffix. An application bean under any of the three
-        // names that give the same contributor name replaces the starter's, since two fail startup
-        @Bean
-        @ConditionalOnEnabledHealthIndicator("competingconsumers")
-        @ConditionalOnMissingBean(name = {"competingConsumers", "competingConsumersHealthIndicator",
-                "competingConsumersHealthContributor"})
-        CompositeHealthContributor competingConsumersHealthContributor(ConfigurableListableBeanFactory beanFactory) {
-            return new CompetingConsumersHealthContributor(beanFactory);
-        }
-
-        @Bean
-        @ConditionalOnEnabledHealthIndicator("competingconsumerleases")
-        @ConditionalOnMissingBean(name = {"competingConsumerLeases", "competingConsumerLeasesHealthIndicator",
-                "competingConsumerLeasesHealthContributor"})
-        CompositeHealthContributor competingConsumerLeasesHealthContributor(ConfigurableListableBeanFactory beanFactory) {
-            return new CompetingConsumerLeasesHealthContributor(beanFactory);
         }
     }
 }

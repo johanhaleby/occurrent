@@ -46,8 +46,8 @@ import static java.util.Objects.requireNonNull;
  * A subscription is down while {@link CompetingConsumerStatus#isFailing()}, which is a subscription given up after the
  * wrapped model refused to start it, one held paused after such a refusal, and one whose last call to the wrapped model
  * or the lease strategy failed with no call succeeding since. Standby, a pause by the user and a stopped model are up
- * while no call fails. When two models use the same subscription id, the indicator is down while either reports a
- * failure, and shows the details of the first model that does.
+ * while no call fails. When more than one model uses the same subscription id, the indicator is down while one of
+ * them reports a failure, and shows the details of the first model that does.
  * <p>
  * The models are found on every health call, among the {@link SubscriptionModel} beans already created, by unwrapping
  * each {@link SubscriptionModelWrapper} until a {@code CompetingConsumerSubscriptionModel} turns up. A health call

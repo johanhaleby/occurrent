@@ -525,11 +525,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // Per competing consumer, from its subscribe until it is forgotten, what its handles throw once the wrapped model
     // refused its start
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, StartRefusal> startRefusals = new ConcurrentHashMap<>();
-    // Per competing consumer, the failure of a call that no later try has made succeed. Written and
-    // cleared under the monitor, as the try is, so a failure handed over after a try decided it was done starts a new
-    // try rather than being cleared by the old one.
+    // Per competing consumer, the failure of a call that no later try has made succeed. Written, and cleared by a try,
+    // under the monitor the try decides under, so a failure handed over after a try decided it was done starts a new
+    // try rather than being cleared by the old one. A cancel and the forget of a refused start remove it without the
+    // monitor as they forget the consumer, and a subscribe of the id again removes it under the monitor.
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, CompetingConsumerStatus.Failure> failing = new ConcurrentHashMap<>();
-    // Per competing consumer held paused after the wrapped model refused it, the refusal, until the user resumes it
+    // Per competing consumer held paused after the wrapped model refused it, the refusal, until a resume by the user or
+    // a start(true)
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, CompetingConsumerStatus.Failure> heldAfterARefusal = new ConcurrentHashMap<>();
     // Per subscription id forgotten after the wrapped model refused its start, until the id is subscribed again or
     // cancelled, or this model is shut down
@@ -2009,7 +2011,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * {@code hasLock} throws.</li>
      * <li>{@link CompetingConsumerStatus.State#PAUSED} when the user paused the subscription, or this model holds it
      * paused because the wrapped model refused to start or resume it from its position. The refusal is then the
-     * failure, until the user resumes the subscription.</li>
+     * failure, until the subscription is resumed, by {@link #resumeSubscription(String)} or by {@code start(true)}.</li>
      * <li>{@link CompetingConsumerStatus.State#STOPPED} while this model is stopped, unless the user resumed the
      * subscription since {@link #stop()}.</li>
      * <li>{@link CompetingConsumerStatus.State#GIVEN_UP} once the wrapped model has refused to start the subscription
@@ -2109,9 +2111,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // a subscription handed over can come after a later stop() began, which must still pause it after that resume.
     private Subscription resume(String subscriptionId, boolean askedForByTheUser) {
         logDebug("Trying to resume CompetingConsumer subscription (subscriptionId={})", subscriptionId);
-        if (askedForByTheUser) {
-            heldAfterARefusal.keySet().removeIf(key -> key.subscriptionId().equals(subscriptionId));
-        }
+        // Ends a hold after a refusal, also when a start(true) resumes it
+        heldAfterARefusal.keySet().removeIf(key -> key.subscriptionId().equals(subscriptionId));
         long stopSeen;
         @Nullable SubscriptionLock held = subscriptionLocks.get(subscriptionId);
         synchronized (wrappedModelStart) {

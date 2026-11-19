@@ -3254,7 +3254,7 @@ groups.
 
 A node on standby, a subscription you paused and a stopped model are up. The details of a component that is down
 include the failure and since when it has been failing. When two `CompetingConsumerSubscriptionModel`s use the same
-subscription id, its component is down when either of them reports a failure.
+subscription id, its component is down when one of them reports a failure.
 
 ### What to do
 
@@ -3263,7 +3263,8 @@ Nothing, if a node should report down in these cases. To leave one out, set
 change what one reports, declare your own `HealthContributor` bean named `competingConsumers` or
 `competingConsumerLeases`, which replaces the starter's.
 
-`CompetingConsumerSubscriptionModel#competingConsumerStatus(subscriptionId)` and
-`SpringMongoLeaseCompetingConsumerStrategy#leaseRefreshFailure()` return the same information to code of your own. The
+`CompetingConsumerSubscriptionModel#competingConsumerStatus(subscriptionId)`, and `leaseRefreshFailure()` on
+`SpringMongoLeaseCompetingConsumerStrategy` and `NativeMongoLeaseCompetingConsumerStrategy`, return the same information
+to code of your own. The
 code compiles unchanged, there is no OpenRewrite recipe, and nothing stored changes. See
 [ADR 183](../architecture/decisions/0183-a-competing-consumer-reports-its-status-and-the-mongodb-starter-turns-it-into-health.md).

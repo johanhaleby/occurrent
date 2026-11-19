@@ -77,6 +77,10 @@ class CompetingConsumerReportsItsStatusTest {
     @AfterEach
     void shutdown() {
         wrapped.pausesFail = false;
+        wrapped.resumesFail = false;
+        strategy.releasesFail = false;
+        wrapped.reportsPausedAsRunning = false;
+        wrapped.pauseFailureMessage = "The wrapped model's pause fails";
         strategy.hasLockFails = false;
         wrapped.pauseGate = null;
         strategy.unregisterGate = null;
@@ -417,6 +421,116 @@ class CompetingConsumerReportsItsStatusTest {
     }
 
     @Test
+    void reports_the_failure_of_the_latest_try_when_the_pause_that_keeps_failing_fails_differently_each_time() throws Exception {
+        // Given a lost lease whose pause fails, and a try that fails differently from the call that failed first
+        strategy.grantOnRegister = true;
+        subscribe();
+        wrapped.pausesFail = true;
+        strategy.holders.remove(ID);
+        CountDownLatch secondTryIsAboutToWait = new CountDownLatch(1);
+        CountDownLatch goOn = new CountDownLatch(1);
+        AtomicInteger tries = new AtomicInteger();
+        model.runBeforeATryWaitsForItsBackoff(() -> {
+            int waits = tries.incrementAndGet();
+            if (waits == 1) {
+                wrapped.pauseFailureMessage = "The wrapped model's pause fails again, differently";
+            } else if (waits == 2) {
+                secondTryIsAboutToWait.countDown();
+                try {
+                    goOn.await(30, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+
+        try {
+            // When the first try has failed, which the second try waiting for its backoff comes after
+            model.onConsumeProhibited(ID, NODE);
+            assertThat(secondTryIsAboutToWait.await(10, SECONDS)).as("the first try has failed").isTrue();
+
+            // Then it is the failure of that try that is reported
+            CompetingConsumerStatus status = status();
+            assertThat(status.isFailing()).as("failing").isTrue();
+            assertThat(status.failure().cause()).hasMessageContaining("differently");
+        } finally {
+            wrapped.pausesFail = false;
+            goOn.countDown();
+        }
+    }
+
+    @Test
+    void does_not_report_a_try_that_waits_for_a_pause_in_the_wrapped_model_to_take_effect_as_failing() throws Exception {
+        // Given a subscription that lost its lease and got it back while the wrapped model reports it running and paused, as a catch-up does until its replay has ended
+        strategy.grantOnRegister = true;
+        subscribe();
+        strategy.holders.remove(ID);
+        model.onConsumeProhibited(ID, NODE);
+        assertThat(wrapped.isPaused(ID)).as("paused in the wrapped model").isTrue();
+        wrapped.reportsPausedAsRunning = true;
+        CountDownLatch thirdTryIsAboutToWait = new CountDownLatch(1);
+        CountDownLatch goOn = new CountDownLatch(1);
+        AtomicInteger waits = new AtomicInteger();
+        model.runBeforeATryWaitsForItsBackoff(() -> {
+            if (waits.incrementAndGet() == 3) {
+                thirdTryIsAboutToWait.countDown();
+                try {
+                    goOn.await(30, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+
+        try {
+            // When the lease is granted again, and the try is asked twice whether the pause has taken effect
+            strategy.holders.add(ID);
+            model.onConsumeGranted(ID, NODE);
+            assertThat(thirdTryIsAboutToWait.await(10, SECONDS)).as("two tries have waited for the pause").isTrue();
+
+            // Then
+            assertThat(status().isFailing()).as("failing while the pause has not taken effect").isFalse();
+        } finally {
+            wrapped.reportsPausedAsRunning = false;
+            goOn.countDown();
+        }
+
+        // And when the pause has taken effect, the subscription runs again
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(status().state()).isEqualTo(State.LEASE_HELD));
+        assertThat(status().isFailing()).as("failing").isFalse();
+    }
+
+    @Test
+    void reports_a_call_that_failed_while_the_subscription_was_made_as_failing_once_the_subscribe_returns() throws Exception {
+        // Given a try that waits before it first runs, so the failure can be seen before any try has failed, and a lease strategy that cannot give back the lease while the subscribe makes the subscription
+        CountDownLatch tryMayRun = new CountDownLatch(1);
+        model.runBeforeATryWaitsForItsBackoff(() -> {
+            try {
+                tryMayRun.await(30, SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        strategy.grantOnRegister = true;
+        wrapped.resumesFail = true;
+        strategy.releasesFail = true;
+
+        try {
+            // When
+            subscribe();
+
+            // Then
+            CompetingConsumerStatus failing = status();
+            assertThat(failing.isFailing()).as("failing before any try").isTrue();
+            assertThat(failing.failure().cause()).hasMessageContaining("release fails");
+        } finally {
+            wrapped.resumesFail = false;
+            strategy.releasesFail = false;
+            tryMayRun.countDown();
+        }
+    }
+
+    @Test
     void reports_a_call_that_failed_as_failing_from_the_moment_it_failed_until_the_try_that_follows_succeeds() throws Exception {
         // Given a try that waits before it first runs, so the failure can be seen before any try has failed
         CountDownLatch tryMayRun = new CountDownLatch(1);
@@ -460,6 +574,24 @@ class CompetingConsumerReportsItsStatusTest {
         wrapped.refusing = false;
         strategy.grantOnRegister = true;
         model.resumeSubscription(ID);
+
+        model.pauseSubscription(ID);
+
+        assertThat(status().state()).isEqualTo(State.PAUSED);
+        assertThat(status().isFailing()).as("failing, a pause by the user").isFalse();
+    }
+
+    @Test
+    void does_not_report_the_refusal_of_a_subscription_that_was_held_and_resumed_by_a_start_when_the_user_pauses_it_later() {
+        strategy.grantOnRegister = false;
+        subscribe();
+        wrapped.refusing = true;
+        strategy.holders.add(ID);
+        model.onConsumeGranted(ID, NODE);
+        wrapped.refusing = false;
+        strategy.grantOnRegister = true;
+        model.stop();
+        model.start(true);
 
         model.pauseSubscription(ID);
 
@@ -630,6 +762,9 @@ class CompetingConsumerReportsItsStatusTest {
         private final List<StartRefusalListener> listeners = new CopyOnWriteArrayList<>();
         private final AtomicInteger pauseCalls = new AtomicInteger();
         private volatile boolean pausesFail;
+        private volatile boolean resumesFail;
+        private volatile String pauseFailureMessage = "The wrapped model's pause fails";
+        private volatile boolean reportsPausedAsRunning;
         private volatile boolean refusing;
         private volatile boolean subscribesFail;
         private volatile @Nullable Gate pauseGate;
@@ -659,6 +794,9 @@ class CompetingConsumerReportsItsStatusTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId) {
+            if (resumesFail) {
+                throw new IllegalStateException("The wrapped model's resume fails");
+            }
             refuseFromThePosition();
             return super.resumeSubscription(subscriptionId);
         }
@@ -683,9 +821,14 @@ class CompetingConsumerReportsItsStatusTest {
                 gate.pass();
             }
             if (pausesFail) {
-                throw new IllegalStateException("The wrapped model's pause fails");
+                throw new IllegalStateException(pauseFailureMessage);
             }
             super.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return super.isRunning(subscriptionId) || (reportsPausedAsRunning && isPaused(subscriptionId));
         }
 
         @Override
@@ -703,6 +846,7 @@ class CompetingConsumerReportsItsStatusTest {
         private final Set<String> holders = ConcurrentHashMap.newKeySet();
         private volatile boolean grantOnRegister;
         private volatile boolean hasLockFails;
+        private volatile boolean releasesFail;
         private volatile @Nullable Gate unregisterGate;
 
         @Override
@@ -725,6 +869,9 @@ class CompetingConsumerReportsItsStatusTest {
 
         @Override
         public void releaseCompetingConsumer(String subscriptionId, String subscriberId) {
+            if (releasesFail) {
+                throw new IllegalStateException("The lease strategy's release fails");
+            }
             holders.remove(subscriptionId);
         }
 
