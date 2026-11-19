@@ -122,6 +122,11 @@ class InMemorySagaStateStoreTest {
         return store.compareAndSaveQuarantineEnded(codec.encode(next(sagaId)), store.find(sagaId).orElseThrow().version(), quarantineId);
     }
 
+    private boolean quarantineEndedByCompletion(String sagaId, String quarantineId) {
+        long version = store.find(sagaId).orElseThrow().version();
+        return store.compareAndSaveQuarantineEnded(codec.encode(completedEnvelope(sagaId, "a", version + 1, List.of())), version, quarantineId);
+    }
+
     @Nested
     class CompareAndSave {
 
@@ -533,6 +538,11 @@ class InMemorySagaStateStoreTest {
         return new StoredSaga(sagaId, version, new EncodedSaga(Map.of(SagaCodec.STATUS, 5)), SagaCodec.indexOf(codec.encode(releasingEnvelope(sagaId)).encoded()));
     }
 
+    // As unreadable, with the index of a completed instance, so that a quarantine end handed it deletes the records
+    private StoredSaga unreadableCompleted(String sagaId, long version) {
+        return new StoredSaga(sagaId, version, new EncodedSaga(Map.of(SagaCodec.STATUS, 5)), SagaCodec.indexOf(codec.encode(completedEnvelope(sagaId, "a", 1, List.of())).encoded()));
+    }
+
     @Nested
     class SkippedInputRecords {
 
@@ -722,7 +732,7 @@ class InMemorySagaStateStoreTest {
             skip("s1", "q2", new SkippedInput(0, "b@1"));
             skip("s2", "q1", new SkippedInput(0, "c@1"));
 
-            boolean ended = quarantineEnded("s1", "q1");
+            boolean ended = quarantineEndedByCompletion("s1", "q1");
 
             assertAll(
                     () -> assertThat(ended).isTrue(),
@@ -798,6 +808,68 @@ class InMemorySagaStateStoreTest {
     }
 
     @Nested
+    class AQuarantineEndedByAnInstanceThatIsNotCompleted {
+
+        private void recordsOf(String sagaId, SkippedInput... expected) {
+            assertThat(store.findSkippedInputs(sagaId, "q1", 10)).containsExactly(expected);
+        }
+
+        @Test
+        void is_refused_while_a_record_is_under_the_quarantine_id_and_leaves_the_instance_and_the_record_as_they_were() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            StoredSaga before = store.find("s1").orElseThrow();
+
+            boolean ended = quarantineEnded("s1", "q1");
+
+            assertAll(
+                    () -> assertThat(ended).as("an instance that is not completed ends its quarantine only with no record left").isFalse(),
+                    () -> assertThat(store.find("s1")).as("the instance as it was, version and fields").contains(before),
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1")));
+        }
+
+        @Test
+        void succeeds_once_no_record_is_under_the_quarantine_id() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            replayed("s1", "q1", new SkippedInput(0, "a@1"));
+            long version = store.find("s1").orElseThrow().version();
+
+            boolean ended = quarantineEnded("s1", "q1");
+
+            assertAll(
+                    () -> assertThat(ended).isTrue(),
+                    () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(version + 1));
+        }
+
+        @Test
+        void is_not_refused_by_a_record_under_another_quarantine_id() {
+            instance("s1");
+            skip("s1", "q2", new SkippedInput(0, "b@1"));
+
+            boolean ended = quarantineEnded("s1", "q1");
+
+            assertAll(
+                    () -> assertThat(ended).isTrue(),
+                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1")));
+        }
+
+        @Test
+        void that_completes_the_instance_deletes_every_record_under_the_quarantine_id() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(1, "b@2"));
+
+            boolean ended = quarantineEndedByCompletion("s1", "q1");
+
+            assertAll(
+                    () -> assertThat(ended).isTrue(),
+                    () -> assertThat(find("s1").orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> recordsOf("s1"));
+        }
+    }
+
+    @Nested
     class TransitionAtomicity {
 
         private void recordsOf(String sagaId, SkippedInput... expected) {
@@ -845,7 +917,7 @@ class InMemorySagaStateStoreTest {
             skip("s1", "q1", new SkippedInput(0, "a@1"));
             skip("s1", "q1", new SkippedInput(1, "b@2"));
 
-            assertThatThrownBy(() -> store.compareAndSaveQuarantineEnded(unreadable("s1", 4), 3, "q1")).isInstanceOf(RuntimeException.class);
+            assertThatThrownBy(() -> store.compareAndSaveQuarantineEnded(unreadableCompleted("s1", 4), 3, "q1")).isInstanceOf(RuntimeException.class);
 
             assertAll(
                     () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(3),

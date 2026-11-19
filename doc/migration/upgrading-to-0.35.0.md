@@ -1257,7 +1257,7 @@ Code that wrote an envelope to a store directly encodes it with the same codec f
 stateStore.compareAndSave(codec.encode(envelope), 0);
 ```
 
-`encode` throws an `IllegalStateException` for a quarantined envelope with no `quarantineSkipCount`, with the
+`encode` throws an `IllegalStateException` for an envelope quarantined with a quarantine id and no `quarantineSkipCount`, with the
 message a read of such an instance gives, since no read could take that instance back.
 
 For a flow saga, pass the application's `CloudEventConverter` instead of `null`. A codec built with `null` throws
@@ -1294,6 +1294,11 @@ MongoDB needs a replica set.
   first input a quarantined instance skips fails, since the server refuses the transaction.
 - Code that builds a `SpringMongoSagaStateStore` with a `MongoOperations` that isn't a `MongoTemplate`, such as a
   wrapper or a mock.
+- An application of the Spring Boot starter with a `MongoOperations` bean of its own that isn't a `MongoTemplate`,
+  such as a decorator marked `@Primary`. The starter now builds the store of a `@Saga` on the `MongoTemplate` bean, as
+  it builds the event store, so saga reads and writes no longer go through the decorator. Spring Boot creates no
+  `MongoTemplate` bean when the application declares a `MongoOperations` bean, so an application with no
+  `MongoTemplate` bean of its own fails to start its sagas.
 
 ### What changes
 
@@ -1302,6 +1307,11 @@ replica set has the write in its on-disk journal. When a majority doesn't acknow
 throws, and the store's `RetryStrategy` tries it again. On a client with a `timeoutMS` above 0, where the driver sends
 no `wtimeout`, your `timeoutMS` bounds each attempt instead. A write that timed out can still be on the primary. Reads
 at read concern `majority` don't return it until a majority has it, so the saga doesn't act on it before then.
+
+`find` and `findWithoutState` read an instance they don't find at `majority` again at read concern `linearizable`,
+which waits for a majority as a write does. Right after a failover, a majority read on the new primary can miss an
+instance the old primary wrote, and the saga would then skip an input addressed to it. So the first input of a new
+instance costs one more round trip to a majority.
 
 The four writes of `SagaStateStoreSkippedInputs` and the `delete` of a quarantined instance run in a transaction that
 commits at `majority` with `j: true` and reads at read concern `snapshot`. The store retries a transaction that fails
@@ -1325,6 +1335,7 @@ bean.
 - On a standalone server, run MongoDB as a replica set, which can have a single member, or turn quarantine off with
   `SagaRunnerConfig.disableQuarantine()` or `occurrent.saga.quarantine-enabled=false`.
 - Pass the `MongoTemplate` bean to `SpringMongoSagaStateStore`. The Spring Boot starter already does.
+- With the starter and a `MongoOperations` decorator, declare the `MongoTemplate` it wraps as a bean.
 - Run the transitions outside a transaction of yours, or commit yours at `majority` with `j: true`.
 
 ## The shorter `SagaEnvelope` and `SagaFailure` constructors are removed

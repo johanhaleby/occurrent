@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
 import static java.util.Objects.requireNonNull;
@@ -115,7 +116,10 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
         requireNonNull(saga, "saga cannot be null");
         requireNonNull(quarantineId, "quarantineId cannot be null");
-        return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga), quarantineId, records -> Map.of());
+        // An instance the release does not complete ends its quarantine only with no record left, as the SPI says
+        boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
+        return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga), quarantineId,
+                records -> completes || records.isEmpty(), records -> Map.of());
     }
 
     private static UnaryOperator<@Nullable StoredSaga> withoutState(StoredSaga saga, long expectedVersion) {
@@ -143,18 +147,25 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         return new StoredSaga(saga.sagaId(), saga.version(), encoded, SagaCodec.indexOf(encoded));
     }
 
-    // Replaces the instance and the records under quarantineId in one compute, so a read sees both as one write left them
     private boolean compareAndSet(StoredSaga saga, long expectedVersion, UnaryOperator<@Nullable StoredSaga> next, @Nullable String quarantineId,
                                   UnaryOperator<Map<String, SkippedInput>> writeRecords) {
+        return compareAndSet(saga, expectedVersion, next, quarantineId, records -> true, writeRecords);
+    }
+
+    // Replaces the instance and the records under quarantineId in one compute, so a read sees both as one write left them.
+    // Writes nothing when the records under quarantineId fail recordsAllow
+    private boolean compareAndSet(StoredSaga saga, long expectedVersion, UnaryOperator<@Nullable StoredSaga> next, @Nullable String quarantineId,
+                                  Predicate<Map<String, SkippedInput>> recordsAllow, UnaryOperator<Map<String, SkippedInput>> writeRecords) {
         boolean[] saved = {false};
         instances.compute(saga.sagaId(), (sagaId, existing) -> {
             StoredSaga stored = existing == null ? null : existing.saga();
             long current = stored == null ? 0 : stored.version();
-            if (current != expectedVersion) {
+            Map<String, Map<String, SkippedInput>> existingRecords = existing == null ? Map.of() : existing.records();
+            if (current != expectedVersion || quarantineId != null && !recordsAllow.test(existingRecords.getOrDefault(quarantineId, Map.of()))) {
                 return existing;
             }
             StoredSaga savedSaga = requireNonNull(next.apply(stored));
-            Map<String, Map<String, SkippedInput>> records = existing == null ? Map.of() : existing.records();
+            Map<String, Map<String, SkippedInput>> records = existingRecords;
             if (quarantineId != null) {
                 records = withRecords(records, quarantineId, writeRecords.apply(records.getOrDefault(quarantineId, Map.of())));
             }

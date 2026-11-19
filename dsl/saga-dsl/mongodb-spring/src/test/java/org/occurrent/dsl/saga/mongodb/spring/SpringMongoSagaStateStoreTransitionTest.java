@@ -36,6 +36,7 @@ import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.retry.RetryStrategy;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -101,7 +102,7 @@ class SpringMongoSagaStateStoreTransitionTest {
                         BsonDocument command = event.getCommand();
                         BsonValue target = command.get(event.getCommandName());
                         sent.add(new Sent(event.getCommandName(), target != null && target.isString() ? target.asString().getValue() : "", command.containsKey("txnNumber"),
-                                command.getDocument("writeConcern", new BsonDocument())));
+                                BsonDocument.parse(command.getDocument("writeConcern", new BsonDocument()).toJson())));
                     }
                 }).build());
         template = new MongoTemplate(client, database);
@@ -148,6 +149,15 @@ class SpringMongoSagaStateStoreTransitionTest {
 
     private static boolean ended(SpringMongoSagaStateStore<Payment> store, String sagaId) {
         return SagaEnvelopes.of(store, null).compareAndSaveQuarantineEnded(store, next(store, sagaId), versionOf(store, sagaId), QUARANTINE_ID);
+    }
+
+    private static SagaEnvelope<Payment> completing(SagaEnvelope<Payment> e) {
+        return new SagaEnvelope<>(e.sagaId(), e.state(), SagaStatus.COMPLETED, e.version(), List.of(), e.streamWatermarks(), null, e.createdAt(), NOW, NOW, null, true, null, Map.of(), null);
+    }
+
+    // The write of a release that completes the instance, which deletes the records whatever is left
+    private static boolean endedByCompletion(SpringMongoSagaStateStore<Payment> store, String sagaId) {
+        return SagaEnvelopes.of(store, null).compareAndSaveQuarantineEnded(store, completing(next(store, sagaId)), versionOf(store, sagaId), QUARANTINE_ID);
     }
 
     // An instance at version 2 with the record of a@1, so that a stale version is a version that was once current
@@ -214,7 +224,7 @@ class SpringMongoSagaStateStoreTransitionTest {
             SpringMongoSagaStateStore<Payment> store = store(RetryStrategy.none());
             aQuarantinedInstanceWithTheRecordOfA(store, "order-4");
 
-            leavesTheInstanceAndItsRecordsAsTheyWere("order-4", store, FailPoint.failing(client, "delete", 1, UNKNOWN_ERROR), () -> ended(store, "order-4"));
+            leavesTheInstanceAndItsRecordsAsTheyWere("order-4", store, FailPoint.failing(client, "delete", 1, UNKNOWN_ERROR), () -> endedByCompletion(store, "order-4"));
         }
 
         @Test
@@ -274,7 +284,59 @@ class SpringMongoSagaStateStoreTransitionTest {
             SpringMongoSagaStateStore<Payment> store = store(RetryStrategy.none());
             aQuarantinedInstanceWithTheRecordOfA(store, "order-4");
 
-            writesNothing("order-4", store, e -> SagaEnvelopes.of(store, null).compareAndSaveQuarantineEnded(store, e, 1, QUARANTINE_ID));
+            writesNothing("order-4", store, e -> SagaEnvelopes.of(store, null).compareAndSaveQuarantineEnded(store, completing(e), 1, QUARANTINE_ID));
+        }
+    }
+
+    @Nested
+    class AQuarantineEndedByAnInstanceThatIsNotCompleted {
+
+        @Test
+        void is_refused_while_a_record_is_under_the_quarantine_id_and_leaves_the_instance_and_the_record_as_they_were() {
+            SpringMongoSagaStateStore<Payment> store = store(RetryStrategy.none());
+            aQuarantinedInstanceWithTheRecordOfA(store, "order-1");
+            StoredSaga instanceBefore = store.find("order-1").orElseThrow();
+            State before = stateOf(store, "order-1");
+
+            boolean ended = ended(store, "order-1");
+
+            assertAll(
+                    () -> assertThat(ended).as("an instance that is not completed ends its quarantine only with no record left").isFalse(),
+                    () -> assertThat(store.find("order-1")).as("the instance, version and fields").contains(instanceBefore),
+                    () -> assertThat(stateOf(store, "order-1")).isEqualTo(before),
+                    () -> assertThat(before.records()).containsExactly(new SkippedInput(1, "a@1"))
+            );
+        }
+
+        @Test
+        void succeeds_once_the_record_is_gone() {
+            SpringMongoSagaStateStore<Payment> store = store(RetryStrategy.none());
+            aQuarantinedInstanceWithTheRecordOfA(store, "order-2");
+            assertThat(ended(store, "order-2")).as("refused while the record is there").isFalse();
+            assertThat(replayed(store, "order-2", new SkippedInput(1, "a@1"))).isTrue();
+            long version = versionOf(store, "order-2");
+
+            boolean ended = ended(store, "order-2");
+
+            assertAll(
+                    () -> assertThat(ended).isTrue(),
+                    () -> assertThat(versionOf(store, "order-2")).isEqualTo(version + 1)
+            );
+        }
+
+        @Test
+        void that_completes_the_instance_deletes_every_record_under_the_quarantine_id() {
+            SpringMongoSagaStateStore<Payment> store = store(RetryStrategy.none());
+            aQuarantinedInstanceWithTheRecordOfA(store, "order-3");
+            assertThat(skip(store, "order-3", new SkippedInput(2, "b@2"))).isTrue();
+
+            boolean ended = endedByCompletion(store, "order-3");
+
+            assertAll(
+                    () -> assertThat(ended).isTrue(),
+                    () -> assertThat(SagaEnvelopes.of(store, null).find("order-3").orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(store.findSkippedInputs("order-3", QUARANTINE_ID, 100)).isEmpty()
+            );
         }
     }
 
@@ -300,7 +362,7 @@ class SpringMongoSagaStateStoreTransitionTest {
             aQuarantinedInstanceWithTheRecordOfA(store, "order-2");
             assertThat(skip(store, "order-2", new SkippedInput(2, "b@2"))).isTrue();
 
-            boolean applied = ended(store, "order-2");
+            boolean applied = endedByCompletion(store, "order-2");
 
             assertAll(
                     () -> assertThat(applied).isTrue(),
@@ -340,8 +402,7 @@ class SpringMongoSagaStateStoreTransitionTest {
                     () -> skip(store, "order-1", new SkippedInput(2, "b@2")),
                     () -> startRelease(store, "order-1", new SkippedInput(0, "a@1")),
                     () -> replayed(store, "order-1", new SkippedInput(0, "a@1")),
-                    () -> ended(store, "order-1"),
-                    () -> store.delete("order-1"));
+                    () -> endedByCompletion(store, "order-1"));
 
             for (int i = 0; i < writes.size(); i++) {
                 sent.clear();
@@ -351,6 +412,12 @@ class SpringMongoSagaStateStoreTransitionTest {
                 assertThat(commits).as("commitTransaction commands of write %s", i).hasSize(1);
                 assertDurable(commits.get(0));
             }
+            aQuarantinedInstanceWithTheRecordOfA(store, "order-9");
+            sent.clear();
+            store.delete("order-9");
+            List<Sent> commitsOfTheDelete = sent.stream().filter(s -> s.command().equals("commitTransaction")).toList();
+            assertThat(commitsOfTheDelete).as("commitTransaction commands of the delete of a quarantined instance").hasSize(1);
+            assertDurable(commitsOfTheDelete.get(0));
         }
 
         @Test
@@ -411,6 +478,28 @@ class SpringMongoSagaStateStoreTransitionTest {
             assertAll(
                     () -> assertThat(outsideBeforeCommit[0]).as("nothing is visible outside before the caller commits").isEqualTo(before),
                     () -> assertThat(stateOf(store, "order-2")).isEqualTo(new State(before.version() + 1, List.of(new SkippedInput(1, "a@1"), new SkippedInput(2, "b@2"))))
+            );
+        }
+
+        @Test
+        void that_a_transition_in_it_loses_its_compare_and_set_leaves_it_committable_with_the_callers_other_write() {
+            SpringMongoSagaStateStore<Payment> store = store(RetryStrategy.none());
+            aQuarantinedInstanceWithTheRecordOfA(store, "order-4");
+            State before = stateOf(store, "order-4");
+            SagaEnvelope<Payment> lost = next(store, "order-4");
+            boolean[] applied = {true};
+
+            // Version 1 is stale, the instance is at version 2
+            Throwable thrown = catchThrowable(() -> callersTransaction().executeWithoutResult(status -> {
+                template.insert(new org.bson.Document("_id", "callers-write"), "callers-writes");
+                applied[0] = SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, lost, 1, QUARANTINE_ID, new SkippedInput(2, "b@2"));
+            }));
+
+            assertAll(
+                    () -> assertThat(thrown).as("the caller's commit, which an UnexpectedRollbackException says the lost compare-and-set marked for rollback").isNull(),
+                    () -> assertThat(applied[0]).as("the compare-and-set at the stale version").isFalse(),
+                    () -> assertThat(client.getDatabase(database).getCollection("callers-writes").find(new org.bson.Document("_id", "callers-write")).first()).as("the caller's other write after its commit").isNotNull(),
+                    () -> assertThat(stateOf(store, "order-4")).as("the lost transition wrote nothing").isEqualTo(before)
             );
         }
 

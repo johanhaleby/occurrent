@@ -91,6 +91,20 @@ whatever write concern the `MongoTemplate` has. Every other read of the store go
 `majority`, so the executor never acts on a write that a failover can still roll back, its own included, such as a
 write whose majority acknowledgement timed out.
 
+A read at `majority` can still miss a write acknowledged before it. Right after a failover, a majority read on the new
+primary can miss a write the old primary acknowledged at `majority`. The executor acts on an instance or a record it
+finds through a compare-and-set on the version, which a read that missed a later write loses. Two decisions act on
+something a read did not find, and each reads again where nothing is missed:
+
+- `find` and `findWithoutState` read an instance they don't find again at read concern `linearizable`, which returns
+  every write a majority acknowledged before the read started. The executor skips an input addressed to no instance
+  without writing anything, so an instance the read missed would lose that input.
+- `compareAndSaveQuarantineEnded`, for an instance the release doesn't complete, reads the records again inside its
+  transaction and writes nothing while one is there. A release ends the quarantine after a read of the records finds
+  none, and the write deletes every record under the quarantine id, so a record the read missed would be deleted
+  before it was replayed. The transaction reads everything the primary has, and a new primary has every write a
+  majority acknowledged.
+
 A transaction aborted with the `TransientTransactionError` label runs again through the store's `RetryStrategy`. A
 commit that ends with `UnknownTransactionCommitResult` is committed again through the same strategy. Any other failure
 of the transaction is thrown at once. The transaction needs a replica set. A standalone server refuses it, and the store
@@ -127,6 +141,8 @@ the concern is. The SPI and the store's javadoc say that the caller's commit dec
   the template's concern, so this is a breaking change, with a section in the upgrade guide.
 - Quarantine on MongoDB needs a replica set, because a skip runs in a transaction. Occurrent's MongoDB subscription
   models need one already for change streams.
+- A `find` or `findWithoutState` that finds no instance reads a second time, and that read waits for a majority as a
+  write does. The first input of a new instance pays for it, and a found instance costs one read as before.
 - A transition costs a transaction, a few more round trips than a single-document write. Only a quarantined instance and
   a release run them. The live path of an `ACTIVE` instance stays one write.
 - A `SpringMongoSagaStateStore` built on a `MongoOperations` that isn't a `MongoTemplate`, such as a wrapper or a mock,

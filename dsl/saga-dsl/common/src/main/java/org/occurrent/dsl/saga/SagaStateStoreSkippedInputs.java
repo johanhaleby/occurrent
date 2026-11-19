@@ -39,6 +39,9 @@ import java.util.List;
  * after it. On a replicated database that means the write is on a majority of the members, in their journals, before
  * the call returns. The reads of the store, those here and those of {@link SagaStateStore}, return only writes that
  * survive a failover, so the executor never acknowledges an input because it read a write that a failover can roll back.
+ * A read can still miss a write acknowledged before it, such as on a new primary right after a failover, except where
+ * {@link SagaStateStore#find(String)} says it can't. The executor acts on any other read through a compare-and-set,
+ * which a read that missed a write loses, or on the next poll.
  * Inside a transaction the caller opened, the four methods and {@link SagaStateStore#delete(String)}
  * are atomic through that transaction, and the write concern of its commit decides whether the write survives a
  * failover.
@@ -137,9 +140,14 @@ public interface SagaStateStoreSkippedInputs {
      * every record under the quarantine {@code quarantineId} of its saga id, in one atomic write. A release calls this
      * when it turns the instance active after a read of its records found none, and when a record it replays completes
      * the instance.
+     * <p>
+     * When {@code saga} is not completed, the write takes place only while no record is under {@code quarantineId}. The
+     * release's read of the records can miss one, and deleting it would lose an input the instance skipped and never
+     * applied. The store checks inside the atomic write, against every record written before it.
      *
      * @return {@code true} when the instance is written, {@code false} when the stored version is not
-     * {@code expectedVersion}, and then nothing is written or deleted
+     * {@code expectedVersion}, or when {@code saga} is not completed and a record is under {@code quarantineId}, and then
+     * nothing is written or deleted
      */
     boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId);
 }

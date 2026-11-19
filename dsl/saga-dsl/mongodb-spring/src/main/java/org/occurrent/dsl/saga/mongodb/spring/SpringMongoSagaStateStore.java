@@ -105,8 +105,12 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * {@link #findByStatus}, {@link #findReleasingSagaIds} and {@link #findSkippedInputs}) goes to the primary at read
  * concern {@code majority}, so it returns only writes a majority of the replica set has. A write that reached the primary
  * but not a majority reads as absent until it reaches a majority or a failover rolls it back, so the saga never
- * acknowledges an input on the strength of it. The transactions below read at read concern {@code snapshot}, which is
- * what a majority had when the transaction started.
+ * acknowledges an input on the strength of it. Right after a failover, a majority read on the new primary can miss a
+ * write the old primary acknowledged, so {@link #find} and {@link #findWithoutState} read an instance they don't find
+ * again at read concern {@code linearizable}, which returns every write a majority acknowledged before it. The
+ * transactions below read at read concern {@code snapshot}, everything the primary has when the transaction starts,
+ * and their commit at {@code majority} returns only once a majority has all of it. A release ends the quarantine of an
+ * instance only in such a transaction that finds no skipped input left.
  * <p>
  * The four writes of {@link SagaStateStoreSkippedInputs} and the {@link #delete(String)} of a quarantined instance write
  * the instance and its skipped inputs in one MongoDB transaction, through a {@link MongoTransactionManager} on the
@@ -335,8 +339,17 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         // Decoding happens outside the retried supplier, and in the caller, so a stored state that no longer reads back
         // throws once instead of being attempted ten times.
-        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(majorityRead(Query.query(where(ID).is(sagaId))), Document.class, collectionName);
-        return Optional.ofNullable(retryStrategy.execute(read)).map(this::toStoredSaga);
+        return Optional.ofNullable(findInstance(() -> Query.query(where(ID).is(sagaId)))).map(this::toStoredSaga);
+    }
+
+    // An instance found at read concern majority is acted on through a compare-and-set on its version, which a stale
+    // version loses. An absence has no version to compare, and an input addressed to no instance is skipped without a
+    // write. Right after a failover the new primary's majority view can be older than a write the old primary
+    // acknowledged, so an absence is read again at read concern linearizable. That read returns every write a majority
+    // acknowledged before it started, and returns only once a majority has what it read
+    private @Nullable Document findInstance(Supplier<Query> query) {
+        Document found = retryStrategy.execute(() -> mongoOperations.findOne(majorityRead(query.get()), Document.class, collectionName));
+        return found != null ? found : retryStrategy.execute(() -> mongoOperations.findOne(linearizableRead(query.get()), Document.class, collectionName));
     }
 
     @Override
@@ -346,11 +359,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (expectedVersion == 0) {
             // Caught inside the retried supplier, because another writer getting there first is an outcome and
             // retrying it would lose the same race nine more times. A failure arriving after MongoDB already stored
-            // the document hits this catch on the next attempt and reports the save as lost. The caller reads again at
-            // read concern majority, so it reads no instance and loses its insert again until a majority has the
-            // document, and then skips an input its watermarks already cover. A failover that rolls the document back
-            // lets the next insert through. An input that has no redelivery key has no watermark, so it re-dispatches,
-            // which is the multiplicity a lost compare-and-set already has.
+            // the document hits this catch on the next attempt and reports the save as lost. The caller reads again,
+            // and find reads an absence again at read concern linearizable, which waits until a majority has the
+            // document and then returns it, or throws when no majority has it in time. With the document read back,
+            // the caller skips an input its watermarks already cover. A failover that rolls the document back lets the
+            // next insert through. An input that has no redelivery key has no watermark, so it re-dispatches, which is
+            // the multiplicity a lost compare-and-set already has.
             Supplier<Boolean> insert = () -> {
                 try {
                     writeDurably(collectionName, collection -> collection.insertOne(document));
@@ -368,10 +382,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public Optional<StoredSaga> findWithoutState(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        Query query = Query.query(where(ID).is(sagaId));
-        project(query, SagaCodec.fieldsWithoutState());
-        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(majorityRead(query), Document.class, collectionName);
-        return Optional.ofNullable(retryStrategy.execute(read)).map(this::toStoredSaga);
+        return Optional.ofNullable(findInstance(() -> {
+            Query query = Query.query(where(ID).is(sagaId));
+            project(query, SagaCodec.fieldsWithoutState());
+            return query;
+        })).map(this::toStoredSaga);
     }
 
     @Override
@@ -510,7 +525,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Objects.requireNonNull(saga, "saga cannot be null");
         Document document = toDocument(saga);
         Document filter = quarantineFilter(saga.sagaId(), quarantineId);
-        return transition(database -> instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
+        // A release ends the quarantine of an instance it does not complete once its read of the records found none. That
+        // read can miss a record right after a failover, so the transaction reads the records again. It reads everything
+        // the primary has, which includes every write a majority acknowledged. A record written after that read changes
+        // the instance too, so the replaceOne then conflicts and the transaction runs again
+        boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
+        return transition(database -> (completes || skippedInputs(database).find(filter).first() == null)
+                                      && instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
                 database -> skippedInputs(database).deleteMany(filter));
     }
 
@@ -785,5 +806,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // back. Inside a transaction the caller started, the driver sends that transaction's read concern instead
     private static Query majorityRead(Query query) {
         return primary(query).withReadConcern(ReadConcern.MAJORITY);
+    }
+
+    // Bounded by the write timeout, since the read waits for a majority as a write does
+    private static Query linearizableRead(Query query) {
+        return primary(query).withReadConcern(ReadConcern.LINEARIZABLE).maxTime(WRITE_TIMEOUT);
     }
 }
