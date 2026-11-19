@@ -192,8 +192,8 @@ class StreamCatchupLiveEventWaitsForEndedReplayMongoTest {
 
     /**
      * A shutdown forgets every record before the live delegate closes its runs, and a live call that threw into a run
-     * still open would make the MongoDB model restart it. The call waits on instead, until the live delegate no longer
-     * reports the subscription running, which the MongoDB model does from the moment its shutdown begins, and from then
+     * still open would make the MongoDB model restart it. The call waits on instead, until a second after the catch-up
+     * model's shutdown began, which is after the MongoDB model's shutdown began right behind it, and from then
      * on it ignores a run's failure instead of restarting the run.
      */
     @Test

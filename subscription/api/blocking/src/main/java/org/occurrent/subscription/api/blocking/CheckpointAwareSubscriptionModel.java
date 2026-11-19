@@ -36,12 +36,10 @@ import java.util.function.BooleanSupplier;
  * back the others.
  * <p>
  * The action a catch-up model gives this model throws {@link AttemptNotMade} without handling the event once a cancel
- * of the subscription has forgotten it. While the catch-up model shuts down, an action that waits as above throws it
- * once this model no longer reports the subscription running, and a second after the shutdown began even when this
- * model still does. An implementation should report a subscription not running from the moment its shutdown begins,
- * and from then on not restart a run whose action threw. Otherwise, and also when its shutdown begins more than a
- * second after the catch-up model's, the throw a second after the shutdown began can reach a run it still has open. An
- * implementation must not store its position past an event whose action threw it.
+ * of the subscription has forgotten it. While the catch-up model shuts down, an action that waits as above throws it a
+ * second after the shutdown began. An implementation should not restart a run whose action threw once its shutdown has
+ * begun. The throw can reach a run it still has open when its shutdown begins more than a second after the catch-up
+ * model's. An implementation must not store its position past an event whose action threw it.
  */
 public interface CheckpointAwareSubscriptionModel extends SubscriptionModel, GlobalCheckpointSource<@Nullable Checkpoint> {
 
