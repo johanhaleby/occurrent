@@ -115,7 +115,7 @@ import java.util.stream.Stream;
  *       else, so a delete that throws cancels nothing, and the cancel can be tried again. A delete the store loses, or
  *       a marker write it applies after the delete, leaves a marker stored, and the next subscribe of the id then skips
  *       its replay. So a projection that has to be rebuilt, or whose filter changes, subscribes under a new id. ADR 179
- *       decides that the reactor stack resumes after its marker instead of reading it as done.</li>
+ *       decides that the reactor stack reads its marker as a position to resume after instead of as done.</li>
  * </ul>
  * Only stream and capability-agnostic subscription filters can be replayed (their plain {@link Filter} drives the
  * position-ordered read). A DCB subscription filter is rejected, since a DCB boundary needs a different replay read.

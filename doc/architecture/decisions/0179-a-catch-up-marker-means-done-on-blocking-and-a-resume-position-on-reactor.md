@@ -65,15 +65,19 @@ that is running when a cancel arrives finishes before the delete, and a write th
 replay gone and writes nothing. What the lock cannot order is the store applying a write late, after the delete has
 returned. The next subscribe of the id then skips its replay, see "Cancel".
 
-### The reactor stack resumes after its marker
+### The reactor stack resumes after a marker it reads
 
-On the reactor `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` and `DomainEventFeed`, every catch-up
+On the reactor `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` and `DomainEventFeed`, a catch-up
 start does this:
 
 1. Read the stored marker P. No marker means the start has none.
 2. Read the head H with `reader.currentPosition()`, before the replay.
 3. Replay `PositionRange.afterPosition(P)`, or `PositionRange.fromBeginning()` when there is no marker.
 4. Write H as the marker, before the live drain, at the point where 0.34.0 writes it, as ADR 110 orders it.
+
+The reactor push model skips step 1 after a failed delete of the marker. Until a delete or a marker write of that
+model succeeds, a start of the id in the same process deletes the marker again and replays from the beginning, see
+"Fed-back events on the reactor stack".
 
 A catch-up that one of these sources asks for from its own code, such as a view calling `catchUp()` from the code that applies an event,
 reads P and H when it gets its turn to replay, not when it is asked. It then resumes after the marker the catch-up
@@ -370,8 +374,8 @@ every third-party `CheckpointStorage` and needed a rolling-upgrade precondition.
   the in-memory engine, or a marker write the store applies after that delete, makes a later subscribe of the same id
   skip its replay. 0.34.0 had the same gap and promised a rebuild anyway. Once a rebuild means a new subscription id,
   the same id is only ever subscribed again to resume, and the gap costs nothing.
-* On the reactor stack every start after the first replays the events since the previous start's H, per event, without
-  the replay callbacks. After a restart it applies again the events the live feed delivered before the restart, since
+* On the reactor stack every start after the first replays at least the events since the previous start's H, per
+  event, without the replay callbacks. After a restart it applies again the events the live feed delivered before the restart, since
   the de-duplication cache is in memory. The at-least-once contract already allows that, and a projection has to
   tolerate it. The first 0.35.0 start replays everything since the id first caught up.
 * `cancelSubscription(id)` no longer guarantees a full replay on the next subscribe, on either stack. The cancel still
@@ -404,8 +408,9 @@ every third-party `CheckpointStorage` and needed a rolling-upgrade precondition.
   the reactor stack" lists which. When that delete fails, the reactor push model's next catch-up of the id in the same
   process tries it again and replays from the beginning, as in 0.34.0, unless a delete or a marker write of that model
   succeeds first.
-* ADR 177's marker order is amended for the reactor stack. Step 1 reads the marker on both stacks, the blocking stack
-  writes it after the drain, and the reactor stack writes H before the drain on purpose, so
+* ADR 177's marker order is amended for the reactor stack. Step 1 reads the marker on both stacks, apart from a
+  start of the reactor push model after a failed delete, the blocking stack writes it after the drain, and the reactor
+  stack writes H before the drain on purpose, so
   [#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 31 no longer applies to the reactor stack.
 * The reactor push model still takes no `CheckpointWriteVersionSource`
   ([#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 29), so its marker writes pass `any()`. Nothing
