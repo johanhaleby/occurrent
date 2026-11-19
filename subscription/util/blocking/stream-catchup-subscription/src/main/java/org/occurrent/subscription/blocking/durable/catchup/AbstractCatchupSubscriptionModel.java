@@ -565,7 +565,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * delegate's thread, so the action never runs alongside itself. The subscribe itself returns without that wait. The
      * wait ends once the subscription is gone, and the event then doesn't reach the action. A cancel that throws keeps
      * the subscription, so the event waits on and reaches the action once the replay has returned. An interrupt that comes
-     * during the wait doesn't end it. It is kept from the action and set again once the action has returned or thrown.
+     * during the wait doesn't end it. Each of those calls hands the event to the action with the thread's interrupt status
+     * clear, whenever the status was set, and sets it again once the action has returned or thrown. When no such replay
+     * is left as the subscribe runs, the live delegate gets the action itself, and calls it with whatever interrupt
+     * status its thread has.
      */
     protected Subscription subscribeInTheWrappedModel(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         Consumer<CloudEvent> afterEndedReplays = afterEndedReplaysReturned(subscriptionId, action);
@@ -608,6 +611,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     interrupted = true;
                 }
             }
+            // Also a status get(..) returned without throwing for, or one set before a call that didn't wait
+            interrupted |= Thread.interrupted();
             action.accept(event);
         } finally {
             if (interrupted) {
