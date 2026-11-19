@@ -715,7 +715,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * reached it later. A delete the store loses in a failover, or a marker write the store applies after the delete,
      * makes that subscribe resume after the old marker instead. A delete that fails makes a subscribe in this process
      * delete the marker again and replay from the beginning, and a subscribe after a restart resume after the old
-     * marker. To rebuild the projection for certain, subscribe under a new subscription id.
+     * marker if the store still holds it. To rebuild the projection for certain, subscribe under a new subscription id.
      * <p>
      * The cancel happens when you call this, whether or not anything subscribes to the returned {@code Mono}. When the
      * delete fails, the subscription stays cancelled and the marker stays stored. It deletes the marker for an id this

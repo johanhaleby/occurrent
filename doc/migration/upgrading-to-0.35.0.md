@@ -3068,7 +3068,7 @@ What you see:
   delete is done. The next subscribe of the id replays from the beginning when that delete holds. A delete that the
   store loses, on a MongoDB member with the in-memory storage engine for example, or a marker write that the store
   applies after the delete, makes that subscribe resume after the old marker instead. A delete that fails makes the next subscribe of the id in the same process replay from the
-  beginning, as in 0.34.0, but a subscribe after a restart resumes after the marker that is still stored. Subscribe
+  beginning, as in 0.34.0, but a subscribe after a restart resumes after the marker if the store still holds it. Subscribe
   under a new subscription id when you need a rebuild.
 - The marker is stored under the subscription id alone. When you change the filter or the projection, subscribe under
   a new id. A start under the old id resumes after a position its earlier filter stored, and skips the events at or

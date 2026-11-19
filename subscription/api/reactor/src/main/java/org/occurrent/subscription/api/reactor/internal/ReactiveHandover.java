@@ -2287,8 +2287,8 @@ public final class ReactiveHandover<T, K> {
         failedForGood.tryEmitError(FailedForGood.INSTANCE);
     }
 
-    // Retried, since a marker left in place makes the next catch-up resume after it, so a failed payload at or below
-    // it is not delivered again, and an attempt that takes longer than forgetAttemptTimeout counts as failed. Never
+    // Retried, since a catch-up that reads a marker left in place resumes after it, so a failed payload at or below
+    // it is not replayed, and an attempt that takes longer than forgetAttemptTimeout counts as failed. Never
     // errors, and always completes, so the failure goes on either way, and the log line tells an operator what to
     // remove.
     private Mono<Void> forgetCaughtUp(List<Source<T>> sources) {
@@ -2297,8 +2297,8 @@ public final class ReactiveHandover<T, K> {
                         .timeout(forgetAttemptTimeout)
                         .retryWhen(Retry.backoff(FORGET_RETRIES, FORGET_FIRST_RETRY_DELAY))
                         .onErrorResume(forgetFailure -> {
-                            log.error("The catch-up marker of this {} could not be forgotten, so its next catch-up "
-                                    + "resumes after it and does not deliver a failed event at or below it again. "
+                            log.error("The catch-up marker of this {} could not be forgotten, so a catch-up that reads "
+                                    + "it resumes after it and does not replay a failed event at or below it. "
                                     + "Delete the catch-up marker of this {} before replacing it.", noun, noun,
                                     forgetFailure);
                             return Mono.empty();
