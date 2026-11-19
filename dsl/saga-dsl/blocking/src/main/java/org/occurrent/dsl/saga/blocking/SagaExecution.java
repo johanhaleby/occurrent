@@ -892,7 +892,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             try {
                 E event = converter.toDomainEvent(cloudEvent);
                 SagaInput<E> input = SagaInput.event(event, EventMetadata.from(cloudEvent));
-                Outcome<S, C> outcome = SagaExecutionSupport.replay(saga, sagaId, current, record, input, meta, now, config.reorderWindow());
+                Outcome<S, C> outcome = SagaExecutionSupport.replay(saga, sagaId, current, record, input, meta, now);
                 if (outcome.processed()) {
                     dispatcher.dispatchAll(outcome.commands());
                     saved = saveReplayed(records, sagaId, quarantineId, record, current, outcome);

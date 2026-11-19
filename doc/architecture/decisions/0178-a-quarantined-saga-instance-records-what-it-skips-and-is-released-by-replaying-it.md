@@ -175,7 +175,11 @@ writes to the instance's own document keep the caller's write concern.
    says nothing about whether the input it names was applied, and the stream marks alone decide whether a record's
    input was applied. K is applied once, as its record. A record whose input the stream marks show as applied already,
    after a crash between that write and the delete or behind another node's release, is deleted without being applied
-   again, also when it is K's or the failure record names its input.
+   again, also when it is K's or the failure record names its input. Release reads and writes the stream marks with no
+   reorder window, so every version it applies stays among the `applied` ones. With a window of 1, a record of version 3
+   replayed after a record of version 5 of the same type would read as behind the window and be deleted without being
+   applied. A record is written only while its input is new, so a record that isn't new to the marks read this way names
+   an input the instance applied. The write that makes the instance `ACTIVE` trims the marks back to the window.
 3. The instance becomes `ACTIVE`, with the failure record and the skip counter cleared, only in a compare-and-set that
    expects the version release read before it found no records left. Release reads the instance first and the records
    after it, so a skip that finishes between the two reads has changed the version, and the write loses. A skip that
