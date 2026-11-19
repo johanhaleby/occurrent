@@ -133,13 +133,13 @@ import java.util.function.Supplier;
  * A failing subscription deletes its catch-up marker, refuses every later event that does not come from its handler,
  * applies the events it has already taken in and those its handler writes meanwhile, and then fails for good. A
  * failed catch-up starts it failing the same way, and also refuses each event from anywhere else that is still
- * waiting, and does not apply it. Cancel the subscription and subscribe again, and once the marker is gone its
- * catch-up replays from the beginning. When deleting the marker still fails after 3 retries, the subscription logs an
- * error naming the subscription id. The cancel deletes the marker again, and when that delete fails too, subscribing
+ * waiting, and does not apply it. When deleting the marker still fails after 3 retries, the subscription logs an
+ * error naming the subscription id. A cancel deletes the marker again, and when that delete fails too, subscribing
  * again in this process deletes it once more and replays from the beginning. After a restart a catch-up that reads a
- * marker the store still holds resumes after it and does not replay a failed event at or below it, so delete it by hand
- * before subscribing again. A delete the store loses in a failover has the same effect, so a subscription that has
- * to be rebuilt subscribes under a new id. A written event that no replay can bring back and nothing waits for is
+ * marker the store still holds resumes after it and does not replay a failed event at or below it. Deleting the marker
+ * by hand is best effort, as a cancel's delete is, so only a subscription under a new id is sure to replay from the
+ * beginning, see the "Cancel" section of
+ * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md">ADR 179</a>. A written event that no replay can bring back and nothing waits for is
  * lost when applying it fails, or when the process stops before it is applied.
  * <p>
  * Nothing records which live events the subscription has handled, and a crash before the handler has run
@@ -365,8 +365,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public Mono<Void> forgetCaughtUp() {
-                // Names the id, since the handover logs this when every attempt failed and an operator then deletes
-                // the marker by hand.
+                // Names the id, since the handover logs this when every attempt failed, and an operator needs to know
+                // which marker can still be stored.
                 // Queued behind the last marker operation for the id, as a cancel's delete is, so a marker write
                 // still running cannot put the marker back after it
                 // Does not delete a checkpoint the last read refused, since it is not this model's to delete.

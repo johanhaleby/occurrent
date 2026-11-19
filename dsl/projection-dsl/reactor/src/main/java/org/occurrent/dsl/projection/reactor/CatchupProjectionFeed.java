@@ -256,10 +256,11 @@ public final class CatchupProjectionFeed<E> {
      * A failing feed deletes its catch-up marker, refuses every later event that does not come from its fold, folds the
      * events it has already taken in and those its fold feeds it meanwhile, and then fails for good. A failed catch-up
      * starts it failing the same way, and also refuses each event from anywhere else that is still waiting, and does
-     * not fold it. Build a new feed, and once the marker is gone its catch-up replays from the beginning. When deleting
-     * the marker still fails after 3 retries, the feed logs an error naming the feed id, and the marker has to be
-     * deleted by hand before building a new feed, since a catch-up that reads it resumes after it and does not replay
-     * a failed event at or below it.
+     * not fold it. When deleting the marker still fails after 3 retries, the feed logs an error naming the feed id. A
+     * catch-up that reads a marker the store still holds resumes after it and does not replay a failed event at or
+     * below it. Deleting the marker by hand is best effort, so only a new feed under a new id is sure to replay from
+     * the beginning, see the "Cancel" section of
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md">ADR 179</a>.
      * <p>
      * An event fed from code nothing waits for has no caller to tell, so when no replay can bring it back, it is lost
      * if its fold fails or the process stops before it is folded. An event the fold's code feeds on another thread
@@ -595,8 +596,8 @@ public final class CatchupProjectionFeed<E> {
     // Reads what is stored when asked, since the source a forget runs for can be the one delivering live while another
     // catch-up failed, and a marker read it made earlier says nothing about what is stored now. Deletes nothing when
     // that is not a catch-up marker, such as a durable subscription's resume token, since it is not this feed's to
-    // delete. Names the id, since the handover logs this when every attempt failed and an operator then deletes the
-    // marker by hand.
+    // delete. Names the id, since the handover logs this when every attempt failed, and an operator needs to know
+    // which marker can still be stored.
     private Mono<Void> forgetCaughtUp() {
         CheckpointStorage marker = catchupMarker;
         if (marker == null) {
