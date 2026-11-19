@@ -266,7 +266,7 @@ class CatchupThenPushSubscriptionModelTest {
         replacement.join(TimeUnit.SECONDS.toMillis(10));
         first.join(TimeUnit.SECONDS.toMillis(10));
 
-        assertThat(announced).hasSize(2);
+        await().untilAsserted(() -> assertThat(announced).hasSize(2));
         assertThat(announced.get(0))
                 .as("the attempt that reached its announce first is the one announced first, so a start never "
                         + "arrives behind the start of the attempt that replaced it")
