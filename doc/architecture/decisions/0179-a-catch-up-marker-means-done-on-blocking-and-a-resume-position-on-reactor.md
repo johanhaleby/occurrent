@@ -339,8 +339,8 @@ The `CatchupListener` that `listenForCatchup` gives a push model follows the sam
 push model sends `catchupStarted`, `historyRead` and `alreadyDeliveredByReplay` only for a replay from the beginning. A
 start that replays after P sends none of them for itself. Before it replays, it sends `historyRead` for a replay from
 the beginning that a stop, a cancel or a failure cut short, and a start that replays from the beginning does the same
-before its own `catchupStarted`. So every `catchupStarted` the listener hears is followed by `historyRead` for the same
-replay once a later start of the id replays. A replay cut short by a shutdown, or one no later start follows, gets no
+before its own `catchupStarted`. So every `catchupStarted` the listener hears is followed by exactly one `historyRead`
+for the same replay once a later start of the id replays. A replay cut short by a shutdown, or one no later start follows, gets no
 `historyRead`, since the model delivers nothing for the id after it. A recorder that listens there, as the reactive
 Spring Boot starter's does, then keeps its records over a restart that replays after P, and a wait for an append the
 projection applied before the restart can still finish. In 0.34.0 every reactor start sent `catchupStarted`, and the
