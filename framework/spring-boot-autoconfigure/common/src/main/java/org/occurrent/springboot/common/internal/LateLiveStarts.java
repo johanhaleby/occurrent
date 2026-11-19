@@ -48,6 +48,11 @@ public final class LateLiveStarts {
         return liveStartByInstance.remove(new InstanceKey(instance, null));
     }
 
+    public synchronized @Nullable String get(Object instance) {
+        removeCollected();
+        return liveStartByInstance.get(new InstanceKey(instance, null));
+    }
+
     private void removeCollected() {
         Reference<?> key;
         while ((key = collected.poll()) != null) {

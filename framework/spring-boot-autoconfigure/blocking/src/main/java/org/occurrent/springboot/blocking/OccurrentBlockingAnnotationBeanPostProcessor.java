@@ -38,6 +38,7 @@ import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.aop.scope.ScopedProxyUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.BeanPostProcessor;
@@ -130,7 +131,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private final Map<Class<?>, List<Method>> synchronousHandlersByClass = new ConcurrentHashMap<>();
     // The start boundary each bean built after startup read when it was created, until it registers
     private final LateLiveStarts lateLiveStarts = new LateLiveStarts();
-    // The boundary a FactoryBean built after startup read for its product, until the product arrives
+    // The boundaries FactoryBeans built after startup read for their products
     private final LateFactoryLiveStarts lateFactoryLiveStarts = new LateFactoryLiveStarts();
     private StartPositionSupport startPositionSupport;
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
@@ -172,7 +173,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
         if (bean instanceof FactoryBean<?>) {
             if (startupScanComplete) {
-                lateFactoryLiveStarts.put(beanName, singletonDefinition(beanName), startPositionSupport.readLateLiveStart());
+                ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
+                boolean prototype = beanFactory.containsBeanDefinition(beanName) && beanFactory.getMergedBeanDefinition(beanName).isPrototype();
+                lateFactoryLiveStarts.factoryCreated(beanName, bean, prototype, startPositionSupport.readLateLiveStart());
             }
         } else {
             // put rather than putIfAbsent, because a creation that failed is retried and the retry can produce a
@@ -196,17 +199,24 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         return bean;
     }
 
-    // Read from the bean definition, since isSingleton on a FactoryBean's name answers for its product
-    private boolean singletonDefinition(String beanName) {
-        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
-        return beanFactory.containsBeanDefinition(beanName) && beanFactory.getMergedBeanDefinition(beanName).isSingleton();
-    }
-
     // The instance the callback above saw, which a proxy created since wraps
     private @Nullable String takeLateLiveStart(Object bean) {
         @Nullable String liveStart = lateLiveStarts.remove(bean);
         Object target = SubscriptionAnnotations.ultimateTarget(bean);
         return liveStart != null || target == bean ? liveStart : lateLiveStarts.remove(target);
+    }
+
+    // A prototype factory is claimed among those created on this thread, since asking the container for it would
+    // create another. Any other factory is the container's own, and the instance the callback above saw can be wrapped
+    // in a proxy since
+    private @Nullable String lateFactoryLiveStart(String beanName, ConfigurableListableBeanFactory beanFactory) {
+        if (beanFactory.getMergedBeanDefinition(beanName).isPrototype()) {
+            return lateFactoryLiveStarts.claimPrototypeFactory(beanName);
+        }
+        Object factory = beanFactory.getBean(BeanFactory.FACTORY_BEAN_PREFIX + beanName);
+        @Nullable String liveStart = lateFactoryLiveStarts.liveStartOf(factory);
+        Object target = SubscriptionAnnotations.ultimateTarget(factory);
+        return liveStart != null || target == factory ? liveStart : lateFactoryLiveStarts.liveStartOf(target);
     }
 
     // Where a bean created after the startup scan registers. A @Lazy bean, or a FactoryBean product nothing has
@@ -272,15 +282,13 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // sees the flag set. Registering it twice is not possible, since both check the same RegisteredHandlers.
         if (startupScanComplete) {
             boolean defined = beanFactory.containsBeanDefinition(beanName);
-            // A FactoryBean's product takes the boundary its factory read in the callback above. A later product of
-            // the same factory, or one whose factory was built before the startup scan ended, reads it now. Taken
-            // also for an instance with no bean definition, so its entry does not stay in the map
+            // A FactoryBean's product takes the boundary its own factory read in the callback above, before the
+            // product's getObject ran, as LateFactoryLiveStarts describes, and none when its factory was built before
+            // the startup scan ended. Any other bean's is taken also for an instance with no bean definition, so its
+            // entry does not stay in the map
             boolean product = defined && beanFactory.isFactoryBean(beanName);
-            @Nullable String lateLiveStart = product ? lateFactoryLiveStarts.remove(beanName, singletonDefinition(beanName)) : takeLateLiveStart(bean);
+            @Nullable String lateLiveStart = product ? lateFactoryLiveStart(beanName, beanFactory) : takeLateLiveStart(bean);
             if (defined) {
-                if (lateLiveStart == null && product && declaresAnyOccurrentAnnotation(userClassOf(bean))) {
-                    lateLiveStart = startPositionSupport.readLateLiveStart();
-                }
                 // Counted while the gate is closed, because the scan claims a handler before it subscribes it, and the
                 // startup thread's drain would skip a handler claimed here and could open the gate before the subscribe
                 boolean counted = writeAdmission.registrationStarts();

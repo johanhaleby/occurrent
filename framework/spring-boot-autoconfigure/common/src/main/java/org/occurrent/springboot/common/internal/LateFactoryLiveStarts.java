@@ -19,46 +19,102 @@ package org.occurrent.springboot.common.internal;
 
 import org.jspecify.annotations.Nullable;
 
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Internal, not part of the public API. The start boundary a FactoryBean built after startup read for its product,
- * kept until the annotation post-processor sees that product.
+ * Internal, not part of the public API. The start boundary each FactoryBean built after startup read as it was created,
+ * for the products it builds.
  * <p>
- * The product is a different instance from the factory, so the two meet only by bean name. A singleton FactoryBean is
- * created once, so its product takes the boundary whatever thread asks for it. Two creations of a prototype or scoped
- * FactoryBean can run at the same time on two threads, and Spring builds each one's product on the thread that
- * created its factory, inside the same {@code getBean} call. So such a boundary is kept for that thread only, and each
- * product takes the boundary its own creation read.
+ * Spring calls a post-processor before a factory's own initialization but none before its {@code getObject}, so the
+ * boundary belongs to the creation of the factory. A product never takes a boundary read after its {@code getObject}
+ * started, so a write the factory or {@code getObject} makes, or one made on another thread meanwhile, reaches it. It
+ * can get events written before it was built, and which ones depends on its factory:
+ * <ul>
+ *     <li>A singleton or scoped factory's product takes the boundary that factory read. When the product is built in
+ *     the {@code getBean} call that created the factory, that's every event written from that call on. When the factory
+ *     was created in an earlier call, by a {@code getBean} of the factory itself, or the product is a later one of a
+ *     factory whose products aren't cached, it's also every event written between the factory's creation and the
+ *     product's.</li>
+ *     <li>A prototype factory is created in the same call as its product. The product takes the boundary of the oldest
+ *     factory under its bean name that was created on its thread, hasn't been claimed by a product and hasn't been
+ *     garbage collected. Its own factory is one of them, so that boundary is never later than its own. It's earlier
+ *     when an older one is still there, which is the factory whose {@code getObject} asked for this product under its
+ *     own name, one asked for with {@code getBean} of the factory itself, or one whose creation failed and that isn't
+ *     collected yet. The product then also gets every event written since that older factory was created.</li>
+ * </ul>
+ * This assumes the boundaries one thread reads never go back, so the oldest is the earliest. A product whose factory
+ * was built before the startup scan ended takes none, and starts at the boundary of the context.
  * <p>
- * Spring calls no post-processor when a factory's initialization or its {@code getObject} throws, so nothing removes
- * the boundary that creation read. It stays as one entry per bean name, for a singleton, or per bean name and thread
- * that is still alive, for any other scope, and the next creation under that name, on that thread, replaces it.
+ * Keyed by the factory instance and held weakly, so a factory whose creation failed, or a prototype factory whose
+ * product is built, takes its boundary with it once it's collected. The boundary itself goes at the next access after
+ * that.
  */
 public final class LateFactoryLiveStarts {
-    private final Map<String, String> singletonLiveStarts = new ConcurrentHashMap<>();
-    // Dropped with the thread, so a failed creation on a thread that has ended keeps no entry
-    private final ThreadLocal<Map<String, String>> liveStartsOfThisThread = ThreadLocal.withInitial(HashMap::new);
+    private final LateLiveStarts liveStartByFactory = new LateLiveStarts();
+    // Oldest first, and dropped with the thread
+    private final ThreadLocal<Map<String, List<WeakReference<Object>>>> unclaimedPrototypeFactoriesOfThisThread =
+            new ThreadLocal<>();
 
     /**
-     * @param liveStart The boundary the factory read, or null when there is none, which drops an earlier one
+     * Called when a factory under {@code beanName} is created, before its initialization.
+     *
+     * @param liveStart The boundary the factory read, or null when there is none
      */
-    public void put(String beanName, boolean singleton, @Nullable String liveStart) {
-        Map<String, String> liveStarts = liveStartsFor(singleton);
-        if (liveStart == null) {
-            liveStarts.remove(beanName);
-        } else {
-            liveStarts.put(beanName, liveStart);
+    public void factoryCreated(String beanName, Object factory, boolean prototype, @Nullable String liveStart) {
+        if (liveStart != null) {
+            liveStartByFactory.put(factory, liveStart);
+        }
+        if (prototype) {
+            Map<String, List<WeakReference<Object>>> unclaimedByName = unclaimedPrototypeFactoriesOfThisThread.get();
+            if (unclaimedByName == null) {
+                unclaimedByName = new HashMap<>();
+                unclaimedPrototypeFactoriesOfThisThread.set(unclaimedByName);
+            }
+            List<WeakReference<Object>> unclaimed =
+                    unclaimedByName.computeIfAbsent(beanName, ignored -> new ArrayList<>());
+            unclaimed.removeIf(reference -> reference.get() == null);
+            unclaimed.add(new WeakReference<>(factory));
         }
     }
 
-    public @Nullable String remove(String beanName, boolean singleton) {
-        return liveStartsFor(singleton).remove(beanName);
+    /**
+     * @return The boundary {@code factory} read when it was created, or null when it was created before the startup
+     * scan ended
+     */
+    public @Nullable String liveStartOf(Object factory) {
+        return liveStartByFactory.get(factory);
     }
 
-    private Map<String, String> liveStartsFor(boolean singleton) {
-        return singleton ? singletonLiveStarts : liveStartsOfThisThread.get();
+    /**
+     * Claims the prototype factory created last under {@code beanName} on this thread, for a product that has just been
+     * built on it.
+     *
+     * @return The boundary of the oldest unclaimed factory under that name on this thread, or null when there is none
+     */
+    public @Nullable String claimPrototypeFactory(String beanName) {
+        Map<String, List<WeakReference<Object>>> unclaimedByName = unclaimedPrototypeFactoriesOfThisThread.get();
+        List<WeakReference<Object>> unclaimed = unclaimedByName == null ? null : unclaimedByName.get(beanName);
+        if (unclaimed == null) {
+            return null;
+        }
+        @Nullable Object oldest = null;
+        for (WeakReference<Object> reference : unclaimed) {
+            oldest = reference.get();
+            if (oldest != null) {
+                break;
+            }
+        }
+        unclaimed.removeIf(reference -> reference.get() == null);
+        if (!unclaimed.isEmpty()) {
+            unclaimed.remove(unclaimed.size() - 1);
+        }
+        if (unclaimed.isEmpty()) {
+            unclaimedByName.remove(beanName);
+        }
+        return oldest == null ? null : liveStartByFactory.get(oldest);
     }
 }
