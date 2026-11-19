@@ -324,6 +324,26 @@ class CatchupProjectionFeedResumePositionTest {
     }
 
     @Test
+    void a_failed_catch_up_leaves_a_foreign_checkpoint_stored_when_the_catch_up_that_delivers_live_read_a_marker_before_it_was_stored() {
+        log.append("1", "2");
+        marker.save("counter", GlobalCheckpoint.of(1)).block(TIMEOUT);
+        CatchupProjectionFeed<Counted> feed = feed(new RecordingReplayAwareView());
+        // Reads the marker, so what it finds is a catch-up marker, and goes live, so it is the catch-up that delivers live.
+        feed.catchUp().block(TIMEOUT);
+        StringBasedCheckpoint foreign = new StringBasedCheckpoint("resume-token-xyz");
+        // Something else is stored under the id after that.
+        marker.save("counter", foreign).block(TIMEOUT);
+
+        // Reads the foreign checkpoint and refuses it. The handover then forgets for it and for the catch-up that delivers live.
+        assertThat(catchThrowable(() -> feed.catchUp().block(TIMEOUT))).as("the catch-up that read the foreign checkpoint")
+                .hasStackTraceContaining("subscribe under a new id");
+
+        assertThat(marker.read("counter").blockOptional(TIMEOUT))
+                .as("checkpoint under the id once the catch-up that delivers live forgot, which read a marker itself")
+                .contains(foreign);
+    }
+
+    @Test
     void an_event_a_live_fold_fed_back_that_the_replay_does_not_read_is_delivered_by_the_next_start_when_its_fold_fails_and_the_marker_cannot_be_deleted() throws Exception {
         log.append("1");
         InMemoryCheckpointStorage undeletable = new InMemoryCheckpointStorage() {
