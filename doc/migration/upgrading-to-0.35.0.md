@@ -2907,29 +2907,31 @@ inside the action of a replay of the same model throws `IllegalStateException` a
 
 ### Who is affected
 
-Code that stops or starts a blocking catch-up model from the action of one of its subscriptions while that
-subscription replays history. In 0.34.0 a `stop()` from there parked the replay and returned. A call from the action
-of another model's subscription, or from the action once the subscription has gone live, is not affected.
+Code that stops or starts a blocking catch-up model from the action of one of its subscriptions. In 0.34.0 a `stop()`
+from a replay's action parked the replay and returned. A call from the action of another model's subscription is not
+affected.
 
 ### What changes
 
 * A `start(..)` or `stop()` from a replay's action throws `IllegalStateException` with "Nothing was changed." in its
   message, and so does one from a thread on which the model is in the middle of a call for one of its subscriptions.
+* A `start(..)` or `stop()` from the action once the subscription has gone live runs when no other `start(..)`,
+  `stop()` or `shutdown()` of the model is under way. When one is, it throws the same exception instead of waiting,
+  since the call under way can be waiting in the wrapped model for that action to return.
 * The public `stopReplay()` and `resumeReplay()` of `StreamCatchupSubscriptionModel` throw in the same places.
-* `shutdown()` from those threads doesn't throw, and goes ahead without waiting for a `start(..)` or `stop()` under
-  way.
+* `shutdown()` from any of those threads doesn't throw and doesn't wait. It forgets the catch-ups at once. When a
+  `start(..)` or `stop()` is under way, that call shuts the wrapped model down as it returns, after its own calls to
+  the wrapped model, and resumes no subscription after the `shutdown()` began.
 * Elsewhere, each of `start(..)`, `stop()` and `shutdown()` waits, with no deadline, until one already under way on
   the model has returned.
-* A wrapped model whose `stop()` waits with no deadline for its actions to return now never returns when one of those
-  actions calls `start(..)` or `stop()` on the catch-up model. The MongoDB subscription models give up on an action
-  after a second, and `InMemorySubscriptionModel` doesn't wait for one.
 
 ### What to do
 
 Hand the call to another thread, for example an executor the action submits it to, and let the action return. Don't
-wait in the action for that call to finish, since a `stop()` waits up to a second for the action. If you wrap a
-subscription model of your own whose `stop()` waits for its actions, give that wait a deadline when an action may call
-`start(..)` or `stop()` on the catch-up model.
+wait in the action for that call to finish, since a `stop()` waits up to a second for the action. A wrapped model of
+your own whose `stop()` waits with no deadline for its actions never returns when one of those actions calls `stop()`
+itself, on the catch-up model or on the wrapped model. The MongoDB subscription models give up on an action after a
+second, and `InMemorySubscriptionModel` doesn't wait for one.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 

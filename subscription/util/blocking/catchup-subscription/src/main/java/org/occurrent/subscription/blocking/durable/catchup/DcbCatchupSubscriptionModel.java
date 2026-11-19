@@ -299,10 +299,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
     @Override
     public void shutdown() {
-        try (ModelLock ignored = lockTheModelForShutdown()) {
-            markShuttingDown();
-            subscriptionModel.shutdown();
-        }
+        shutDownInTurn(this::markShuttingDown, subscriptionModel::shutdown);
     }
 
     @Override

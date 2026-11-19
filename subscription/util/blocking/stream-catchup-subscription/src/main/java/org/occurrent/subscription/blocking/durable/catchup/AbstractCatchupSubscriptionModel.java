@@ -71,6 +71,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -118,6 +119,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private final Object lifecycleLock = new Object();
     // Orders start(..), stop() and shutdown() of this model and of every other child of the same dispatcher
     private final ReentrantLock modelLock;
+    // Each shutdown of the wrapped model that a shutdown on a replay, claim or live call thread left to the call holding
+    // modelLock, shared with every other child of the same dispatcher
+    private final Queue<Runnable> owedShutdowns;
     // Moves on with every start and stop, so a start whose live delegate failed can tell whether another came after it
     private long lifecycleGeneration = 0;
     // Moves on with every stop, so a call to the wrapped model can tell whether a stop came while it ran
@@ -138,6 +142,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // own dedicated virtual thread, never reused, and clears the value in a finally block.
     private final ConcurrentMap<String, CatchupAttempt> currentAttempt;
     private static final ThreadLocal<@Nullable CatchupAttempt> CURRENT_ATTEMPT = new ThreadLocal<>();
+    // The live calls whose action runs on this thread, so a start(..), stop() or shutdown() from inside that action
+    // doesn't wait for a call that can be waiting for the action
+    private static final ThreadLocal<@Nullable LiveCallOnThread> IN_A_LIVE_CALL = new ThreadLocal<>();
     // How often a replay run again checks, while an earlier attempt's action still runs, whether it should still wait
     private static final long EARLIER_ATTEMPT_POLL_MILLIS = 100;
     // How many times a position replay may run again from its origin after the first replay, when the wrapped model
@@ -293,6 +300,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.handedOver = sharedState.handedOver;
         this.askedFirst = sharedState.askedFirst;
         this.modelLock = sharedState.modelLock;
+        this.owedShutdowns = sharedState.owedShutdowns;
         HistoryLossReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.addHistoryLossListener(historyLossListener));
     }
 
@@ -319,6 +327,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final Set<AskedFirst> askedFirst = ConcurrentHashMap.newKeySet();
         // Taken by start(..), stop() and shutdown(), so one of them runs at a time across every child
         private final ReentrantLock modelLock = new ReentrantLock();
+        // Each shutdown of the wrapped model that a shutdown on a thread that may not wait for modelLock left to the
+        // call that held it, run by that call as it gives modelLock back
+        private final Queue<Runnable> owedShutdowns = new ConcurrentLinkedQueue<>();
     }
 
     // A subscribe whose function is asked with no claim held, kept from before the function is asked until the
@@ -703,9 +714,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     // As the protected subscribeInTheWrappedModel, for the subscription whose record is made, read by an override of
     // subscribe on entry, so a handover on a replay thread puts the action behind the same check. Without a record the
-    // live delegate gets the action itself, as in 0.34.0
+    // live delegate gets the action uncounted, as in 0.34.0, and marked as a live call's action all the same
     final Subscription subscribeInTheWrappedModel(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, @Nullable Subscribed made) {
-        Consumer<CloudEvent> afterEndedReplays = made == null ? action : afterEndedReplaysReturned(subscriptionId, action, made);
+        Consumer<CloudEvent> afterEndedReplays = made == null ? event -> acceptInALiveCall(action, event) : afterEndedReplaysReturned(subscriptionId, action, made);
         return holdPaused
                 ? getWrappedSubscriptionModel().subscribePaused(subscriptionId, filter, startAt, afterEndedReplays)
                 : getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, afterEndedReplays);
@@ -733,14 +744,30 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private void acceptIfLetIn(String subscriptionId, Subscribed made, Consumer<CloudEvent> action, CloudEvent event) {
         if (letIn(subscriptionId, made)) {
             try {
-                action.accept(event);
+                acceptInALiveCall(action, event);
             } finally {
                 made.liveCalls().exit();
             }
         } else if (made.liveCalls().forgottenByShutdown()) {
-            action.accept(event);
+            acceptInALiveCall(action, event);
         } else {
             throw liveEventWithdrawn(subscriptionId);
+        }
+    }
+
+    // Marks the thread as running a live call's action of this model while the action runs, so lockTheModel and
+    // shutDownInTurn don't wait there for a call that can itself be waiting for the action to return
+    private void acceptInALiveCall(Consumer<CloudEvent> action, CloudEvent event) {
+        LiveCallOnThread outer = IN_A_LIVE_CALL.get();
+        IN_A_LIVE_CALL.set(new LiveCallOnThread(modelLock, outer));
+        try {
+            action.accept(event);
+        } finally {
+            if (outer == null) {
+                IN_A_LIVE_CALL.remove();
+            } else {
+                IN_A_LIVE_CALL.set(outer);
+            }
         }
     }
 
@@ -823,13 +850,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * live delegate stops, and logs a {@code WARN} past that.
      * <p>
      * It runs alone, as {@link #lockTheModel(String)} describes. A {@link #start(boolean)} or {@code shutdown()} under
-     * way is waited for, with no deadline, and so is the live delegate's {@code stop()}. A live delegate whose
-     * {@code stop()} waits with no deadline for its actions to return therefore never returns when one of those actions
-     * calls {@code start(..)} or {@code stop()} on this model.
+     * way is waited for, with no deadline, and so is the live delegate's {@code stop()}. Called from inside the action of
+     * a live call of this model, it doesn't wait for a start, stop or shutdown under way and throws instead, since a
+     * live delegate's {@code stop()} can be waiting for that action to return.
      *
-     * @throws IllegalStateException when called from inside the action of a replay of this model, or from a thread on
-     *                               which the model is in the middle of a call for one of its subscriptions. Nothing
-     *                               was changed then.
+     * @throws IllegalStateException when called from inside the action of a replay of this model, from a thread on
+     *                               which the model is in the middle of a call for one of its subscriptions, or from
+     *                               inside the action of a live call of this model while a start, stop or shutdown
+     *                               is under way. Nothing was changed then.
      */
     @Override
     public void stop() {
@@ -866,11 +894,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * stops again as it does when the live delegate throws.
      * <p>
      * It runs alone, as {@link #lockTheModel(String)} describes, and waits with no deadline for a {@link #stop()} or
-     * {@code shutdown()} under way.
+     * {@code shutdown()} under way, apart from inside the action of a live call of this model, where it throws instead.
+     * A {@code shutdown()} that didn't wait for this start, as {@link #shutDownInTurn} describes, keeps it from resuming
+     * anything once the live delegate is started.
      *
-     * @throws IllegalStateException when called from inside the action of a replay of this model, or from a thread on
-     *                               which the model is in the middle of a call for one of its subscriptions. Nothing
-     *                               was changed then.
+     * @throws IllegalStateException when called from inside the action of a replay of this model, from a thread on
+     *                               which the model is in the middle of a call for one of its subscriptions, or from
+     *                               inside the action of a live call of this model while a start, stop or shutdown
+     *                               is under way. Nothing was changed then.
      */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
@@ -884,12 +915,20 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 undoStart(attempt, attempt.wasStopped() && runsAfterFailedStart(getWrappedSubscriptionModel(), e), e);
                 throw e;
             }
+            // A shutdown that didn't wait for this start has forgotten the catch-ups by now, so nothing is resumed after it
+            if (shuttingDown) {
+                return;
+            }
             List<Runnable> resumes = new ArrayList<>();
             if (resumeSubscriptionsAutomatically) {
                 resumes.add(this::relaunchParkedReplays);
             }
             if (resumeEachHere) {
-                resumes.add(() -> resumeEach(subscriptionsTheLiveDelegateHoldsPaused(), this::resumeSubscription));
+                resumes.add(() -> resumeEach(subscriptionsTheLiveDelegateHoldsPaused(), id -> {
+                    if (!shuttingDown) {
+                        resumeSubscription(id);
+                    }
+                }));
             }
             runEach(resumes, Runnable::run);
         }
@@ -1717,7 +1756,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             return attempt.replay.handle;
         }
         Subscribed made = attempt.replay.made;
-        Consumer<CloudEvent> letInByTheRecord = made == null ? liveConsumer : afterEndedReplaysReturned(subscriptionId, liveConsumer, made);
+        Consumer<CloudEvent> letInByTheRecord = made == null ? event -> acceptInALiveCall(liveConsumer, event) : afterEndedReplaysReturned(subscriptionId, liveConsumer, made);
         Subscription subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAtToUse, letInByTheRecord);
         attempt.wentLive = true;
         markDidNotGoLive(subscriptionId, false);
@@ -4144,32 +4183,104 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Takes the lock that lets one {@link #start(boolean)}, {@link #stop()} or {@code shutdown()} of this model, or of
      * any other child of the same dispatcher, run at a time, and waits for it with no deadline. {@code call} names the
      * call in the exception.
+     * <p>
+     * Inside the action of a live call of this model or of another child of the same dispatcher, it doesn't wait. It
+     * takes the lock when no start, stop or shutdown holds it, and throws otherwise, since the call holding it can be
+     * waiting in the live delegate for that action to return.
      *
      * @throws IllegalStateException when the calling thread runs a catch-up replay of this model or of another child of
      *                               the same dispatcher, which it does inside the subscriber's action, or holds the
-     *                               {@link #claim} for one of their subscriptions. Nothing was changed then.
+     *                               {@link #claim} for one of their subscriptions, or runs the action of one of their
+     *                               live calls while a start, stop or shutdown holds the lock. Nothing was changed then.
      */
     ModelLock lockTheModel(String call) {
         if (replaysOrClaimsOnTheCallingThread()) {
             throw new IllegalStateException("Cannot call " + call + " from inside the action of a catch-up replay of this model, or from a thread on which the model is in the middle of a call"
                     + " for one of its subscriptions. Call it from another thread. " + NOTHING_CHANGED);
         }
-        return takeTheModelLock();
+        if (inALiveCallOnTheCallingThread()) {
+            if (!modelLock.tryLock()) {
+                throw new IllegalStateException("Cannot call " + call + " from inside the action of a live call of this model while a start(..), stop() or shutdown() of the model is under way,"
+                        + " since that call can be waiting for the action to return. Call it from another thread. " + NOTHING_CHANGED);
+            }
+            return this::releaseTheModelLock;
+        }
+        modelLock.lock();
+        return this::releaseTheModelLock;
     }
 
     /**
-     * Takes the lock as {@link #lockTheModel(String)} does, for a {@code shutdown()}, apart from on a thread that
-     * {@link #lockTheModel(String)} refuses, where it takes nothing, so such a shutdown doesn't wait for a start or a
-     * stop under way.
+     * Runs a {@code shutdown()} in turn with the {@link #start(boolean)}, {@link #stop()} and {@code shutdown()} calls
+     * of this model and of every other child of the same dispatcher. {@code forgetTheCatchups} forgets what the
+     * catch-ups hold and flags the model as shutting down, and {@code shutDownTheLiveDelegate} shuts the live delegate
+     * down.
+     * <p>
+     * On a thread that {@link #lockTheModel(String)} refuses or doesn't let wait, the shutdown doesn't wait.
+     * {@code forgetTheCatchups} runs at once. {@code shutDownTheLiveDelegate} runs at once too when no other call holds
+     * the lock. Otherwise the call holding the lock runs it as it gives the lock back, after its own calls to the live
+     * delegate, and logs a {@code WARN} for what it throws, and this returns before it has run. A start holding the lock
+     * resumes nothing once it finds the model flagged as shutting down after the live delegate's start.
      */
-    ModelLock lockTheModelForShutdown() {
-        return replaysOrClaimsOnTheCallingThread() ? () -> {
-        } : takeTheModelLock();
+    void shutDownInTurn(Runnable forgetTheCatchups, Runnable shutDownTheLiveDelegate) {
+        if (!replaysOrClaimsOnTheCallingThread() && !inALiveCallOnTheCallingThread()) {
+            modelLock.lock();
+            try {
+                forgetTheCatchups.run();
+                shutDownTheLiveDelegate.run();
+            } finally {
+                releaseTheModelLock();
+            }
+            return;
+        }
+        forgetTheCatchups.run();
+        if (!modelLock.isHeldByCurrentThread() && modelLock.tryLock()) {
+            try {
+                shutDownTheLiveDelegate.run();
+            } finally {
+                releaseTheModelLock();
+            }
+            return;
+        }
+        // Run by the holder as it gives the lock back. Looked at once more after the add, since the holder can have
+        // given it back between the tryLock above and the add, and looks for an owed shutdown after it gives it back
+        owedShutdowns.add(shutDownTheLiveDelegate);
+        if (!modelLock.isHeldByCurrentThread() && modelLock.tryLock()) {
+            releaseTheModelLock();
+        }
     }
 
-    private ModelLock takeTheModelLock() {
-        modelLock.lock();
-        return modelLock::unlock;
+    // Runs every shutdown owed to the lock as the outermost hold gives it back. Looks again after the unlock, since a
+    // shutdown that found the lock taken adds its own and then tries the lock, so one of the two runs it
+    private void releaseTheModelLock() {
+        if (modelLock.getHoldCount() > 1) {
+            modelLock.unlock();
+            return;
+        }
+        do {
+            for (Runnable owed = owedShutdowns.poll(); owed != null; owed = owedShutdowns.poll()) {
+                try {
+                    owed.run();
+                } catch (Throwable e) {
+                    log.warn("Shutting down the live delegate, on behalf of a shutdown() that didn't wait for a start(..) or stop() under way, threw", e);
+                }
+            }
+            modelLock.unlock();
+        } while (!owedShutdowns.isEmpty() && modelLock.tryLock());
+    }
+
+    // Whether the calling thread runs the action of a live call of this model or of another child of the same
+    // dispatcher, at any depth
+    private boolean inALiveCallOnTheCallingThread() {
+        for (LiveCallOnThread call = IN_A_LIVE_CALL.get(); call != null; call = call.outer()) {
+            if (call.modelLock() == modelLock) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // The live calls the thread runs the action of, innermost first
+    private record LiveCallOnThread(ReentrantLock modelLock, @Nullable LiveCallOnThread outer) {
     }
 
     // A replay thread of a child of another dispatcher may call, since nothing that call waits for runs on that thread

@@ -387,13 +387,21 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 attempts.forEach((model, attempt) -> model.undoStart(attempt, liveDelegateRuns, e));
                 throw e;
             }
+            // A shutdown that didn't wait for this start has forgotten the catch-ups by now, so nothing is resumed after it
+            if (anyCatchupModel().shuttingDown) {
+                return;
+            }
             // Each also when an earlier one throws, so a parked replay whose claim fails holds up no other subscription
             List<Runnable> resumes = new ArrayList<>();
             if (resumeSubscriptionsAutomatically) {
                 resumes.add(() -> AbstractCatchupSubscriptionModel.runEach(presentCatchupModels().toList(), AbstractCatchupSubscriptionModel::relaunchParkedReplays));
             }
             if (replaysOnResume != null) {
-                resumes.add(() -> AbstractCatchupSubscriptionModel.resumeEach(replaysOnResume.subscriptionsTheLiveDelegateHoldsPaused(), this::resumeSubscription));
+                resumes.add(() -> AbstractCatchupSubscriptionModel.resumeEach(replaysOnResume.subscriptionsTheLiveDelegateHoldsPaused(), id -> {
+                    if (!anyCatchupModel().shuttingDown) {
+                        resumeSubscription(id);
+                    }
+                }));
             }
             AbstractCatchupSubscriptionModel.runEach(resumes, Runnable::run);
         }
@@ -641,12 +649,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @PreDestroy
     @Override
     public void shutdown() {
-        try (AbstractCatchupSubscriptionModel.ModelLock ignored = anyCatchupModel().lockTheModelForShutdown()) {
+        anyCatchupModel().shutDownInTurn(() -> {
             // Every child flagged before any forgets the state they share, see flagShuttingDown
             presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::flagShuttingDown);
             presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::markShuttingDown);
-            subscriptionModel.shutdown();
-        }
+        }, subscriptionModel::shutdown);
     }
 
     static boolean isTimeBasedCheckpoint(StartAt startAt) {

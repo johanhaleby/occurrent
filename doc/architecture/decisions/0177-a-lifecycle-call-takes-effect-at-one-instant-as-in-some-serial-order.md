@@ -193,9 +193,17 @@ has a deadline, so a wrapped model or a checkpoint storage that never returns ho
 A `start(..)` or `stop()` called from an action on a replay thread, or from a thread that holds a claim, throws at once,
 because it would wait for a per-id call that can only finish on that thread.
 
-A `shutdown()` called from such a thread doesn't throw, because it waits for no replay and no per-id call. It goes ahead
-without the model lock, since a `start(..)` or `stop()` under way may be waiting for that same thread to return from the
-action or to give back its claim.
+A `start(..)` or `stop()` called from the action of a live call never waits for the model lock either. It takes the lock
+when it is free and throws otherwise, because the call holding it can be waiting in the wrapped model's `stop()` for
+that action to return. The catch-up marks the thread while it runs a live call's action, with or without a record for
+the subscription.
+
+A `shutdown()` called from any of these threads doesn't throw and doesn't wait for the model lock, since a `start(..)`
+or `stop()` under way may be waiting for that same thread to return from the action or to give back its claim. It still
+runs in turn. It forgets the catch-ups at once and flags the model as shutting down. The wrapped model's `shutdown()`
+runs at once when the lock is free, and otherwise the call holding the lock runs it as it gives the lock back, after
+its own calls to the wrapped model. A `start(..)` under way that finds the flag set after the wrapped model's
+`start(..)` resumes nothing.
 
 Handover locks are counted and removed like claims. ADR 131 says its registry of handover locks is never reclaimed.
 Under this rule it keeps an entry only while a call or a replay thread uses it ([#1257](https://github.com/johanhaleby/occurrent/issues/1257)).

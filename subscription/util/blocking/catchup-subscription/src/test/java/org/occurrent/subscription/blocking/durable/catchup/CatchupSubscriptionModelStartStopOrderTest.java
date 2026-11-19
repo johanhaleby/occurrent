@@ -92,10 +92,13 @@ class CatchupSubscriptionModelStartStopOrderTest {
 
     @AfterEach
     void release_everything_and_shut_down() {
-        gates.forEach(Gate::release);
-        calls.forEach(Call::awaitEnded);
-        model.shutdown();
-        inMemory.shutdown();
+        try {
+            gates.forEach(Gate::release);
+            calls.forEach(Call::awaitEnded);
+        } finally {
+            model.shutdown();
+            inMemory.shutdown();
+        }
     }
 
     @Test
@@ -245,6 +248,7 @@ class CatchupSubscriptionModelStartStopOrderTest {
         } finally {
             startGate.release();
         }
+        calls.forEach(Call::awaitEnded);
     }
 
     @Test
@@ -365,13 +369,14 @@ class CatchupSubscriptionModelStartStopOrderTest {
     private static final class Call {
         private final Thread thread;
         private final AtomicBoolean returned = new AtomicBoolean();
+        private final AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
 
         private Call(Runnable body) {
             thread = new Thread(() -> {
                 try {
                     body.run();
-                } catch (Throwable ignored) {
-                    // A call that threw has returned too, and the tests that care read what it threw from the call itself
+                } catch (Throwable e) {
+                    thrown.set(e);
                 } finally {
                     returned.set(true);
                 }
@@ -397,6 +402,7 @@ class CatchupSubscriptionModelStartStopOrderTest {
                 Thread.currentThread().interrupt();
             }
             assertThat(thread.isAlive()).as("whether the call is still running 15 seconds after the test released what held it").isFalse();
+            assertThat(thrown.get()).as("what the call threw").isNull();
         }
     }
 
