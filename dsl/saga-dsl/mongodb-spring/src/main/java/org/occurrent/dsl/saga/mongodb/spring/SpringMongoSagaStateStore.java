@@ -107,10 +107,12 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * but not a majority reads as absent until it reaches a majority or a failover rolls it back, so the saga never
  * acknowledges an input on the strength of it. Right after a failover, a majority read on the new primary can miss a
  * write the old primary acknowledged, so {@link #find} and {@link #findWithoutState} read an instance they don't find
- * again at read concern {@code linearizable}, which returns every write a majority acknowledged before it. The
- * transactions below read at read concern {@code snapshot}, everything the primary has when the transaction starts,
- * and their commit at {@code majority} returns only once a majority has all of it. A release ends the quarantine of an
- * instance only in such a transaction that finds no skipped input left.
+ * again at read concern {@code linearizable}. MongoDB documents that a linearizable read on the primary returns every
+ * write a majority acknowledged before the read started, in
+ * <a href="https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/">read concern "linearizable"</a>.
+ * The transactions below read at read concern {@code snapshot}, everything the primary has when the transaction
+ * starts, and their commit at {@code majority} returns only once a majority has all of it. A release ends the
+ * quarantine of an instance only in such a transaction that finds no skipped input left.
  * <p>
  * The four writes of {@link SagaStateStoreSkippedInputs} and the {@link #delete(String)} of a quarantined instance write
  * the instance and its skipped inputs in one MongoDB transaction, through a {@link MongoTransactionManager} on the
@@ -345,8 +347,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // An instance found at read concern majority is acted on through a compare-and-set on its version, which a stale
     // version loses. An absence has no version to compare, and an input addressed to no instance is skipped without a
     // write. Right after a failover the new primary's majority view can be older than a write the old primary
-    // acknowledged, so an absence is read again at read concern linearizable. That read returns every write a majority
-    // acknowledged before it started, and returns only once a majority has what it read
+    // acknowledged, so an absence is read again at read concern linearizable, on the primary, by _id and with a
+    // maxTimeMS. MongoDB documents that such a read returns every write a majority acknowledged before the read
+    // started, see
+    // https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/
     private @Nullable Document findInstance(Supplier<Query> query) {
         Document found = retryStrategy.execute(() -> mongoOperations.findOne(majorityRead(query.get()), Document.class, collectionName));
         return found != null ? found : retryStrategy.execute(() -> mongoOperations.findOne(linearizableRead(query.get()), Document.class, collectionName));
@@ -360,11 +364,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             // Caught inside the retried supplier, because another writer getting there first is an outcome and
             // retrying it would lose the same race nine more times. A failure arriving after MongoDB already stored
             // the document hits this catch on the next attempt and reports the save as lost. The caller reads again,
-            // and find reads an absence again at read concern linearizable, which waits until a majority has the
-            // document and then returns it, or throws when no majority has it in time. With the document read back,
-            // the caller skips an input its watermarks already cover. A failover that rolls the document back lets the
-            // next insert through. An input that has no redelivery key has no watermark, so it re-dispatches, which is
-            // the multiplicity a lost compare-and-set already has.
+            // and find reads an absence again at read concern linearizable. MongoDB documents that such a read may wait
+            // for writes in progress to reach a majority before it returns, and the maxTimeMS bounds that wait. With
+            // the document read back, the caller skips an input its watermarks already cover. A failover that rolls the
+            // document back lets the next insert through. An input that has no redelivery key has no watermark, so it
+            // re-dispatches, which is the multiplicity a lost compare-and-set already has.
             Supplier<Boolean> insert = () -> {
                 try {
                     writeDurably(collectionName, collection -> collection.insertOne(document));

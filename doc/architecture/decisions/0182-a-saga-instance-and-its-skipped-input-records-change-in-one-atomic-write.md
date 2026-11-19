@@ -7,7 +7,8 @@ Date: 2026-11-19
 Accepted, for [#1259](https://github.com/johanhaleby/occurrent/issues/1259). Amends
 [ADR 178](0178-a-quarantined-saga-instance-records-what-it-skips-and-is-released-by-replaying-it.md). It replaces the
 separate writes of the instance and its records in ADR 178's points 1, 2 and 3, the rules for the gaps between them,
-the write concerns of point 2, and the consequences that follow from them. ADR 178 gets a pointer in its Status section.
+the write concerns of point 2, and the consequences that follow from them. ADR 178 gets a pointer in its Status section,
+and its points are corrected in place to this rule.
 
 It restores a rule from [ADR 134](0134-a-saga-instance-that-keeps-failing-is-quarantined-at-its-own-position.md),
 which ADR 178 dropped when it moved the records out of the instance's document. A record is written in the same
@@ -97,7 +98,8 @@ finds through a compare-and-set on the version, which a read that missed a later
 something a read did not find, and each reads again where nothing is missed:
 
 - `find` and `findWithoutState` read an instance they don't find again at read concern `linearizable`, which returns
-  every write a majority acknowledged before the read started. The executor skips an input addressed to no instance
+  every write a majority acknowledged before the read started, as
+  [MongoDB documents](https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/). The executor skips an input addressed to no instance
   without writing anything, so an instance the read missed would lose that input.
 - `compareAndSaveQuarantineEnded`, for an instance the release doesn't complete, reads the records again inside its
   transaction and writes nothing while one is there. A release ends the quarantine after a read of the records finds

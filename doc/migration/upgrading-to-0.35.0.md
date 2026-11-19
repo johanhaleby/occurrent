@@ -1319,9 +1319,10 @@ no `wtimeout`, your `timeoutMS` bounds each attempt instead. A write that timed 
 at read concern `majority` don't return it until a majority has it, so the saga doesn't act on it before then.
 
 `find` and `findWithoutState` read an instance they don't find at `majority` again at read concern `linearizable`,
-which waits for a majority as a write does. Right after a failover, a majority read on the new primary can miss an
-instance the old primary wrote, and the saga would then skip an input addressed to it. So the first input of a new
-instance costs one more round trip to a majority.
+with a `maxTimeMS` of 10 seconds. MongoDB documents that such a read returns every write a majority acknowledged before
+it started, in [read concern "linearizable"](https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/). Right after a failover, a
+majority read on the new primary can miss an instance the old primary wrote, and the saga would then skip an input
+addressed to it. So the first input of a new instance costs a second read.
 
 The four writes of `SagaStateStoreSkippedInputs` and the `delete` of a quarantined instance run in a transaction that
 commits at `majority` with `j: true` and reads at read concern `snapshot`. The store retries a transaction that fails
