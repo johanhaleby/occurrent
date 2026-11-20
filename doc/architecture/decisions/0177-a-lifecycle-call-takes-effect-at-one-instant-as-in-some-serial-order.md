@@ -229,7 +229,11 @@ call for a subscription, doesn't wait. A handed `stop()` parks the replays under
 such a thread can hold one of them, as a replay run again after a failure does while it tells its listener. Such a
 resume takes effect before the handed calls. When the handed `stop()` has already set the model stopped and the
 subscription is paused, the resume would start the model, so it throws `IllegalStateException` and changes nothing, as
-`start(..)` does on such a thread. A thread already holding the model lock runs its call at once instead, since the lifecycle thread would wait for that
+`start(..)` does on such a thread. A `resumeSubscription(X)` from the action of a live call or a replay, made while the
+model is stopped and X is paused, goes to the lifecycle thread whole. Run on the action's thread, the `start(false)` it
+needs would only be handed over, so the model would still read as stopped and X's parked replay would park again while
+the resume returned normally. It returns at once a handle that starts once the lifecycle thread has run the resume. A
+thread already holding the model lock runs its call at once instead, since the lifecycle thread would wait for that
 thread to give the lock back.
 
 A `shutdown()` doesn't wait for a `start(..)` that is inside the wrapped model's `start(..)`, because a wrapped model can

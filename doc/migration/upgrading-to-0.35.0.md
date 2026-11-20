@@ -2925,6 +2925,9 @@ the catch-up is not affected.
   return. A lifecycle thread, shared by the models of one dispatcher, runs the call once the action has returned and
   no other of the three calls is under way, in the order the calls came. It doesn't run the call once a `shutdown()`
   has begun, and logs an `ERROR` naming the model when the call throws.
+* A `resumeSubscription(id)` from the action of a replay or a live call, made while the model is stopped and the
+  subscription is paused, returns at once as well. The lifecycle thread starts the model and resumes the subscription
+  once the action has returned. The handle it returns starts then, so don't wait for it inside the action.
 * After a `stop()` from a replay's action, the replay goes on to its next event until the lifecycle thread runs the
   `stop()`, which then parks it. After a `stop()` from a live call's action, the wrapped model can go on delivering live
   events to the action until then. In 0.34.0 the wrapped model had stopped by the time `stop()` returned. The tests of

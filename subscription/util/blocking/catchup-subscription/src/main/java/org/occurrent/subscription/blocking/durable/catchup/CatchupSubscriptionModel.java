@@ -492,9 +492,24 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * middle of a call for one of its subscriptions, it doesn't wait, so it takes effect before those calls. When the
      * model was stopped by then and the subscription is paused, it throws {@link IllegalStateException} there as
      * {@link #start(boolean)} does, and changes nothing.
+     * <p>
+     * Called from inside the action of a live call or a replay of this model while the model is stopped and the
+     * subscription is paused, it returns at once and changes nothing yet. Once the action has returned, the lifecycle
+     * thread starts the model and resumes the subscription, in turn with the {@link #start(boolean)} and {@link #stop()}
+     * calls handed over around it. The handle it returns starts then, so waiting for it inside the action doesn't see it
+     * start. Its {@code waitUntilStarted} answers {@code false} when a {@code shutdown()} has begun by then, and throws
+     * what the resume threw there, which is also logged at {@code ERROR}.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
+        // From an action the start(false) below would only be handed over, so the model would still read as stopped and
+        // a parked replay would park again
+        if (presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId)) {
+            Subscription handedOver = anyCatchupModel().resumeOnceTheActionHasReturned(this, subscriptionId, () -> resumeSubscription(subscriptionId));
+            if (handedOver != null) {
+                return handedOver;
+            }
+        }
         anyCatchupModel().awaitTheHandedCalls();
         // Started before the claim is taken, since a start that fails parks the replays of other ids under their claims
         boolean started = presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId);
