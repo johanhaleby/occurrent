@@ -140,6 +140,27 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
         @Nullable Consumer<List<E>> sideEffect = options.sideEffect();
+        // Before anything is read, so a refused write reads nothing, see beforeWrite()
+        SynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? SynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
+        // Closed once the append and its dispatch are done, so a pause or a stop meanwhile waits for them
+        Written<E> written;
+        try (writeCheck) {
+            written = executeAdmitted(criteria, options, functionThatCallsDomainModel, writeCheck);
+        }
+        // Once, after a successful append, with the newly written events. Not on the no-new-events path, and outside the
+        // retry so it doesn't run per attempt. After the write check closed, so a side effect that waits for a pause or a
+        // stop never waits for this append
+        if (sideEffect != null && written.result().isPresent()) {
+            sideEffect.accept(written.newDomainEvents());
+        }
+        return written.result();
+    }
+
+    private record Written<E>(Optional<DcbAppendResult> result, List<E> newDomainEvents) {
+    }
+
+    private Written<E> executeAdmitted(DcbCriteria criteria, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel,
+                                       SynchronousEventDispatcher.WriteCheck writeCheck) {
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
         @Nullable DcbReadOptions readOptions = readOptions(options);
         boolean versionsRequested = options.versionsRequested();
@@ -174,7 +195,9 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             }
 
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-            return Optional.of(new Decision<>(eventStream, newDomainEvents, addTags(options.tagGenerator(), newDomainEvents, cloudEvents)));
+            List<CloudEvent> taggedEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
+            writeCheck.check(taggedEvents);
+            return Optional.of(new Decision<>(eventStream, newDomainEvents, taggedEvents));
         };
         BiFunction<Decision<E>, Boolean, Attempt<Optional<DcbAppendResult>, List<E>>> appendAndDispatch = (decision, openedTransaction) -> {
             if (failureAfterWrite.isHeld()) {
@@ -251,12 +274,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         failureAfterWrite.rethrowIfHeld();
 
-        // Invoke the side-effect once, after a successful append, with the newly written events. It is not invoked
-        // on the no-new-events path, and it is outside the retry so it does not run per attempt.
-        if (sideEffect != null && result.v1.isPresent()) {
-            sideEffect.accept(result.v2);
-        }
-        return result.v1;
+        return new Written<>(result.v1, result.v2);
     }
 
     @Override

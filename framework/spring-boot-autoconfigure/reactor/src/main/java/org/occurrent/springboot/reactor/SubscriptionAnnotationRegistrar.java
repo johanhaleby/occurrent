@@ -254,11 +254,17 @@ class SubscriptionAnnotationRegistrar {
         // handler with a fixed start subscribes or is handed to the scheduler. When one fails, no handler with a fixed
         // start has subscribed, and all of them are released. Those that subscribed before it stay subscribed, see
         // claimAndResolve.
+        //
+        // A synchronous handler subscribes on the calling thread and never through subscribeCall, which holds the
+        // asynchronous ones back until the startup scan is done, since a write the gate admits after that has to
+        // reach it.
+        Deque<ResolvedRegistration> synchronous = new ArrayDeque<>();
         Deque<ResolvedRegistration> inPlace = new ArrayDeque<>();
         Deque<ResolvedRegistration> fixed = new ArrayDeque<>();
-        resolved.forEach(registration -> (registration.subscribe().startIsFixed() ? fixed : inPlace).add(registration));
+        resolved.forEach(registration -> (registration.subscribe().synchronous() ? synchronous : registration.subscribe().startIsFixed() ? fixed : inPlace).add(registration));
         LateSubscriber.SubscribeCall call = subscribeCall.apply(release);
         try {
+            subscribeEach(synchronous, claimedIds, reservedHandlers).run();
             if (!inPlace.isEmpty()) {
                 call.subscribe(() -> describe(inPlace.peek()), false, subscribeEach(inPlace, claimedIds, reservedHandlers));
             }
@@ -358,7 +364,10 @@ class SubscriptionAnnotationRegistrar {
     private record ResolvedRegistration(PendingRegistration claim, Subscribe subscribe) {
     }
 
-    private record Subscribe(Runnable call, boolean startIsFixed) {
+    private record Subscribe(Runnable call, boolean startIsFixed, boolean synchronous) {
+        Subscribe(Runnable call, boolean startIsFixed) {
+            this(call, startIsFixed, false);
+        }
     }
 
     // Each resolve method checks and computes everything the handler subscribes with and returns only the subscribe
@@ -442,7 +451,7 @@ class SubscriptionAnnotationRegistrar {
             // The synchronous subscription model has no start position or background subscription, so there is no
             // start position to resolve and nothing to wait for.
             synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(filter), StartAt.subscriptionModelDefault(), consumer);
-        }, false);
+        }, false, true);
     }
 
     @SuppressWarnings("unchecked")

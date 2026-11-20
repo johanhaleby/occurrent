@@ -21,6 +21,7 @@ import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
 import org.jspecify.annotations.NonNull;
+import org.bson.BsonTimestamp;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
@@ -46,6 +47,7 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.eventstore.mongodb.internal.OperationTimeLiveStart;
 import org.occurrent.eventstore.mongodb.spring.blocking.CommitRetryingMongoTransactionManager;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
@@ -55,8 +57,10 @@ import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.blocking.*;
 import org.occurrent.springboot.common.*;
+import org.occurrent.springboot.common.internal.LiveStartCheckpoints;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
 import org.occurrent.springboot.common.internal.AsynchronousSubscribables;
+import org.occurrent.springboot.common.internal.StartupGap;
 import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
@@ -64,6 +68,7 @@ import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModelConfig;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.util.predicate.EveryN;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
@@ -111,6 +116,19 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Bean
     StartupWorkaround occurrentMongoOperationsStartupWorkaround(ApplicationContext applicationContext) {
         return () -> applicationContext.getBean(MongoOperations.class);
+    }
+
+    /**
+     * Turns the live start a MongoDB event store reports into the operation-time checkpoint an annotated subscription's
+     * first start is pinned to. The MongoDB checkpoint storages order an operation-time checkpoint, so two nodes that
+     * pin the same subscription at the same moment keep the earlier position.
+     */
+    @Bean
+    LiveStartCheckpoints occurrentMongoLiveStartCheckpoints() {
+        return liveStart -> {
+            BsonTimestamp operationTime = OperationTimeLiveStart.parse(liveStart);
+            return operationTime == null ? null : new MongoOperationTimeCheckpoint(operationTime);
+        };
     }
 
     /**
@@ -366,14 +384,9 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Bean
     @ConditionalOnMissingBean(SynchronousSubscriptionModel.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
-    public SynchronousSubscriptionModel occurrentSynchronousSubscriptionModel(OccurrentProperties occurrentProperties, ObjectProvider<DataFieldReader> dataFieldReaderProvider) {
-        SynchronousSubscriptionModel synchronousSubscriptionModel = new SynchronousSubscriptionModel(dataFieldReaderProvider.getIfAvailable(DataFieldReader::refusing));
-        // Stopped up front rather than after registration, so a synchronous handler registered under MANUAL is paused
-        // from the outset and a write does not run it.
-        if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
-            synchronousSubscriptionModel.stop();
-        }
-        return synchronousSubscriptionModel;
+    public SynchronousSubscriptionModel occurrentSynchronousSubscriptionModel(ObjectProvider<DataFieldReader> dataFieldReaderProvider) {
+        // Running under MANUAL too, since a write a stopped synchronous handler never sees is lost to it for good
+        return new SynchronousSubscriptionModel(dataFieldReaderProvider.getIfAvailable(DataFieldReader::refusing));
     }
 
     /**
@@ -443,15 +456,16 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Conditional(OnStreamEventStoreCapabilityCondition.class)
     @ConditionalOnProperty(name = {"occurrent.event-store.enabled", "occurrent.application-service.enabled"}, havingValue = "true", matchIfMissing = true)
     public ApplicationService<E> occurrentApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter, OccurrentProperties occurrentProperties,
-                                                             ObjectProvider<SynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<TransactionExecutor> transactionExecutor) {
+                                                             ObjectProvider<SynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<TransactionExecutor> transactionExecutor,
+                                                             ObjectProvider<StartupGap> startupGaps) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         RetryStrategy retryStrategy = enableDefaultRetryStrategy ? GenericApplicationService.defaultRetryStrategy() : RetryStrategy.none();
         GenericApplicationService.Builder<E> builder = GenericApplicationService.builder(eventStore, cloudEventConverter).retryStrategy(retryStrategy);
         // Wire the synchronous subscription dispatcher and transaction executor when present, so a
         // @SynchronousSubscription handler runs on the writer's thread, atomically with the write. Both are resolved
         // through ObjectProvider because they only exist when the feature is applicable, and either can be absent or
-        // user-replaced.
-        synchronousEventDispatcher.ifAvailable(builder::synchronousSubscriptions);
+        // user-replaced. A write made before startup has registered the synchronous handlers is refused, see StartupGap.
+        synchronousEventDispatcher.ifAvailable(dispatcher -> builder.synchronousSubscriptions(StartupWriteGate.refusingWritesUntilStarted(dispatcher, startupGaps)));
         transactionExecutor.ifAvailable(builder::transactionExecutor);
         return builder.build();
     }
@@ -475,13 +489,14 @@ public class OccurrentMongoAutoConfiguration<E> {
     @ConditionalOnProperty(name = {"occurrent.event-store.enabled", "occurrent.application-service.enabled"}, havingValue = "true", matchIfMissing = true)
     public DcbApplicationService<E> occurrentDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter,
                                                                      ObjectProvider<TagGenerator<E>> tagGeneratorProvider, OccurrentProperties occurrentProperties,
-                                                                     ObjectProvider<SynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<TransactionExecutor> transactionExecutor) {
+                                                                     ObjectProvider<SynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<TransactionExecutor> transactionExecutor,
+                                                                     ObjectProvider<StartupGap> startupGaps) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         RetryStrategy retryStrategy = enableDefaultRetryStrategy ? GenericDcbApplicationService.defaultRetryStrategy() : RetryStrategy.none();
         GenericDcbApplicationService.Builder<E> builder = GenericDcbApplicationService.builder(eventStore, cloudEventConverter).retryStrategy(retryStrategy);
         tagGeneratorProvider.ifAvailable(builder::tagGenerator);
         // Wire the synchronous subscription dispatcher and transaction executor when present (see occurrentApplicationService).
-        synchronousEventDispatcher.ifAvailable(builder::synchronousSubscriptions);
+        synchronousEventDispatcher.ifAvailable(dispatcher -> builder.synchronousSubscriptions(StartupWriteGate.refusingWritesUntilStarted(dispatcher, startupGaps)));
         transactionExecutor.ifAvailable(builder::transactionExecutor);
         return builder.build();
     }

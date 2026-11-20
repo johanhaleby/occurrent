@@ -30,6 +30,7 @@ import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.springboot.common.internal.AsynchronousSubscribables;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
@@ -60,7 +61,6 @@ import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Queue;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.BooleanSupplier;
 
@@ -77,6 +77,7 @@ class SagaAnnotationRegistrar {
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
+    private final StartupSubscribes startupSubscribes;
     // Resolves the competing-consumer strategy lazily, on the first checkpoint write a catch-up-then-push saga makes,
     // so this registrar does not force the strategy bean into existence while singletons are still being instantiated
     // (ADR 116). Separate from resolveSagaCompetingConsumerStrategy below, which gates the saga timer poller and is
@@ -96,7 +97,8 @@ class SagaAnnotationRegistrar {
     // registration that shutdown has begun even in principle.
     private volatile boolean closing = false;
 
-    SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
+    SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, StartupSubscribes startupSubscribes) {
+        this.startupSubscribes = startupSubscribes;
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
         this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class),
@@ -199,21 +201,23 @@ class SagaAnnotationRegistrar {
         }
 
         refuseIfSagaSubscriptionBeanNameIsTaken(id);
-        AtomicReference<SagaSubscription> ran = new AtomicReference<>();
-        BackgroundStartup.subscribe(annotation.startupMode(), () -> ran.set(runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted)));
-        SagaSubscription sagaSubscription = ran.get();
-        sagaSubscriptions.add(sagaSubscription);
-        // Reached on the refresh thread at startup, and from postProcessAfterInitialization for a saga on a bean
-        // Spring Boot builds later, which is the path that can overlap close().
-        if (closing) {
-            stopOwnRegistration(sagaSubscription, subscribable);
-            return;
-        }
-        registerSagaSubscriptionSingleton(id, sagaSubscription);
-        if (push) {
-            watchBackgroundCatchUpIfNobodyElseWill(annotation, id, sagaSubscription, waitUntilStarted);
-        }
-        publishSagaInstances(id, sagaSubscription.instances());
+        // Held until the startup scan is done, like every other asynchronous start, since a saga dispatches commands
+        // that write
+        BackgroundStartup.subscribe(startupSubscribes, annotation.startupMode(), () -> {
+            SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
+            sagaSubscriptions.add(sagaSubscription);
+            // Reached on the refresh thread at startup, and from postProcessAfterInitialization for a saga on a bean
+            // Spring Boot builds later, which is the path that can overlap close().
+            if (closing) {
+                stopOwnRegistration(sagaSubscription, subscribable);
+                return;
+            }
+            registerSagaSubscriptionSingleton(id, sagaSubscription);
+            if (push) {
+                watchBackgroundCatchUpIfNobodyElseWill(annotation, id, sagaSubscription, waitUntilStarted);
+            }
+            publishSagaInstances(id, sagaSubscription.instances());
+        });
     }
 
     // Under startupMode = BACKGROUND nobody joins the replay, so a failure would reach no one. Worse, the model forgets

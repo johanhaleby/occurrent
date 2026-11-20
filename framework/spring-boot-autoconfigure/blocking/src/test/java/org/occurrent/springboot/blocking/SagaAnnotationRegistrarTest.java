@@ -30,6 +30,7 @@ import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.springboot.common.SubscriptionResumePoints;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -61,6 +62,12 @@ import static org.mockito.Mockito.when;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaAnnotationRegistrarTest {
 
+    private static StartupSubscribes startedSubscribes() {
+        StartupSubscribes startupSubscribes = new StartupSubscribes();
+        startupSubscribes.start();
+        return startupSubscribes;
+    }
+
     @Test
     void registers_the_saga_and_populates_the_registry_but_skips_the_named_singleton() throws Exception {
         Subscription subscription = mock(Subscription.class);
@@ -82,7 +89,7 @@ class SagaAnnotationRegistrarTest {
 
         // A mock of the plain ApplicationContext interface, not ConfigurableApplicationContext: this is what makes
         // registerSagaInstancesSingleton take its "cannot publish" branch instead of registering the bean.
-        ApplicationContext applicationContext = mock(ApplicationContext.class);
+        ApplicationContext applicationContext = ContextWithoutBoundaryStore.mocked();
         when(applicationContext.getBean(CloudEventConverter.class)).thenReturn(converter());
         // The non-push branch resolves through AsynchronousSubscribables rather than a bare getBean(Subscribable.class)
         // (see #563), so the mock has to answer the same by-name lookup that resolution performs.
@@ -111,7 +118,7 @@ class SagaAnnotationRegistrarTest {
         when(applicationContext.getBeanProvider(SubscriptionResumePoints.class)).thenReturn(resumePointsProvider);
 
         StartPositionSupport startPositionSupport = new StartPositionSupport(applicationContext);
-        SagaAnnotationRegistrar registrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport);
+        SagaAnnotationRegistrar registrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport, startedSubscribes());
 
         Method factoryMethod = SagaHolder.class.getDeclaredMethod("saga");
         org.occurrent.annotation.Saga annotation = factoryMethod.getAnnotation(org.occurrent.annotation.Saga.class);

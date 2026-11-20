@@ -149,6 +149,12 @@ abstract class MongoBackedFailureAfterWriteTest {
     }
 
     private static final class FailingOnceDispatcher implements SynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private @Nullable RuntimeException failure;
 
         FailingOnceDispatcher(RuntimeException failure) {

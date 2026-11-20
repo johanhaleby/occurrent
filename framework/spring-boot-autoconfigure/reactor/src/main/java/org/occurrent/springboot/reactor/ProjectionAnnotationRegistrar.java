@@ -35,6 +35,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.springboot.common.internal.AppliedAppendRecordingRegistry;
 import org.occurrent.springboot.common.internal.PolledCatchupSignals;
 import org.occurrent.springboot.common.internal.AsynchronousSubscribables;
@@ -98,6 +99,7 @@ class ProjectionAnnotationRegistrar {
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
+    private final StartupSubscribes startupSubscribes;
 
     // Domain-push feeds collected during projection registration, caught up once after every projection is
     // registered. A list rather than a set now that a feed carries one projection: each entry is one projection's
@@ -130,8 +132,9 @@ class ProjectionAnnotationRegistrar {
     private record DomainFeedCatchUp(String id, DomainEventFeed<?> feed, boolean waitUntilStarted) {
     }
 
-    ProjectionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
+    ProjectionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, StartupSubscribes startupSubscribes) {
         this.applicationContext = applicationContext;
+        this.startupSubscribes = startupSubscribes;
         this.startPositionSupport = startPositionSupport;
     }
 
@@ -507,7 +510,9 @@ class ProjectionAnnotationRegistrar {
     // owner that composed it, never from a probe or an annotation-only predicate:
     //   1. The composition structurally has no catch-up layer at all (the durable-only case of ADR 132 decision 9), a
     //      known fact resolveCatchupModel's ComposedCatchupModel branch already verified, not an unobserved absence.
-    //   2. NOW with resumeBehavior SAME_AS_START_AT, which is StartAt.now() on every start. On the stream composition
+    //   2. NOW with resumeBehavior SAME_AS_START_AT, which on every start begins at the boundary that start takes
+    //      (StartAt.checkpoint from StartPositionSupport's liveOnlyStart), or at StartAt.now() without one, and never
+    //      at a stored checkpoint. On the stream composition
     //      ReactiveNowStartAtLeftOverCheckpointMongoTest boots, neither a restart nor a resume replays from a catch-up
     //      checkpoint in storage. An application-supplied model that resumes from a stored
     //      position anyway is not seen here.
@@ -661,21 +666,24 @@ class ProjectionAnnotationRegistrar {
         @Nullable CatchupResolution resolution = recordingResolution;
         @Nullable CatchupThenPushSubscriptionModel pushCatchupModel = ownCatchupModel;
         if (subscriptionsStartOnTheirOwn(applicationContext)) {
-            // Registration happens here, on the refresh thread, which is what captures an event committing mid-replay.
-            // Only the replay is elsewhere.
-            var subscription = projectAgnosticOrStream(runner, id, annotation, projection, store, null, resolution);
-            // Checked after the call that subscribes, because the model does not refuse a subscribe once close() has
-            // shut it down. It starts a replay instead, and by then the model is out of the queue and close() cannot
-            // stop it a second time.
-            if (stopIfClosing(pushCatchupModel, subscribable, id)) {
-                return;
-            }
-            if (mayBlock && SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode())) {
-                subscription.waitUntilStarted().block();
-            } else {
-                subscription.waitUntilStarted().subscribe(ignored -> {
-                }, error -> recordBackgroundFailure(id, error));
-            }
+            // Held until the startup scan is done, like every other asynchronous start
+            startupSubscribes.run(() -> {
+                // Registration happens here, on the refresh thread, which is what captures an event committing
+                // mid-replay. Only the replay is elsewhere.
+                var subscription = projectAgnosticOrStream(runner, id, annotation, projection, store, null, resolution);
+                // Checked after the call that subscribes, because the model does not refuse a subscribe once close()
+                // has shut it down. It starts a replay instead, and by then the model is out of the queue and close()
+                // cannot stop it a second time.
+                if (stopIfClosing(pushCatchupModel, subscribable, id)) {
+                    return;
+                }
+                if (mayBlock && SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode())) {
+                    subscription.waitUntilStarted().block();
+                } else {
+                    subscription.waitUntilStarted().subscribe(ignored -> {
+                    }, error -> recordBackgroundFailure(id, error));
+                }
+            });
         } else {
             // This feed bypasses the subscription model bean entirely, so manual mode's own withholding never reaches
             // it. Defer the same call instead, to run once the application starts this projection itself. startupMode
@@ -737,14 +745,17 @@ class ProjectionAnnotationRegistrar {
                 domainFeedsToCatchUp.add(new DomainFeedCatchUp(id, feed,
                         SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode())));
             } else {
-                // Nothing to replay, so there is nothing to defer to catchUpCollectedFeeds(): go live right away.
-                if (mayBlock) {
-                    feed.goLive(id).block();
-                    withPushCatchupStatus(status -> status.recordLive(id));
-                } else {
-                    feed.goLive(id).subscribe(ignored -> {
-                    }, error -> recordBackgroundFailure(id, error), () -> withPushCatchupStatus(status -> status.recordLive(id)));
-                }
+                // Nothing to replay, so there is nothing to defer to catchUpCollectedFeeds(). Live once the startup
+                // scan is done, like every other asynchronous start.
+                startupSubscribes.run(() -> {
+                    if (mayBlock) {
+                        feed.goLive(id).block();
+                        withPushCatchupStatus(status -> status.recordLive(id));
+                    } else {
+                        feed.goLive(id).subscribe(ignored -> {
+                        }, error -> recordBackgroundFailure(id, error), () -> withPushCatchupStatus(status -> status.recordLive(id)));
+                    }
+                });
             }
         } else {
             // register(...) alone puts the feed into buffering mode immediately, so deferring only the catch-up would

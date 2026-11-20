@@ -27,6 +27,9 @@ other sections compile fine and behave differently, so read them first.
   record component. **Breaks the build** if you use a record pattern over it.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
+- [A synchronous event dispatcher you implement breaks on `beforeWrite()`](#a-synchronous-event-dispatcher-you-implement-breaks-on-beforewrite).
+  **Breaks the build** if you implement `SynchronousEventDispatcher` or `ReactiveSynchronousEventDispatcher` yourself,
+  and an implementation compiled against 0.34.0 throws `AbstractMethodError`.
 - [A record pattern over `NativeMongoSubscription` stops compiling](#a-record-pattern-over-nativemongosubscription-stops-compiling).
   `NativeMongoSubscription` gains a third record component. **Breaks the build** if you use a record pattern over it.
 - [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
@@ -222,6 +225,22 @@ other sections compile fine and behave differently, so read them first.
   static method that hides an annotated static factory method of a superclass fails at startup the same way. A
   handler declared with a type variable gets only the type the bean's class gives it, which can narrow a handler that
   ran in 0.34.0, one of the bridge kind or one on a JDK proxy that can't be unwrapped. Compiles unchanged.
+- [A write through the application service is refused while the application starts](#a-write-through-the-application-service-is-refused-while-the-application-starts).
+  A blocking write from a `@PostConstruct` method, an `InitializingBean` or a `@Bean` method fails startup with
+  `WriteRefusedException`, and so does a reactive one whose error reaches that method, for example because it blocks
+  on the `Mono`. A reactive write subscribed without an error consumer stores nothing, and the application starts. A
+  context whose event store bean is a Mockito mock fails startup with an `IllegalStateException`. Under `MANUAL` the
+  synchronous handlers run from the start on writes through the application service. A handler that starts live,
+  `@Projection` and `@Saga` by default among them, can get what is written directly to the event store while the
+  application starts, except in the cases that section lists. A write while the
+  synchronous subscription model is stopped, or one a paused synchronous subscription matches, is refused, also
+  without a starter. Compiles unchanged.
+- [A synchronous event dispatcher you implement breaks on `beforeWrite()`](#a-synchronous-event-dispatcher-you-implement-breaks-on-beforewrite).
+  **Breaks the build** if you implement `SynchronousEventDispatcher` or `ReactiveSynchronousEventDispatcher` yourself,
+  and an implementation compiled against 0.34.0 throws `AbstractMethodError`.
+- [A synchronous handler the startup scan can't see fails the creation of its bean](#a-synchronous-handler-the-startup-scan-cant-see-fails-the-creation-of-its-bean).
+  A `@Lazy` bean whose declared type hides its synchronous handler, created after the startup scan, throws an
+  `IllegalStateException`. Compiles unchanged.
 - [Five types the Spring Boot starters share move to an internal package](#five-types-the-spring-boot-starters-share-move-to-an-internal-package).
   `SubscriptionAnnotations`, `PushCatchupStatusImpl`, `AsynchronousSubscribables`, `AppliedAppendRecordingRegistry`
   and `PolledCatchupSignals` move to `org.occurrent.springboot.common.internal`, and `UpgradeToOccurrent_0_35` rewrites
@@ -2663,6 +2682,318 @@ The code compiles unchanged. An inherited handler that starts running writes wha
 checkpoint and, for a `@Projection`, `@Snapshot` or `@Saga`, its state. There is no OpenRewrite recipe, because nothing in the code
 says whether an inherited handler was meant to run. See
 [ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md).
+
+## A write through the application service is refused while the application starts
+
+The Spring Boot starters now refuse a write through the application service until their startup scan has registered
+every handler. The scan runs once all singleton beans are created, and ends before any `ApplicationRunner` runs.
+[ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md#3-a-write-through-the-application-service-waits-for-the-synchronous-handlers)
+has the reasons.
+
+### Who is affected
+
+The changes reach an application that uses a Spring Boot starter with `occurrent.subscription.mode` set to anything
+but `DISABLED`, the default `AUTO` included, when one of these holds:
+
+- A bean calls `execute` on the `ApplicationService` or `DcbApplicationService` that the starter creates while the
+  application starts, from a `@PostConstruct` method, from `afterPropertiesSet`, from a `@Bean` method, or from a
+  thread it starts then.
+- A test starts a context whose event store bean is a Mockito mock of `SpringMongoEventStore` or
+  `ReactorMongoEventStore`.
+- The application sets `occurrent.subscription.mode=MANUAL` and has a `@SynchronousSubscription`, or a `@Projection`
+  or `@Snapshot` with `mode = SYNCHRONOUS`. All three run on the synchronous subscription model.
+- The application has a `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`, or a
+  `@Saga` on the blocking starter, that starts live, at `NOW` or at `DEFAULT` with nothing stored, and something
+  writes directly to the event store while the application starts. `@Projection` and `@Saga` start at `DEFAULT`
+  unless they set `startAt`.
+- The application declares its own `CheckpointStorage` that refuses `CheckpointWriteCondition.ifAbsent()`, on the
+  reactor starter, or on the blocking starter with `occurrent.subscription.competing-consumer.fence-checkpoints=false`.
+- The application stops the synchronous subscription model, or pauses a synchronous subscription, and keeps writing
+  through the application service.
+
+The last one reaches an application without a starter too, when it passes a `SynchronousSubscriptionModel` to
+`synchronousSubscriptions(..)` on the builder of `GenericApplicationService` or `GenericDcbApplicationService`, on
+either stack.
+
+### What changes
+
+A `@SynchronousSubscription` runs on the thread that writes through the application service, and nothing replays a
+write to it, so a write made before it registered reaches it only if your code passes that write's events to the
+`SynchronousSubscriptionModel` while the handler is running, as the javadoc of `SynchronousSubscriptionModel`
+describes. For such a write the blocking application service
+now throws `WriteRefusedException` from `execute`, and the reactor one returns a `Mono` that fails with it when it is
+subscribed. Nothing is stored. A `@PostConstruct` method that writes fails the creation of its bean, so the
+application doesn't start, and the message says where to write instead:
+
+```
+The application is still starting and has not registered all of its handlers, so a synchronous handler it registers later would never see this write. Write from an ApplicationRunner or an ApplicationReadyEvent listener, not from a @PostConstruct method, an InitializingBean or a @Bean method.
+```
+
+On the reactor stack the refusal is an error signal on that `Mono`. A `@PostConstruct` method that blocks on it fails
+the same way, but one that calls `subscribe()` without an error consumer stores nothing, and the application starts
+with only Reactor's log line about a dropped error. The `Mono` asks whether to refuse each time it is subscribed, so a
+`Mono` built while the application starts and subscribed once it runs is not refused.
+
+An asynchronous handler, a `@Saga` and a push projection included, now starts once the startup scan has registered
+every handler, in the order the scan registered them, and each `WAIT_UNTIL_STARTED` replay ends before the next handler
+starts. In 0.34.0 each one started as the scan registered it. So a synchronous handler gets every write that a saga or a
+startup replay makes, and a `WAIT_UNTIL_STARTED` replay still ends before any `ApplicationRunner` runs.
+
+A write from a `SmartInitializingSingleton` may or may not be refused, depending on whether Spring calls it before or
+after the starter's own `SmartInitializingSingleton`, which follows the order the beans were registered in. Write
+from an `ApplicationRunner` there too.
+
+The starter refuses the write also when the application declares no synchronous handler. A write made directly to
+the event store, with `EventStore.write` or `DcbEventStore.append`, is not refused. A synchronous handler sees such a
+write, whenever it is made, only if the application passes its events to the `SynchronousSubscriptionModel` while that
+handler is running, with `dispatch` on either stack or `accept` on the blocking one. The javadoc of
+`SynchronousSubscriptionModel` says when a handler is running.
+
+A `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`, or a `@Saga` on the
+blocking starter, that starts live can now get that direct write. On its first start at `NOW`, or at `DEFAULT` with
+nothing stored, it starts from where the event store was when the event store bean was created, except in the cases
+listed further down. In 0.34.0 it started
+from where the event store was once all singleton beans existed, and missed what was written before, as
+[section 11 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#11-a-subscription-handler-spring-cannot-invoke-is-now-refused-and-a-live-subscription-can-miss-a-startup-write)
+describes. A `@Projection` and a `@Saga` start at `DEFAULT` unless they set `startAt`, so a default `@Saga` now acts
+on, and sends commands for, an event written directly to the event store while the application starts, where 0.34.0
+skipped it. A handler on a bean built after startup, such as a `@Lazy` bean, starts from where the event store is
+when that bean is built, so it gets what the bean's own `@PostConstruct` method writes. For a `FactoryBean` built
+after startup that is where the event store was when the factory was built, so its product's handler also gets what
+the factory writes while it builds the product. The product's handler gets events written before the product was built
+in three more cases:
+
+- The factory is a singleton or scoped one created in an earlier call than the product, for example with
+  `getBean("&name")` or by injecting it, or its `isSingleton()` returns false so each lookup builds a new product. The
+  handler also gets what was written between the factory's creation and the product's.
+- The factory is a prototype, and an older factory of the same name that the same thread created is still there,
+  unclaimed by a product and not garbage collected, for example the factory whose `getObject` asked for this product.
+  The handler starts from where the event store was when that older factory was built.
+- The factory was built while the application started and its product only later, also a prototype factory whose
+  `getObject` ran after startup. The handler starts from where the event store was when the event store bean was
+  created, so it also gets what was written while the application started and while the factory built the product.
+
+Except where a `SubscriptionResumePoints` bean answers for the subscription, a handler starts where the event store
+is when it subscribes, which is once the startup scan is done, in these cases:
+
+- Its bean is built on a Reactor non-blocking thread.
+- The event store bean is a Spring AOP proxy without a single target. The starter logs a warning naming the bean.
+  An event store behind a proxy with a single target is read through that target.
+- The application uses neither MongoDB starter. Only those two turn where the event store is into a checkpoint, with
+  the internal `LiveStartCheckpoints` bean they declare.
+- It would store that position as its first checkpoint, which every live start but `NOW` with
+  `resumeBehavior = SAME_AS_START_AT` does, and Spring can't pick one `CheckpointStorage` bean, as it does with a
+  single one or a `@Primary` one among several.
+
+Such a handler misses an event written directly to the event store while the scan runs, for example from the
+`@PostConstruct` method of a bean the scan creates. In 0.34.0 it subscribed as the scan registered it, so it got that
+event when the bean was created after it had subscribed.
+
+The starter writes that first checkpoint with `CheckpointWriteCondition.ifAbsent()`. A `CheckpointStorage` of your own
+that answers `false` from `evaluatesWriteConditionsFor` gets an unconditional write instead, with a warning, as
+`DurableSubscriptionModel` gives it. Two nodes that start the same subscription at the same moment can then lose the
+events between their two start positions.
+
+That position is a time in MongoDB's oplog, so it lasts only as long as the oplog window. An application that takes
+longer than the oplog window to start, from the event store bean to the handler's subscribe, finds it gone. A handler
+the starter runs through a catch-up subscription, which both starters do by default, then refuses to start instead of
+skipping the events since that position. The blocking starter throws `CatchupCannotResumeException` and the
+application doesn't start. With `startupMode = BACKGROUND`, and on the reactor starter, the handler is paused with an
+error in the log that names it. Delete or replace its stored checkpoint and restart the application, as
+[A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now)
+describes. A handler at `NOW` with `resumeBehavior = SAME_AS_START_AT` stores no checkpoint, so it is paused with an
+error in the log, and the next start of the application reads a new position. Without a catch-up subscription, the
+MongoDB subscription model restarts the handler from now when
+`occurrent.subscription.mongodb.restart-on-change-stream-history-lost` is `true`, its default, and the events written
+between that position and the restart are never delivered. With it set to `false` the subscription ends with an error
+in the log.
+
+The starter reads where the event store is from the event store bean as soon as that bean is created. A Mockito mock
+returns `null` from `openCatchupReadScope`, so a context with one fails to start with an `IllegalStateException` that
+names `openCatchupReadScope`.
+
+Under `occurrent.subscription.mode=MANUAL` the synchronous subscription model, which runs `@SynchronousSubscription`
+and a `@Projection` or `@Snapshot` with `mode = SYNCHRONOUS`, runs from the start. In 0.34.0 the starter kept it
+stopped until you started the subscriptions, and a write made before that reached no synchronous handler. Now every
+write through the application service runs the synchronous handlers.
+
+The application service also throws `WriteRefusedException` for a write while the synchronous subscription model is
+stopped and has a handler registered, and for a write whose events match a paused synchronous subscription. That
+holds with or without a starter, as long as a dispatcher you implement yourself passes `beforeWrite()` on, see
+[A synchronous event dispatcher you implement breaks on `beforeWrite()`](#a-synchronous-event-dispatcher-you-implement-breaks-on-beforewrite).
+In 0.34.0 that write was stored and the stopped or paused handler never got its
+events. The match uses the stream id and the stream version that the write gives the events, so a filter on either
+one works. A filter on the position or on the append id can't match before the event store writes the events, so a
+paused subscription with such a filter doesn't stop the write.
+
+A `pauseSubscription(id)` or `stop()` on the synchronous subscription model waits for the writes the model has
+already let through, so their handlers still get their events, and `pauseSubscription(id)` returns once the
+subscription is paused. A write that starts while the pause waits is refused when the pausing subscription matches
+it, and a write that starts while the stop waits is refused. A handler that pauses or stops its own model doesn't
+wait, since its own write is one of those, and the pause or stop applies once the last of those writes ends. Until then
+`isPaused(id)` answers `false`. On the reactor stack a pause or stop on a non-blocking thread doesn't wait either and
+applies the same way. So does one from any thread while the model routes the events of a write, since a reactor
+handler runs on whatever thread the event store calls back on. A long write holds a pause or stop back for as long as
+it runs.
+
+### What to do
+
+Move a write out of a `@PostConstruct` method, an `InitializingBean` or a `@Bean` method into an `ApplicationRunner`
+or an `ApplicationReadyEvent` listener. Before:
+
+```java
+@Component
+class OpenDefaultAccount {
+    private final ApplicationService<DomainEvent> applicationService;
+
+    OpenDefaultAccount(ApplicationService<DomainEvent> applicationService) {
+        this.applicationService = applicationService;
+    }
+
+    @PostConstruct
+    void open() {
+        applicationService.execute("account-1", events -> Account.open(events, "account-1"));
+    }
+}
+```
+
+After:
+
+```java
+@Component
+class OpenDefaultAccount implements ApplicationRunner {
+    private final ApplicationService<DomainEvent> applicationService;
+
+    OpenDefaultAccount(ApplicationService<DomainEvent> applicationService) {
+        this.applicationService = applicationService;
+    }
+
+    @Override
+    public void run(ApplicationArguments args) {
+        applicationService.execute("account-1", events -> Account.open(events, "account-1"));
+    }
+}
+```
+
+With an `ApplicationReadyEvent` listener, annotate the method with `@EventListener(ApplicationReadyEvent.class)` in
+place of `@PostConstruct`. A thread that writes goes the same way, so start it from the `ApplicationRunner`.
+
+In a test with a mocked event store, run the test over `InMemoryEventStore` or a MongoDB event store instead, as
+[A catch-up needs the event store itself](#a-catch-up-needs-the-event-store-itself) recommends. To keep the mock, make
+`openCatchupReadScope` return a scope. A mocked scope reports no live start, and the subscriptions then start as they
+did in 0.34.0:
+
+```java
+// Blocking, org.occurrent.eventstore.api.blocking.internal.CatchupReadScope
+when(eventStore.openCatchupReadScope(any())).thenReturn(mock(CatchupReadScope.class));
+// Reactor, org.occurrent.eventstore.api.reactor.internal.CatchupReadScope
+CatchupReadScope scope = mock(CatchupReadScope.class);
+when(scope.close()).thenReturn(Mono.empty());
+when(eventStore.openCatchupReadScope(any())).thenReturn(Mono.just(scope));
+```
+
+A test that stops the synchronous subscription model and keeps writing through the application service now gets
+`WriteRefusedException`. Put `@EnableOccurrentTesting` on the test class and register the
+`OccurrentSubscriptionsExtension` bean it declares in an `@Autowired @RegisterExtension` field. Building that extension
+lets those writes through, and a stopped or paused synchronous handler doesn't get their events. The annotation alone
+doesn't, because nothing builds the extension until a test autowires it. Once built, the model lets those writes
+through for as long as Spring keeps the test context cached, so every test class that shares the context gets the same
+behaviour.
+
+In the application, resume a paused synchronous subscription before writing events it matches, or cancel it.
+
+## A synchronous event dispatcher you implement breaks on `beforeWrite()`
+
+`SynchronousEventDispatcher` in `org.occurrent.application.service.blocking` and `ReactiveSynchronousEventDispatcher`
+in `org.occurrent.application.service.reactor` gain an abstract method:
+
+```java
+WriteCheck beforeWrite();
+```
+
+A class that implements either interface doesn't compile until it implements the method. A class compiled against
+0.34.0 and not compiled again throws `AbstractMethodError` when the application service calls the method. The
+application service calls it once per write, before it reads anything. `SynchronousSubscriptionModel` answers with the
+refusal and the wait that
+[A write through the application service is refused while the application starts](#a-write-through-the-application-service-is-refused-while-the-application-starts)
+describes.
+
+### What to do
+
+A dispatcher that passes the written events on to a `SynchronousSubscriptionModel`, or to another dispatcher, passes
+`beforeWrite()` on as well:
+
+```java
+@Override
+public WriteCheck beforeWrite() {
+    return synchronousSubscriptionModel.beforeWrite();
+}
+```
+
+`WriteCheck.NONE` is right only for a dispatcher that never wraps a model that can be stopped or paused. There's no
+default implementation, because a dispatcher that wraps the model and doesn't pass the call on lets a write through
+while the model is stopped or a matching subscription is paused, and that handler never gets its events. For the same
+reason the rewrite recipe doesn't add the method, since a generated `return WriteCheck.NONE` would bring that loss
+back.
+
+## A synchronous handler the startup scan can't see fails the creation of its bean
+
+The Spring Boot starters register every handler in a scan while the application starts. A bean whose synchronous
+handler the scan couldn't see, and that is created after it, now fails its creation.
+[ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md#3-a-write-through-the-application-service-waits-for-the-synchronous-handlers)
+has the reasons.
+
+### Who is affected
+
+An application that uses a Spring Boot starter and has a bean with a `@SynchronousSubscription`, or a `@Projection` or
+`@Snapshot` with `mode = SYNCHRONOUS`, when both of these hold:
+
+- The bean's declared type hides the annotation. That is a `@Bean` method that returns an interface or `Object`, or a
+  `FactoryBean` whose declared product type isn't the annotated class.
+- The bean is created after the scan, since it is `@Lazy`, the application sets
+  `spring.main.lazy-initialization=true`, or it is a `FactoryBean` product nothing asked for during the scan. That
+  includes a bean that an asynchronous handler's startup replay creates, since the asynchronous handlers start once the
+  scan is done.
+
+### What changes
+
+In 0.34.0 the handler registered when the bean was created, and never got the writes made before that. Now creating
+the bean throws an `IllegalStateException` before its init methods run, so the `getBean` call or the injection that
+asked for it fails. When another post-processor replaces the bean with an object that declares such a handler, the
+creation fails once the bean is initialized instead. The message names the bean and the handler, for example:
+
+```
+Bean 'accountReadModel' declares the synchronous handler com.example.AccountReadModel#on and is created after the startup scan of the Spring Boot starter registered the synchronous handlers. A synchronous handler has no replay and gets only the writes made after it registers, so it would miss the earlier ones. Let the startup scan register it: remove @Lazy from the bean, or declare its @Bean method with the annotated class as the return type rather than an interface or Object. Or make the handler asynchronous, with @Subscription instead of @SynchronousSubscription, or mode = ASYNC on @Projection and @Snapshot.
+```
+
+A prototype bean, or the target of a scoped proxy, whose handler registered at startup is created as before.
+
+An object that implements `FactoryBean` and declares a synchronous handler that isn't registered yet now fails its
+creation with a `BeanCreationException` wherever the starter handles it as a factory. That is every `FactoryBean`
+bean. It is also the product of a `FactoryBean` when that product implements `FactoryBean` too and its factory is
+registered with `registerSingleton`, is an inner bean, or asks for the product while it initializes itself. An object
+the starter handles as a factory also fails its creation when the starter can't read its handler methods. In 0.34.0
+the starter didn't register a synchronous handler of such an object when the object was created. Move the handler to
+a class that doesn't implement `FactoryBean`.
+
+An object Spring initializes under a name with no bean definition fails its creation the same way when it declares a
+synchronous handler that isn't registered. That is the product of a `FactoryBean` registered with `registerSingleton`,
+and an object passed to `initializeBean` of `AutowireCapableBeanFactory`. The startup scan reads only names with a bean
+definition, and in 0.34.0 the starter didn't register such a handler when the object was created either. Declare the
+bean, or the `FactoryBean` that creates it, with a bean definition, for example with a `@Bean` method. An object
+initialized under its class name with `.ORIGINAL` appended isn't checked. That is the name Spring's test support gives
+a test instance, so a test class that declares a synchronous handler starts as it did in 0.34.0.
+
+### What to do
+
+Do one of these:
+
+- Declare the annotated class as the `@Bean` method's return type. The startup scan then sees the handler and creates
+  the bean to register it, `@Lazy` or not.
+- Remove `@Lazy`, so the bean is created with the other singletons, before the startup scan.
+- Make the handler asynchronous, with `@Subscription` in place of `@SynchronousSubscription`, or `mode = ASYNC` on
+  `@Projection` and `@Snapshot`. With `startAt = BEGINNING` an asynchronous handler reads the events stored before its
+  bean was created from the event store.
 
 ## Five types the Spring Boot starters share move to an internal package
 

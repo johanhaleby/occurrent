@@ -270,7 +270,7 @@ class StartPositionSupportResumePointsTest {
 
     @SuppressWarnings("unchecked")
     private StartPositionSupport support(@Nullable String answer, boolean beanDeclared) {
-        ApplicationContext applicationContext = mock(ApplicationContext.class);
+        ApplicationContext applicationContext = ContextWithoutBoundaryStore.mocked();
         ObjectProvider<SubscriptionResumePoints> provider = mock(ObjectProvider.class);
         SubscriptionResumePoints resumePoints = subscriptionId -> {
             asked.add(subscriptionId);

@@ -243,7 +243,7 @@ class NowStartResumeBehaviorStartAtTest {
 
     @SuppressWarnings("unchecked")
     private static StartPositionSupport support() {
-        ApplicationContext applicationContext = mock(ApplicationContext.class);
+        ApplicationContext applicationContext = ContextWithoutBoundaryStore.mocked();
         ObjectProvider<org.occurrent.springboot.common.SubscriptionResumePoints> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(null);
         when(applicationContext.getBeanProvider(org.occurrent.springboot.common.SubscriptionResumePoints.class)).thenReturn(provider);

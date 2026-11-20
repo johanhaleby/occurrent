@@ -109,6 +109,9 @@ acknowledgement, and every consumer behind it either never sees the message or l
 it. Check a push or fan-out design against this before anything else. It is what decided the one-sink-per-consumer
 topology in ADR 90. The rule has no severity ladder either: a loss window that is narrow, documented and warn-logged
 is still a loss. A change that narrows one is a step on a recorded path to closing it, never the accepted end state.
+An event outside a scope the user opts into, and that the javadoc of the chosen API states, is not a loss, such as a
+write from another process for a synchronous handler, which gets only the writes through its own process's application
+service after it registered.
 
 **Safety work finishes in the release that starts it.** A follow-up on something important means shipping another
 version right after this one, so when more work now makes a component safe or complete, prefer doing that work now.

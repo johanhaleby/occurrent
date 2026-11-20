@@ -43,7 +43,7 @@ class NowStartDependingOnResumeBehaviorTest {
 
     private static final String SUBSCRIPTION_ID = "now-start-depending-on-resume-behavior";
 
-    private final StartPositionSupport support = new StartPositionSupport(mock(ApplicationContext.class));
+    private final StartPositionSupport support = new StartPositionSupport(ContextWithoutBoundaryStore.mocked());
 
     @ParameterizedTest
     @EnumSource(ResumeBehavior.class)

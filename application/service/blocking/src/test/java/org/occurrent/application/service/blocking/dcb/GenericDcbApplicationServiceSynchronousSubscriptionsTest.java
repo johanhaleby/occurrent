@@ -196,6 +196,12 @@ class GenericDcbApplicationServiceSynchronousSubscriptionsTest {
     }
 
     private static final class RecordingDispatcher implements SynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final List<CloudEvent> dispatched = new ArrayList<>();
         private @Nullable Boolean toldTransactional;
 

@@ -216,7 +216,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
     // planted checkpoint before live-2.
     @Test
     void a_dcb_subscription_with_now_and_same_as_start_at_does_not_replay_from_a_catch_up_checkpoint_planted_while_paused_when_it_is_resumed() {
-        try (ConfigurableApplicationContext context = SpringApplication.run(NowRestartApplication.class,
+        try (ConfigurableApplicationContext context = bootWritingHistoryFirst(
                 nowBootArgs("dcb-now-same-as-start-at-paused", "historic-1,historic-2", "live-1"))) {
             DcbSubscriptionNowSameAsStartAt handler = context.getBean(DcbSubscriptionNowSameAsStartAt.class);
             awaitHandled(handler, "live-1");
@@ -280,7 +280,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
 
     private static void restartNow(String databaseName, Class<? extends Handled> handlerType,
                                    List<String> expectedFirstBoot, List<String> expectedSecondBoot) {
-        ConfigurableApplicationContext firstBoot = SpringApplication.run(NowRestartApplication.class,
+        ConfigurableApplicationContext firstBoot = bootWritingHistoryFirst(
                 nowBootArgs(databaseName, "historic-1,historic-2", "live-1"));
         try {
             Handled handler = firstBoot.getBean(handlerType);
@@ -290,7 +290,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
             firstBoot.close();
         }
 
-        ConfigurableApplicationContext secondBoot = SpringApplication.run(NowRestartApplication.class,
+        ConfigurableApplicationContext secondBoot = bootWritingHistoryFirst(
                 nowBootArgs(databaseName, "while-down-1", "live-2"));
         try {
             Handled handler = secondBoot.getBean(handlerType);
@@ -328,7 +328,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
     private static void restartSnapshot(String databaseName, Class<? extends DcbSnapshotHandled> handlerType,
                                         @Nullable String subscriptionIdThatStoresCheckpoint, int expectedReadsFirstBoot, Consumer<List<Long>> expectedSavedFirstBoot,
                                         int expectedReadsSecondBoot, Consumer<List<Long>> expectedSavedSecondBoot) {
-        ConfigurableApplicationContext firstBoot = SpringApplication.run(NowRestartApplication.class,
+        ConfigurableApplicationContext firstBoot = bootWritingHistoryFirst(
                 nowBootArgs(databaseName, "historic-1,historic-2", "live-1"));
         try {
             DcbSnapshotHandled handler = firstBoot.getBean(handlerType);
@@ -341,7 +341,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
             firstBoot.close();
         }
 
-        ConfigurableApplicationContext secondBoot = SpringApplication.run(NowRestartApplication.class,
+        ConfigurableApplicationContext secondBoot = bootWritingHistoryFirst(
                 nowBootArgs(databaseName, "while-down-1", "live-2"));
         try {
             DcbSnapshotHandled handler = secondBoot.getBean(handlerType);
@@ -393,10 +393,29 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
                 assertThat(handler.names()).contains(marker));
     }
 
+    // The start of a subscription at the present is read when the event store bean is created, so only what is written
+    // before the context starts is history. A context with subscriptions off writes the events of test.before-subscribe
+    // and is closed again, and the context under test is then booted with none to write.
+    private static ConfigurableApplicationContext bootWritingHistoryFirst(String[] args) {
+        String beforeSubscribe = "--test.before-subscribe=";
+        String afterStart = "--test.after-start=";
+        boolean hasHistory = Stream.of(args).anyMatch(arg -> arg.startsWith(beforeSubscribe) && arg.length() > beforeSubscribe.length());
+        if (hasHistory) {
+            String[] whileDown = Stream.concat(
+                    Stream.of(args).map(arg -> arg.startsWith(afterStart) ? afterStart : arg),
+                    Stream.of("--occurrent.subscription.enabled=false")).toArray(String[]::new);
+            SpringApplication.run(NowRestartApplication.class, whileDown).close();
+        }
+        String[] withoutHistory = Stream.of(args).map(arg -> arg.startsWith(beforeSubscribe) ? beforeSubscribe : arg).toArray(String[]::new);
+        return SpringApplication.run(NowRestartApplication.class, withoutHistory);
+    }
+
     private static String[] nowBootArgs(String databaseName, String beforeSubscribe, String afterStart) {
         return Stream.concat(Arrays.stream(bootArgs(databaseName)), Stream.of(
                 "--test.before-subscribe=" + beforeSubscribe,
-                "--test.after-start=" + afterStart)).toArray(String[]::new);
+                "--test.after-start=" + afterStart,
+                // The history is written by a boot of its own, so the boot that replays it is told what to wait for
+                "--test.last-history=" + List.of(beforeSubscribe.split(",")).getLast())).toArray(String[]::new);
     }
 
     private static String[] bootArgs(String databaseName) {
@@ -506,13 +525,17 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         NowEventWriter nowEventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter,
                                       @Value("${test.before-subscribe}") String beforeSubscribe,
                                       @Value("${test.after-start}") String afterStart,
+                                      @Value("${test.last-history}") String lastHistory,
                                       MongoTemplate mongoOperations, ObjectProvider<SubscriptionModel> subscriptionModel,
                                       ObjectProvider<DcbSnapshotBeginningDefault> beginningDefault,
                                       ObjectProvider<DcbSnapshotBeginningSameAsStartAt> beginningSameAsStartAt) {
             // A BEGINNING snapshot replays the history. An event written while it replays is delivered by the replay and can
             // be delivered by the live feed too, so the events written after start wait until the last history event is folded.
             Runnable replayIsOver = () -> {
-                String lastHistory = List.of(beforeSubscribe.split(",")).getLast();
+                // The boot that writes the history has subscriptions off, so nothing replays and there is no model
+                if (subscriptionModel.getIfAvailable() == null) {
+                    return;
+                }
                 ReplayAwareSubscriptions replayAware = ReplayAwareSubscriptions.findIn(subscriptionModel.getObject()).orElseThrow();
                 Map<String, DcbSnapshotHandled> replaying = Map.of(
                         "dcb-beginning-snapshot-default", beginningDefault.getObject(),
@@ -650,7 +673,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
             this.beforeAfterStart = beforeAfterStart;
             this.dcbEventStore = dcbEventStore;
             this.cloudEventConverter = cloudEventConverter;
-            this.beforeSubscribe = List.of(beforeSubscribe.split(","));
+            this.beforeSubscribe = beforeSubscribe.isEmpty() ? List.of() : List.of(beforeSubscribe.split(","));
             this.afterStart = afterStart.isEmpty() ? List.of() : List.of(afterStart.split(","));
             this.mongoOperations = mongoOperations;
         }
@@ -659,6 +682,9 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
         // confirms that a NOW subscription would open after them.
         @PostConstruct
         void writeBeforeSubscribe() {
+            if (beforeSubscribe.isEmpty()) {
+                return;
+            }
             beforeSubscribe.forEach(this::write);
             HistoryBeforeThePresent.awaitedWith(mongoOperations);
         }

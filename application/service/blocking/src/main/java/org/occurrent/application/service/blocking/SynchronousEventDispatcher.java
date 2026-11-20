@@ -56,4 +56,45 @@ public interface SynchronousEventDispatcher {
      * application service does no synchronous-dispatch work at all for a write.
      */
     boolean hasSubscriptions();
+
+    /**
+     * Asked once when {@code execute} is called, on the caller's thread, before anything is read and before
+     * {@link #hasSubscriptions()}. It throws a {@link org.occurrent.application.service.WriteRefusedException} when no
+     * write may go through now. The {@link WriteCheck} it returns is asked with the events the command decided on,
+     * before they are written, and throws one when a handler that would never see them matches them. Nothing is
+     * written when either throws. The application service closes it once the write and its dispatch are done or have
+     * failed, and a pause or a stop that came after this call waits for that.
+     * <p>
+     * A dispatcher that passes the written events on to a subscription model passes this on too. Otherwise a write
+     * goes through while the model is stopped or a matching subscription is paused, and that handler never gets its
+     * events. A dispatcher with nothing to refuse returns {@link WriteCheck#NONE}. There's no default, so a
+     * dispatcher written for an earlier version doesn't compile until it answers.
+     *
+     * @return The check for the events of this write.
+     */
+    WriteCheck beforeWrite();
+
+    /**
+     * The check {@link #beforeWrite()} returns for the events of one write.
+     */
+    @FunctionalInterface
+    interface WriteCheck extends AutoCloseable {
+        /**
+         * Refuses nothing.
+         */
+        WriteCheck NONE = newEvents -> {
+        };
+
+        /**
+         * @param newEvents The cloud events the command decided on, before the event store has written them
+         */
+        void check(List<CloudEvent> newEvents);
+
+        /**
+         * Called once the write and its dispatch are done or have failed. The default does nothing.
+         */
+        @Override
+        default void close() {
+        }
+    }
 }

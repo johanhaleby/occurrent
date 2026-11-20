@@ -282,6 +282,12 @@ class ReactiveGenericApplicationServiceSynchronousSubscriptionsTest {
     }
 
     private static final class RecordingDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final List<CloudEvent> dispatched = new ArrayList<>();
         private boolean hasSubscriptions = true;
 
@@ -297,6 +303,12 @@ class ReactiveGenericApplicationServiceSynchronousSubscriptionsTest {
     }
 
     private static final class RegimeRecordingDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private @Nullable Boolean toldTransactional;
 
         @Override

@@ -41,6 +41,7 @@ import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.DcbSnapshotInvalidException;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerScan;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
@@ -68,8 +69,10 @@ class SnapshotAnnotationRegistrar {
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
+    private final StartupSubscribes startupSubscribes;
 
-    SnapshotAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
+    SnapshotAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, StartupSubscribes startupSubscribes) {
+        this.startupSubscribes = startupSubscribes;
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
     }
@@ -158,10 +161,10 @@ class SnapshotAnnotationRegistrar {
         startPositionSupport.applyStartupWorkarounds();
         if (stream) {
             StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
-            BackgroundStartup.subscribe(annotation.startupMode(), () -> streamSubscriptions.subscribe(id, filter(eventFilter), startAt, waitUntilStarted, consumer));
+            BackgroundStartup.subscribe(startupSubscribes, annotation.startupMode(), () -> streamSubscriptions.subscribe(id, filter(eventFilter), startAt, waitUntilStarted, consumer));
         } else {
             Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
-            BackgroundStartup.subscribe(annotation.startupMode(), () -> subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, consumer));
+            BackgroundStartup.subscribe(startupSubscribes, annotation.startupMode(), () -> subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, consumer));
         }
     }
 
@@ -216,7 +219,7 @@ class SnapshotAnnotationRegistrar {
             store.save(key, org.occurrent.dsl.snapshot.Snapshot.atMarkerVersions(newState, read.markerVersions().get(), Math.max(base.highestFoldedPosition(), read.highestEventPosition()), schemaVersion));
         };
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-        BackgroundStartup.subscribe(annotation.startupMode(), () -> {
+        BackgroundStartup.subscribe(startupSubscribes, annotation.startupMode(), () -> {
             var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, fold);
             if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext) && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                 subscription.waitUntilStarted();

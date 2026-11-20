@@ -30,12 +30,16 @@ public enum SubscriptionMode {
     DISABLED,
 
     /**
-     * Every subscription bean exists and every subscription is registered, but none of them run. Start them yourself
-     * with {@code start()} or one at a time with {@code resumeSubscription(id)}. Use this to bring subscriptions up
-     * behind a leader election or a health check, or in a test that chooses which subscriptions run.
+     * Every subscription bean exists and every subscription is registered, but only the synchronous ones run. Start
+     * the others yourself with {@code start()} or one at a time with {@code resumeSubscription(id)}. Use this to bring
+     * subscriptions up behind a leader election or a health check, or in a test that chooses which subscriptions run.
      * <p>
-     * A synchronous subscription is affected too, and that is worth knowing before you use this in production. A write
-     * succeeds while its synchronous projection does not run, because the projection is stopped rather than deferred.
+     * The synchronous subscription model, which runs {@code @SynchronousSubscription} and a {@code @Projection} or
+     * {@code @Snapshot} with {@code mode = SYNCHRONOUS}, runs from the start, so every write through the application
+     * service runs those handlers, also before the others start. A synchronous handler has no replay, so a write it
+     * missed would be lost to it. While that model is stopped, or a synchronous subscription is paused, the
+     * application service refuses a write those handlers would miss with {@code WriteRefusedException}. In 0.34.0
+     * this mode kept the synchronous handlers stopped too, and such a write succeeded without them.
      */
     MANUAL,
 

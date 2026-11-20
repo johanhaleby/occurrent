@@ -4,7 +4,9 @@ Date: 2026-07-15
 
 ## Status
 
-Accepted
+Accepted. Decision point 4 of [ADR 172](0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md)
+corrects the claim below that a synchronous projection "has no history to catch up on". It has no replay, so one
+added to an application whose event store has events starts empty.
 
 ## Context
 

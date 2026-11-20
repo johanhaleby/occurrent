@@ -21,6 +21,7 @@ import jakarta.annotation.PostConstruct;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.DcbSubscription;
@@ -33,14 +34,12 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.DependsOn;
-import org.springframework.context.annotation.Import;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import tools.jackson.databind.ObjectMapper;
@@ -53,6 +52,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -67,35 +67,53 @@ import static org.awaitility.Awaitility.await;
  */
 @DisplayName("DcbSubscription startAt: DEFAULT and NOW never replay")
 @DisplayNameGeneration(ReplaceUnderscores.class)
-@SpringBootTest(
-        classes = DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest.DcbOnlyApplication.class,
-        properties = {
-                "occurrent.event-store.capabilities=dcb",
-                "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:dcb-default-now-start-position-test"
-        }
-)
-@Import(DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest.MongoDbContainerConfiguration.class)
 @Testcontainers
-@Timeout(60)
+@Timeout(120)
 class DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest {
 
     static final String TAG = "test:default-now-start-position";
     private static final URI SOURCE = URI.create("urn:occurrent:dcb-default-now-start-position-test");
 
-    @Autowired
+    @Container
+    static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
+
     private DcbEventStore dcbEventStore;
-
-    @Autowired
     private CloudEventConverter<TestEvent> cloudEventConverter;
-
-    @Autowired
     private DefaultPositionSubscriber defaultPositionSubscriber;
-
-    @Autowired
     private NowPositionSubscriber nowPositionSubscriber;
+    private ConfigurableApplicationContext context;
+
+    @AfterEach
+    void closeContext() {
+        if (context != null) {
+            context.close();
+        }
+    }
+
+    // The start of a subscription at the present is read when the event store bean is created, so only what is written
+    // before the context starts is history. A context with subscriptions off writes it and is closed again.
+    @SuppressWarnings("unchecked")
+    private void bootAfterTheHistoryIsWritten() {
+        SpringApplication.run(DcbOnlyApplication.class, bootArgs("--occurrent.subscription.enabled=false", "--test.history=true")).close();
+        context = SpringApplication.run(DcbOnlyApplication.class, bootArgs());
+        dcbEventStore = context.getBean(DcbEventStore.class);
+        cloudEventConverter = context.getBean(CloudEventConverter.class);
+        defaultPositionSubscriber = context.getBean(DefaultPositionSubscriber.class);
+        nowPositionSubscriber = context.getBean(NowPositionSubscriber.class);
+    }
+
+    private static String[] bootArgs(String... more) {
+        return Stream.concat(Stream.of(
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("dcb-default-now-start-position"),
+                "--spring.main.web-application-type=none",
+                "--occurrent.event-store.capabilities=dcb",
+                "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE), Stream.of(more)).toArray(String[]::new);
+    }
 
     @Test
     void default_and_now_never_replay_pre_existing_dcb_history_only_live_events() {
+        bootAfterTheHistoryIsWritten();
+
         // Neither subscriber's handler is ever invoked for the historic event, and consequently neither
         // ever sees it in received(), even after settling.
         await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
@@ -126,16 +144,6 @@ class DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest {
 
     // --- inner application and configuration classes ---
 
-    @TestConfiguration(proxyBeanMethods = false)
-    static class MongoDbContainerConfiguration {
-
-        @Bean
-        @ServiceConnection
-        MongoDBContainer mongoDbContainer() {
-            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
-        }
-    }
-
     @SpringBootApplication
     @EnableOccurrent
     static class DcbOnlyApplication {
@@ -154,20 +162,20 @@ class DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest {
                     .build();
         }
 
-        // Appends history before either subscriber starts, so a wrongly-replaying subscriber would be caught.
+        // Appends history in the boot with subscriptions off, which is the one given test.history, so a
+        // wrongly-replaying subscriber would be caught.
         @Bean
+        @ConditionalOnProperty(name = "test.history", havingValue = "true")
         HistoryAppender historyAppender(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter) {
             return new HistoryAppender(dcbEventStore, cloudEventConverter);
         }
 
         @Bean
-        @DependsOn("historyAppender")
         DefaultPositionSubscriber defaultPositionSubscriber() {
             return new DefaultPositionSubscriber();
         }
 
         @Bean
-        @DependsOn("historyAppender")
         NowPositionSubscriber nowPositionSubscriber() {
             return new NowPositionSubscriber();
         }
