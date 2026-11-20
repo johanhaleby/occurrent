@@ -76,6 +76,34 @@ class LateLiveStartsTest {
         assertThat(lateLiveStarts.remove(instance)).isNull();
     }
 
+    @Test
+    void getting_an_instance_reads_its_value_without_removing_it() {
+        Object instance = new Object();
+        lateLiveStarts.put(instance, "boundary");
+
+        assertThat(lateLiveStarts.get(instance)).isEqualTo("boundary");
+        assertThat(lateLiveStarts.get(instance)).isEqualTo("boundary");
+        assertThat(lateLiveStarts.remove(instance)).isEqualTo("boundary");
+    }
+
+    @Test
+    void getting_an_instance_that_was_never_put_gives_no_value() {
+        lateLiveStarts.put(new Object(), "boundary");
+
+        assertThat(lateLiveStarts.get(new Object())).isNull();
+    }
+
+    @Test
+    void getting_one_of_two_equal_instances_gives_its_own_value() {
+        Equal first = new Equal();
+        Equal second = new Equal();
+        lateLiveStarts.put(first, "first");
+        lateLiveStarts.put(second, "second");
+
+        assertThat(lateLiveStarts.get(second)).isEqualTo("second");
+        assertThat(lateLiveStarts.get(first)).isEqualTo("first");
+    }
+
     private static final class Equal {
         @Override
         public boolean equals(Object other) {

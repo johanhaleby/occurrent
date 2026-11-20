@@ -60,7 +60,7 @@ import static org.mockito.Mockito.withSettings;
 /**
  * Spring calls no post-processor when a FactoryBean's initialization or its {@code getObject} throws, so the boundary
  * the failed creation read is not taken by anything. That boundary must not reach a later creation, and must not
- * outlive the thread that read it. Container-free, with an event store whose boundary the test moves.
+ * stay reachable once its factory is collected. Container-free, with an event store whose boundary the test moves.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class FailedLateFactoryBeanLiveStartTest {
@@ -70,6 +70,7 @@ class FailedLateFactoryBeanLiveStartTest {
     private static final AtomicLong BOUNDARY = new AtomicLong();
     private static final AtomicInteger ATTEMPTS = new AtomicInteger();
     private static final List<WeakReference<String>> BOUNDARIES_READ = new CopyOnWriteArrayList<>();
+    private static final List<WeakReference<FailingOnceFactory>> FACTORIES_CREATED = new CopyOnWriteArrayList<>();
     private static volatile FailsAt failsAt;
 
     enum FailsAt {
@@ -85,6 +86,7 @@ class FailedLateFactoryBeanLiveStartTest {
         BOUNDARY.set(1);
         ATTEMPTS.set(0);
         BOUNDARIES_READ.clear();
+        FACTORIES_CREATED.clear();
     }
 
     @ParameterizedTest
@@ -95,6 +97,7 @@ class FailedLateFactoryBeanLiveStartTest {
             assertThat(context).hasNotFailed();
 
             assertThatThrownBy(() -> context.getBean("failingOnceFactory")).hasRootCauseMessage("creation failed");
+            assertThat(uncollectedAfterGc(FACTORIES_CREATED)).describedAs("the failed factory still reachable after gc").isZero();
             BOUNDARY.set(2);
             context.getBean("failingOnceFactory");
 
@@ -110,12 +113,16 @@ class FailedLateFactoryBeanLiveStartTest {
             assertThat(context).hasNotFailed();
 
             BOUNDARIES_READ.clear();
+            FACTORIES_CREATED.clear();
             runOnAThreadThatEnds(() -> assertThatThrownBy(() -> context.getBean("failingOnceFactory")).hasRootCauseMessage("creation failed"));
             assertThat(BOUNDARIES_READ).describedAs("the failed creation read one boundary").hasSize(1);
-            assertThat(uncollectedAfterGc()).describedAs("boundaries of the failed creation still reachable after its thread ended").isZero();
+            assertThat(FACTORIES_CREATED).describedAs("the failed creation built one factory").hasSize(1);
+            List<WeakReference<String>> failedBoundaries = List.copyOf(BOUNDARIES_READ);
+            assertThat(uncollectedAfterGc(FACTORIES_CREATED)).describedAs("factories of the failed creation still reachable after its thread ended").isZero();
 
             BOUNDARY.set(2);
             context.getBean("failingOnceFactory");
+            assertThat(uncollectedAfterGc(failedBoundaries)).describedAs("boundaries of the failed creation still reachable after the next creation under its name").isZero();
             assertThat(ConcurrentLateFactoryBeanLiveStartTest.startOfLateRegistration(context, "failing-once-handler")).isEqualTo(GlobalCheckpoint.of(2));
         });
     }
@@ -127,10 +134,10 @@ class FailedLateFactoryBeanLiveStartTest {
         assertThat(thread.isAlive()).isFalse();
     }
 
-    private static long uncollectedAfterGc() {
+    private static long uncollectedAfterGc(List<? extends WeakReference<?>> references) {
         long deadline = System.nanoTime() + GC_DEADLINE_NANOS;
         long uncollected;
-        while ((uncollected = BOUNDARIES_READ.stream().filter(reference -> reference.get() != null).count()) > 0 && System.nanoTime() < deadline) {
+        while ((uncollected = references.stream().filter(reference -> reference.get() != null).count()) > 0 && System.nanoTime() < deadline) {
             System.gc();
             byte[] pressure = new byte[1024 * 1024];
             pressure[0] = 1;
@@ -150,6 +157,10 @@ class FailedLateFactoryBeanLiveStartTest {
     // Fails its first creation, at the point the test chose, and every later one succeeds
     static class FailingOnceFactory implements FactoryBean<LateMarker>, InitializingBean {
         private final boolean failsThisCreation = ATTEMPTS.getAndIncrement() == 0;
+
+        FailingOnceFactory() {
+            FACTORIES_CREATED.add(new WeakReference<>(this));
+        }
 
         @Override
         public void afterPropertiesSet() {
