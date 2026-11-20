@@ -222,12 +222,12 @@ I rejected three smaller changes:
   setting keeps a handler that never runs and a log that says nothing about it. Occurrent is pre-1.0, and I'd rather
   correct a mistake with a migration path than keep it.
 
-### 2. A subscription that starts live begins where the event store was when the event store bean was created
+### 2. Where a subscription that starts live begins
 
 The post-processors read where the event store is, its live start, as the event store bean is created, in
 `postProcessAfterInitialization`. A first start at `NOW`, or at `DEFAULT` with nothing stored, of a `@Subscription`,
 `@StreamSubscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`, or of a `@Saga` on the blocking starter,
-begins there. That answers the question #979 left open, whether `@Projection`, `@Snapshot` and `@Saga` should get
+begins there, except in the cases the rest of this section lists. That answers the question #979 left open, whether `@Projection`, `@Snapshot` and `@Saga` should get
 the startup writes too. They start live the same way, and a `@Projection` and a `@Saga` start at `DEFAULT` unless
 they set `startAt`.
 

@@ -2749,8 +2749,9 @@ handler is running, with `dispatch` on either stack or `accept` on the blocking 
 `SynchronousSubscriptionModel` says when a handler is running.
 
 A `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`, or a `@Saga` on the
-blocking starter, that starts live now gets that direct write. On its first start at `NOW`, or at `DEFAULT` with
-nothing stored, it starts from where the event store was when the event store bean was created. In 0.34.0 it started
+blocking starter, that starts live can now get that direct write. On its first start at `NOW`, or at `DEFAULT` with
+nothing stored, it starts from where the event store was when the event store bean was created, except in the cases
+listed further down. In 0.34.0 it started
 from where the event store was once all singleton beans existed, and missed what was written before, as
 [section 11 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#11-a-subscription-handler-spring-cannot-invoke-is-now-refused-and-a-live-subscription-can-miss-a-startup-write)
 describes. A `@Projection` and a `@Saga` start at `DEFAULT` unless they set `startAt`, so a default `@Saga` now acts
