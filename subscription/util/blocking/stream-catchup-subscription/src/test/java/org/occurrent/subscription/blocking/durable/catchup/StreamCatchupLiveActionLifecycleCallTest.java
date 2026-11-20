@@ -20,11 +20,14 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -33,12 +36,16 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.blocking.durable.catchup.GatedLiveSubscriptionModel.Gate;
 import org.slf4j.LoggerFactory;
 
+import java.net.URI;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -115,6 +122,7 @@ class StreamCatchupLiveActionLifecycleCallTest {
     }
 
     private GatedLiveSubscriptionModel live;
+    private InMemoryEventStore eventStore;
     private StreamCatchupSubscriptionModel model;
     private Logger modelLog;
     private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
@@ -124,7 +132,8 @@ class StreamCatchupLiveActionLifecycleCallTest {
     @BeforeEach
     void create_a_model_over_a_live_delegate_whose_stop_waits_for_the_actions_of_other_threads() {
         live = new GatedLiveSubscriptionModel(STOP_WAITS_FOR_AN_ACTION_FOR);
-        model = new StreamCatchupSubscriptionModel(live, new InMemoryEventStore(), new CatchupSubscriptionModelConfig(100));
+        eventStore = new InMemoryEventStore();
+        model = new StreamCatchupSubscriptionModel(live, eventStore, new CatchupSubscriptionModelConfig(100));
         modelLog = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
         logged.list = new CopyOnWriteArrayList<>();
         logged.start();
@@ -290,6 +299,76 @@ class StreamCatchupLiveActionLifecycleCallTest {
         assertThat(error.getThrowableProxy().getMessage()).as("message of the exception logged for the " + call.described + " that threw").isEqualTo(THE_FAILURE);
     }
 
+    @Test
+    @Timeout(30)
+    void a_start_from_another_thread_made_while_a_stop_from_a_live_action_has_not_run_yet_runs_after_that_stop() {
+        // Given
+        AtomicReference<@Nullable CallOnAThread> start = new AtomicReference<>();
+        model.subscribe(ID, null, StartAt.now(), event -> {
+            model.stop();
+            CallOnAThread startFromAnotherThread = new CallOnAThread(() -> model.start(false));
+            start.set(startFromAnotherThread);
+            startFromAnotherThread.awaitReturnedOrWaiting();
+        });
+
+        // When
+        run(() -> live.callTheKeptAction(ID)).awaitEnded();
+        start.get().awaitEnded();
+
+        // Then
+        await().atMost(WAIT).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked, where the start came after the stop from the action").containsExactly(STOP_RETURNED, START_RETURNED));
+        assertThat(model.isRunning()).as("whether the model runs, which a start that ran before the stop from the action leaves it not doing").isTrue();
+    }
+
+    @Test
+    @Timeout(40)
+    void a_stopReplay_from_a_live_action_returns_at_once_and_parks_the_replays_in_flight_only_once_the_action_has_returned() throws InterruptedException {
+        // Given
+        write("1");
+        Gate replayAction = new Gate();
+        gates.add(replayAction);
+        model.subscribe("replay", StartAtTime.beginningOfTime(), event -> replayAction.pass());
+        assertThat(replayAction.entered.await(5, TimeUnit.SECONDS)).as("the replay is inside the action").isTrue();
+        AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+        AtomicBoolean replayPausedInTheAction = new AtomicBoolean(true);
+        model.subscribe(ID, null, StartAt.now(), event -> {
+            thrown.set(catchThrowable(model::stopReplay));
+            replayPausedInTheAction.set(model.isPaused("replay"));
+        });
+
+        // When
+        run(() -> live.callTheKeptAction(ID)).awaitEnded();
+
+        // Then
+        assertThat(thrown.get()).as("what the stopReplay() from the action threw").isNull();
+        assertThat(replayPausedInTheAction.get()).as("whether the replay in flight was paused when the stopReplay() from the action returned").isFalse();
+        await().atMost(WAIT).untilAsserted(() -> assertThat(model.isPaused("replay")).as("whether the replay in flight is paused once the action has returned").isTrue());
+    }
+
+    @Test
+    @Timeout(40)
+    void a_resumeReplay_from_a_live_action_returns_at_once_and_lets_the_next_replay_run_only_once_the_action_has_returned() {
+        // Given
+        write("1");
+        model.stopReplay();
+        AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+        AtomicBoolean replayPausedInTheAction = new AtomicBoolean();
+        model.subscribe(ID, null, StartAt.now(), event -> {
+            thrown.set(catchThrowable(model::resumeReplay));
+            model.subscribe("replay", StartAtTime.beginningOfTime(), replayed -> {
+            });
+            replayPausedInTheAction.set(model.isPaused("replay"));
+        });
+
+        // When
+        run(() -> live.callTheKeptAction(ID)).awaitEnded();
+
+        // Then
+        assertThat(thrown.get()).as("what the resumeReplay() from the action threw").isNull();
+        assertThat(replayPausedInTheAction.get()).as("whether a replay subscribed right after the resumeReplay() from the action was kept waiting to run").isTrue();
+        await().atMost(WAIT).untilAsserted(() -> assertThat(model.stopped).as("whether the model still counts as stopped once the action has returned").isFalse());
+    }
+
     private List<ILoggingEvent> errorsLoggedForTheLeftCall() {
         return logged.list.stream()
                 .filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN))
@@ -308,6 +387,14 @@ class StreamCatchupLiveActionLifecycleCallTest {
         CallOnAThread call = new CallOnAThread(body);
         calls.add(call);
         return call;
+    }
+
+    private void write(String id) {
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent(id)));
+    }
+
+    private static CloudEvent cloudEvent(String id) {
+        return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("test.event").withTime(OffsetDateTime.now()).build();
     }
 
     private static void awaitLatch(CountDownLatch latch) {

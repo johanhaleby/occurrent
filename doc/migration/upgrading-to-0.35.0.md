@@ -2922,12 +2922,19 @@ before the action returned. A call from the action of another model's subscripti
   model for that action to return. A lifecycle thread, shared by the models of one dispatcher, runs the call
   once the action has returned and no other of the three calls is under way, in the order the calls came. It doesn't
   run the call once a `shutdown()` has begun, and logs an `ERROR` naming the model when the call throws.
+* After a `stop()` from a live call's action, the wrapped model can go on delivering live events to the action until
+  the lifecycle thread runs the `stop()`. In 0.34.0 the wrapped model had stopped by the time `stop()` returned. Those
+  events reach the action as any other live event does.
+* A `start(..)`, `stop()` or `shutdown()` from any other thread, made while a call a live call's action handed over
+  hasn't run yet, waits for it and takes effect after it. So when the action signals another thread to call `start(..)`
+  after its own `stop()`, the model ends up started.
 * The public `stopReplay()` and `resumeReplay()` of `StreamCatchupSubscriptionModel` throw in the same places as
   `stop()`, and take effect after a live call's action as `stop()` does.
 * `shutdown()` from any of those threads doesn't throw and doesn't wait. It forgets the catch-ups at once, and returns
   before the wrapped model is shut down. The lifecycle thread shuts the wrapped model down once a live call's action the
   `shutdown()` came from has returned and no `start(..)` or `stop()` is under way, and logs an `ERROR` naming the model
-  when that throws. A `start(..)` under way resumes no subscription after the `shutdown()` began.
+  when that throws. A `start(..)` under way resumes no subscription after the `shutdown()` began. The wrapped model is
+  shut down once, by whichever `shutdown()` gets there first.
 * Elsewhere, each of `start(..)`, `stop()` and `shutdown()` waits, with no deadline, until one already under way on
   the model has returned.
 
@@ -2936,7 +2943,9 @@ before the action returned. A call from the action of another model's subscripti
 From a replay's action, hand the call to another thread, for example an executor the action submits it to, and let the
 action return. Don't wait in the action for that call to finish, since a `stop()` waits up to a second for the action.
 From a live call's action, the call can stay where it is, but code after it in the action runs before the call takes
-effect, so don't rely on the model being stopped or started there.
+effect, so don't rely on the model being stopped or started there. Don't wait in the action for a call you asked
+another thread to make after it, since that call waits for the action to return. An action that never returns keeps the
+call it made, and every call made after it, from taking effect.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 

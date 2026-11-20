@@ -27,6 +27,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -42,6 +43,7 @@ import org.slf4j.LoggerFactory;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -292,6 +294,27 @@ class CatchupSubscriptionModelLiveActionLifecycleCallTest {
         assertThat(error.getThrowableProxy().getMessage()).as("message of the exception logged for the " + call.described + " that threw").isEqualTo(THE_FAILURE);
     }
 
+    @Test
+    @Timeout(30)
+    void a_start_from_another_thread_made_while_a_stop_from_a_live_action_has_not_run_yet_runs_after_that_stop() {
+        // Given
+        AtomicReference<@Nullable CallOnAThread> start = new AtomicReference<>();
+        model.subscribe(ID, null, StartAt.now(), event -> {
+            model.stop();
+            CallOnAThread startFromAnotherThread = new CallOnAThread(() -> model.start(false));
+            start.set(startFromAnotherThread);
+            startFromAnotherThread.awaitReturnedOrWaiting();
+        });
+
+        // When
+        run(() -> live.callTheKeptAction(ID)).awaitEnded();
+        start.get().awaitEnded();
+
+        // Then
+        await().atMost(WAIT).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked, where the start came after the stop from the action").containsExactly(STOP_RETURNED, START_RETURNED));
+        assertThat(model.isRunning()).as("whether the model runs, which a start that ran before the stop from the action leaves it not doing").isTrue();
+    }
+
     private List<ILoggingEvent> loggedForTheLeftCall() {
         return logged.list.stream()
                 .filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN))
@@ -326,6 +349,7 @@ class CatchupSubscriptionModelLiveActionLifecycleCallTest {
     // One call on a thread of its own, whose awaitEnded fails when the call threw
     private static final class CallOnAThread {
         private final Thread thread;
+        private final AtomicBoolean returned = new AtomicBoolean();
         private final AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
 
         private CallOnAThread(Runnable body) {
@@ -334,10 +358,18 @@ class CatchupSubscriptionModelLiveActionLifecycleCallTest {
                     body.run();
                 } catch (Throwable e) {
                     thrown.set(e);
+                } finally {
+                    returned.set(true);
                 }
             }, "call-on-a-thread");
             thread.setDaemon(true);
             thread.start();
+        }
+
+        // Returns once the call has returned or its thread waits or is blocked, as a call that waits for a lock or a future does
+        void awaitReturnedOrWaiting() {
+            EnumSet<Thread.State> waiting = EnumSet.of(Thread.State.WAITING, Thread.State.TIMED_WAITING, Thread.State.BLOCKED);
+            await().atMost(WAIT).until(() -> returned.get() || waiting.contains(thread.getState()));
         }
 
         void awaitEnded() {

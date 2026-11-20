@@ -264,6 +264,40 @@ class StreamCatchupShutdownInTurnTest {
         assertThat(delivered).as("the events the parked replay delivered, which a start after the shutdown doesn't run again").containsExactly("1");
     }
 
+    @Test
+    @Timeout(40)
+    void a_shutdown_from_another_thread_made_while_a_shutdown_from_a_live_action_has_not_run_yet_does_not_shut_the_live_delegate_down_a_second_time() {
+        // Given
+        AtomicReference<@Nullable CallOnAThread> shutdownFromAnotherThread = new AtomicReference<>();
+        model.subscribe(ID, null, StartAt.now(), event -> {
+            model.shutdown();
+            CallOnAThread other = new CallOnAThread(model::shutdown);
+            shutdownFromAnotherThread.set(other);
+            other.awaitReturnedOrWaiting();
+        });
+
+        // When
+        run(() -> live.callTheKeptAction(ID)).awaitEnded();
+        shutdownFromAnotherThread.get().awaitEnded();
+
+        // Then
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked, where both shutdowns were made before the first one ran").contains(SHUTDOWN));
+        assertThat(live.events()).as("what the live delegate was asked").containsExactly(SHUTDOWN);
+    }
+
+    @Test
+    @Timeout(40)
+    void a_shutdown_after_a_shutdown_from_ordinary_threads_does_not_shut_the_live_delegate_down_a_second_time() {
+        // Given
+        model.shutdown();
+
+        // When
+        model.shutdown();
+
+        // Then
+        assertThat(live.events()).as("what the live delegate was asked").containsExactly(SHUTDOWN);
+    }
+
     private Gate newGate() {
         Gate gate = new Gate();
         gates.add(gate);
