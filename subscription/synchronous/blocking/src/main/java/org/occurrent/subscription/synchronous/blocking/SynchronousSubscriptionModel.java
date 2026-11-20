@@ -45,11 +45,21 @@ import java.util.function.Consumer;
  * replay. It only ever reacts to events fed to it here and now, so a handler that misses an event never sees it. It is
  * a full {@link org.occurrent.subscription.api.blocking.SubscriptionModel}, and the application service asks
  * {@link #beforeWrite()} before every write, which refuses the write while the model is stopped or when a paused
- * subscription matches its events. Events fed in directly, through {@link #dispatch(List)} or {@link #accept(List)},
- * skip a paused subscription instead, as ADR 85 describes. The register-and-route machinery lives in
- * {@link RegisteringSubscribable}. This model adds the
- * application-service dispatch entry point. For an externally driven push feed (RabbitMQ, Kafka, ...) use
- * {@code PushSubscriptionModel} instead.
+ * subscription matches its events.
+ * <p>
+ * An event your code passes to {@link #dispatch(List)}, {@link #dispatch(List, boolean)} or {@link #accept(List)} isn't
+ * refused. It reaches a handler whose filter matches it only while this model is running and that handler's
+ * subscription isn't paused. Otherwise the event is dropped for that handler, not held, so neither
+ * {@link #resumeSubscription(String)} nor {@link #start()} delivers it later. A subscription is paused after
+ * {@link #pauseSubscription(String)}, after {@link #stop()}, and when it registers while this model is stopped.
+ * {@link #resumeSubscription(String)} or {@link #start()} resumes it, and {@code start(false)} doesn't. Each event is
+ * checked as it is routed, so a stop or a pause that applies partway through a list drops the events after it. A stop
+ * or a pause made while a write through the application service is open applies once that write closes, and until then
+ * an event passed in still reaches the handler. ADR 85 has the background.
+ * <p>
+ * The register-and-route machinery lives in {@link RegisteringSubscribable}. This model adds the application-service
+ * dispatch entry point. For an externally driven push feed (RabbitMQ, Kafka, ...) use {@code PushSubscriptionModel}
+ * instead.
  */
 @NullMarked
 public class SynchronousSubscriptionModel extends RegisteringSubscribable implements SynchronousEventDispatcher, Consumer<List<CloudEvent>>, SynchronousHandlersTestSwitch {

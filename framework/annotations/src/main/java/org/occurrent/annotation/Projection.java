@@ -150,13 +150,12 @@ public @interface Projection {
     /**
      * The processing mode for events. {@link Mode#ASYNC} (the default) processes events asynchronously and eventually
      * updates the read model. {@link Mode#SYNCHRONOUS} updates the read model as part of each write through the
-     * application service of this process, so once that write returns the read model has its events. It also gets the
-     * events your code passes to the {@code SynchronousSubscriptionModel} directly, and no others, which
-     * {@link SynchronousSubscription} lists in full. It has no replay, so a synchronous projection added to an
-     * application whose event store already has events starts empty, and gets those events only if your code passes
-     * them to the model. A write made directly to the event store, or by another process, doesn't reach it unless your
-     * code passes it to the model, so every process that writes must run the same synchronous projections. Without a
-     * transaction executor the update is best-effort.
+     * application service of this process, so once that write returns the read model has its events. Any other event
+     * reaches it only if your code passes that event to the {@code SynchronousSubscriptionModel} while the projection
+     * is running, which {@link SynchronousSubscription} describes. It has no replay, so without that a synchronous
+     * projection added to an application whose event store already has events starts empty, and a write made directly
+     * to the event store, or by another process, doesn't reach it. So every process that writes must run the same
+     * synchronous projections. Without a transaction executor the update is best-effort.
      * <p>
      * To read your own writes over the events already stored, use {@link Mode#ASYNC} with {@link #startAt()} set to
      * {@link StartPosition#BEGINNING} and {@link #recordAppliedAppends()} set to {@code true}, and wait for the write

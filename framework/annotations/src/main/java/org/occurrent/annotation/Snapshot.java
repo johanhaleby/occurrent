@@ -145,10 +145,11 @@ public @interface Snapshot {
 
     /**
      * The maintenance mode. {@link Mode#ASYNC} (the default) updates the snapshot from a catch-up subscription.
-     * {@link Mode#SYNCHRONOUS} updates it as part of each write through the application service of this process, and
-     * from the events your code passes to the {@code SynchronousSubscriptionModel} directly, and from no other writes,
-     * which {@link SynchronousSubscription} lists in full. A write made directly to the event store, or by another
-     * process, and not passed to the model doesn't update the stored snapshot, so it stays at an older stream version.
+     * {@link Mode#SYNCHRONOUS} updates it as part of each write through the application service of this process. Any
+     * other write updates it only if your code passes that write's events to the {@code SynchronousSubscriptionModel}
+     * while the snapshot's handler is running, which {@link SynchronousSubscription} describes. Without that, a write
+     * made directly to the event store, or by another process, doesn't update the stored snapshot, so it stays at an
+     * older stream version.
      * The next update to that stream finds the missing versions and rebuilds the snapshot from the event store.
      * Synchronous mode is mutually exclusive with {@link #startAt()}, {@link #startAtGlobalPosition()},
      * {@link #resumeBehavior()}, and {@link #startupMode()}.

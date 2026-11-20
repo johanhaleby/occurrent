@@ -2717,8 +2717,9 @@ either stack.
 ### What changes
 
 A `@SynchronousSubscription` runs on the thread that writes through the application service, and nothing replays a
-write to it, so it never gets a write made before it registered unless your code passes that write's events to the
-`SynchronousSubscriptionModel` directly. For such a write the blocking application service
+write to it, so a write made before it registered reaches it only if your code passes that write's events to the
+`SynchronousSubscriptionModel` while the handler is running, as the javadoc of `SynchronousSubscriptionModel`
+describes. For such a write the blocking application service
 now throws `WriteRefusedException` from `execute`, and the reactor one returns a `Mono` that fails with it when it is
 subscribed. Nothing is stored. A `@PostConstruct` method that writes fails the creation of its bean, so the
 application doesn't start, and the message says where to write instead:
@@ -2742,10 +2743,10 @@ after the starter's own `SmartInitializingSingleton`, which follows the order th
 from an `ApplicationRunner` there too.
 
 The starter refuses the write also when the application declares no synchronous handler. A write made directly to
-the event store, with `EventStore.write` or `DcbEventStore.append`, is not refused. No synchronous handler sees such a
-write, whenever it is made, unless the application also passes its events to the `SynchronousSubscriptionModel`
-directly, with `dispatch` on either stack or `accept` on the blocking one, which reaches the synchronous handlers the
-starter registered for those events.
+the event store, with `EventStore.write` or `DcbEventStore.append`, is not refused. A synchronous handler sees such a
+write, whenever it is made, only if the application passes its events to the `SynchronousSubscriptionModel` while that
+handler is running, with `dispatch` on either stack or `accept` on the blocking one. The javadoc of
+`SynchronousSubscriptionModel` says when a handler is running.
 
 A `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`, or a `@Saga` on the
 blocking starter, that starts live now gets that direct write. On its first start at `NOW`, or at `DEFAULT` with
