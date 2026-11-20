@@ -262,6 +262,7 @@ class StreamCatchupShutdownInTurnTest {
         // When
         theStartIsInTheLiveDelegate.countDown();
         assertThat(theShutdownReturned.await(10, TimeUnit.SECONDS)).as("the shutdown from the thread that holds a claim returned").isTrue();
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked while the start was inside it").containsExactly(SHUTDOWN));
         startGate.release();
         calls.forEach(CallOnAThread::awaitEnded);
 

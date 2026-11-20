@@ -57,6 +57,7 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.SoftAssertions.assertSoftly;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -213,10 +214,12 @@ class CatchupSubscriptionModelLiveActionLifecycleCallTest {
 
         // Then
         assertThat(theCallFromTheActionEnded.await(20, TimeUnit.SECONDS)).as("the " + call.described + " from the action returned or threw").isTrue();
-        assertThat(thrown.get()).as("what the " + call.described + " from the action threw while a stop waited in the live delegate for the action").isNull();
-        assertThat(askedWhenTheActionReturned.get()).as("what the live delegate was asked when the action returned").isEmpty();
         calls.forEach(CallOnAThread::awaitEnded);
-        assertThat(live.gaveUpWaitingForAnAction()).as("whether the live delegate's stop gave up waiting for the action").isFalse();
+        assertSoftly(softly -> {
+            softly.assertThat(thrown.get()).as("what the " + call.described + " from the action threw while a stop waited in the live delegate for the action").isNull();
+            softly.assertThat(askedWhenTheActionReturned.get()).as("what the live delegate was asked when the action returned").isEmpty();
+            softly.assertThat(live.gaveUpWaitingForAnAction()).as("whether the live delegate's stop gave up waiting for the action").isFalse();
+        });
         await().atMost(WAIT).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked").containsExactly(STOP_RETURNED, call.returned));
     }
 
@@ -288,10 +291,12 @@ class CatchupSubscriptionModelLiveActionLifecycleCallTest {
         assertThat(thrown.get()).as("what the " + call.described + " from the action threw, which is left to run once the action has returned").isNull();
         await().atMost(WAIT).untilAsserted(() -> assertThat(loggedForTheLeftCall()).as("lines logged for the " + call.described + " left to run").hasSize(1));
         ILoggingEvent error = loggedForTheLeftCall().getFirst();
-        assertThat(error.getLevel()).as("level of the line logged for the " + call.described + " that threw").isEqualTo(Level.ERROR);
-        assertThat(error.getFormattedMessage()).as("the line logged for the " + call.described + " that threw").startsWith(call.described + " of ").contains(model.toString());
-        assertThat(error.getThrowableProxy()).as("the exception logged for the " + call.described + " that threw").isNotNull();
-        assertThat(error.getThrowableProxy().getMessage()).as("message of the exception logged for the " + call.described + " that threw").isEqualTo(THE_FAILURE);
+        assertSoftly(softly -> {
+            softly.assertThat(error.getLevel()).as("level of the line logged for the " + call.described + " that threw").isEqualTo(Level.ERROR);
+            softly.assertThat(error.getFormattedMessage()).as("the line logged for the " + call.described + " that threw").startsWith(call.described + " of ").contains(model.toString());
+            softly.assertThat(error.getThrowableProxy()).as("the exception logged for the " + call.described + " that threw").isNotNull();
+            softly.assertThat(error.getThrowableProxy() == null ? null : error.getThrowableProxy().getMessage()).as("message of the exception logged for the " + call.described + " that threw").isEqualTo(THE_FAILURE);
+        });
     }
 
     @Test

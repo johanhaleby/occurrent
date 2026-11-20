@@ -25,7 +25,6 @@ import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
@@ -495,9 +494,32 @@ class CatchupSubscriptionModelStopAndStartTest {
         assertThat(receivedByB).as("history replayed to b").isEmpty();
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void a_replay_in_flight_hands_over_when_a_start_waits_for_a_failing_start_that_has_not_parked_it_yet(boolean resumeSubscriptionsAutomatically) throws InterruptedException {
+    @Test
+    void a_replay_in_flight_hands_over_when_a_start_that_resumes_automatically_waits_for_a_failing_start_that_has_not_parked_it_yet() throws InterruptedException {
+        ReplayAfterAFailingStart replay = startWhileAFailingStartHasNotParkedTheReplay(true);
+
+        assertThat(replay.a().waitUntilStarted(STARTED_WITHIN)).as("a started").isTrue();
+        replay.live().publish(cloudEvent("3"));
+        assertThat(replay.receivedByA()).containsExactly("1", "2", "3");
+    }
+
+    @Test
+    void a_replay_that_a_failing_start_parked_before_a_start_that_does_not_resume_automatically_came_runs_again_on_a_resume() throws InterruptedException {
+        ReplayAfterAFailingStart replay = startWhileAFailingStartHasNotParkedTheReplay(false);
+        assertThat(replay.model().isPaused("a")).as("a, which a start that does not resume automatically leaves parked").isTrue();
+
+        replay.model().resumeSubscription("a");
+
+        assertThat(replay.a().waitUntilStarted(STARTED_WITHIN)).as("a started").isTrue();
+        replay.live().publish(cloudEvent("3"));
+        assertThat(replay.receivedByA()).containsExactly("1", "2", "3");
+    }
+
+    private record ReplayAfterAFailingStart(FakeLiveModel live, ParkWaitingStreamCatchupSubscriptionModel model, Subscription a, List<String> receivedByA) {
+    }
+
+    // Returns once the start has returned and the replay's history read is let through
+    private ReplayAfterAFailingStart startWhileAFailingStartHasNotParkedTheReplay(boolean resumeSubscriptionsAutomatically) throws InterruptedException {
         FakeLiveModel live = new FakeLiveModel();
         GatedHistory history = history();
         ParkWaitingStreamCatchupSubscriptionModel model = new ParkWaitingStreamCatchupSubscriptionModel(live, history);
@@ -524,14 +546,7 @@ class CatchupSubscriptionModelStopAndStartTest {
         failing.join(STARTED_WITHIN.toMillis());
         assertThat(starting).as("the start").succeedsWithin(STARTED_WITHIN);
         gate.countDown();
-        if (!resumeSubscriptionsAutomatically) {
-            // The failing start parked the replay before the start came, and a start(false) does not run it again
-            model.resumeSubscription("a");
-        }
-
-        assertThat(a.waitUntilStarted(STARTED_WITHIN)).as("a started").isTrue();
-        live.publish(cloudEvent("3"));
-        assertThat(receivedByA).containsExactly("1", "2", "3");
+        return new ReplayAfterAFailingStart(live, model, a, receivedByA);
     }
 
     @ParameterizedTest
