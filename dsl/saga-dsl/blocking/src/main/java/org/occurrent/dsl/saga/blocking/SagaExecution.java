@@ -865,8 +865,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 // a custom EventStoreQueries gives back, goes the same way, since only those tell an input the instance
                 // applied already from one it has not
                 SagaEnvelope<S> requarantined = cloudEvent == null
-                        ? SagaExecutionSupport.withMissingInputQuarantined(current, record.key(), now)
-                        : SagaExecutionSupport.withInputWithoutStreamKeyQuarantined(current, record.key(), now);
+                        ? SagaExecutionSupport.withMissingInputQuarantined(current, record.key(), now, config.reorderWindow())
+                        : SagaExecutionSupport.withInputWithoutStreamKeyQuarantined(current, record.key(), now, config.reorderWindow());
                 // The record stays. The input is now what the failure names, so the next release starts from it and
                 // moves its record to the head. Deleting it here could remove the record a release starting in between
                 // wrote, since for the input a release starts from that has the same key and seq

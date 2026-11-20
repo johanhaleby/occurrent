@@ -291,7 +291,6 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // Non-null only for a flow saga: used to serialize FlowState.received as CloudEvents (stable types, package-independent).
     private final @Nullable CloudEventConverter<Object> cloudEventConverter;
     private final RetryStrategy retryStrategy;
-    private final RetryStrategy skippedInputWriteRetry;
 
     /**
      * Creates a store for a core saga, whose state serializes with the application's {@code MongoConverter}.
@@ -333,7 +332,6 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @SuppressWarnings("unchecked")
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter, RetryStrategy retryStrategy) {
         this.retryStrategy = Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
-        this.skippedInputWriteRetry = notRetryingJournalingRequired(retryStrategy);
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName cannot be null");
         if (collectionName.endsWith(SKIPPED_INPUTS_SUFFIX)) {
@@ -585,27 +583,21 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // caller's MongoOperations or collection has. A skip is acknowledged once its record is written, so a record a
     // failover rolled back would leave a skipped input that no release replays. execute(..) still translates exceptions
     private void writeSkippedInputs(java.util.function.Function<MongoCollection<Document>, ?> write) {
-        skippedInputWriteRetry.execute(() -> {
+        // A server without journaling refuses every attempt, so the retried call returns the refusal instead of throwing
+        // it, and it is thrown once execute(..) has returned, where no strategy can retry it
+        Optional<IllegalStateException> refused = retryStrategy.execute(() -> {
             try {
-                return mongoOperations.execute(skippedInputsCollectionName, collection -> write.apply(skippedInputWrites(collection)));
+                mongoOperations.execute(skippedInputsCollectionName, collection -> write.apply(skippedInputWrites(collection)));
+                return Optional.<IllegalStateException>empty();
             } catch (RuntimeException e) {
                 if (isJournalNotSupported(e)) {
-                    throw new JournalingRequired(e);
+                    return Optional.of(new IllegalStateException(JOURNALING_REQUIRED_MESSAGE, e));
                 }
                 throw e;
             }
         });
-    }
-
-    // A server without journaling refuses every attempt, so it is not retried. Only a strategy built with
-    // RetryStrategy.retry() takes a predicate, and one implemented elsewhere retries what it retries
-    private static RetryStrategy notRetryingJournalingRequired(RetryStrategy retryStrategy) {
-        return retryStrategy instanceof RetryStrategy.Retry retry ? retry.mapRetryPredicate(retryIf -> retryIf.and(failure -> !(failure instanceof JournalingRequired))) : retryStrategy;
-    }
-
-    private static final class JournalingRequired extends IllegalStateException {
-        private JournalingRequired(Throwable cause) {
-            super(JOURNALING_REQUIRED_MESSAGE, cause);
+        if (refused.isPresent()) {
+            throw refused.get();
         }
     }
 

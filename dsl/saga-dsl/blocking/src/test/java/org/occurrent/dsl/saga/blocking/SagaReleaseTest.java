@@ -1028,6 +1028,265 @@ class SagaReleaseTest {
                     () -> assertThat(items()).as("the items of the instance").containsExactlyInAnyOrder("poison", "v5", "v3")
             );
         }
+
+        @Test
+        void a_cloud_event_keyed_record_of_an_input_a_live_delivery_applied_before_the_quarantine_is_applied_again_under_best_effort() {
+            // Under BEST_EFFORT a redelivery runs every reaction again, see ADR 109, and a release applies such a record again too
+            execution = execution(CONFIG.withReorderWindow(1));
+            deliver(placed());
+            CloudEvent early = added("early");
+            deliver(early);
+            deliver(added("i3"));
+            deliver(added("i4"));
+            failing.add("poison");
+            quarantineOn(added("poison"));
+            deliver(withoutStream(early));
+            List<String> recorded = recordedKeys();
+            failing.clear();
+
+            ReleaseResult result = execution.release(ORDER);
+
+            assertAll(
+                    () -> assertThat(recorded).as("the records before the release").contains(cloudEventKey(early)),
+                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(items()).as("the items of the instance").containsExactly("early", "i3", "i4", "poison", "early"),
+                    () -> assertThat(packed()).as("the commands dispatched").extracting(Pack::item).filteredOn("early"::equals).hasSize(2)
+            );
+        }
+    }
+
+    @Nested
+    class AReleaseThatEndsAfterReplayingMoreVersionsOfATypeThanTheWindow {
+
+        private static final int WINDOW = 1;
+        private final Map<String, CloudEvent> events = new java.util.LinkedHashMap<>();
+
+        // Placed at version 1, quarantined on "poison" at version 2, then each item appended in order from version 3 on and
+        // skipped in the order given. Skipping i6 and i7 before i5, i3 and i4 makes the release raise the mark of the item
+        // type to 7 before the later records, so a write that trims the marks puts those records behind the window
+        private void quarantinedOnPoisonThenSkipping(List<String> appended, List<String> skipped) {
+            execution = execution(CONFIG.withReorderWindow(WINDOW));
+            deliver(placed());
+            failing.add("poison");
+            quarantineOn(added("poison"));
+            appended.forEach(item -> events.put(item, added(item)));
+            skipped.forEach(item -> deliver(events.get(item)));
+            failing.clear();
+            store.accepted.clear();
+        }
+
+        private void quarantinedOnPoisonThenSkippingHighVersionsFirst() {
+            quarantinedOnPoisonThenSkipping(List.of("i3", "i4", "i5", "i6", "i7"), List.of("i6", "i7", "i5", "i3", "i4"));
+        }
+
+        private CloudEvent event(String item) {
+            return events.get(item);
+        }
+
+        // The type marks of the instance that remember a version at or below mark - WINDOW, or forget less than that
+        private static List<String> beyondTheWindow(SagaEnvelope<Order> envelope) {
+            List<String> beyond = new ArrayList<>();
+            envelope.streamMarks().forEach((streamId, marks) -> marks.byType().forEach((type, typeMark) -> {
+                long bound = typeMark.mark() - WINDOW;
+                if (typeMark.horizon() < bound || typeMark.applied().stream().anyMatch(version -> version <= bound)) {
+                    beyond.add(streamId + " " + type + " " + typeMark);
+                }
+            }));
+            return beyond;
+        }
+
+        private List<String> beyondTheWindowDuringTheRelease() {
+            return store.accepted.stream().flatMap(envelope -> beyondTheWindow(envelope).stream()).toList();
+        }
+
+        private TypeMark markOfTheItems() {
+            return instance().streamMarks().get(ORDER).byType().values().stream().max(java.util.Comparator.comparingLong(TypeMark::mark)).orElseThrow();
+        }
+
+        private ReleaseResult quarantinedAgainOnTheBudgetOfI5() {
+            failing.add("i5");
+            assertThat(execution.release(ORDER)).isEqualTo(ReleaseResult.STILL_RELEASING);
+            now.set(now.get().plus(BUDGET));
+            return execution.release(ORDER);
+        }
+
+        private ReleaseResult quarantinedAgainOnI5Missing() {
+            queries.hide(event("i5"));
+            return execution.release(ORDER);
+        }
+
+        private ReleaseResult quarantinedAgainOnI5WithoutAStreamKey() {
+            queries.stripStreamKeyFrom(event("i5"));
+            return execution.release(ORDER);
+        }
+
+        private void assertRecordsLeftBehindTheWindow() {
+            assertAll(
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(recordedKeys()).as("the records left").containsExactlyInAnyOrder(
+                            streamKey(event("i5")), streamKey(event("i3")), streamKey(event("i4"))),
+                    () -> assertThat(markOfTheItems().horizon()).as("the horizon, at or above version 5 of the records left").isGreaterThanOrEqualTo(5L)
+            );
+        }
+
+        private void assertEveryItemIsAppliedOnceAndTheInstanceIsReleasedWithinTheWindow(ReleaseResult result) {
+            assertAll(
+                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(items()).as("the items of the instance").containsExactlyInAnyOrder("poison", "i3", "i4", "i5", "i6", "i7"),
+                    () -> assertThat(packed()).as("the commands dispatched").extracting(Pack::item).containsExactlyInAnyOrder("poison", "i3", "i4", "i5", "i6", "i7"),
+                    () -> assertThat(beyondTheWindow(instance())).as("the type marks beyond the window").isEmpty()
+            );
+        }
+
+        @Test
+        void leaves_the_marks_within_the_window_when_it_releases_the_instance() {
+            quarantinedOnPoisonThenSkippingHighVersionsFirst();
+
+            ReleaseResult result = execution.release(ORDER);
+
+            assertAll(
+                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(beyondTheWindowDuringTheRelease()).as("the type marks beyond the window during the release").isNotEmpty(),
+                    () -> assertThat(beyondTheWindow(instance())).as("the type marks beyond the window").isEmpty()
+            );
+        }
+
+        @Test
+        void leaves_the_marks_within_the_window_when_a_replayed_input_completes_the_instance() {
+            quarantinedOnPoisonThenSkipping(List.of("i3", "i4", "i5", "i6", "done"), List.of("i6", "i3", "done"));
+
+            ReleaseResult result = execution.release(ORDER);
+
+            assertAll(
+                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(beyondTheWindowDuringTheRelease()).as("the type marks beyond the window during the release").isNotEmpty(),
+                    () -> assertThat(beyondTheWindow(instance())).as("the type marks beyond the window").isEmpty()
+            );
+        }
+
+        @Test
+        void leaves_the_marks_within_the_window_when_the_budget_of_a_record_runs_out() {
+            quarantinedOnPoisonThenSkippingHighVersionsFirst();
+
+            ReleaseResult result = quarantinedAgainOnTheBudgetOfI5();
+
+            assertAll(
+                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
+                    () -> assertThat(beyondTheWindowDuringTheRelease()).as("the type marks beyond the window during the release").isNotEmpty(),
+                    () -> assertThat(beyondTheWindow(instance())).as("the type marks beyond the window").isEmpty()
+            );
+        }
+
+        @Test
+        void leaves_the_marks_within_the_window_when_the_event_of_a_record_is_missing() {
+            quarantinedOnPoisonThenSkippingHighVersionsFirst();
+
+            ReleaseResult result = quarantinedAgainOnI5Missing();
+
+            assertAll(
+                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_EVENT_MISSING),
+                    () -> assertThat(beyondTheWindowDuringTheRelease()).as("the type marks beyond the window during the release").isNotEmpty(),
+                    () -> assertThat(beyondTheWindow(instance())).as("the type marks beyond the window").isEmpty()
+            );
+        }
+
+        @Test
+        void leaves_the_marks_within_the_window_when_the_event_of_a_record_is_read_back_without_a_stream_key() {
+            quarantinedOnPoisonThenSkippingHighVersionsFirst();
+
+            ReleaseResult result = quarantinedAgainOnI5WithoutAStreamKey();
+
+            assertAll(
+                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
+                    () -> assertThat(beyondTheWindowDuringTheRelease()).as("the type marks beyond the window during the release").isNotEmpty(),
+                    () -> assertThat(beyondTheWindow(instance())).as("the type marks beyond the window").isEmpty()
+            );
+        }
+
+        @Test
+        void applies_each_record_left_behind_the_window_once_in_the_next_release_after_the_budget_of_a_record_ran_out() {
+            quarantinedOnPoisonThenSkippingHighVersionsFirst();
+            quarantinedAgainOnTheBudgetOfI5();
+            assertRecordsLeftBehindTheWindow();
+            failing.clear();
+
+            ReleaseResult result = execution.release(ORDER);
+
+            assertEveryItemIsAppliedOnceAndTheInstanceIsReleasedWithinTheWindow(result);
+        }
+
+        @Test
+        void applies_each_record_left_behind_the_window_once_in_the_next_release_after_the_event_of_a_record_was_missing() {
+            quarantinedOnPoisonThenSkippingHighVersionsFirst();
+            quarantinedAgainOnI5Missing();
+            assertRecordsLeftBehindTheWindow();
+            queries.restore(event("i5"));
+
+            ReleaseResult result = execution.release(ORDER);
+
+            assertEveryItemIsAppliedOnceAndTheInstanceIsReleasedWithinTheWindow(result);
+        }
+
+        @Test
+        void applies_each_record_left_behind_the_window_once_in_the_next_release_after_the_event_of_a_record_had_no_stream_key() {
+            quarantinedOnPoisonThenSkippingHighVersionsFirst();
+            quarantinedAgainOnI5WithoutAStreamKey();
+            assertRecordsLeftBehindTheWindow();
+            queries.keepStreamKeyOf(event("i5"));
+
+            ReleaseResult result = execution.release(ORDER);
+
+            assertEveryItemIsAppliedOnceAndTheInstanceIsReleasedWithinTheWindow(result);
+        }
+
+        @Test
+        void quarantines_the_instance_again_on_a_record_behind_the_window_that_keeps_failing_once_its_budget_is_used_up() {
+            quarantinedOnPoisonThenSkippingHighVersionsFirst();
+            quarantinedAgainOnI5Missing();
+            assertRecordsLeftBehindTheWindow();
+            queries.restore(event("i5"));
+            failing.add("i3");
+
+            ReleaseResult first = execution.release(ORDER);
+            SagaFailure recorded = instance().failure();
+            now.set(now.get().plus(BUDGET));
+            ReleaseResult pastTheBudget = execution.release(ORDER);
+
+            SagaFailure quarantinedOn = instance().failure();
+            assertAll(
+                    () -> assertThat(first).isEqualTo(ReleaseResult.STILL_RELEASING),
+                    () -> assertThat(recorded).as("the failure recorded by the first release").isNotNull()
+                            .extracting(SagaFailure::input).isEqualTo(streamKey(event("i3"))),
+                    () -> assertThat(pastTheBudget).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
+                    () -> assertThat(quarantinedOn).as("the failure the instance is quarantined on").isNotNull()
+                            .extracting(SagaFailure::input, SagaFailure::failureMessage).containsExactly(streamKey(event("i3")), "cannot pack i3")
+            );
+        }
+
+        @Test
+        void does_not_apply_a_record_behind_the_window_again_when_the_release_that_applied_it_crashed_before_deleting_it() {
+            quarantinedOnPoisonThenSkippingHighVersionsFirst();
+            quarantinedAgainOnI5Missing();
+            assertRecordsLeftBehindTheWindow();
+            queries.restore(event("i5"));
+            store.beforeNextDeleteOfARecord(() -> store.beforeNextDeleteOfARecord(() -> {
+                throw new IllegalStateException("crash after the write of i3 and before its delete");
+            }));
+            Throwable crash = catchThrowable(() -> execution.release(ORDER));
+            List<String> itemsAfterTheCrash = items();
+            List<String> recordsAfterTheCrash = recordedKeys();
+
+            ReleaseResult result = execution.release(ORDER);
+
+            assertAll(
+                    () -> assertThat(crash).hasMessageContaining("crash after the write of i3"),
+                    () -> assertThat(itemsAfterTheCrash).as("the items written before the crash").contains("i3"),
+                    () -> assertThat(recordsAfterTheCrash).as("the records left by the crash").contains(streamKey(event("i3"))),
+                    () -> assertEveryItemIsAppliedOnceAndTheInstanceIsReleasedWithinTheWindow(result)
+            );
+        }
     }
 
     @Nested
@@ -2864,6 +3123,10 @@ class SagaReleaseTest {
 
         void stripStreamKeyFrom(CloudEvent event) {
             withoutStreamKey.add(event.getId());
+        }
+
+        void keepStreamKeyOf(CloudEvent event) {
+            withoutStreamKey.remove(event.getId());
         }
 
         void failReadsWith(@Nullable RuntimeException failure) {

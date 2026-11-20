@@ -524,13 +524,33 @@ class SagaReleaseSupportTest {
         }
 
         @Test
-        void skips_a_record_of_an_input_that_a_live_delivery_applied_and_the_mark_has_trimmed_since() {
+        void applies_a_record_of_an_input_that_a_live_delivery_applied_and_the_mark_has_trimmed_since() {
             SagaEnvelope<OrderState> current = replayedUpTo(new TypeMark(5, List.of(), 4));
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.replay(saga(), "o1", current, new SkippedInput(1, SkippedInputKey.cloudEventKey("e:3", "urn:orders")),
                     SagaInput.event(new OrderPlaced("o1")), at(3), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
-            assertThat(outcome.processed()).isFalse();
+            assertAll(
+                    () -> assertThat(outcome.processed()).as("processed").isTrue(),
+                    () -> assertThat(outcome.envelope()).as("envelope").isNotNull(),
+                    () -> assertThat(outcome.envelope().streamMarks().get("o1").byType().get("").applied()).as("applied versions").contains(3L)
+            );
+        }
+
+        @Test
+        void applies_a_stream_keyed_record_behind_the_horizon_once_and_skips_it_when_replayed_again_before_the_release_ends() {
+            SagaEnvelope<OrderState> current = replayedUpTo(new TypeMark(5, List.of(), 4));
+
+            Outcome<OrderState, OrderCommand> first = SagaExecutionSupport.replay(saga(), "o1", current, new SkippedInput(1, "o1@3"),
+                    SagaInput.event(new OrderPlaced("o1")), at(3), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
+            assertThat(first.processed()).as("applied").isTrue();
+            Outcome<OrderState, OrderCommand> again = SagaExecutionSupport.replay(saga(), "o1", first.envelope(), new SkippedInput(1, "o1@3"),
+                    SagaInput.event(new OrderPlaced("o1")), at(3), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
+
+            assertAll(
+                    () -> assertThat(first.envelope().streamMarks().get("o1").byType().get("").applied()).as("applied versions").contains(3L),
+                    () -> assertThat(again.processed()).as("replayed again").isFalse()
+            );
         }
 
         @Test
@@ -813,7 +833,7 @@ class SagaReleaseSupportTest {
         void quarantines_again_on_a_missing_event_keeping_the_id_and_the_count_and_naming_the_key() {
             SagaEnvelope<OrderState> releasing = quarantined(releasingOn(9), 3L);
 
-            SagaEnvelope<OrderState> again = SagaExecutionSupport.withMissingInputQuarantined(releasing, "o1@7", NOW);
+            SagaEnvelope<OrderState> again = SagaExecutionSupport.withMissingInputQuarantined(releasing, "o1@7", NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
             assertAll(
                     () -> assertThat(again.status()).isEqualTo(SagaStatus.QUARANTINED),
@@ -829,7 +849,7 @@ class SagaReleaseSupportTest {
         void quarantines_again_on_an_event_without_a_stream_key_with_a_failure_type_of_its_own() {
             SagaEnvelope<OrderState> releasing = quarantined(releasingOn(9), 3L);
 
-            SagaEnvelope<OrderState> again = SagaExecutionSupport.withInputWithoutStreamKeyQuarantined(releasing, "o1@7", NOW);
+            SagaEnvelope<OrderState> again = SagaExecutionSupport.withInputWithoutStreamKeyQuarantined(releasing, "o1@7", NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
             assertAll(
                     () -> assertThat(again.failure().failureType()).isEqualTo("EventWithoutStreamKey"),
@@ -844,8 +864,8 @@ class SagaReleaseSupportTest {
             SagaEnvelope<OrderState> releasing = quarantined(releasingOn(9), 3L);
 
             assertAll(
-                    () -> assertThat(SagaExecutionSupport.withMissingInputQuarantined(releasing, "o1@9", NOW).failure().position()).isEqualTo(9L),
-                    () -> assertThat(SagaExecutionSupport.withMissingInputQuarantined(releasing, "o1@7", NOW).failure().position()).isNull()
+                    () -> assertThat(SagaExecutionSupport.withMissingInputQuarantined(releasing, "o1@9", NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW).failure().position()).isEqualTo(9L),
+                    () -> assertThat(SagaExecutionSupport.withMissingInputQuarantined(releasing, "o1@7", NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW).failure().position()).isNull()
             );
         }
 
@@ -853,7 +873,7 @@ class SagaReleaseSupportTest {
         void refuses_an_instance_that_is_not_releasing() {
             SagaEnvelope<OrderState> current = quarantined(failedOn(9), 3L);
 
-            assertThatThrownBy(() -> SagaExecutionSupport.withMissingInputQuarantined(current, "o1@7", NOW)).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> SagaExecutionSupport.withMissingInputQuarantined(current, "o1@7", NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW)).isInstanceOf(IllegalStateException.class);
         }
     }
 
@@ -882,22 +902,39 @@ class SagaReleaseSupportTest {
         }
 
         @Test
-        void keeps_the_applied_version_and_the_horizon_when_the_record_is_missing_and_applies_a_record_far_below_the_mark_in_the_next_release() {
+        void trims_the_marks_to_the_window_when_the_record_is_missing_and_applies_a_record_far_below_the_mark_in_the_next_release() {
             SagaEnvelope<OrderState> releasing = releasingAfterReplaying(HIGH);
 
-            SagaEnvelope<OrderState> again = SagaExecutionSupport.withMissingInputQuarantined(releasing, "o1@5", NOW);
+            SagaEnvelope<OrderState> again = SagaExecutionSupport.withMissingInputQuarantined(releasing, "o1@5", NOW, WINDOW);
 
             Outcome<OrderState, OrderCommand> next = releaseAndReplayLowVersion(again);
             assertAll(
+                    () -> assertThat(typeMark(releasing).applied()).as("applied during the release").containsExactly(2L),
                     () -> assertThat(typeMark(again).mark()).as("mark").isEqualTo(HIGH),
-                    () -> assertThat(typeMark(again).applied()).as("applied").containsExactly(2L),
-                    () -> assertThat(typeMark(again).horizon()).as("horizon").isEqualTo(0),
+                    () -> assertThat(typeMark(again).applied()).as("applied").isEmpty(),
+                    () -> assertThat(typeMark(again).horizon()).as("horizon").isEqualTo(HIGH - WINDOW),
                     () -> assertThat(next.processed()).as("the record far below the mark is applied").isTrue()
             );
         }
 
         @Test
-        void keeps_the_applied_version_and_the_horizon_when_the_failure_runs_out_of_its_budget_and_applies_a_record_far_below_the_mark_in_the_next_release() {
+        void trims_the_marks_to_the_window_when_the_event_has_no_stream_key_and_applies_a_record_far_below_the_mark_in_the_next_release() {
+            SagaEnvelope<OrderState> releasing = releasingAfterReplaying(HIGH);
+
+            SagaEnvelope<OrderState> again = SagaExecutionSupport.withInputWithoutStreamKeyQuarantined(releasing, "o1@5", NOW, WINDOW);
+
+            Outcome<OrderState, OrderCommand> next = releaseAndReplayLowVersion(again);
+            assertAll(
+                    () -> assertThat(typeMark(releasing).applied()).as("applied during the release").containsExactly(2L),
+                    () -> assertThat(typeMark(again).mark()).as("mark").isEqualTo(HIGH),
+                    () -> assertThat(typeMark(again).applied()).as("applied").isEmpty(),
+                    () -> assertThat(typeMark(again).horizon()).as("horizon").isEqualTo(HIGH - WINDOW),
+                    () -> assertThat(next.processed()).as("the record far below the mark is applied").isTrue()
+            );
+        }
+
+        @Test
+        void trims_the_marks_to_the_window_when_the_failure_runs_out_of_its_budget_and_applies_a_record_far_below_the_mark_in_the_next_release() {
             SagaEnvelope<OrderState> releasing = releasingAfterReplaying(HIGH);
 
             FailureRecord<OrderState> record = SagaExecutionSupport.onReleaseFailure(releasing, "o1@5", at(5), new IllegalStateException("again"), NOW, Duration.ZERO, WINDOW);
@@ -906,9 +943,10 @@ class SagaReleaseSupportTest {
             Outcome<OrderState, OrderCommand> next = releaseAndReplayLowVersion(again);
             assertAll(
                     () -> assertThat(record.quarantined()).as("quarantined").isTrue(),
+                    () -> assertThat(typeMark(releasing).applied()).as("applied during the release").containsExactly(2L),
                     () -> assertThat(typeMark(again).mark()).as("mark").isEqualTo(HIGH),
-                    () -> assertThat(typeMark(again).applied()).as("applied").containsExactly(2L),
-                    () -> assertThat(typeMark(again).horizon()).as("horizon").isEqualTo(0),
+                    () -> assertThat(typeMark(again).applied()).as("applied").isEmpty(),
+                    () -> assertThat(typeMark(again).horizon()).as("horizon").isEqualTo(HIGH - WINDOW),
                     () -> assertThat(next.processed()).as("the record far below the mark is applied").isTrue()
             );
         }
@@ -960,15 +998,35 @@ class SagaReleaseSupportTest {
         }
 
         @Test
-        void is_not_applied_again_by_a_release_replaying_it() {
+        void is_applied_by_a_release_replaying_it_since_a_version_the_release_applied_would_be_among_the_applied_ones() {
             SagaEnvelope<OrderState> releasing = withFailureOn(SagaStatus.QUARANTINED, failureOnS10(NOW));
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.replay(saga(), "o1", releasing, new SkippedInput(0, "S@10"),
                     SagaInput.event(new PaymentReserved("o1")), s10(), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
             assertAll(
-                    () -> assertThat(outcome.processed()).isFalse(),
-                    () -> assertThat(outcome.envelope()).isNull()
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.envelope()).isNotNull()
+            );
+        }
+
+        @Test
+        void is_not_applied_again_by_a_release_replaying_it_once_more_after_applying_it() {
+            SagaEnvelope<OrderState> releasing = withFailureOn(SagaStatus.QUARANTINED, failureOnS10(NOW));
+            // An event that does not complete the instance, so the release goes on after it
+            Outcome<OrderState, OrderCommand> first = SagaExecutionSupport.replay(saga(), "o1", releasing, new SkippedInput(0, "S@10"),
+                    SagaInput.event(new OrderPlaced("o1")), s10(), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
+            assertThat(first.processed()).as("applied").isTrue();
+            SagaEnvelope<OrderState> stillReleasing = first.envelope();
+
+            Outcome<OrderState, OrderCommand> again = SagaExecutionSupport.replay(saga(), "o1", stillReleasing, new SkippedInput(0, "S@10"),
+                    SagaInput.event(new OrderPlaced("o1")), s10(), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
+
+            assertAll(
+                    () -> assertThat(stillReleasing.isReleasing()).as("control: releasing").isTrue(),
+                    () -> assertThat(stillReleasing.streamMarks().get("S").byType().get(TYPE).applied()).as("applied").contains(10L),
+                    () -> assertThat(again.processed()).isFalse(),
+                    () -> assertThat(again.envelope()).isNull()
             );
         }
 
