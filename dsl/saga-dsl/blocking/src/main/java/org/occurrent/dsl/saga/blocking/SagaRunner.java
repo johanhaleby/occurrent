@@ -280,6 +280,9 @@ public final class SagaRunner<E, C> {
         requireNonNull(timersEnabled, "timersEnabled cannot be null");
 
         SagaRunnerConfig effectiveConfig = quarantineOnlyIfTheEventCanBeAskedForAgain(subscriptionId, stateStore, config);
+        if (effectiveConfig.quarantineAfter().isPresent() && stateStore instanceof SagaStateStoreSkippedInputs skippedInputs) {
+            skippedInputs.requireAtomicTransitions();
+        }
         SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, effectiveConfig,
                 retentionCheckFor(subscriptionId, effectiveConfig), Instant::now, eventStoreQueries);
         SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));

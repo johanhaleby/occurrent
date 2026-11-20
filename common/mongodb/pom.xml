@@ -28,6 +28,7 @@
         <module>native</module>
         <module>spring</module>
         <module>timerepresentation</module>
+        <module>deployment</module>
         <module>specialfilterhandling</module>
     </modules>
     <artifactId>mongodb</artifactId>

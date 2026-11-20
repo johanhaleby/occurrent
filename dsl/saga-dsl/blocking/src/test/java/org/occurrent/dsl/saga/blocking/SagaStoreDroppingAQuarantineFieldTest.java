@@ -268,6 +268,11 @@ class SagaStoreDroppingAQuarantineFieldTest {
         }
 
         @Override
+        public void requireAtomicTransitions() {
+            delegate.requireAtomicTransitions();
+        }
+
+        @Override
         public SagaStateCodec<Order> stateCodec() {
             return delegate.stateCodec();
         }

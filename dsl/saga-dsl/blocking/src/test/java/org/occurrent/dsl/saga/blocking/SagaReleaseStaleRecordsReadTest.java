@@ -200,6 +200,11 @@ class SagaReleaseStaleRecordsReadTest {
         volatile int missesTheNextReads = 0;
 
         @Override
+        public void requireAtomicTransitions() {
+            inMemory.requireAtomicTransitions();
+        }
+
+        @Override
         public SagaStateCodec<Order> stateCodec() {
             return inMemory.stateCodec();
         }

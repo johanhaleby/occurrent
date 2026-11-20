@@ -1893,6 +1893,11 @@ class SagaQuarantineTest {
         }
 
         @Override
+        public void requireAtomicTransitions() {
+            delegate.requireAtomicTransitions();
+        }
+
+        @Override
         public SagaStateCodec<OrderState> stateCodec() {
             return delegate.stateCodec();
         }

@@ -51,6 +51,7 @@ import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
+import org.occurrent.mongodb.deployment.internal.MongoDeployment;
 import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -113,6 +114,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * again at read concern {@code linearizable}. MongoDB documents that a linearizable read on the primary returns every
  * write a majority acknowledged before the read started, in
  * <a href="https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/">read concern "linearizable"</a>.
+ * A standalone server has no failover and refuses that read concern, so there the store skips the second read.
  * The transactions below read at read concern {@code snapshot}, everything the primary has when the transaction
  * starts, and their commit at {@code majority} returns only once a majority has all of it. A release ends the
  * quarantine of an instance only in such a transaction that finds no skipped input left.
@@ -120,11 +122,16 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * The four writes of {@link SagaStateStoreSkippedInputs} and the {@link #delete(String)} of a quarantined instance write
  * the instance and its skipped inputs in one MongoDB transaction, through a {@link MongoTransactionManager} on the
  * template's {@link MongoDatabaseFactory}. So quarantine needs a replica set or a sharded cluster, and the store throws an
- * {@link IllegalStateException} when the server refuses a transaction. Such a transaction that fails with the
+ * {@link IllegalStateException} when the server refuses a transaction. A transaction that fails with the
  * {@code TransientTransactionError} label is run again from the start with the store's {@link RetryStrategy}, and a
  * commit that fails with the {@code UnknownTransactionCommitResult} label is committed again. Any other failure of such a
  * transaction is thrown at once, and so is a server's refusal of a transaction or of journaling on any call, whatever
  * the strategy retries, a {@code RetryStrategy} you implement yourself included.
+ * <p>
+ * The constructor asks the server for its deployment once, with {@code hello}. On a standalone server
+ * {@link #requireAtomicTransitions()} throws, so a saga with quarantine on refuses to start. With quarantine off every
+ * other call works there, except the {@link #delete(String)} of an instance quarantined earlier, which the server
+ * refuses with the replica set message.
  * <p>
  * Called inside a MongoDB transaction of the caller's on the same {@link MongoDatabaseFactory}, those writes join it.
  * Inside such a transaction the store sends each read and write once, and a failure reaches the caller as MongoDB
@@ -192,8 +199,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // CommandOperationHelper.transformWriteException
     private static final int TRANSACTIONS_NOT_SUPPORTED_ERROR_CODE = 20;
     private static final String TRANSACTIONS_NOT_SUPPORTED_ERROR_MESSAGE = "Transaction numbers";
-    static final String REPLICA_SET_REQUIRED_MESSAGE = "SpringMongoSagaStateStore needs a MongoDB replica set or sharded cluster for quarantine, since it writes a quarantined saga instance and the inputs it skips in one transaction. "
-                                                       + "The server refused the transaction. Run MongoDB as a replica set, which can have a single member, or turn quarantine off for the saga.";
+    private static final String QUARANTINE_NEEDS_TRANSACTIONS = "SpringMongoSagaStateStore needs a MongoDB replica set or sharded cluster for quarantine, since it writes a quarantined saga instance and the inputs it skips in one transaction. ";
+    private static final String WAYS_TO_RUN_THE_SAGA = "Run MongoDB as a replica set, which can have a single member, or as a sharded cluster, or turn quarantine off for the saga with occurrent.saga.quarantine-enabled=false on Spring Boot "
+                                                       + "or SagaRunnerConfig.disableQuarantine() on a SagaRunner.";
+    static final String REPLICA_SET_REQUIRED_MESSAGE = QUARANTINE_NEEDS_TRANSACTIONS + "The server refused the transaction. " + WAYS_TO_RUN_THE_SAGA;
+    static final String STANDALONE_SERVER_MESSAGE = QUARANTINE_NEEDS_TRANSACTIONS + "The server is a standalone server, which refuses transactions. " + WAYS_TO_RUN_THE_SAGA;
     private static final String ID = "_id";
     private static final String STATE = SagaCodec.STATE;
     private static final String STATUS = SagaCodec.STATUS;
@@ -234,6 +244,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private final Class<S> stateType;
     private final boolean flowSaga;
     private final RetryStrategy retryStrategy;
+    private final MongoDeployment deployment;
     private final SagaStateCodec<S> stateCodec = new SagaStateCodec<>() {
         @Override
         public Object encode(S state) {
@@ -338,6 +349,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // setting changes it, so nothing a user configures can make MongoDB refuse one permanently. An index an operator
         // has already created with different options fails the constructor after the attempt limit rather than being
         // retried forever. The unique index on the skipped inputs is what makes recording a key twice store one document.
+        // The deployment is asked once here, like the indexes, and a failure of the probe other than a server that does
+        // not know hello propagates once the attempts are used
+        this.deployment = retryStrategy.execute(() -> MongoDeployment.detect(mongoOperations::executeCommand));
         retryStrategy.execute(() -> {
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(UPDATED_AT)));
@@ -356,6 +370,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      */
     static RetryStrategy.Retry defaultRetryStrategy() {
         return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(DEFAULT_MAX_ATTEMPTS);
+    }
+
+    @Override
+    public void requireAtomicTransitions() {
+        if (deployment == MongoDeployment.OTHER) {
+            throw new IllegalStateException(STANDALONE_SERVER_MESSAGE);
+        }
     }
 
     @Override
@@ -380,12 +401,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // maxTimeMS. MongoDB documents that such a read returns every write a majority acknowledged before the read
     // started, see
     // https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/
+    // A standalone server has no failover and refuses read concern linearizable, so there the majority read stands
     private @Nullable Document findInstance(String sagaId, Supplier<Query> query) {
         if (joinsCallersTransaction()) {
             return findInCallersTransaction(sagaId, query.get());
         }
         Document found = retried(() -> readInstance(query.get(), ReadConcern.MAJORITY));
-        return found != null ? found : retried(() -> readInstance(query.get(), ReadConcern.LINEARIZABLE));
+        return found != null || deployment == MongoDeployment.OTHER ? found : retried(() -> readInstance(query.get(), ReadConcern.LINEARIZABLE));
     }
 
     // From the primary, on the database MongoDatabaseUtils hands out, which is bound to no session here. A template with

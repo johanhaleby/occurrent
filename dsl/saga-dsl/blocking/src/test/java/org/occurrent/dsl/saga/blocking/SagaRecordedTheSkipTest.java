@@ -224,6 +224,11 @@ class SagaRecordedTheSkipTest {
         }
 
         @Override
+        public void requireAtomicTransitions() {
+            inMemory.requireAtomicTransitions();
+        }
+
+        @Override
         public SagaStateCodec<Order> stateCodec() {
             return inMemory.stateCodec();
         }

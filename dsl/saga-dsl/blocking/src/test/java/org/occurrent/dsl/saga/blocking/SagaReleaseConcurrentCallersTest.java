@@ -262,6 +262,11 @@ class SagaReleaseConcurrentCallersTest {
 
     private class DelegatingStore implements SagaStateStore<Order>, SagaStateStoreSkippedInputs {
         @Override
+        public void requireAtomicTransitions() {
+            inMemory.requireAtomicTransitions();
+        }
+
+        @Override
         public SagaStateCodec<Order> stateCodec() {
             return inMemory.stateCodec();
         }

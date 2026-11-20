@@ -67,6 +67,17 @@ import java.util.List;
 public interface SagaStateStoreSkippedInputs {
 
     /**
+     * Throws when the store cannot write the four {@code compareAndSave} methods below atomically in the database it is
+     * connected to. The runner calls it once, when it starts a saga with quarantine on and before the saga receives its
+     * first input, so a store that cannot write them fails at startup rather than when an instance is first quarantined.
+     * A store that can does nothing.
+     *
+     * @throws IllegalStateException when the store cannot write a transition atomically, with a message that says how
+     *                               to run the saga anyway
+     */
+    void requireAtomicTransitions();
+
+    /**
      * The ids of instances that are releasing, in ascending id order, strictly after {@code after} and at most
      * {@code limit} of them. A releasing instance is {@link SagaStatus#QUARANTINED} and its failure record has
      * {@link SagaFailure#releasedAt()} set. The timer poller asks for them on every poll and goes on with their

@@ -53,6 +53,11 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     }
 
     @Override
+    public void requireAtomicTransitions() {
+        // Every write takes the store's lock, so a transition is atomic
+    }
+
+    @Override
     public SagaStateCodec<S> stateCodec() {
         return SagaStateCodec.identity();
     }
