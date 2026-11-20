@@ -104,7 +104,7 @@ public class ReactorDurableSubscriptionModelConfig {
      * Whether a registration whose first position would be recorded in a {@code CheckpointStorage} that answers
      * {@code false} from {@code evaluatesWriteConditionsFor(String)} starts anyway instead of being refused. A first
      * position is recorded for a registration that asks for the model default with no checkpoint stored, and for one
-     * whose {@code StartAt.dynamic(..)} function answers {@code StartAt.now()}. It is written with
+     * whose {@code StartAt.dynamic(..)} function answers {@code StartAt.subscriptionModelDefault()}. It is written with
      * {@code CheckpointWriteCondition.ifAbsent()}, so of two nodes recording one at the same moment only one write is
      * stored, and a storage that can't evaluate that condition could only write it unconditionally. Starting anyway
      * writes it unconditionally, logged at {@code WARN}, so the two nodes can overwrite each other's first position and

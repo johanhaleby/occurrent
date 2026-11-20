@@ -426,9 +426,9 @@ this. See
 
 A durable subscription that starts at the model default, with no checkpoint stored, records its first position before
 anything is delivered. `DurableSubscriptionModel` and `ReactorDurableSubscriptionModel` write it with
-`CheckpointWriteCondition.ifAbsent()`, so of two nodes recording one at the same moment, only one write is stored. The
-reactor model also records one for a `StartAt.dynamic(..)` that answers `StartAt.now()`, and the Spring Boot starters
-store a live start as the first checkpoint the same way.
+`CheckpointWriteCondition.ifAbsent()`, so of two nodes recording one at the same moment, only one write is stored. Both
+models record one for a `StartAt.dynamic(..)` that answers `StartAt.subscriptionModelDefault()` too, and the Spring
+Boot starters store a live start as the first checkpoint the same way.
 
 ### Who is affected
 
@@ -457,8 +457,8 @@ From 0.35.0 the subscription is refused with `IllegalStateException` before anyt
 * Both Spring Boot starters fail startup when they would store a live start as the subscription's first checkpoint.
 
 A subscription that records no first position isn't refused, whatever the storage answers. That covers a checkpoint
-already stored, a `StartAt` of your own other than a dynamic one answering `StartAt.now()` on the reactor stack, and a
-starter subscription at `NOW` with `resumeBehavior = SAME_AS_START_AT`.
+already stored, a `StartAt` of your own that doesn't resolve to the model default, `StartAt.now()` and a dynamic one
+answering it included, and a starter subscription at `NOW` with `resumeBehavior = SAME_AS_START_AT`.
 
 ### What to do
 

@@ -17,8 +17,8 @@ which [ADR 172](0172-how-the-spring-boot-starters-find-and-start-annotated-handl
 A durable subscription that asks for the model default and has no checkpoint stored records its first position before
 anything is delivered. `ReactorDurableSubscriptionModel` writes it with `CheckpointWriteCondition.ifAbsent()`, and so
 does `DurableSubscriptionModel` since 0.34.0, so of two nodes recording one at the same moment, only one write is
-stored. The reactor model also records one for a `StartAt.dynamic(..)` that answers `StartAt.now()`, and from 0.35.0
-both starters store the live start as the first checkpoint the same way.
+stored. Both models record one for a `StartAt.dynamic(..)` that answers `StartAt.subscriptionModelDefault()` too, and
+from 0.35.0 both starters store the live start as the first checkpoint the same way.
 
 `CheckpointStorage.evaluatesWriteConditions()` defaults to `false`. A storage that answers `false` from
 `evaluatesWriteConditionsFor(String)` can't evaluate `ifAbsent()`, and every one of these sites then wrote the first
@@ -46,8 +46,8 @@ keep the unconditional write and the warning. The name says what the application
 `startWhenNoStartPositionCanBeRecorded`. Both default to `false`.
 
 A subscription that records no first position isn't refused, whatever the storage answers. That covers a checkpoint
-already stored, a `StartAt` of the application's own other than a dynamic one answering `now()` on the reactor stack,
-and a starter subscription at `NOW` with `resumeBehavior = SAME_AS_START_AT`.
+already stored, a `StartAt` of the application's own that doesn't resolve to the model default, `StartAt.now()` and a
+dynamic one answering it included, and a starter subscription at `NOW` with `resumeBehavior = SAME_AS_START_AT`.
 
 ## Consequences
 

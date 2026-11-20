@@ -301,8 +301,8 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
 
     @Test
     void a_storage_that_cannot_evaluate_write_conditions_keeps_the_unconditional_write() {
-        // Nothing here can make such a storage write conditionally, and refusing it would take out a storage that
-        // has worked until now over a capability it never claimed. So the write is the one 0.32.0 made.
+        // Nothing here can make such a storage write conditionally. With the opt-in the write is the one 0.32.0
+        // made, and without it the subscription is refused, see ReactorDurableSubscriptionModelFirstPositionCanBeOverwrittenTest
         ConditionRecordingCheckpointStorage storage = new ConditionRecordingCheckpointStorage();
         storage.evaluatesWriteConditions = false;
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");

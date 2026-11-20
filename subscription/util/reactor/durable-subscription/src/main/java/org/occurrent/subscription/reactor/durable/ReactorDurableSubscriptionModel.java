@@ -2016,8 +2016,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                          "ReactorDurableSubscriptionModelConfig.startWhenFirstPositionCanBeOverwritten(true), " +
                                          "or set occurrent.subscription.start-when-first-position-can-be-overwritten=true " +
                                          "when using the Spring Boot starter. A subscription with a checkpoint already " +
-                                         "stored, or with a StartAt of its own other than a dynamic one answering " +
-                                         "StartAt.now(), records no first position and is never refused this way.");
+                                         "stored, or with a StartAt of its own that doesn't resolve to the model " +
+                                         "default, records no first position and is never refused this way.");
     }
 
     // Refuses a dynamic StartAt that answered StartAt.now() and is handed to the wrapped model, when the read of where

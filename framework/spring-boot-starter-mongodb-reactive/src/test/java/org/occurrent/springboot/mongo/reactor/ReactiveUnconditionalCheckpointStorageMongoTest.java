@@ -64,7 +64,8 @@ import static org.awaitility.Awaitility.await;
  * A checkpoint storage written for 0.32.0 and brought to 0.33.0 with the migration guide's stub writes only
  * unconditionally, and refuses {@code ifAbsent()} with {@link UnsupportedOperationException}. A subscription at
  * {@code DEFAULT} with nothing stored pins its start boundary as the first checkpoint, and with such a storage it
- * does so unconditionally rather than failing startup.
+ * does so unconditionally when occurrent.subscription.start-when-first-position-can-be-overwritten is set, and
+ * fails startup otherwise.
  */
 @DisplayName("A reactive checkpoint storage that only writes unconditionally")
 @DisplayNameGeneration(ReplaceUnderscores.class)
