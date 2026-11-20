@@ -355,9 +355,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * about. An event the saga cannot route is refused whether or not {@link SagaRunnerConfig#quarantineAfter()} is
      * set, because nothing here ever quarantines an instance for it (see {@link #refuseUnroutableDelivery}). Pacing
      * this ERROR on that budget alone would leave a saga without one warning once and then silent for good, even while
-     * the model keeps offering the event. That is every saga under the default configuration, and every saga on a
-     * subscription model {@code SagaRunner} switches quarantine off for, such as a push feed, including one a broker
-     * source feeds. A model that does not offer a refused delivery again gets only the first WARN either way. Using
+     * the model keeps offering the event. That is every saga with quarantine off. A model that does not offer a refused
+     * delivery again gets only the first WARN. Using
      * the configured budget when there is one keeps one number for an operator to reason about, and
      * {@link #UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE} otherwise gives every other saga the same five-minute
      * cadence rather than inventing a second tunable for it.
