@@ -90,6 +90,7 @@ import static org.occurrent.functional.Not.not;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.FULL_DOCUMENT;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
+import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Timeout(20)
@@ -304,7 +305,7 @@ public class SpringMongoCheckpointStorageTest {
                 return false;
             }
         };
-        subscriptionModel = new DurableSubscriptionModel(springMongoSubscriptionModel, storage);
+        subscriptionModel = new DurableSubscriptionModel(springMongoSubscriptionModel, storage, new DurableSubscriptionModelConfig(everyEvent()).startWhenFirstPositionCanBeOverwritten(true));
         subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When
@@ -361,7 +362,7 @@ public class SpringMongoCheckpointStorageTest {
                 return false;
             }
         };
-        subscriptionModel = new DurableSubscriptionModel(springMongoSubscriptionModel, storage, new DurableSubscriptionModelConfig(3));
+        subscriptionModel = new DurableSubscriptionModel(springMongoSubscriptionModel, storage, new DurableSubscriptionModelConfig(3).startWhenFirstPositionCanBeOverwritten(true));
         subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When
