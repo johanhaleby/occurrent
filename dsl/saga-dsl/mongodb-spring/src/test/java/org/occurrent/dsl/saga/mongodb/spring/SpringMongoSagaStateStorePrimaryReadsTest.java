@@ -82,6 +82,7 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
     private SpringMongoSagaStateStore<Payment> writer;
     private SpringMongoSagaStateStore<Payment> secondaryOnly;
     private MongoTemplate secondaryOnlyTemplate;
+    private MongoTemplate primaryTemplate;
     // The read preference each find command was sent with, as the server was told
     private final List<String> readPreferencesOfFinds = new CopyOnWriteArrayList<>();
 
@@ -100,6 +101,7 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
                         }
                     }
                 }).build();
+        primaryTemplate = new MongoTemplate(MongoClients.create(settings), database);
         secondaryOnlyTemplate = new MongoTemplate(MongoClients.create(settings), database);
         secondaryOnlyTemplate.setReadPreference(ReadPreference.secondary());
         secondaryOnly = new SpringMongoSagaStateStore<>(secondaryOnlyTemplate, COLLECTION, Payment.class);
@@ -120,6 +122,16 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
         return List.copyOf(readPreferencesOfFinds);
     }
 
+    // What a template with no read preference of its own, which reads from the primary, sends for a find
+    private String primaryOnTheWire() {
+        return readPreferencesSentBy(() -> primaryTemplate.findOne(Query.query(where("_id").is("control")), Document.class, COLLECTION)).getFirst();
+    }
+
+    @Test
+    void the_primary_is_sent_as_neither_a_secondary_nor_a_nearest_read_preference_so_the_tests_below_prove_something() {
+        assertThat(primaryOnTheWire()).isNotIn("secondary", "secondaryPreferred", "nearest");
+    }
+
     @Test
     void the_template_used_here_sends_a_secondary_read_preference_so_the_tests_below_prove_something() {
         writer.compareAndSave("control", envelope("control", SagaStatus.ACTIVE, List.of(), null), 0);
@@ -138,7 +150,7 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
         List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnly.find("order-1")));
 
         assertAll(
-                () -> assertThat(sent).as("read preference of each find").isNotEmpty().doesNotContain("secondary"),
+                () -> assertThat(sent).as("read preference of each find").isNotEmpty().containsOnly(primaryOnTheWire()),
                 () -> assertThat(read.get()).get().extracting(SagaEnvelope::state).isEqualTo(new Payment(12L))
         );
     }
@@ -152,7 +164,7 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
         List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnly.findWithoutState("order-1")));
 
         assertAll(
-                () -> assertThat(sent).as("read preference of each find").isNotEmpty().doesNotContain("secondary"),
+                () -> assertThat(sent).as("read preference of each find").isNotEmpty().containsOnly(primaryOnTheWire()),
                 () -> assertThat(read.get()).get().extracting(SagaEnvelope::sagaId).isEqualTo("order-1")
         );
     }
@@ -166,7 +178,7 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
         List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnly.findWithDueTimers(NOW.plusSeconds(1), 10)));
 
         assertAll(
-                () -> assertThat(sent).as("read preference of each find").isNotEmpty().doesNotContain("secondary"),
+                () -> assertThat(sent).as("read preference of each find").isNotEmpty().containsOnly(primaryOnTheWire()),
                 () -> assertThat(read.get()).extracting(SagaEnvelope::sagaId).containsExactly("order-1")
         );
     }
@@ -180,7 +192,7 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
         List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnly.findByStatus(SagaStatus.QUARANTINED, NOW.plusSeconds(1), 10)));
 
         assertAll(
-                () -> assertThat(sent).as("read preference of each find").isNotEmpty().doesNotContain("secondary"),
+                () -> assertThat(sent).as("read preference of each find").isNotEmpty().containsOnly(primaryOnTheWire()),
                 () -> assertThat(read.get()).extracting(SagaEnvelope::sagaId).containsExactly("order-1")
         );
     }
@@ -194,7 +206,7 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
         List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnly.findReleasingSagaIds(null, 10)));
 
         assertAll(
-                () -> assertThat(sent).as("read preference of each find").isNotEmpty().doesNotContain("secondary"),
+                () -> assertThat(sent).as("read preference of each find").isNotEmpty().containsOnly(primaryOnTheWire()),
                 () -> assertThat(read.get()).containsExactly("order-1")
         );
     }
@@ -208,7 +220,7 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
         List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnly.findSkippedInputs("order-1", QUARANTINE_ID, 10)));
 
         assertAll(
-                () -> assertThat(sent).as("read preference of each find").isNotEmpty().doesNotContain("secondary"),
+                () -> assertThat(sent).as("read preference of each find").isNotEmpty().containsOnly(primaryOnTheWire()),
                 () -> assertThat(read.get()).containsExactly(new SkippedInput(0, "order-1@8"))
         );
     }

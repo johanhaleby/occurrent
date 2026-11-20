@@ -354,7 +354,7 @@ class SagaReleaseSupportTest {
     class ReplayingARecord {
 
         private Outcome<OrderState, OrderCommand> replay(SagaEnvelope<OrderState> current, SkippedInput record, OrderEvent event, EventMeta meta) {
-            return SagaExecutionSupport.replay(saga(), "o1", current, record, SagaInput.event(event), meta, NOW);
+            return SagaExecutionSupport.replay(saga(), "o1", current, record, SagaInput.event(event), meta, NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
         }
 
         @Test
@@ -383,6 +383,31 @@ class SagaReleaseSupportTest {
                     () -> assertThat(outcome.processed()).isTrue(),
                     () -> assertThat(outcome.envelope().status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(outcome.envelope().failure()).isNull()
+            );
+        }
+
+        @Test
+        void trims_the_marks_to_the_reorder_window_when_the_record_completes_the_instance() {
+            SagaEnvelope<OrderState> base = quarantined(releasingOn(9), 3L);
+            StreamMarks before = new StreamMarks(1, Map.of("", new TypeMark(10, List.of(3L, 5L, 7L, 9L), 0)), Map.of("", List.of(13L)), List.of(2L), Map.of(13L, QUARANTINED_AT));
+            SagaEnvelope<OrderState> current = new SagaEnvelope<>(base.sagaId(), base.state(), base.status(), base.version(), base.timers(), base.streamWatermarks(),
+                    base.positionWatermark(), base.createdAt(), base.updatedAt(), base.completedAt(), base.currentStep(), base.started(), base.failure(),
+                    Map.of("o1", before), base.quarantineSkipCount());
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.replay(saga(), "o1", current, new SkippedInput(0, "o1@11"),
+                    SagaInput.event(new PaymentReserved("o1")), at(11), NOW, 2);
+
+            SagaEnvelope<OrderState> completed = outcome.envelope();
+            StreamMarks after = completed.streamMarks().get("o1");
+            assertAll(
+                    () -> assertThat(completed.status()).as("status").isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(after.byType().get("").mark()).as("mark").isEqualTo(11),
+                    () -> assertThat(after.byType().get("").applied()).as("applied").containsExactly(10L),
+                    () -> assertThat(after.byType().get("").horizon()).as("horizon").isEqualTo(9),
+                    () -> assertThat(after.floor()).as("floor").isEqualTo(before.floor()),
+                    () -> assertThat(after.pending()).as("pending").isEqualTo(before.pending()),
+                    () -> assertThat(after.legacyFailed()).as("legacy failed").isEqualTo(before.legacyFailed()),
+                    () -> assertThat(after.pendingSince()).as("pending since").isEqualTo(before.pendingSince())
             );
         }
 
@@ -445,7 +470,7 @@ class SagaReleaseSupportTest {
             SagaEnvelope<OrderState> current = replayedUpTo(new TypeMark(5, List.of(), 0));
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.replay(saga(), "o1", current, new SkippedInput(1, "o1@3"),
-                    SagaInput.event(new PaymentReserved("o1")), at(3), NOW);
+                    SagaInput.event(new PaymentReserved("o1")), at(3), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
             assertAll(
                     () -> assertThat(outcome.processed()).as("processed").isTrue(),
@@ -460,9 +485,9 @@ class SagaReleaseSupportTest {
             SkippedInput byStreamKey = new SkippedInput(0, "o1@3");
             SkippedInput byCloudEventKey = new SkippedInput(1, SkippedInputKey.cloudEventKey("e:3", "urn:orders"));
 
-            SagaEnvelope<OrderState> afterV3 = SagaExecutionSupport.replay(saga(), "o1", current, byStreamKey, SagaInput.event(new OrderPlaced("o1")), at(3), NOW).envelope();
-            SagaEnvelope<OrderState> afterV5 = SagaExecutionSupport.replay(saga(), "o1", afterV3, new SkippedInput(2, "o1@5"), SagaInput.event(new OrderPlaced("o1")), at(5), NOW).envelope();
-            Outcome<OrderState, OrderCommand> again = SagaExecutionSupport.replay(saga(), "o1", afterV5, byCloudEventKey, SagaInput.event(new OrderPlaced("o1")), at(3), NOW);
+            SagaEnvelope<OrderState> afterV3 = SagaExecutionSupport.replay(saga(), "o1", current, byStreamKey, SagaInput.event(new OrderPlaced("o1")), at(3), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW).envelope();
+            SagaEnvelope<OrderState> afterV5 = SagaExecutionSupport.replay(saga(), "o1", afterV3, new SkippedInput(2, "o1@5"), SagaInput.event(new OrderPlaced("o1")), at(5), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW).envelope();
+            Outcome<OrderState, OrderCommand> again = SagaExecutionSupport.replay(saga(), "o1", afterV5, byCloudEventKey, SagaInput.event(new OrderPlaced("o1")), at(3), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
             assertAll(
                     () -> assertThat(afterV3).as("v3 applied").isNotNull(),
@@ -478,14 +503,14 @@ class SagaReleaseSupportTest {
             SagaEnvelope<OrderState> current = withTypeMarks(0, Map.of());
 
             SagaEnvelope<OrderState> afterHigh = SagaExecutionSupport.replay(saga(), "o1", current, new SkippedInput(0, "o1@" + high),
-                    SagaInput.event(new OrderPlaced("o1")), at(high), NOW).envelope();
+                    SagaInput.event(new OrderPlaced("o1")), at(high), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW).envelope();
             Outcome<OrderState, OrderCommand> low = SagaExecutionSupport.replay(saga(), "o1", afterHigh, new SkippedInput(1, "o1@1"),
-                    SagaInput.event(new OrderPlaced("o1")), at(1), NOW);
+                    SagaInput.event(new OrderPlaced("o1")), at(1), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
             SagaEnvelope<OrderState> afterLow = low.envelope() == null ? afterHigh : low.envelope();
             Outcome<OrderState, OrderCommand> highAgain = SagaExecutionSupport.replay(saga(), "o1", afterLow, new SkippedInput(2, "o1@" + high),
-                    SagaInput.event(new OrderPlaced("o1")), at(high), NOW);
+                    SagaInput.event(new OrderPlaced("o1")), at(high), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
             Outcome<OrderState, OrderCommand> lowAgain = SagaExecutionSupport.replay(saga(), "o1", afterLow, new SkippedInput(3, "o1@1"),
-                    SagaInput.event(new OrderPlaced("o1")), at(1), NOW);
+                    SagaInput.event(new OrderPlaced("o1")), at(1), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
             assertAll(
                     () -> assertThat(afterHigh).as("the high version applied").isNotNull(),
@@ -503,7 +528,7 @@ class SagaReleaseSupportTest {
             SagaEnvelope<OrderState> current = replayedUpTo(new TypeMark(5, List.of(), 4));
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.replay(saga(), "o1", current, new SkippedInput(1, SkippedInputKey.cloudEventKey("e:3", "urn:orders")),
-                    SagaInput.event(new OrderPlaced("o1")), at(3), NOW);
+                    SagaInput.event(new OrderPlaced("o1")), at(3), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
             assertThat(outcome.processed()).isFalse();
         }
@@ -513,7 +538,7 @@ class SagaReleaseSupportTest {
             SagaEnvelope<OrderState> current = replayedUpTo(new TypeMark(5, List.of(), 4));
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.replay(saga(), "o1", current, new SkippedInput(1, "o1@5"),
-                    SagaInput.event(new PaymentReserved("o1")), at(5), NOW);
+                    SagaInput.event(new PaymentReserved("o1")), at(5), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
             assertThat(outcome.processed()).isFalse();
         }
@@ -523,7 +548,7 @@ class SagaReleaseSupportTest {
             SagaEnvelope<OrderState> current = replayedUpTo(new TypeMark(5, List.of(4L), 3));
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.replay(saga(), "o1", current, new SkippedInput(1, "o1@4"),
-                    SagaInput.event(new PaymentReserved("o1")), at(4), NOW);
+                    SagaInput.event(new PaymentReserved("o1")), at(4), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
             assertThat(outcome.processed()).isFalse();
         }
@@ -672,7 +697,7 @@ class SagaReleaseSupportTest {
             SagaEnvelope<OrderState> before = quarantined(releasingOn(9), 3L);
             SagaEnvelope<OrderState> after = SagaExecutionSupport.withSkipFinished(SagaExecutionSupport.withSkipCounted(before));
             SagaEnvelope<OrderState> computed = SagaExecutionSupport.replay(saga(), "o1", before, new SkippedInput(0, "o1@7"),
-                    SagaInput.event(new OrderPlaced("o1")), at(7), NOW).envelope();
+                    SagaInput.event(new OrderPlaced("o1")), at(7), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW).envelope();
 
             SagaEnvelope<OrderState> rebased = SagaExecutionSupport.rebased(computed, after);
 
@@ -760,6 +785,18 @@ class SagaReleaseSupportTest {
         }
 
         @Test
+        void writes_nothing_when_the_same_pending_input_fails_again_within_its_budget() {
+            SagaEnvelope<OrderState> base = quarantined(releasingOn(9), 3L);
+            SagaEnvelope<OrderState> releasing = new SagaEnvelope<>(base.sagaId(), base.state(), base.status(), base.version(), base.timers(), base.streamWatermarks(),
+                    base.positionWatermark(), base.createdAt(), base.updatedAt(), base.completedAt(), base.currentStep(), base.started(), base.failure(),
+                    Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(9L)), List.of(), Map.of(9L, NOW.minusSeconds(1)))), base.quarantineSkipCount());
+
+            FailureRecord<OrderState> record = failOn(releasing, at(9));
+
+            assertThat(record).isNull();
+        }
+
+        @Test
         void throws_when_the_event_has_no_stream_id_and_version_since_a_release_never_replays_one() {
             SagaEnvelope<OrderState> releasing = quarantined(releasingOn(9), 3L);
 
@@ -821,6 +858,63 @@ class SagaReleaseSupportTest {
     }
 
     @Nested
+    class AReleaseThatQuarantinesAgainAfterApplyingAHighVersion {
+
+        private static final long HIGH = 3_000;
+        private static final int WINDOW = 2;
+
+        // Version 2 of the type was applied before the quarantine. The release then replays version 3000 of the same type
+        private SagaEnvelope<OrderState> releasingAfterReplaying(long version) {
+            SagaEnvelope<OrderState> base = quarantined(releasingOn(9), 3L);
+            SagaEnvelope<OrderState> current = new SagaEnvelope<>(base.sagaId(), base.state(), base.status(), base.version(), base.timers(), base.streamWatermarks(),
+                    base.positionWatermark(), base.createdAt(), base.updatedAt(), base.completedAt(), base.currentStep(), base.started(), base.failure(),
+                    Map.of("o1", new StreamMarks(1, Map.of("", new TypeMark(2, List.of(), 0)), Map.of(), List.of(), Map.of())), base.quarantineSkipCount());
+            return SagaExecutionSupport.replay(saga(), "o1", current, new SkippedInput(0, "o1@" + version), SagaInput.event(new OrderPlaced("o1")), at(version), NOW, WINDOW).envelope();
+        }
+
+        private static TypeMark typeMark(SagaEnvelope<OrderState> envelope) {
+            return envelope.streamMarks().get("o1").byType().get("");
+        }
+
+        private static Outcome<OrderState, OrderCommand> releaseAndReplayLowVersion(SagaEnvelope<OrderState> quarantinedAgain) {
+            SagaEnvelope<OrderState> releasing = SagaExecutionSupport.startRelease(quarantinedAgain, NOW);
+            return SagaExecutionSupport.replay(saga(), "o1", releasing, new SkippedInput(1, "o1@5"), SagaInput.event(new OrderPlaced("o1")), at(5), NOW, WINDOW);
+        }
+
+        @Test
+        void keeps_the_applied_version_and_the_horizon_when_the_record_is_missing_and_applies_a_record_far_below_the_mark_in_the_next_release() {
+            SagaEnvelope<OrderState> releasing = releasingAfterReplaying(HIGH);
+
+            SagaEnvelope<OrderState> again = SagaExecutionSupport.withMissingInputQuarantined(releasing, "o1@5", NOW);
+
+            Outcome<OrderState, OrderCommand> next = releaseAndReplayLowVersion(again);
+            assertAll(
+                    () -> assertThat(typeMark(again).mark()).as("mark").isEqualTo(HIGH),
+                    () -> assertThat(typeMark(again).applied()).as("applied").containsExactly(2L),
+                    () -> assertThat(typeMark(again).horizon()).as("horizon").isEqualTo(0),
+                    () -> assertThat(next.processed()).as("the record far below the mark is applied").isTrue()
+            );
+        }
+
+        @Test
+        void keeps_the_applied_version_and_the_horizon_when_the_failure_runs_out_of_its_budget_and_applies_a_record_far_below_the_mark_in_the_next_release() {
+            SagaEnvelope<OrderState> releasing = releasingAfterReplaying(HIGH);
+
+            FailureRecord<OrderState> record = SagaExecutionSupport.onReleaseFailure(releasing, "o1@5", at(5), new IllegalStateException("again"), NOW, Duration.ZERO, WINDOW);
+
+            SagaEnvelope<OrderState> again = record.envelope();
+            Outcome<OrderState, OrderCommand> next = releaseAndReplayLowVersion(again);
+            assertAll(
+                    () -> assertThat(record.quarantined()).as("quarantined").isTrue(),
+                    () -> assertThat(typeMark(again).mark()).as("mark").isEqualTo(HIGH),
+                    () -> assertThat(typeMark(again).applied()).as("applied").containsExactly(2L),
+                    () -> assertThat(typeMark(again).horizon()).as("horizon").isEqualTo(0),
+                    () -> assertThat(next.processed()).as("the record far below the mark is applied").isTrue()
+            );
+        }
+    }
+
+    @Nested
     class ClassifyingAnInputTheFailureRecordNames {
 
         private static final String TYPE = "org.example.PaymentReserved";
@@ -870,7 +964,7 @@ class SagaReleaseSupportTest {
             SagaEnvelope<OrderState> releasing = withFailureOn(SagaStatus.QUARANTINED, failureOnS10(NOW));
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.replay(saga(), "o1", releasing, new SkippedInput(0, "S@10"),
-                    SagaInput.event(new PaymentReserved("o1")), s10(), NOW);
+                    SagaInput.event(new PaymentReserved("o1")), s10(), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
 
             assertAll(
                     () -> assertThat(outcome.processed()).isFalse(),
