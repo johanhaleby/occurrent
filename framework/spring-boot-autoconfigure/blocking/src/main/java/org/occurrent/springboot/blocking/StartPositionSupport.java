@@ -329,7 +329,7 @@ class StartPositionSupport {
                                          "and lose the events between the two positions. The subscription is therefore " +
                                          "refused before anything is written. Use a CheckpointStorage that evaluates " +
                                          "CheckpointWriteCondition.ifAbsent() and answers true from " +
-                                         "evaluatesWriteConditionsFor(String), such as the storages Occurrent ships, or set " +
+                                         "evaluatesWriteConditionsFor(String) for this subscription, or set " +
                                          "occurrent.subscription.start-when-first-position-can-be-overwritten=true to start " +
                                          "anyway, accepting that loss.");
     }

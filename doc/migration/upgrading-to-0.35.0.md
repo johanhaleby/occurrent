@@ -186,7 +186,8 @@ other sections compile fine and behave differently, so read them first.
 
 - [A first position a checkpoint storage can only write unconditionally is refused](#a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused).
   A `CheckpointStorage` bean of your own that answers `false` from `evaluatesWriteConditionsFor` fails startup when the
-  starter would store a live start as a subscription's first checkpoint. Compiles unchanged.
+  starter would store a live start as a subscription's first checkpoint, or fails the creation of a handler bean built
+  after startup. Compiles unchanged.
 
 - [A catch-up needs the event store itself](#a-catch-up-needs-the-event-store-itself). A context whose
   `EventStoreQueries`, event store or `DcbEventStore` bean is a decorator, a mock or your own implementation fails at
@@ -434,14 +435,15 @@ Boot starters store a live start as the first checkpoint the same way.
 
 An application with a `CheckpointStorage` of its own that answers `false` from `evaluatesWriteConditionsFor(String)`,
 which every implementation does unless it overrides `evaluatesWriteConditions()` or `evaluatesWriteConditionsFor`.
-The `AddCheckpointStorageConditionalWriteStubs` recipe from the 0.33.0 upgrade adds stubs that keep
-`evaluatesWriteConditions()` at `false`, so a storage it migrated is affected until it implements the conditions.
+The `UpgradeToOccurrent_0_33` recipe from the 0.33.0 upgrade, through its `AddCheckpointStorageConditionalWriteStubs`
+step, adds stubs that keep `evaluatesWriteConditions()` at `false`, so a storage it migrated is affected until it implements the conditions.
 
 Every `CheckpointStorage` Occurrent ships answers `true` apart from `SpringRedisCheckpointStorage` for two kinds of
-id. Its `save(..)` refuses an id in the reserved namespace of its version key whatever the condition, so such a
-subscription never started and now fails before the write instead. In Cluster-safe mode it also answers `false` for
-an id Redis Cluster can't put in one slot with its version key, such as `{}orders`, and its javadoc says no id an
-application would choose is built like that by accident.
+id. In Cluster-safe mode it answers `false` for an id Redis Cluster can't put in one slot with its version key, such
+as `{}orders`, and its javadoc says no id an application would choose is built like that by accident. It also answers
+`false` for an id in the reserved namespace of its version key, but its `read(..)`, `exists(..)` and `save(..)` refuse
+such an id with `IllegalArgumentException`. Occurrent reads the stored checkpoint before it decides on a first
+position, so a subscription with such an id fails on that read, as it did in 0.34.0.
 
 ### What changes
 
@@ -455,6 +457,7 @@ From 0.35.0 the subscription is refused with `IllegalStateException` before anyt
   recorded it. Those are the places it refuses a subscription that has no start position to record.
 * `ReactorDurableSubscriptionModel` signals it on `Subscription.waitUntilStarted()`.
 * Both Spring Boot starters fail startup when they would store a live start as the subscription's first checkpoint.
+  For a handler on a bean built after startup, the creation of that bean fails instead.
 
 A subscription that records no first position isn't refused, whatever the storage answers. That covers a checkpoint
 already stored, a `StartAt` of your own that doesn't resolve to the model default, `StartAt.now()` and a dynamic one
@@ -472,13 +475,14 @@ To keep the 0.34.0 behaviour and accept the loss, configure
 new DurableSubscriptionModelConfig(EveryN.everyEvent()).startWhenFirstPositionCanBeOverwritten(true)
 ```
 
-or the same method on `ReactorDurableSubscriptionModelConfig`, or set
+or the same method on `ReactorDurableSubscriptionModelConfig`. With a Spring Boot starter, set
 
 ```properties
 occurrent.subscription.start-when-first-position-can-be-overwritten=true
 ```
 
-with a Spring Boot starter. There is no OpenRewrite recipe for this. See
+instead. The starter reads only the property before it stores a first checkpoint, so the config method alone doesn't
+stop that refusal. There is no OpenRewrite recipe for this. See
 [ADR 184](../architecture/decisions/0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md).
 
 ## A capability that acts on a subscription is not found past a wrapper

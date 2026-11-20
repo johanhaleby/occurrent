@@ -428,7 +428,10 @@ public class OccurrentProperties {
          * unconditionally, and then the two nodes can overwrite each other's first position and lose the events between
          * the two positions for good. Starting anyway writes it unconditionally, with a warning. The default is
          * {@code false}, which refuses such a subscription when it is created, before anything is written for it. Every
-         * {@code CheckpointStorage} Occurrent ships evaluates write conditions, so only one of your own is affected.
+         * {@code CheckpointStorage} Occurrent ships evaluates write conditions, apart from
+         * {@code SpringRedisCheckpointStorage} in Cluster-safe mode for an id Redis Cluster can't put in one slot with its
+         * version key, and for an id in the reserved namespace of its version key, which it refuses for every read and
+         * write anyway.
          */
         private boolean startWhenFirstPositionCanBeOverwritten = false;
 

@@ -96,13 +96,16 @@ public class DurableSubscriptionModelConfig {
     /**
      * Whether a subscription whose first position would be recorded in a {@code CheckpointStorage} that answers
      * {@code false} from {@code evaluatesWriteConditionsFor(String)} starts anyway instead of being refused. A first
-     * position is recorded for a subscription that asks for the model default with no checkpoint stored. It is written
-     * with {@code CheckpointWriteCondition.ifAbsent()}, so of two nodes recording one at the same moment only one write
-     * is stored, and a storage that can't evaluate that condition could only write it unconditionally. Starting anyway
+     * position is recorded for a subscription that asks for the model default with no checkpoint stored, and for one
+     * whose {@code StartAt.dynamic(..)} function answers {@code StartAt.subscriptionModelDefault()}. It is written with
+     * {@code CheckpointWriteCondition.ifAbsent()}, so of two nodes recording one at the same moment only one write is
+     * stored, and a storage that can't evaluate that condition could only write it unconditionally. Starting anyway
      * writes it unconditionally, with a warning, so the two nodes can overwrite each other's first position and lose the
      * events between the two positions for good. The default is {@code false}, which refuses such a subscription with
      * {@code IllegalStateException} before anything is written for it. Every storage Occurrent ships evaluates write
-     * conditions.
+     * conditions, apart from {@code SpringRedisCheckpointStorage} in Cluster-safe mode for an id
+     * Redis Cluster can't put in one slot with its version key, and for an id in the reserved namespace of its version
+     * key, which it refuses for every read and write anyway.
      *
      * @param startWhenFirstPositionCanBeOverwritten {@code true} to start anyway, accepting that loss
      * @return A new instance of {@code DurableSubscriptionModelConfig}

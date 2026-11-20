@@ -85,7 +85,8 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * and {@link #cancelSubscription(String)} tries the cancel again and keeps the checkpoint stored for the id, which the
  * held subscription itself, an earlier run or another node may have written. A subscription with a
  * checkpoint already stored starts from that checkpoint and is never refused this way, and one subscribing with
- * a {@link StartAt} of its own records no position and is never refused either. This is the same answer
+ * a {@link StartAt} of its own that doesn't resolve to the model default records no position and is never refused
+ * either. This is the same answer
  * {@link ManualStartSubscriptionModel} gives for a {@code null} position source and the same one the reactor
  * {@code ReactorDurableSubscriptionModel} gives for the same registration.
  * {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turns the refusal into a
@@ -96,8 +97,11 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} could only write it unconditionally, and then the two
  * nodes could overwrite each other's and lose the events between the two positions. Such a subscription is refused with
  * {@link IllegalStateException} where a subscription with no position to record is, before anything is written for it.
- * A subscription with a checkpoint already stored, or with a {@link StartAt} of its own, records no first position and
- * is never refused this way. Every storage Occurrent ships evaluates write conditions.
+ * A subscription with a checkpoint already stored, or with a {@link StartAt} of its own that doesn't resolve to the
+ * model default, records no first position and is never refused this way. Every storage Occurrent ships evaluates
+ * write conditions, apart from {@code SpringRedisCheckpointStorage} in Cluster-safe mode for an id
+ * Redis Cluster can't put in one slot with its version key, and for an id in the reserved namespace of its version
+ * key, which it refuses for every read and write anyway.
  * {@link DurableSubscriptionModelConfig#startWhenFirstPositionCanBeOverwritten(boolean)} writes the first position
  * unconditionally instead, with a warning, accepting that loss.
  * <p>
@@ -462,12 +466,18 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      *                               {@link CheckpointAwareSubscriptionModel#globalCheckpoint()} answers
      *                               {@code null}, which is how it reports a problem it cannot resolve. The
      *                               subscription the wrapped model accepted is cancelled, so subscribe again once the
-     *                               model can answer, pass a {@link StartAt} of your own, which records no position
+     *                               model can answer, pass a {@link StartAt} of your own that doesn't resolve to the
+     *                               model default, which records no position
      *                               and makes no resume promise, or configure
      *                               {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)}.
      *                               When that cancel throws too, the exception has a suppressed exception saying the
      *                               wrapped model may still hold the id, and {@link #cancelSubscription(String)} tries
-     *                               the cancel again and keeps the checkpoint stored for the id.
+     *                               the cancel again and keeps the checkpoint stored for the id. Thrown the same way,
+     *                               and with the same cancel, when {@code startAt} resolves to the model default, no
+     *                               checkpoint is stored for {@code subscriptionId}, and the storage answers
+     *                               {@code false} from {@link CheckpointStorage#evaluatesWriteConditionsFor(String)},
+     *                               unless {@link DurableSubscriptionModelConfig#startWhenFirstPositionCanBeOverwritten(boolean)}
+     *                               is set.
      */
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
@@ -758,7 +768,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                          "occurrent.subscription.start-when-no-start-position-can-be-recorded=true when " +
                                          "using the Spring Boot starter. A subscription with a checkpoint already stored " +
                                          "starts from that checkpoint and is never refused this way. Subscribing with a " +
-                                         "StartAt of your own records no position and makes no such promise.");
+                                         "StartAt of your own that doesn't resolve to the model default records no " +
+                                         "position and makes no such promise.");
     }
 
     // Thrown where noStartPositionCanBeRecorded is, before anything is written for the subscription, so it reaches the
@@ -771,13 +782,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                          "then overwrite each other's and lose the events between the two positions. " +
                                          "The subscription is therefore refused before anything is written. Use a " +
                                          "storage that evaluates CheckpointWriteCondition.ifAbsent() and answers true " +
-                                         "from evaluatesWriteConditionsFor(String), such as the storages Occurrent " +
-                                         "ships. To start anyway, accepting that loss, configure " +
+                                         "from evaluatesWriteConditionsFor(String) for this subscription. To start " +
+                                         "anyway, accepting that loss, configure " +
                                          "DurableSubscriptionModelConfig.startWhenFirstPositionCanBeOverwritten(true), " +
                                          "or set occurrent.subscription.start-when-first-position-can-be-overwritten=true " +
                                          "when using the Spring Boot starter. A subscription with a checkpoint already " +
-                                         "stored, or with a StartAt of your own, records no first position and is never " +
-                                         "refused this way.");
+                                         "stored, or with a StartAt of your own that doesn't resolve to the model " +
+                                         "default, records no first position and is never refused this way.");
     }
 
     // Pinned with ifAbsent(), the same protocol ManualStartSubscriptionModel and ReactorDurableSubscriptionModel

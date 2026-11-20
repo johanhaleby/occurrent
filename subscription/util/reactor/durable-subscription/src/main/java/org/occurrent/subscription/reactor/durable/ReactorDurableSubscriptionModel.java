@@ -117,7 +117,9 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * from {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} cannot be written to conditionally, so two nodes
  * recording a first position at the same moment could overwrite each other's and lose the events between the two
  * positions. That registration is refused the same way, with {@link IllegalStateException}, before anything is written
- * for it. Every storage Occurrent ships evaluates write conditions.
+ * for it. Every storage Occurrent ships evaluates write conditions, apart from {@code SpringRedisCheckpointStorage} in
+ * Cluster-safe mode for an id Redis Cluster can't put in one slot with its version key, and for an id in the reserved
+ * namespace of its version key, which it refuses for every read and write anyway.
  * {@link ReactorDurableSubscriptionModelConfig#startWhenFirstPositionCanBeOverwritten(boolean)} writes the first
  * position unconditionally instead, logged at {@code WARN}, accepting that loss. See ADR 89. A {@code save(..)} for that first
  * position answering nothing, rather than the checkpoint it wrote, refuses the registration the same way, with
@@ -1984,19 +1986,22 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // No original throwable to carry here, since answering nothing is how the wrapped model reports a problem it
     // cannot resolve, so this is what names the subscription and the way past it. Built at capturePositionNow's read
     // failure too, before storage is asked, so it cannot claim storage holds nothing: a checkpoint stored by then, or
-    // a start position of its own, still lets the subscription start despite this failure, and only the caller
+    // a start position of its own that doesn't resolve to the model default, still lets the subscription start
+    // despite this failure, and only the caller
     // consulting storage afterwards, in refusalOnceNothingIsStored or resolveStartAt, settles whether it is refused.
     private IllegalStateException positionSourceAnsweredNothing(String subscriptionId) {
         return new IllegalStateException("The wrapped subscription model " + subscription.getClass().getName() +
                                          " answered nothing when asked for the current position for subscription " +
                                          subscriptionId + ", which is how it reports a problem it cannot resolve. A " +
-                                         "checkpoint already stored for it, or a start position of its own, still lets " +
+                                         "checkpoint already stored for it, or a start position of its own that doesn't " +
+                                         "resolve to the model default, still lets " +
                                          "it start despite this failure; only when neither holds is the registration " +
                                          "refused rather than started from wherever the feed has reached by then, " +
                                          "which would skip whatever was written while it waited. Starting it is what " +
                                          "releases the id, so register it again after that, or after " +
                                          "cancelSubscription(String), once the model can answer. Subscribing with a " +
-                                         "StartAt of your own records no position and carries no such guarantee. To " +
+                                         "StartAt of your own that doesn't resolve to the model default records no " +
+                                         "position and carries no such guarantee. To " +
                                          "start anyway, accepting that loss window, configure " +
                                          "ReactorDurableSubscriptionModelConfig.startWhenNoStartPositionCanBeRecorded(true), " +
                                          "or set occurrent.subscription.start-when-no-start-position-can-be-recorded=true " +
@@ -2011,8 +2016,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                          "then overwrite each other's and lose the events between the two positions. " +
                                          "The subscription is therefore refused before anything is written. Use a " +
                                          "storage that evaluates CheckpointWriteCondition.ifAbsent() and answers true " +
-                                         "from evaluatesWriteConditionsFor(String), such as the storages Occurrent " +
-                                         "ships. To start anyway, accepting that loss, configure " +
+                                         "from evaluatesWriteConditionsFor(String) for this subscription. To start " +
+                                         "anyway, accepting that loss, configure " +
                                          "ReactorDurableSubscriptionModelConfig.startWhenFirstPositionCanBeOverwritten(true), " +
                                          "or set occurrent.subscription.start-when-first-position-can-be-overwritten=true " +
                                          "when using the Spring Boot starter. A subscription with a checkpoint already " +

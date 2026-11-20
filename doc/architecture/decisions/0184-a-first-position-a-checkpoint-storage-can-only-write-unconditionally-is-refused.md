@@ -27,7 +27,8 @@ each other's and lose the events between the two positions for good.
 
 ADR 89 kept that write because refusing would fail every application whose own storage never overrode the method.
 `AGENTS.md` counts a loss window that is narrow, documented and warn-logged as a loss all the same, and
-`ManualStartSubscriptionModel` already refuses such a storage when it is built.
+`ManualStartSubscriptionModel` already refuses a storage that answers `false` from `evaluatesWriteConditions()` when it
+is built.
 
 ## Decision
 
@@ -38,7 +39,8 @@ refused with `IllegalStateException` before anything is written for the subscrip
   `subscribe(..)` or from the evaluation of the start position that would have recorded it.
 * `ReactorDurableSubscriptionModel` refuses it on `Subscription.waitUntilStarted()`, the way it refuses a first position
   that lost a race it can't order.
-* Both Spring Boot starters refuse it when they would store the live start as the first checkpoint, so the application fails to start.
+* Both Spring Boot starters refuse it when they would store the live start as the first checkpoint, so the application
+  fails to start. For a handler on a bean built after startup, the creation of that bean fails instead.
 
 `startWhenFirstPositionCanBeOverwritten(boolean)` on `DurableSubscriptionModelConfig` and
 `ReactorDurableSubscriptionModelConfig`, and the property `occurrent.subscription.start-when-first-position-can-be-overwritten`,
@@ -51,16 +53,17 @@ dynamic one answering it included, and a starter subscription at `NOW` with `res
 
 ## Consequences
 
-Every storage Occurrent ships answers `true` apart from `SpringRedisCheckpointStorage` for two kinds of id. Its
-`save(..)` refuses an id in the reserved namespace of its version key whatever the condition, so such a subscription
-never got a first position written and is now refused before the write instead. In Cluster-safe mode it also answers
-`false` for an id Redis Cluster can't put in one slot with its version key, such as `{}orders`, which got the
-unconditional write and is now refused unless the opt-in is set. Its javadoc says no id an application would choose is
-built like that by accident.
+Every storage Occurrent ships answers `true` apart from `SpringRedisCheckpointStorage` for two kinds of id. In
+Cluster-safe mode it answers `false` for an id Redis Cluster can't put in one slot with its version key, such as
+`{}orders`, which got the unconditional write and is now refused unless the opt-in is set. Its javadoc says no id an
+application would choose is built like that by accident. It also answers `false` for an id in the reserved namespace of
+its version key, but its `read(..)`, `exists(..)` and `save(..)` refuse such an id with `IllegalArgumentException`, and
+the read comes first, so nothing changes for it.
 
 An application with a storage of its own that keeps the interface default fails at its first subscribe of a new
 subscription, or at startup with a starter. The way out is to evaluate `ifAbsent()` and answer `true`, or to set the
-opt-in and accept the loss. The `AddCheckpointStorageConditionalWriteStubs` recipe adds stubs that keep
+opt-in and accept the loss. The `UpgradeToOccurrent_0_33` recipe, through its `AddCheckpointStorageConditionalWriteStubs`
+step, adds stubs that keep
 `evaluatesWriteConditions()` at `false`, so a storage it migrated is refused too until it implements the condition.
 
 ## Alternatives considered
