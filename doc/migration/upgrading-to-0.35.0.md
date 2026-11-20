@@ -2923,8 +2923,9 @@ before the action returned. A call from the action of another model's subscripti
   once the action has returned and no other of the three calls is under way, in the order the calls came. It doesn't
   run the call once a `shutdown()` has begun, and logs an `ERROR` naming the model when the call throws.
 * After a `stop()` from a live call's action, the wrapped model can go on delivering live events to the action until
-  the lifecycle thread runs the `stop()`. In 0.34.0 the wrapped model had stopped by the time `stop()` returned. Those
-  events reach the action as any other live event does.
+  the lifecycle thread runs the `stop()`. In 0.34.0 the wrapped model had stopped by the time `stop()` returned. The
+  tests of this release run these calls over test models of the wrapped model, not over the MongoDB subscription
+  models the Spring Boot starter sets up.
 * A `start(..)`, `stop()` or `shutdown()` from any other thread, made while a call a live call's action handed over
   hasn't run yet, waits for it and takes effect after it. So when the action signals another thread to call `start(..)`
   after its own `stop()`, the model ends up started.
@@ -2933,8 +2934,10 @@ before the action returned. A call from the action of another model's subscripti
 * `shutdown()` from any of those threads doesn't throw and doesn't wait. It forgets the catch-ups at once, and returns
   before the wrapped model is shut down. The lifecycle thread shuts the wrapped model down once a live call's action the
   `shutdown()` came from has returned and no `start(..)` or `stop()` is under way, and logs an `ERROR` naming the model
-  when that throws. A `start(..)` under way resumes no subscription after the `shutdown()` began. The wrapped model is
-  shut down once, by whichever `shutdown()` gets there first.
+  when that throws. A `start(..)` under way resumes no subscription after the `shutdown()` began. Once the wrapped
+  model's `shutdown()` has returned normally, a later `shutdown()` doesn't call it again. After one that threw, the next
+  `shutdown()` calls it again. A `start(..)` after a `shutdown()` calls the wrapped model's `start(..)`, as in 0.34.0, and
+  the next `shutdown()` calls its `shutdown()` again. In 0.34.0 every `shutdown()` called the wrapped model's `shutdown()`.
 * Elsewhere, each of `start(..)`, `stop()` and `shutdown()` waits, with no deadline, until one already under way on
   the model has returned.
 

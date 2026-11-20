@@ -340,7 +340,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 Thread.ofPlatform().daemon().name("occurrent-catchup-lifecycle").factory());
         // The calls given to lifecycleThread that haven't returned yet
         private final AtomicInteger callsOnTheLifecycleThread = new AtomicInteger();
-        // The models whose live delegate a shutdown() has shut down, or begun to, so it is shut down once
+        // The models whose live delegate a shutdown() has shut down, with no start(..) of the model since, so a later
+        // shutdown() doesn't shut it down again
         private final Set<Object> liveDelegateShutDown = ConcurrentHashMap.newKeySet();
     }
 
@@ -923,6 +924,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             final boolean resumeEachHere;
             try {
                 resumeEachHere = resumeSubscriptionsAutomatically && anyResumeReplays();
+                startingTheLiveDelegate(this);
                 getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && !resumeEachHere);
             } catch (Throwable e) {
                 undoStart(attempt, attempt.wasStopped() && runsAfterFailedStart(getWrappedSubscriptionModel(), e), e);
@@ -4259,6 +4261,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
+    // Called by a start(..) of model right before it calls the live delegate's start(..), so the next shutdown() of
+    // model shuts the live delegate down again, also after a start that threw and may have left it running
+    void startingTheLiveDelegate(Object model) {
+        liveDelegateShutDown.remove(model);
+    }
+
     /**
      * Runs a {@code shutdown()} of {@code model} in turn with the {@link #start(boolean)}, {@link #stop()} and
      * {@code shutdown()} calls of this model and of every other child of the same dispatcher. {@code forgetTheCatchups}
@@ -4272,12 +4280,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * holding the lock resumes nothing once it finds the model flagged as shutting down after the live delegate's start.
      * From any other thread it runs after the calls handed to the lifecycle thread, as {@link #runInTurn} describes.
      * <p>
-     * The live delegate of {@code model} is shut down once, by whichever {@code shutdown()} gets there first.
+     * Once the live delegate's {@code shutdown()} has returned normally, a later {@code shutdown()} of {@code model}
+     * doesn't call it again, until a {@code start(..)} of {@code model} has called the live delegate's {@code start(..)}.
+     * One that threw left the live delegate running, so the next {@code shutdown()} calls it again. The calls that check
+     * and mark this run alone, as {@link #runInTurn} describes, so two never call it at once.
      */
     void shutDownInTurn(Object model, Runnable forgetTheCatchups, Runnable shutDownTheLiveDelegate) {
         Runnable shutDownTheLiveDelegateOnce = () -> {
-            if (liveDelegateShutDown.add(model)) {
+            if (!liveDelegateShutDown.contains(model)) {
                 shutDownTheLiveDelegate.run();
+                liveDelegateShutDown.add(model);
             }
         };
         LiveCallOnThread liveCall = outermostLiveCallOnTheCallingThread();

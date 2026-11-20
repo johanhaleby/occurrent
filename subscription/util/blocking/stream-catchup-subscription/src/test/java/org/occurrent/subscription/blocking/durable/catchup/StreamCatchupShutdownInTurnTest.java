@@ -119,6 +119,7 @@ class StreamCatchupShutdownInTurnTest {
     @AfterEach
     void release_everything_and_shut_down() {
         try {
+            live.shutdownThrows = null;
             gates.forEach(Gate::release);
             calls.forEach(CallOnAThread::awaitEnded);
         } finally {
@@ -296,6 +297,63 @@ class StreamCatchupShutdownInTurnTest {
 
         // Then
         assertThat(live.events()).as("what the live delegate was asked").containsExactly(SHUTDOWN);
+    }
+
+    @Test
+    @Timeout(40)
+    void a_shutdown_after_a_shutdown_whose_call_to_the_live_delegate_threw_calls_the_live_delegate_again() {
+        // Given
+        RuntimeException failure = new IllegalStateException("the live delegate failed");
+        live.shutdownThrows = failure;
+        Throwable thrownByTheFirstShutdown = catchThrowable(model::shutdown);
+        live.shutdownThrows = null;
+
+        // When
+        model.shutdown();
+
+        // Then
+        assertThat(thrownByTheFirstShutdown).as("what the first shutdown threw").isSameAs(failure);
+        assertThat(live.shutdownCalls()).as("the calls to the live delegate's shutdown(), where the first one threw").isEqualTo(2);
+        assertThat(live.events()).as("what the live delegate was asked, where only the second shutdown returned").containsExactly(SHUTDOWN);
+    }
+
+    @Test
+    @Timeout(40)
+    void a_shutdown_from_another_thread_after_a_shutdown_from_a_live_action_whose_call_to_the_live_delegate_threw_calls_the_live_delegate_again() throws InterruptedException {
+        // Given
+        live.shutdownThrows = new IllegalStateException("the live delegate failed");
+        CountDownLatch theShutdownReturned = new CountDownLatch(1);
+        AtomicReference<@Nullable Throwable> thrownFromTheAction = new AtomicReference<>();
+        model.subscribe(ID, null, StartAt.now(), event -> {
+            thrownFromTheAction.set(catchThrowable(model::shutdown));
+            theShutdownReturned.countDown();
+        });
+        run(() -> live.callTheKeptAction(ID)).awaitEnded();
+        assertThat(theShutdownReturned.await(10, TimeUnit.SECONDS)).as("the shutdown from the action returned or threw").isTrue();
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.shutdownCalls()).as("the calls to the live delegate's shutdown(), once the one left to the lifecycle thread has run and threw").isEqualTo(1));
+        live.shutdownThrows = null;
+
+        // When
+        model.shutdown();
+
+        // Then
+        assertThat(thrownFromTheAction.get()).as("what the shutdown from the action threw, which is left to run once the action has returned").isNull();
+        assertThat(live.shutdownCalls()).as("the calls to the live delegate's shutdown(), where the one left to the lifecycle thread threw").isEqualTo(2);
+        assertThat(live.events()).as("what the live delegate was asked, where only the shutdown from the other thread returned").containsExactly(SHUTDOWN);
+    }
+
+    @Test
+    @Timeout(40)
+    void a_shutdown_after_a_start_that_came_after_a_shutdown_calls_the_live_delegate_again() {
+        // Given
+        model.shutdown();
+        model.start(true);
+
+        // When
+        model.shutdown();
+
+        // Then
+        assertThat(live.events()).as("what the live delegate was asked").containsExactly(SHUTDOWN, START_RETURNED, SHUTDOWN);
     }
 
     private Gate newGate() {

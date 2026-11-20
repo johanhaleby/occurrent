@@ -36,6 +36,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 /**
@@ -58,6 +59,7 @@ final class GatedLiveSubscriptionModel implements CheckpointAwareSubscriptionMod
     private final List<String> events = new CopyOnWriteArrayList<>();
     private final Duration stopWaitsForActionsFor;
     private final AtomicBoolean stopTimedOut = new AtomicBoolean();
+    private final AtomicInteger shutdownCalls = new AtomicInteger();
     private volatile boolean runs = true;
     volatile @Nullable Gate startGate;
     volatile @Nullable Gate stopGate;
@@ -72,6 +74,11 @@ final class GatedLiveSubscriptionModel implements CheckpointAwareSubscriptionMod
 
     List<String> events() {
         return events;
+    }
+
+    // Every call to shutdown(), also one that threw, counted once it has read what it was told to throw
+    int shutdownCalls() {
+        return shutdownCalls.get();
     }
 
     boolean stopGaveUpWaitingForAnAction() {
@@ -195,7 +202,9 @@ final class GatedLiveSubscriptionModel implements CheckpointAwareSubscriptionMod
     @Override
     public void shutdown() {
         pass(shutdownGate);
-        throwIfTold(shutdownThrows);
+        RuntimeException failure = shutdownThrows;
+        shutdownCalls.incrementAndGet();
+        throwIfTold(failure);
         if (stopAndShutdownWaitForTheCallersOwnAction) {
             waitForTheKeptActions();
         }

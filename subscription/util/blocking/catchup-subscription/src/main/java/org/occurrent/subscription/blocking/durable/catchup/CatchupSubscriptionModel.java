@@ -382,6 +382,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 replaysOnResume = resumeSubscriptionsAutomatically
                         ? presentCatchupModels().filter(AbstractCatchupSubscriptionModel::anyResumeReplays).findFirst().orElse(null)
                         : null;
+                anyCatchupModel().startingTheLiveDelegate(this);
                 getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && replaysOnResume == null);
             } catch (Throwable e) {
                 boolean liveDelegateRuns = attempts.values().stream().anyMatch(AbstractCatchupSubscriptionModel.StartAttempt::wasStopped)

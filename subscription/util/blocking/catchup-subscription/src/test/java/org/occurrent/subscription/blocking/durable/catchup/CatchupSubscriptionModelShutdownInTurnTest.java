@@ -153,6 +153,20 @@ class CatchupSubscriptionModelShutdownInTurnTest {
         assertThat(delivered).as("the events the parked replay delivered, which a start after the shutdown doesn't run again").containsExactly("1");
     }
 
+    @Test
+    @Timeout(40)
+    void a_shutdown_after_a_start_that_came_after_a_shutdown_calls_the_live_delegate_again() {
+        // Given
+        model.shutdown();
+        model.start(true);
+
+        // When
+        model.shutdown();
+
+        // Then
+        assertThat(live.events()).as("what the live delegate was asked").containsExactly(SHUTDOWN, START_RETURNED, SHUTDOWN);
+    }
+
     private CountDownLatch holdStarts() {
         CountDownLatch gate = new CountDownLatch(1);
         gates.add(gate);

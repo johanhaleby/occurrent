@@ -215,7 +215,9 @@ or `stop()` under way may be waiting for that same thread to return from the act
 runs in turn. It forgets the catch-ups at once and flags the model as shutting down, and hands the wrapped model's
 `shutdown()` to the lifecycle thread, which runs it once a live call's action the `shutdown()` came from has returned
 and the lock is free. A `start(..)` under way that finds the flag set after the wrapped model's `start(..)` resumes
-nothing. The wrapped model's `shutdown()` runs once, for whichever `shutdown()` gets there first.
+nothing. Once the wrapped model's `shutdown()` has returned normally, a later `shutdown()` doesn't call it again. One
+that threw left the wrapped model running, so the next `shutdown()` calls it again. A `start(..)` after a `shutdown()`
+calls the wrapped model's `start(..)`, as 0.34.0 did, and the next `shutdown()` calls its `shutdown()` again.
 
 No thread waits for itself under these rules. A replay thread and a thread holding a claim never take the model lock,
 since they throw or hand the call to the lifecycle thread. A thread running a live call's action doesn't take it for a
