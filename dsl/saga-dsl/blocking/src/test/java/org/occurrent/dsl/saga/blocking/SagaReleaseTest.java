@@ -1254,13 +1254,13 @@ class SagaReleaseTest {
         }
 
         @Test
-        void does_not_apply_a_record_behind_the_window_again_when_the_release_that_applied_it_crashed_before_deleting_it() {
+        void applies_a_record_behind_the_window_once_when_the_release_crashes_before_the_write_that_applies_it() {
             quarantinedOnPoisonThenSkippingHighVersionsFirst();
             quarantinedAgainOnI5Missing();
             assertRecordsLeftBehindTheWindow();
             queries.restore(event("i5"));
             store.beforeNextDeleteOfARecord(() -> store.beforeNextDeleteOfARecord(() -> {
-                throw new IllegalStateException("crash after the write of i3 and before its delete");
+                throw new OutOfMemoryError("crash before the write that applies i3");
             }));
             Throwable crash = catchThrowable(() -> execution.release(ORDER));
             List<String> itemsAfterTheCrash = items();
@@ -1269,10 +1269,14 @@ class SagaReleaseTest {
             ReleaseResult result = execution.release(ORDER);
 
             assertAll(
-                    () -> assertThat(crash).hasMessageContaining("crash after the write of i3"),
-                    () -> assertThat(itemsAfterTheCrash).as("the items written before the crash").contains("i3"),
+                    () -> assertThat(crash).hasMessageContaining("crash before the write that applies i3"),
+                    () -> assertThat(itemsAfterTheCrash).as("the items written before the crash").doesNotContain("i3"),
                     () -> assertThat(recordsAfterTheCrash).as("the records left by the crash").contains(streamKey(event("i3"))),
-                    () -> assertEveryItemIsAppliedOnceAndTheInstanceIsReleasedWithinTheWindow(result)
+                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(items()).as("the items of the instance").containsExactlyInAnyOrder("poison", "i3", "i4", "i5", "i6", "i7"),
+                    () -> assertThat(packed()).as("commands are dispatched before the write, so the release that crashed before it dispatched i3 and the second release dispatches it again").extracting(Pack::item).containsExactlyInAnyOrder("poison", "i3", "i3", "i4", "i5", "i6", "i7"),
+                    () -> assertThat(beyondTheWindow(instance())).as("the type marks beyond the window").isEmpty()
             );
         }
     }

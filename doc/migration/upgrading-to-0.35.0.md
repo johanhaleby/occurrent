@@ -1358,11 +1358,10 @@ commits at `majority` with `j: true` and reads at read concern `snapshot`. A com
 fails after 10 seconds, or after your `timeoutMS` when it is above 0. On a client with a `timeoutMS` of 0 the commit
 waits without limit, since the driver then sends no `wtimeout` and `MongoTransactionManager` passes it no transaction
 timeout. The store retries a transaction that fails with the `TransientTransactionError` label, and commits again after
-an `UnknownTransactionCommitResult`, both with its `RetryStrategy`. With a strategy built from `RetryStrategy.retry()`,
-as the default is, the store throws any other failure of the transaction at once. A standalone server refuses the
-transaction, and with such a strategy the store throws an `IllegalStateException` on the first attempt that says it
-needs a replica set and that a single-member one is enough. A strategy implemented another way runs its own loop and
-decides what it retries, except inside a MongoDB transaction, as the next paragraph says.
+an `UnknownTransactionCommitResult`, both with its `RetryStrategy`. The store throws any other failure of the
+transaction at once, whatever the strategy retries, and that includes a strategy you implement yourself. A standalone
+server refuses the transaction, and the store throws an `IllegalStateException` on the first attempt that says it
+needs a replica set and that a single-member one is enough.
 
 Inside a MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your transaction
 instead of starting their own. In such a transaction the store sends each read and write once, whatever `RetryStrategy`

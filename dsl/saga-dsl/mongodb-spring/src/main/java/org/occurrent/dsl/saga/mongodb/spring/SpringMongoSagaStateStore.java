@@ -74,7 +74,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -123,9 +122,9 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * template's {@link MongoDatabaseFactory}. So quarantine needs a replica set or a sharded cluster, and the store throws an
  * {@link IllegalStateException} when the server refuses a transaction. Such a transaction that fails with the
  * {@code TransientTransactionError} label is run again from the start with the store's {@link RetryStrategy}, and a
- * commit that fails with the {@code UnknownTransactionCommitResult} label is committed again. With a strategy built from
- * {@link RetryStrategy#retry()}, as the default is, any other failure of such a transaction is thrown at once, and so is
- * a server's refusal of a transaction or of journaling on any call.
+ * commit that fails with the {@code UnknownTransactionCommitResult} label is committed again. Any other failure of such a
+ * transaction is thrown at once, and so is a server's refusal of a transaction or of journaling on any call, whatever
+ * the strategy retries, a {@code RetryStrategy} you implement yourself included.
  * <p>
  * Called inside a MongoDB transaction of the caller's on the same {@link MongoDatabaseFactory}, those writes join it.
  * Inside such a transaction the store sends each read and write once, and a failure reaches the caller as MongoDB
@@ -140,9 +139,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * to no session. In such a transaction each call of the store takes part in it with the store's own transaction, which
  * turns synchronization on for the call, so the call reads and writes in that transaction too. The single-document
  * writes and the scans go through the template, so a template with {@code SessionSynchronization.NEVER} sends them
- * outside a {@code MongoTransactionManager} transaction, and the store doesn't retry them there either. A
- * {@code RetryStrategy} you implement yourself runs its own loop, so once an attempt has failed inside a MongoDB
- * transaction, the store makes every later attempt throw that failure again without sending anything.
+ * outside a {@code MongoTransactionManager} transaction, and the store doesn't retry them there either, whatever a
+ * {@code RetryStrategy} you implement yourself retries.
  * <p>
  * Inside a transaction of the caller's, {@link #find} and {@link #findWithoutState} read at the transaction's snapshot,
  * which misses an instance written after the snapshot began. When the read finds no instance, the store inserts a
@@ -236,7 +234,6 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private final Class<S> stateType;
     private final boolean flowSaga;
     private final RetryStrategy retryStrategy;
-    private final RetryStrategy transactionRetry;
     private final SagaStateCodec<S> stateCodec = new SagaStateCodec<>() {
         @Override
         public Object encode(S state) {
@@ -307,12 +304,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      *                                  {@code _skipped_inputs}. Pass the {@code MongoTemplate} bean.
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter, RetryStrategy retryStrategy) {
-        Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
-        // A server that refuses the durability the store needs refuses it on every attempt, so it fails at once. So does
-        // an operation that failed inside a MongoDB transaction, which the server has aborted, see retried(..)
-        this.retryStrategy = retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer) && !inMongoTransaction());
-        // A transaction is run again only when MongoDB labels its failure transient, as the class javadoc says
-        this.transactionRetry = retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer) && hasCause(failure, SpringMongoSagaStateStore::isTransientTransactionError));
+        this.retryStrategy = Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
         if (!(mongoOperations instanceof MongoTemplate mongoTemplate)) {
             throw new IllegalArgumentException("SpringMongoSagaStateStore needs a MongoTemplate, and was given a " + mongoOperations.getClass().getName() + ". "
@@ -444,30 +436,16 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     // Outside a MongoDB transaction an operation that fails is sent again, with the store's RetryStrategy. Inside one,
     // MongoDB aborts the transaction on the server when an operation in it fails, so the same operation sent again in it
-    // fails too, and the failure goes to the caller as it was thrown. The strategy's predicate reads inMongoTransaction()
+    // fails too, and the failure goes to the caller as it was thrown. The predicate reads inMongoTransaction()
     // again after the failure, since a template with SessionSynchronization.ALWAYS starts the transaction on its first
     // operation
     private <T extends @Nullable Object> T retried(Supplier<T> operation) {
         if (inMongoTransaction()) {
             return operation.get();
         }
-        // A RetryStrategy implemented elsewhere runs its own loop, which the predicate can't reach, so once the operation
-        // has failed inside a MongoDB transaction every later attempt throws that failure again without sending anything
-        AtomicReference<@Nullable RuntimeException> failedInTransaction = new AtomicReference<>();
-        return retryStrategy.execute(() -> {
-            RuntimeException earlier = failedInTransaction.get();
-            if (earlier != null) {
-                throw earlier;
-            }
-            try {
-                return operation.get();
-            } catch (RuntimeException e) {
-                if (inMongoTransaction()) {
-                    failedInTransaction.set(e);
-                }
-                throw e;
-            }
-        });
+        // A server that refuses the durability the store needs refuses it on every attempt, so it fails at once. So does
+        // an operation that failed inside a MongoDB transaction, which the server has aborted
+        return retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer) && !inMongoTransaction(), operation);
     }
 
     // A transaction is bound to the factory, the caller's, the store's own or one a template with
@@ -754,7 +732,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 throw translated(e);
             }
         };
-        return joinsCallersTransaction ? attempt.get() : transactionRetry.execute(attempt);
+        // A transaction is run again only when MongoDB labels its failure transient, as the class javadoc says
+        return joinsCallersTransaction ? attempt.get()
+                : retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer) && hasCause(failure, SpringMongoSagaStateStore::isTransientTransactionError), attempt);
     }
 
     private MongoCollection<Document> instances(MongoDatabase database) {
@@ -799,10 +779,29 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return e;
     }
 
-    // Only a strategy built with RetryStrategy.retry() takes a predicate. One implemented elsewhere runs its own loop and
-    // retries what it retries, except an operation that failed inside a MongoDB transaction, see retried(..)
-    private static RetryStrategy retryingOnly(RetryStrategy retryStrategy, Predicate<Throwable> retryable) {
-        return retryStrategy instanceof RetryStrategy.Retry retry ? retry.mapRetryPredicate(retryIf -> retryIf.and(retryable)) : retryStrategy;
+    // Runs operation with retryStrategy and retries only a failure that retryable accepts. Any other failure is returned
+    // out of the retried call instead of thrown, and is thrown once execute(..) has returned, so a strategy implemented
+    // elsewhere, which runs its own loop and retries what it retries, cannot send the operation again
+    private static <T extends @Nullable Object> T retryingOnly(RetryStrategy retryStrategy, Predicate<Throwable> retryable, Supplier<T> operation) {
+        Attempt<T> attempt = retryStrategy.execute(() -> {
+            try {
+                return new Attempt<T>(operation.get(), null);
+            } catch (RuntimeException e) {
+                if (retryable.test(e)) {
+                    throw e;
+                }
+                return new Attempt<T>(null, e);
+            }
+        });
+        RuntimeException failure = attempt.failure();
+        if (failure != null) {
+            throw failure;
+        }
+        return attempt.result();
+    }
+
+    // What one run of a retried operation gave, its result or the failure no attempt is to retry
+    private record Attempt<T extends @Nullable Object>(@Nullable T result, @Nullable RuntimeException failure) {
     }
 
     private static boolean isTransientTransactionError(Throwable cause) {
@@ -947,11 +946,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // MongoTransactionManager.doCommit shows. MongoDB commits a transaction at most once, so a commit that took effect
     // and is sent again changes nothing. Only a transaction this store started commits here
     private static final class CommitRetryingTransactionManager extends MongoTransactionManager {
-        private final RetryStrategy commitRetry;
+        private final RetryStrategy retryStrategy;
 
         private CommitRetryingTransactionManager(MongoDatabaseFactory databaseFactory, TransactionOptions options, RetryStrategy retryStrategy) {
             super(databaseFactory, options);
-            this.commitRetry = retryingOnly(retryStrategy, failure -> hasCause(failure, CommitRetryingTransactionManager::hasUnknownCommitResult));
+            this.retryStrategy = retryStrategy;
         }
 
         private static boolean hasUnknownCommitResult(Throwable cause) {
@@ -960,7 +959,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
         @Override
         protected void doCommit(MongoTransactionObject transactionObject) {
-            commitRetry.execute(transactionObject::commitTransaction);
+            retryingOnly(retryStrategy, failure -> hasCause(failure, CommitRetryingTransactionManager::hasUnknownCommitResult), () -> {
+                transactionObject.commitTransaction();
+                return null;
+            });
         }
     }
 

@@ -115,10 +115,11 @@ something a read did not find, and each reads again where nothing is missed:
 A transaction aborted with the `TransientTransactionError` label runs again through the store's `RetryStrategy`. A
 commit that ends with `UnknownTransactionCommitResult` is committed again through the same strategy. The transaction
 needs a replica set, and a standalone server refuses it. A server without journaling refuses `j: true`. The store turns
-each refusal into an `IllegalStateException` that says what the server lacks. With a strategy built from
-`RetryStrategy.retry()`, as the default is, the store throws any other failure of the transaction at once, and throws
-each refusal on the first attempt, since every later attempt would be refused too. A strategy implemented another way
-runs its own loop and decides what it retries outside a MongoDB transaction, see point 4.
+each refusal into an `IllegalStateException` that says what the server lacks. The store throws any other failure of
+the transaction at once, and throws each refusal on the first attempt, since every later attempt would be refused too.
+That holds for a strategy implemented another way, which runs its own loop and retries what it retries. The attempt
+returns a failure the store doesn't retry instead of throwing it, and the store throws it once the strategy has
+returned, so the strategy never sees it.
 
 The store needs the `MongoDatabaseFactory` to run a transaction, and only a `MongoTemplate` exposes it. The constructors
 keep their `MongoOperations` parameter, which 0.34.0 shipped, and refuse anything else than a `MongoTemplate` with an
@@ -149,11 +150,10 @@ failure in the other two cases, where it can't mark the transaction.
 
 Nor does the store retry any other read or write while a MongoDB transaction is bound to the factory. MongoDB aborts a
 transaction when an operation in it fails, so the same operation sent again in it fails too, and the caller would get
-that later failure in place of the first. The store checks for a bound transaction when a call starts, and, with a
-strategy built from `RetryStrategy.retry()`, again after a failure, since a template with
-`SessionSynchronization.ALWAYS` starts the transaction on the operation that fails. A strategy implemented another way
-runs its own loop, so once the operation has failed inside a MongoDB transaction, the store makes every later attempt
-throw that failure again without sending anything. 0.34.0 retried every read and write, in a caller's transaction
+that later failure in place of the first. The store checks for a bound transaction when a call starts, and again
+after a failure, since a template with `SessionSynchronization.ALWAYS` starts the transaction on the operation that
+fails. The attempt returns a failure inside a transaction instead of throwing it, as in point 3, so a strategy
+implemented another way doesn't send the operation again either. 0.34.0 retried every read and write, in a caller's transaction
 too.
 
 A MongoDB transaction bound to the factory while transaction synchronization is off, as a `MongoTransactionManager`

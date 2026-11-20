@@ -34,6 +34,8 @@ import org.junit.jupiter.api.Timeout;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.SkippedInput;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
@@ -88,6 +90,7 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
 
     private final List<String> sent = new CopyOnWriteArrayList<>();
     private final AtomicInteger retries = new AtomicInteger();
+    private final AtomicInteger commits = new AtomicInteger();
     private MongoClient client;
     private MongoTemplate template;
 
@@ -99,6 +102,9 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
                 .addCommandListener(new CommandListener() {
                     @Override
                     public void commandStarted(CommandStartedEvent event) {
+                        if (event.getCommandName().equals("commitTransaction")) {
+                            commits.incrementAndGet();
+                        }
                         var target = event.getCommand().get(event.getCommandName());
                         if (target != null && target.isString() && target.asString().getValue().equals(COLLECTION)) {
                             sent.add(event.getCommandName());
@@ -278,7 +284,7 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
         }
 
         @Test
-        void compareAndSave_with_a_retry_strategy_implemented_by_the_caller_that_retries_any_failure_sends_once_and_every_later_attempt_throws_the_same_failure() {
+        void compareAndSave_with_a_retry_strategy_implemented_by_the_caller_that_retries_any_failure_sends_once_and_the_strategy_makes_one_attempt() {
             CountingRetry strategy = new CountingRetry();
             var store = storeOn(always(), strategy);
 
@@ -286,8 +292,24 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
 
             assertAll(
                     () -> assertThat(sentOf("insert")).as("insert commands sent to the saga collection").isEqualTo(1),
-                    () -> assertThat(strategy.attempts.get()).as("attempts the retry strategy made, so its loop ran").isGreaterThan(1),
-                    () -> assertThat(strategy.failures).as("failures the attempts threw").hasSize(strategy.attempts.get()).containsOnly(strategy.failures.get(0)),
+                    () -> assertThat(strategy.attempts.get()).as("attempts the retry strategy made, which it sees as a success").isEqualTo(1),
+                    () -> assertThat(strategy.failures).as("failures the attempts threw, which the strategy could retry").isEmpty(),
+                    () -> assertThat(thrown == null ? List.<Integer>of() : mongoCodesIn(thrown)).as("MongoDB error codes in the cause chain").contains(HOST_UNREACHABLE).doesNotContain(NO_SUCH_TRANSACTION)
+            );
+        }
+
+        @Test
+        void findWithDueTimers_with_a_retry_strategy_implemented_by_the_caller_that_retries_any_failure_sends_once_and_the_strategy_makes_one_attempt() {
+            anInstance("order-10");
+            sent.clear();
+            CountingRetry strategy = new CountingRetry();
+            var store = storeOn(always(), strategy);
+
+            Throwable thrown = failureInside(new TransactionTemplate(new AnotherResourcesTransactionManager()), "find", () -> SagaEnvelopes.of(store, null).findWithDueTimers(NOW.plusSeconds(60), 10));
+
+            assertAll(
+                    () -> assertThat(sentOf("find")).as("find commands sent to the saga collection").isEqualTo(1),
+                    () -> assertThat(strategy.attempts.get()).as("attempts the retry strategy made, which it sees as a success").isEqualTo(1),
                     () -> assertThat(thrown == null ? List.<Integer>of() : mongoCodesIn(thrown)).as("MongoDB error codes in the cause chain").contains(HOST_UNREACHABLE).doesNotContain(NO_SUCH_TRANSACTION)
             );
         }
@@ -328,6 +350,49 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
             Throwable thrown = failureInside(transaction(), "insert", () -> SagaEnvelopes.of(store, null).compareAndSave("order-6", payment("order-6"), 0));
 
             assertSentOnceAndFailedAsMongoDbReported("insert", thrown, strategy.attempts);
+        }
+    }
+
+    @Nested
+    class TheCommitOfTheStoresOwnTransaction {
+        private static final int BAD_VALUE = 2;
+        private static final String UNKNOWN_COMMIT_RESULT = "UnknownTransactionCommitResult";
+
+        private StoredSaga anInstanceToSkipAnInputOf(String sagaId) {
+            anInstance(sagaId);
+            return storeOn(template, RetryStrategy.none()).find(sagaId).orElseThrow();
+        }
+
+        @Test
+        void a_commit_that_fails_without_the_unknown_result_label_is_sent_once_under_a_retry_strategy_implemented_by_the_caller_that_retries_any_failure() {
+            StoredSaga instance = anInstanceToSkipAnInputOf("order-11");
+            var store = storeOn(template, new CountingRetry());
+
+            Throwable thrown;
+            try (FailPoint failure = FailPoint.failing(client, "commitTransaction", ATTEMPTS, BAD_VALUE)) {
+                thrown = catchThrowable(() -> store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-11@7")));
+            }
+
+            assertAll(
+                    () -> assertThat(thrown).as("the failed commit reaches the caller").isNotNull(),
+                    () -> assertThat(commits.get()).as("commitTransaction commands sent").isEqualTo(1)
+            );
+        }
+
+        @Test
+        void a_commit_that_fails_with_the_unknown_result_label_is_sent_again_under_a_retry_strategy_implemented_by_the_caller_and_the_transition_is_saved() {
+            StoredSaga instance = anInstanceToSkipAnInputOf("order-12");
+            var store = storeOn(template, new CountingRetry());
+
+            boolean saved;
+            try (FailPoint failure = FailPoint.failing(client, "commitTransaction", 1, BAD_VALUE, UNKNOWN_COMMIT_RESULT)) {
+                saved = store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-12@7"));
+            }
+
+            assertAll(
+                    () -> assertThat(saved).isTrue(),
+                    () -> assertThat(commits.get()).as("commitTransaction commands sent, the failed one and its retry").isEqualTo(2)
+            );
         }
     }
 
