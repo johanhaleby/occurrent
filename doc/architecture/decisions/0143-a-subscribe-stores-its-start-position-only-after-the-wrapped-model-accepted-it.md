@@ -8,6 +8,10 @@ Proposed. Part of [#1197](https://github.com/johanhaleby/occurrent/issues/1197).
 `DurableSubscriptionModel`. The first position it stores is the one
 [ADR 130](0130-a-subscriptions-first-position-race-resolves-by-order-not-by-write-order.md) writes.
 
+Amended by [ADR 184](0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md). On a
+storage that doesn't evaluate write conditions, the two positions are no longer written unconditionally by default.
+The first position is refused instead, unless `startWhenFirstPositionCanBeOverwritten` is set.
+
 ## Context
 
 A subscription that asks for the model default, with nothing stored for its id, gets its start position recorded from

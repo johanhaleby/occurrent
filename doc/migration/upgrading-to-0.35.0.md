@@ -93,6 +93,9 @@ other sections compile fine and behave differently, so read them first.
 - [A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint).
   `RepositionableSubscriptions.findIn(durableModel)` finds the durable model, which stores the position before it
   resumes there. Compiles unchanged.
+- [A first position a checkpoint storage can only write unconditionally is refused](#a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused).
+  A `CheckpointStorage` of your own that answers `false` from `evaluatesWriteConditionsFor` fails a new subscription
+  at the model default, where 0.34.0 wrote its first position unconditionally with a warning. Compiles unchanged.
 - [A capability that acts on a subscription is not found past a wrapper](#a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper).
   `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
   `ManualStartSubscriptionModel` answers empty. Compiles unchanged.
@@ -180,6 +183,10 @@ other sections compile fine and behave differently, so read them first.
   handler of a synchronous subscription that fails now makes `execute` throw, where a retry could run the command again.
 
 ### Spring Boot starter
+
+- [A first position a checkpoint storage can only write unconditionally is refused](#a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused).
+  A `CheckpointStorage` bean of your own that answers `false` from `evaluatesWriteConditionsFor` fails startup when the
+  starter would store a live start as a subscription's first checkpoint. Compiles unchanged.
 
 - [A catch-up needs the event store itself](#a-catch-up-needs-the-event-store-itself). A context whose
   `EventStoreQueries`, event store or `DcbEventStore` bean is a decorator, a mock or your own implementation fails at
@@ -414,6 +421,65 @@ time a stream catch-up stores in the `;v:2;` form, nothing stored changes format
 this. See
 [ADR 151](../architecture/decisions/0151-a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper.md) and
 [#1253](https://github.com/johanhaleby/occurrent/issues/1253).
+
+## A first position a checkpoint storage can only write unconditionally is refused
+
+A durable subscription that starts at the model default, with no checkpoint stored, records its first position before
+anything is delivered. `DurableSubscriptionModel` and `ReactorDurableSubscriptionModel` write it with
+`CheckpointWriteCondition.ifAbsent()`, so of two nodes recording one at the same moment, only one write is stored. The
+reactor model also records one for a `StartAt.dynamic(..)` that answers `StartAt.now()`, and the Spring Boot starters
+store a live start as the first checkpoint the same way.
+
+### Who is affected
+
+An application with a `CheckpointStorage` of its own that answers `false` from `evaluatesWriteConditionsFor(String)`,
+which every implementation does unless it overrides `evaluatesWriteConditions()` or `evaluatesWriteConditionsFor`.
+The `AddCheckpointStorageConditionalWriteStubs` recipe from the 0.33.0 upgrade adds stubs that keep
+`evaluatesWriteConditions()` at `false`, so a storage it migrated is affected until it implements the conditions.
+
+Every `CheckpointStorage` Occurrent ships answers `true` apart from `SpringRedisCheckpointStorage` for two kinds of
+id. Its `save(..)` refuses an id in the reserved namespace of its version key whatever the condition, so such a
+subscription never started and now fails before the write instead. In Cluster-safe mode it also answers `false` for
+an id Redis Cluster can't put in one slot with its version key, such as `{}orders`, and its javadoc says no id an
+application would choose is built like that by accident.
+
+### What changes
+
+In 0.34.0 such a storage got the first position written unconditionally, and the model logged a warning. Two nodes
+recording a first position at the same moment could then overwrite each other's and lose the events between the two
+positions for good.
+
+From 0.35.0 the subscription is refused with `IllegalStateException` before anything is written for it:
+
+* `DurableSubscriptionModel` throws from `subscribe(..)`, or from the evaluation of the start position that would have
+  recorded it. Those are the places it refuses a subscription that has no start position to record.
+* `ReactorDurableSubscriptionModel` signals it on `Subscription.waitUntilStarted()`.
+* Both Spring Boot starters fail startup when they would store a live start as the subscription's first checkpoint.
+
+A subscription that records no first position isn't refused, whatever the storage answers. That covers a checkpoint
+already stored, a `StartAt` of your own other than a dynamic one answering `StartAt.now()` on the reactor stack, and a
+starter subscription at `NOW` with `resumeBehavior = SAME_AS_START_AT`.
+
+### What to do
+
+Make the storage evaluate `CheckpointWriteCondition.ifAbsent()` and answer `true` from `evaluatesWriteConditions()`,
+or from `evaluatesWriteConditionsFor(String)` for the ids it evaluates conditions for. Or use one of the storages
+Occurrent ships.
+
+To keep the 0.34.0 behaviour and accept the loss, configure
+
+```java
+new DurableSubscriptionModelConfig(EveryN.everyEvent()).startWhenFirstPositionCanBeOverwritten(true)
+```
+
+or the same method on `ReactorDurableSubscriptionModelConfig`, or set
+
+```properties
+occurrent.subscription.start-when-first-position-can-be-overwritten=true
+```
+
+with a Spring Boot starter. There is no OpenRewrite recipe for this. See
+[ADR 184](../architecture/decisions/0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md).
 
 ## A capability that acts on a subscription is not found past a wrapper
 
@@ -2790,9 +2856,9 @@ Such a handler misses an event written directly to the event store while the sca
 event when the bean was created after it had subscribed.
 
 The starter writes that first checkpoint with `CheckpointWriteCondition.ifAbsent()`. A `CheckpointStorage` of your own
-that answers `false` from `evaluatesWriteConditionsFor` gets an unconditional write instead, with a warning, as
-`DurableSubscriptionModel` gives it. Two nodes that start the same subscription at the same moment can then lose the
-events between their two start positions.
+that answers `false` from `evaluatesWriteConditionsFor` fails startup instead, unless
+`occurrent.subscription.start-when-first-position-can-be-overwritten` is set, see
+[A first position a checkpoint storage can only write unconditionally is refused](#a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused).
 
 That position is a time in MongoDB's oplog, so it lasts only as long as the oplog window. An application that takes
 longer than the oplog window to start, from the event store bean to the handler's subscribe, finds it gone. A handler
