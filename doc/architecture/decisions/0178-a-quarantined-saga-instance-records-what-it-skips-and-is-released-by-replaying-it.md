@@ -153,9 +153,10 @@ version would be applied twice, because nothing on the instance says it was appl
 see point 3 step 1.
 
 `SagaStateStore.delete(sagaId)` deletes the instance and the records under the quarantine id it had in one atomic
-write. When a replayed input completes the instance, the write that completes it, `compareAndSaveQuarantineEnded`,
-deletes the records under its quarantine id, since a completed instance skips every input and none of them can be
-replayed. So in the stores Occurrent ships, the records of a quarantine exist only while the instance is quarantined
+write. When a replayed input completes the instance, the write that completes it, `compareAndSaveReplayed`, deletes
+every record under its quarantine id, since a completed instance skips every input and none of them can be replayed.
+It writes only while the replayed record is still there, as for any replayed input, so a release that replays a record
+another release applied already can't complete the instance and delete records no release applied. So in the stores Occurrent ships, the records of a quarantine exist only while the instance is quarantined
 under its quarantine id, until the downgrade in point 8 takes the quarantine id off the instances that stay
 quarantined, and nothing reads their records after that.
 
@@ -204,8 +205,9 @@ one its failure record names.
    stays names an input no release applied. When the trim puts such a record behind the window, the next release
    applies it all the same, since release skips only an input the marks list as applied. An input without a stream id
    and version, which only `RedeliveryDetection.BEST_EFFORT` takes (ADR 109), is recorded without being checked against
-   the marks, so when the instance applied the same event before the quarantine, the release applies it again. That
-   is what `BEST_EFFORT` already does with any redelivery.
+   the marks, so when the instance applied the same event before the quarantine, the release applies it again. A
+   redelivery of it that arrives after a release applied and deleted its record is recorded and applied again too.
+   That is what `BEST_EFFORT` already does with any redelivery.
 3. The instance becomes `ACTIVE`, with the failure record and the skip counter cleared, only in a compare-and-set that
    expects the version release read before it found no records left. Release reads the instance first and the records
    after it, so a skip that records an input between the two reads has changed the version, and the write loses. The

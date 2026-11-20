@@ -782,10 +782,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         long expectedVersion = outcome.expectedVersion();
         SagaEnvelope<S> basis = read;
         for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
-            boolean saved = envelope.isCompleted()
-                    ? envelopes.compareAndSaveQuarantineEnded(records, envelope, expectedVersion, quarantineId)
-                    : envelopes.compareAndSaveReplayed(records, envelope, expectedVersion, quarantineId, record);
-            if (saved) {
+            if (envelopes.compareAndSaveReplayed(records, envelope, expectedVersion, quarantineId, record)) {
                 return true;
             }
             SagaEnvelope<S> after = envelopes.find(sagaId).orElse(null);

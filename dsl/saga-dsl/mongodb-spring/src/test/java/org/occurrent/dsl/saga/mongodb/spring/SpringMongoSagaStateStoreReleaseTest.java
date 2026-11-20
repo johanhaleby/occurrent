@@ -332,10 +332,10 @@ class SpringMongoSagaStateStoreReleaseTest {
         return SagaEnvelopes.of(store, null).compareAndSaveQuarantineEnded(store, next(store, sagaId), versionOf(store, sagaId), quarantineId);
     }
 
-    private static boolean quarantineEndedByCompletion(SpringMongoSagaStateStore<Payment> store, String sagaId, String quarantineId) {
+    private static boolean replayedByCompletion(SpringMongoSagaStateStore<Payment> store, String sagaId, String quarantineId, SkippedInput replayed) {
         SagaEnvelope<Payment> current = next(store, sagaId);
         SagaEnvelope<Payment> completed = new SagaEnvelope<>(sagaId, current.state(), SagaStatus.COMPLETED, current.version(), List.of(), current.streamWatermarks(), null, current.createdAt(), NOW, NOW, null, true, null, Map.of(), null);
-        return SagaEnvelopes.of(store, null).compareAndSaveQuarantineEnded(store, completed, versionOf(store, sagaId), quarantineId);
+        return SagaEnvelopes.of(store, null).compareAndSaveReplayed(store, completed, versionOf(store, sagaId), quarantineId, replayed);
     }
 
     @Test
@@ -579,14 +579,15 @@ class SpringMongoSagaStateStoreReleaseTest {
     }
 
     @Test
-    void the_write_that_completes_an_instance_in_quarantine_removes_the_records_of_one_quarantine_id_only() {
+    void the_replay_that_completes_an_instance_in_quarantine_removes_the_records_of_one_quarantine_id_only() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         instances(store, "order-15", "order-16");
         skip(store, "order-15", "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+        skip(store, "order-15", "q-1", new SkippedInput(1, "d@2", heldEvent("d@2")));
         skip(store, "order-15", "q-2", new SkippedInput(0, "b@1", heldEvent("b@1")));
         skip(store, "order-16", "q-1", new SkippedInput(0, "c@1", heldEvent("c@1")));
 
-        boolean ended = quarantineEndedByCompletion(store, "order-15", "q-1");
+        boolean ended = replayedByCompletion(store, "order-15", "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
         assertAll(
                 () -> assertThat(ended).isTrue(),

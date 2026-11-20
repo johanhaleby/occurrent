@@ -99,8 +99,13 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         requireNonNull(saga, "saga cannot be null");
         requireNonNull(quarantineId, "quarantineId cannot be null");
         requireNonNull(replayed, "replayed cannot be null");
+        // A replayed input that completes the instance ends its quarantine, so no record under it is replayed any more
+        boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
         return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga), quarantineId,
                 records -> isStillRecorded(records, replayed), records -> {
+            if (completes) {
+                return Map.of();
+            }
             Map<String, SkippedInput> remaining = new HashMap<>(records);
             remaining.remove(replayed.key());
             return Map.copyOf(remaining);
@@ -117,10 +122,9 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
         requireNonNull(saga, "saga cannot be null");
         requireNonNull(quarantineId, "quarantineId cannot be null");
-        // An instance the release does not complete ends its quarantine only with no record left, as the SPI says
-        boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
+        // The quarantine ends only with no record left, as the SPI says
         return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga), quarantineId,
-                records -> completes || records.isEmpty(), records -> Map.of());
+                Map::isEmpty, records -> Map.of());
     }
 
     // The write that quarantines an instance whose first input failed inserts it, and an insert has no stored state to leave alone

@@ -53,8 +53,8 @@ a compare-and-set on the instance's version that writes the instance and its rec
 | Transition | Instance | Records under the quarantine id |
 | --- | --- | --- |
 | `compareAndSaveSkipped` | raises the skip counter, or quarantines the instance, state left alone | records the input with its event, keeps a record of the same key that is there already |
-| `compareAndSaveReplayed` | the whole instance after the replayed input, or one version up when the input was applied already | deletes the replayed record, and writes neither unless that record is still there with the sequence number the release read |
-| `compareAndSaveQuarantineEnded` | the whole instance, `ACTIVE` after the last record or `COMPLETED` by a replayed input | deletes every record |
+| `compareAndSaveReplayed` | the whole instance after the replayed input, or one version up when the input was applied already | deletes the replayed record, or every record when the input completes the instance, and writes neither unless that record is still there with the sequence number the release read |
+| `compareAndSaveQuarantineEnded` | the whole instance, `ACTIVE` after the last record | deletes every record, and writes neither while a record is there |
 
 The write that quarantines an instance is a `compareAndSaveSkipped` that records the input it was quarantined on, and
 inserts the instance at version 0 when that input is its first. A release starts with a
@@ -121,10 +121,9 @@ something a read did not find, and each reads again where nothing is missed:
   caller's transaction. A standalone server refuses read concern `linearizable`, and has no failover, so a majority
   read there already returns every write it acknowledged. The store asks the server once, with `hello` when it is
   created, and skips the second read on a standalone server.
-- `compareAndSaveQuarantineEnded`, for an instance the release doesn't complete, reads the records again inside its
-  transaction and writes nothing while one is there. A release ends the quarantine after a read of the records finds
-  none, and the write deletes every record under the quarantine id, so a record the read missed would be deleted
-  before it was replayed. The transaction reads everything the primary has, and a new primary has every write a
+- `compareAndSaveQuarantineEnded` reads the records again inside its transaction and writes nothing while one is
+  there. A release ends the quarantine after a read of the records finds none, and the write deletes every record
+  under the quarantine id, so a record the read missed would be deleted before it was replayed. The transaction reads everything the primary has, and a new primary has every write a
   majority acknowledged.
 
 A transaction aborted with the `TransientTransactionError` label runs again through the store's `RetryStrategy`. A

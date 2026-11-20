@@ -114,6 +114,11 @@ class InMemorySagaStateStoreTest {
         return store.compareAndSaveReplayed(codec.encode(next(sagaId)), store.find(sagaId).orElseThrow().version(), quarantineId, replayed);
     }
 
+    private boolean replayedByCompletion(String sagaId, String quarantineId, SkippedInput replayed) {
+        long version = store.find(sagaId).orElseThrow().version();
+        return store.compareAndSaveReplayed(codec.encode(completedEnvelope(sagaId, "a", version + 1, List.of())), version, quarantineId, replayed);
+    }
+
     private boolean quarantineEnded(String sagaId, String quarantineId) {
         return store.compareAndSaveQuarantineEnded(codec.encode(next(sagaId)), store.find(sagaId).orElseThrow().version(), quarantineId);
     }
@@ -677,10 +682,11 @@ class InMemorySagaStateStoreTest {
         void are_deleted_for_one_quarantine_id_only_by_the_write_that_ends_the_quarantine() {
             instance("s1", "s2");
             skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q1", new SkippedInput(1, "d@1", heldEvent("d@1")));
             skip("s1", "q2", new SkippedInput(0, "b@1", heldEvent("b@1")));
             skip("s2", "q1", new SkippedInput(0, "c@1", heldEvent("c@1")));
 
-            boolean ended = quarantineEndedByCompletion("s1", "q1");
+            boolean ended = replayedByCompletion("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
             assertAll(
                     () -> assertThat(ended).isTrue(),
@@ -801,19 +807,25 @@ class InMemorySagaStateStoreTest {
                     () -> assertThat(ended).isTrue(),
                     () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1", heldEvent("b@1"))));
         }
+    }
+
+    @Nested
+    class AQuarantineEndedByACompletedInstance {
 
         @Test
-        void that_completes_the_instance_deletes_every_record_under_the_quarantine_id() {
+        void is_refused_while_a_record_is_under_the_quarantine_id_and_writes_and_deletes_nothing() {
             instance("s1");
             skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
             skip("s1", "q1", new SkippedInput(1, "b@2", heldEvent("b@2")));
+            StoredSaga before = store.find("s1").orElseThrow();
 
             boolean ended = quarantineEndedByCompletion("s1", "q1");
 
             assertAll(
-                    () -> assertThat(ended).isTrue(),
-                    () -> assertThat(find("s1").orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
-                    () -> recordsOf("s1"));
+                    () -> assertThat(ended).as("a completed instance ends its quarantine only with no record left").isFalse(),
+                    () -> assertThat(store.find("s1")).as("the instance as it was, version and fields").contains(before),
+                    () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).as("both records are kept")
+                            .containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1")), new SkippedInput(1, "b@2", heldEvent("b@2"))));
         }
     }
 
@@ -855,6 +867,37 @@ class InMemorySagaStateStoreTest {
         }
 
         @Test
+        void a_replay_that_completes_the_instance_deletes_every_record_under_the_quarantine_id() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q1", new SkippedInput(1, "b@2", heldEvent("b@2")));
+            skip("s1", "q1", new SkippedInput(2, "c@3", heldEvent("c@3")));
+
+            boolean saved = replayedByCompletion("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+
+            assertAll(
+                    () -> assertThat(saved).isTrue(),
+                    () -> assertThat(find("s1").orElseThrow().status()).as("the completed instance is written").isEqualTo(SagaStatus.COMPLETED),
+                    () -> recordsOf("s1"));
+        }
+
+        @Test
+        void a_replay_that_completes_the_instance_of_a_record_that_is_gone_writes_nothing_and_keeps_the_other_records() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q1", new SkippedInput(1, "b@2", heldEvent("b@2")));
+            replayed("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            StoredSaga before = store.find("s1").orElseThrow();
+
+            boolean saved = replayedByCompletion("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+
+            assertAll(
+                    () -> assertThat(saved).as("a completing replay of a record another release deleted already").isFalse(),
+                    () -> assertThat(store.find("s1")).as("the instance, version and fields").contains(before),
+                    () -> recordsOf("s1", new SkippedInput(1, "b@2", heldEvent("b@2"))));
+        }
+
+        @Test
         void a_skip_that_fails_writing_the_instance_records_no_input() {
             instance("s1");
 
@@ -879,12 +922,12 @@ class InMemorySagaStateStoreTest {
         }
 
         @Test
-        void an_end_of_the_quarantine_that_fails_writing_the_instance_keeps_every_record() {
+        void a_replay_that_completes_the_instance_and_fails_writing_it_keeps_every_record() {
             instance("s1");
             skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
             skip("s1", "q1", new SkippedInput(1, "b@2", heldEvent("b@2")));
 
-            assertThatThrownBy(() -> store.compareAndSaveQuarantineEnded(unreadableCompleted("s1", 4), 3, "q1")).isInstanceOf(RuntimeException.class);
+            assertThatThrownBy(() -> store.compareAndSaveReplayed(unreadableCompleted("s1", 4), 3, "q1", new SkippedInput(0, "a@1", heldEvent("a@1")))).isInstanceOf(RuntimeException.class);
 
             assertAll(
                     () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(3),

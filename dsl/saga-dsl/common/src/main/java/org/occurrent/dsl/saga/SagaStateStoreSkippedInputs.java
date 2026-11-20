@@ -126,13 +126,15 @@ public interface SagaStateStoreSkippedInputs {
 
     /**
      * Save the whole {@code saga}, under the rule of {@link SagaStateStore#compareAndSave(StoredSaga, long)}, and delete
-     * the record of {@code replayed}'s key under the quarantine {@code quarantineId}, in one atomic write. Both are
-     * written only while that key has a record with {@code replayed}'s {@code seq}. A key with no record, or with a
-     * record of another {@code seq}, means another release applied {@code replayed} already, so writing the instance
-     * would apply it a second time. A release calls this for every record it applies, and with {@code saga} one version
+     * the record of {@code replayed}'s key under the quarantine {@code quarantineId}, in one atomic write. When
+     * {@code saga} is completed, the write deletes every record under {@code quarantineId} instead, since a completed
+     * instance replays nothing more. Both are written only while that key has a record with {@code replayed}'s
+     * {@code seq}. A key with no record, or with a record of another {@code seq}, means another release applied
+     * {@code replayed} already, so writing the instance would apply it a second time, and completing it would delete
+     * records no release applied. A release calls this for every record it applies, and with {@code saga} one version
      * up and nothing else changed for a record the instance applied already.
      *
-     * @return {@code true} when the instance is written and the record deleted, {@code false} when the stored version
+     * @return {@code true} when the instance is written and the records deleted, {@code false} when the stored version
      * is not {@code expectedVersion} or the record is gone, and then nothing is written or deleted
      */
     boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed);
@@ -140,16 +142,15 @@ public interface SagaStateStoreSkippedInputs {
     /**
      * Save the whole {@code saga}, under the rule of {@link SagaStateStore#compareAndSave(StoredSaga, long)}, and delete
      * every record under the quarantine {@code quarantineId} of its saga id, in one atomic write. A release calls this
-     * when it turns the instance active after a read of its records found none, and when a record it replays completes
-     * the instance.
+     * when it turns the instance active after a read of its records found none. A replayed record that completes the
+     * instance goes through {@link #compareAndSaveReplayed} instead.
      * <p>
-     * When {@code saga} is not completed, the write takes place only while no record is under {@code quarantineId}. The
-     * release's read of the records can miss one, and deleting it would lose an input the instance skipped and never
-     * applied. The store checks inside the atomic write, against every record written before it.
+     * The write takes place only while no record is under {@code quarantineId}. The release's read of the records can
+     * miss one, and deleting it would lose an input the instance skipped and never applied. The store checks inside the
+     * atomic write, against every record written before it.
      *
      * @return {@code true} when the instance is written, {@code false} when the stored version is not
-     * {@code expectedVersion}, or when {@code saga} is not completed and a record is under {@code quarantineId}, and then
-     * nothing is written or deleted
+     * {@code expectedVersion} or a record is under {@code quarantineId}, and then nothing is written or deleted
      */
     boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId);
 }

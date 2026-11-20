@@ -39,6 +39,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -119,6 +120,7 @@ class SagaReleaseConcurrentCallersTest {
                     }
                     return List.of(SagaEffect.issue(new Pack(e.orderId(), e.item())));
                 })
+                .isTerminal(state -> Collections.frequency(state.items(), "x") >= 2)
                 .build();
     }
 
@@ -285,6 +287,52 @@ class SagaReleaseConcurrentCallersTest {
                         .containsExactly("poison", "a", "b"),
                 () -> assertThat(store.staleReplayWon)
                         .as("A's write of the record B applied already. " + evidence).isFalse(),
+                () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE))
+                        .as("no record is left. " + evidence).isEmpty()
+        );
+    }
+
+    @Test
+    void a_release_call_replaying_a_record_another_call_applied_that_would_complete_the_instance_when_applied_again_loses_and_the_later_records_are_applied()
+            throws Exception {
+        CloudEvent streamless = withoutStream(append(new ItemAdded("streamless", ORDER, "x")));
+        StaleRecordStore store = new StaleRecordStore(streamless.getId());
+        SagaExecution<OrderEvent, Order, Object> execution = execution(store);
+        execution.onCloudEvent(append(new OrderPlaced(nextEventId(), ORDER)));
+        poisonFails = true;
+        quarantineOn(execution, append(new ItemAdded(nextEventId(), ORDER, "poison")));
+        poisonFails = false;
+        execution.onCloudEvent(streamless);
+        execution.onCloudEvent(append(new ItemAdded(nextEventId(), ORDER, "y")));
+        String quarantineId = instance().quarantineId();
+        assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE))
+                .as("poison, the input with no stream and y").hasSize(3);
+
+        CompletableFuture<ReleaseResult> a = CompletableFuture.supplyAsync(() -> {
+            store.a = Thread.currentThread();
+            try {
+                return execution.release(ORDER);
+            } finally {
+                store.aFinished.countDown();
+            }
+        });
+        await(store.aHasReadTheRecordWithNoStream);
+        ReleaseResult bResult = execution.release(ORDER);
+        ReleaseResult aResult = a.get(10, TimeUnit.SECONDS);
+
+        SagaEnvelope<Order> after = instance();
+        String evidence = "A returned " + aResult + ", B returned " + bResult + ", status " + after.status()
+                          + ", items " + after.state().items() + ", dispatched " + dispatched
+                          + ", records left under the quarantine id: " + recordsLeft(quarantineId);
+        assertAll(
+                () -> assertThat(store.completingWriteWon)
+                        .as("A's write that would complete the instance by applying x again. " + evidence).isFalse(),
+                () -> assertThat(after.state().items())
+                        .as("x is applied once and y, recorded after it, is applied. " + evidence)
+                        .containsExactly("poison", "x", "y"),
+                () -> assertThat(after.status())
+                        .as("the instance is not completed by a second application of x. " + evidence)
+                        .isEqualTo(SagaStatus.ACTIVE),
                 () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE))
                         .as("no record is left. " + evidence).isEmpty()
         );
@@ -522,6 +570,7 @@ class SagaReleaseConcurrentCallersTest {
         final CountDownLatch bAppliedThatRecord = new CountDownLatch(1);
         final CountDownLatch aFinished = new CountDownLatch(1);
         final AtomicBoolean staleReplayWon = new AtomicBoolean(false);
+        final AtomicBoolean completingWriteWon = new AtomicBoolean(false);
         private final String staleEventId;
         private final AtomicInteger aRecordReads = new AtomicInteger();
         private final AtomicInteger bReplays = new AtomicInteger();
@@ -549,6 +598,7 @@ class SagaReleaseConcurrentCallersTest {
                                               SkippedInput replayed) {
             boolean saved = super.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
             if (isA()) {
+                noteCompletingWrite(saga, saved);
                 if (replayed.event().getId().equals(staleEventId) && saved) {
                     staleReplayWon.set(true);
                 }
@@ -557,6 +607,21 @@ class SagaReleaseConcurrentCallersTest {
                 await(aFinished);
             }
             return saved;
+        }
+
+        @Override
+        public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+            boolean saved = super.compareAndSaveQuarantineEnded(saga, expectedVersion, quarantineId);
+            if (isA()) {
+                noteCompletingWrite(saga, saved);
+            }
+            return saved;
+        }
+
+        private void noteCompletingWrite(StoredSaga saga, boolean saved) {
+            if (saved && SagaStatus.COMPLETED.name().equals(saga.index().storedStatus())) {
+                completingWriteWon.set(true);
+            }
         }
     }
 }

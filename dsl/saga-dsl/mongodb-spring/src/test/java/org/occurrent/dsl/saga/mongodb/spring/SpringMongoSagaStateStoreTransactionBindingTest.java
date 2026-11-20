@@ -203,10 +203,20 @@ class SpringMongoSagaStateStoreTransactionBindingTest {
         @Test
         void compareAndSaveQuarantineEnded_that_fails_on_its_second_write_leaves_nothing_of_the_transition_and_the_commit_throws() {
             aQuarantinedInstanceWithTheRecordOfA("order-4");
+            assertThat(SagaEnvelopes.of(store, null).compareAndSaveReplayed(store, next(found("order-4")), 2, QUARANTINE_ID, new SkippedInput(1, "a@1", heldEvent("a@1")))).isTrue();
             SagaEnvelope<Payment> e = completing(next(found("order-4")));
 
             rollsTheCallersTransactionBackWithTheTransition("order-4", FailPoint.failing(client, "delete", 1, UNKNOWN_ERROR),
-                    () -> SagaEnvelopes.of(store, null).compareAndSaveQuarantineEnded(store, e, 2, QUARANTINE_ID));
+                    () -> SagaEnvelopes.of(store, null).compareAndSaveQuarantineEnded(store, e, 3, QUARANTINE_ID));
+        }
+
+        @Test
+        void compareAndSaveReplayed_that_completes_the_instance_and_fails_on_its_second_write_leaves_nothing_of_the_transition_and_the_commit_throws() {
+            aQuarantinedInstanceWithTheRecordOfA("order-6");
+            SagaEnvelope<Payment> e = completing(next(found("order-6")));
+
+            rollsTheCallersTransactionBackWithTheTransition("order-6", FailPoint.failing(client, "delete", 1, UNKNOWN_ERROR),
+                    () -> SagaEnvelopes.of(store, null).compareAndSaveReplayed(store, e, 2, QUARANTINE_ID, new SkippedInput(1, "a@1", heldEvent("a@1"))));
         }
 
         @Test

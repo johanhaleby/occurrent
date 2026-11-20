@@ -677,10 +677,14 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             Document filter = skippedInputFilter(saga.sagaId(), quarantineId, replayed.key()).append(SKIPPED_SEQ, replayed.seq());
             // A record already gone was applied by another release, so applying it again here would apply it twice. A
             // release that deletes it meanwhile writes the instance too, so the replaceOne then conflicts and the
-            // transaction runs again
+            // transaction runs again. A replayed input that completes the instance ends its quarantine, so every record
+            // under it is deleted
+            boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
             return transition(database -> skippedInputs(database).find(filter).first() != null
                                           && instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
-                    database -> skippedInputs(database).deleteOne(filter));
+                    database -> completes
+                            ? skippedInputs(database).deleteMany(quarantineFilter(saga.sagaId(), quarantineId))
+                            : skippedInputs(database).deleteOne(filter));
         });
     }
 
@@ -690,12 +694,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             Objects.requireNonNull(saga, "saga cannot be null");
             Document document = toDocument(saga);
             Document filter = quarantineFilter(saga.sagaId(), quarantineId);
-            // A release ends the quarantine of an instance it does not complete once its read of the records found none. That
-            // read can miss a record right after a failover, so the transaction reads the records again. It reads everything
-            // the primary has, which includes every write a majority acknowledged. A record written after that read changes
-            // the instance too, so the replaceOne then conflicts and the transaction runs again
-            boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
-            return transition(database -> (completes || skippedInputs(database).find(filter).first() == null)
+            // A release ends the quarantine once its read of the records found none. That read can miss a record right
+            // after a failover, so the transaction reads the records again. It reads everything the primary has, which
+            // includes every write a majority acknowledged. A record written after that read changes the instance too, so
+            // the replaceOne then conflicts and the transaction runs again
+            return transition(database -> skippedInputs(database).find(filter).first() == null
                                           && instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
                     database -> skippedInputs(database).deleteMany(filter));
         });

@@ -1005,7 +1005,9 @@ A store that implements it keeps the skipped inputs, each with its event, and re
 compare-and-sets on the instance, `compareAndSaveSkipped`, `compareAndSaveReplayed` and
 `compareAndSaveQuarantineEnded`. Each writes the instance and its records in one atomic write, and on a version
 conflict returns `false` and writes neither. `compareAndSaveReplayed` also returns `false` and writes neither when
-the record it replays is gone or has another `seq`, since another release applied that input already. The write that quarantines an instance is a `compareAndSaveSkipped` too,
+the record it replays is gone or has another `seq`, since another release applied that input already. When the
+instance it saves is completed, it deletes every record under the quarantine id. `compareAndSaveQuarantineEnded`
+returns `false` and writes neither while a record is under the quarantine id. The write that quarantines an instance is a `compareAndSaveSkipped` too,
 and with an expected version of 0 it inserts an instance the store doesn't hold yet. In `delete(sagaId)` it deletes the records under
 the quarantine id of the instance it removes, in the same atomic write as the instance. A call that returns normally
 has to have made its write survive a failover, since the runner acknowledges the input right after it. It implements
