@@ -2693,7 +2693,7 @@ has the reasons.
 ### Who is affected
 
 The changes reach an application that uses a Spring Boot starter with `occurrent.subscription.mode` set to anything
-but `DISABLED`, which is the default, when one of these holds:
+but `DISABLED`, the default `AUTO` included, when one of these holds:
 
 - A bean calls `execute` on the `ApplicationService` or `DcbApplicationService` that the starter creates while the
   application starts, from a `@PostConstruct` method, from `afterPropertiesSet`, from a `@Bean` method, or from a
@@ -2975,6 +2975,13 @@ registered with `registerSingleton`, is an inner bean, or asks for the product w
 the starter handles as a factory also fails its creation when the starter can't read its handler methods. In 0.34.0
 the starter didn't register a synchronous handler of such an object when the object was created. Move the handler to
 a class that doesn't implement `FactoryBean`.
+
+An object Spring initializes under a name with no bean definition fails its creation the same way when it declares a
+synchronous handler that isn't registered. That is the product of a `FactoryBean` registered with `registerSingleton`,
+an object passed to `initializeBean` of `AutowireCapableBeanFactory`, and a test instance that Spring's test support
+initializes. The startup scan reads only names with a bean definition, and in 0.34.0 the starter didn't register such
+a handler when the object was created either. Declare the bean, or the `FactoryBean` that creates it, with a bean
+definition, for example with a `@Bean` method.
 
 ### What to do
 

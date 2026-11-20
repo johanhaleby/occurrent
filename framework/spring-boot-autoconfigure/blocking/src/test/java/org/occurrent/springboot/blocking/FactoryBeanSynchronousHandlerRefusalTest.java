@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import kotlin.jvm.functions.Function2;
+import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -145,6 +146,49 @@ class FactoryBeanSynchronousHandlerRefusalTest {
                 });
     }
 
+    @Test
+    void a_product_that_declares_a_synchronous_handler_fails_when_its_factory_has_no_bean_definition() {
+        runner.withInitializer(context -> ((GenericApplicationContext) context).getBeanFactory().registerSingleton("registeredPlainFactory", new PlainProductFactory()))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+
+                    assertThatThrownBy(() -> context.getBean("registeredPlainFactory"))
+                            .rootCause()
+                            .hasMessageContaining(SynchronousProduct.class.getName() + " declares the synchronous handler onEvent, which isn't registered. Bean 'registeredPlainFactory' has no bean definition");
+                });
+    }
+
+    @Test
+    void an_object_that_declares_a_synchronous_handler_fails_when_initialized_under_a_name_without_a_bean_definition() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThatThrownBy(() -> context.getAutowireCapableBeanFactory().initializeBean(new SynchronousProduct(), "someUndefinedName"))
+                    .isInstanceOf(BeanCreationException.class)
+                    .hasMessageContaining(SynchronousProduct.class.getName() + " declares the synchronous handler onEvent, which isn't registered. Bean 'someUndefinedName' has no bean definition");
+        });
+    }
+
+    @Test
+    void an_object_that_declares_no_handler_is_initialized_under_a_name_without_a_bean_definition() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThatCode(() -> context.getAutowireCapableBeanFactory().initializeBean(new Object(), "someUndefinedName"))
+                    .doesNotThrowAnyException();
+        });
+    }
+
+    @Test
+    void an_object_that_declares_only_an_asynchronous_handler_is_initialized_under_a_name_without_a_bean_definition() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThatCode(() -> context.getAutowireCapableBeanFactory().initializeBean(new AsynchronousOnlyObject(), "someUndefinedName"))
+                    .doesNotThrowAnyException();
+        });
+    }
+
     @SuppressWarnings("unchecked")
     private static FactoryBean<Object> conflictingHandlerFactory() {
         return (FactoryBean<Object>) Proxy.newProxyInstance(FactoryBeanSynchronousHandlerRefusalTest.class.getClassLoader(),
@@ -223,6 +267,12 @@ class FactoryBeanSynchronousHandlerRefusalTest {
         @Override
         public Class<?> getObjectType() {
             return Object.class;
+        }
+    }
+
+    static class AsynchronousOnlyObject {
+        @Subscription(id = "asynchronous-only-handler")
+        void onEvent(LateBeanAnnotationRegistrationTest.TestEvent event) {
         }
     }
 

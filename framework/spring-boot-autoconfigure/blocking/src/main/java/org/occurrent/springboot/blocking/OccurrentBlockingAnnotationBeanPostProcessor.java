@@ -176,7 +176,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     @Override
     public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
         if (bean instanceof FactoryBean<?>) {
-            refuseSynchronousHandlerOn(bean, beanName);
+            refuseSynchronousHandlerOn(bean, beanName, true);
             ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
             boolean prototype = beanFactory.containsBeanDefinition(beanName) && beanFactory.getMergedBeanDefinition(beanName).isPrototype();
             if (startupScanComplete) {
@@ -229,11 +229,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 || (beanFactory.isCurrentlyInCreation(beanName) && !beanFactory.containsSingleton(beanName));
     }
 
-    // An object handled as a factory registers no handler here, so one whose class declares a synchronous handler that
-    // isn't registered yet fails its bean's creation rather than miss the writes the application service admits. A
-    // handler already registered under this name misses nothing. A factory whose product declares the handlers
-    // doesn't fail, since its own class is what is checked.
-    private void refuseSynchronousHandlerOn(Object factory, String beanName) {
+    // An object handled as a factory, or created under a name without a bean definition, registers no handler, so one
+    // whose class declares a synchronous handler that isn't registered yet fails its bean's creation rather than miss
+    // the writes the application service admits. A handler already registered under this name misses nothing. A
+    // factory whose product declares the handlers doesn't fail, since its own class is what is checked.
+    private void refuseSynchronousHandlerOn(Object factory, String beanName, boolean handledAsFactory) {
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         String scanName = HandlerScan.isScopedTarget(beanFactory, beanName) ? ScopedProxyUtils.getOriginalBeanName(beanName) : beanName;
         Object target = SubscriptionAnnotations.ultimateTarget(factory);
@@ -243,15 +243,22 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             try {
                 handlers = synchronousHandlersOf(type);
             } catch (IllegalStateException | IllegalArgumentException e) {
-                // Nothing scans an object handled as a factory afterwards, so nothing else would report this
-                throw new BeanCreationException(beanName, ("Occurrent can't read the handlers of %s, which implements FactoryBean, so it can't check " +
-                        "that none of them is a synchronous handler it would never register.").formatted(type.getName()), e);
+                // Nothing scans such an object afterwards, so nothing else would report this
+                String why = handledAsFactory ? "which implements FactoryBean" : "created as bean '%s', which has no bean definition".formatted(beanName);
+                throw new BeanCreationException(beanName, ("Occurrent can't read the handlers of %s, %s, so it can't check " +
+                        "that none of them is a synchronous handler it would never register.").formatted(type.getName(), why), e);
             }
             for (Method handler : handlers) {
                 if (!registeredHandlers.isRegistered(scanName, new HandlerMethod(handler, type))) {
-                    throw new BeanCreationException(beanName, ("%s implements FactoryBean and declares the synchronous handler %s, which isn't registered. " +
-                            "Occurrent doesn't register the handlers of an object it handles as a FactoryBean, so writes through the application " +
-                            "service would miss it. Move the handler to a class that doesn't implement FactoryBean.").formatted(type.getName(), handler.getName()));
+                    if (handledAsFactory) {
+                        throw new BeanCreationException(beanName, ("%s implements FactoryBean and declares the synchronous handler %s, which isn't registered. " +
+                                "Occurrent doesn't register the handlers of an object it handles as a FactoryBean, so writes through the application " +
+                                "service would miss it. Move the handler to a class that doesn't implement FactoryBean.").formatted(type.getName(), handler.getName()));
+                    }
+                    throw new BeanCreationException(beanName, ("%s declares the synchronous handler %s, which isn't registered. Bean '%s' has no bean " +
+                            "definition, and Occurrent registers only the handlers of a bean that has one, so writes through the application service " +
+                            "would miss it. Declare the bean, or the FactoryBean that creates it, with a bean definition, for example with a @Bean method.")
+                            .formatted(type.getName(), handler.getName(), beanName));
                 }
             }
         }
@@ -300,12 +307,17 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     @Override
     public Object postProcessAfterInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
         if (isTheFactoryItself(bean, beanName)) {
-            refuseSynchronousHandlerOn(bean, beanName);
+            refuseSynchronousHandlerOn(bean, beanName, true);
             return bean;
+        }
+        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
+        // No scan reads a name without a bean definition, such as the product of a factory registered with
+        // registerSingleton, so a synchronous handler on it would never register
+        if (!beanFactory.containsBeanDefinition(beanName)) {
+            refuseSynchronousHandlerOn(bean, beanName, false);
         }
         // Every event store bean passes through here as it is created, before anything can write through it
         startPositionSupport.recordStartBoundaryOf(bean, beanName);
-        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         // Only a FactoryBean's product is recorded here. Every other bean was recorded by the callback above, from
         // the instance before any proxy wrapped it, and overwriting that with what arrives here would record a
         // proxy class for a proxy ultimateTarget cannot unwrap. A product is what reaches this
