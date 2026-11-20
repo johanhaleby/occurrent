@@ -43,6 +43,8 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,7 +55,8 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * Docker-based, for the store's construction only. A MongoDB without journaling refuses a skipped-input write with
  * {@code j: true} on every attempt, so a store with the default retry strategy must not retry it, and it tells the
  * caller what the server needs. The server here has journaling, so a {@link MongoOperations} that refuses the
- * skipped-input write the way such a server does stands in for one without.
+ * skipped-input write the way such a server does stands in for one without. A strategy implemented outside the retry
+ * module, which retries every failure, must not retry the refusal either.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -139,5 +142,115 @@ class SpringMongoSagaStateStoreJournalingRefusalTest {
                 () -> assertThat(thrown).isInstanceOf(UncategorizedMongoDbException.class),
                 () -> assertThat(attempts).as("attempts").hasValue(SpringMongoSagaStateStore.DEFAULT_MAX_ATTEMPTS)
         );
+    }
+
+    private static final int CUSTOM_MAX_ATTEMPTS = 4;
+
+    /** A strategy of the application's own, which retries every failure up to {@code maxAttempts} attempts in all. */
+    private static final class RetryingEveryFailure implements RetryStrategy {
+        private final int maxAttempts;
+
+        private RetryingEveryFailure(int maxAttempts) {
+            this.maxAttempts = maxAttempts;
+        }
+
+        @Override
+        public <T> T execute(Supplier<T> supplier) {
+            RuntimeException last = null;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    return supplier.get();
+                } catch (RuntimeException e) {
+                    last = e;
+                }
+            }
+            throw requireNonNull(last);
+        }
+
+        // The interface's own execute(Runnable) runs through RetryImpl, which a strategy of the application's own is not
+        @Override
+        public void execute(Runnable runnable) {
+            execute(() -> {
+                runnable.run();
+                return null;
+            });
+        }
+    }
+
+    enum SkippedInputWrite {
+        RECORD(store -> store.recordSkippedInput("order-1", "q-1", new SkippedInput(0, "order-1@7"))),
+        DELETE_ONE(store -> store.deleteSkippedInput("order-1", "q-1", new SkippedInput(0, "order-1@7"))),
+        DELETE_ALL(store -> store.deleteSkippedInputs("order-1", "q-1"));
+
+        private final Consumer<SpringMongoSagaStateStore<Payment>> write;
+
+        SkippedInputWrite(Consumer<SpringMongoSagaStateStore<Payment>> write) {
+            this.write = write;
+        }
+    }
+
+    private static Throwable writeOnAStoreWithItsOwnStrategyRefusingWith(SkippedInputWrite write, MongoCommandException refusal, AtomicInteger attempts) {
+        SpringMongoSagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(refusingSkippedInputWrites(mongoOperations(), refusal, attempts), COLLECTION, Payment.class, null,
+                new RetryingEveryFailure(CUSTOM_MAX_ATTEMPTS));
+        return catchThrowable(() -> write.write.accept(store));
+    }
+
+    private void assertRefusedOnceNamingJournaling(SkippedInputWrite write) {
+        AtomicInteger attempts = new AtomicInteger();
+        MongoCommandException refusal = refusal(2, NO_JOURNALING);
+
+        Throwable thrown = writeOnAStoreWithItsOwnStrategyRefusingWith(write, refusal, attempts);
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage(SpringMongoSagaStateStore.JOURNALING_REQUIRED_MESSAGE),
+                () -> assertThat(thrown).hasRootCause(refusal),
+                () -> assertThat(attempts).as("attempts").hasValue(1)
+        );
+    }
+
+    private void assertRetriedUpToTheLimitOfTheStrategy(SkippedInputWrite write, MongoCommandException refusal) {
+        AtomicInteger attempts = new AtomicInteger();
+
+        Throwable thrown = writeOnAStoreWithItsOwnStrategyRefusingWith(write, refusal, attempts);
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(UncategorizedMongoDbException.class),
+                () -> assertThat(attempts).as("attempts").hasValue(CUSTOM_MAX_ATTEMPTS)
+        );
+    }
+
+    @Test
+    void a_record_refused_for_journaling_is_attempted_once_under_a_strategy_of_the_application_s_own_that_retries_every_failure() {
+        assertRefusedOnceNamingJournaling(SkippedInputWrite.RECORD);
+    }
+
+    @Test
+    void a_delete_of_one_record_refused_for_journaling_is_attempted_once_under_a_strategy_of_the_application_s_own_that_retries_every_failure() {
+        assertRefusedOnceNamingJournaling(SkippedInputWrite.DELETE_ONE);
+    }
+
+    @Test
+    void a_delete_of_every_record_refused_for_journaling_is_attempted_once_under_a_strategy_of_the_application_s_own_that_retries_every_failure() {
+        assertRefusedOnceNamingJournaling(SkippedInputWrite.DELETE_ALL);
+    }
+
+    @Test
+    void a_record_refused_for_another_reason_with_the_same_code_is_retried_by_a_strategy_of_the_application_s_own_up_to_its_attempt_limit() {
+        assertRetriedUpToTheLimitOfTheStrategy(SkippedInputWrite.RECORD, refusal(2, "a bad value"));
+    }
+
+    @Test
+    void a_delete_refused_for_another_reason_with_the_same_code_is_retried_by_a_strategy_of_the_application_s_own_up_to_its_attempt_limit() {
+        assertRetriedUpToTheLimitOfTheStrategy(SkippedInputWrite.DELETE_ONE, refusal(2, "a bad value"));
+    }
+
+    @Test
+    void a_record_refused_with_the_journaling_message_under_another_code_is_retried_by_a_strategy_of_the_application_s_own_up_to_its_attempt_limit() {
+        assertRetriedUpToTheLimitOfTheStrategy(SkippedInputWrite.RECORD, refusal(3, NO_JOURNALING));
+    }
+
+    @Test
+    void a_delete_refused_with_the_journaling_message_under_another_code_is_retried_by_a_strategy_of_the_application_s_own_up_to_its_attempt_limit() {
+        assertRetriedUpToTheLimitOfTheStrategy(SkippedInputWrite.DELETE_ALL, refusal(3, NO_JOURNALING));
     }
 }
