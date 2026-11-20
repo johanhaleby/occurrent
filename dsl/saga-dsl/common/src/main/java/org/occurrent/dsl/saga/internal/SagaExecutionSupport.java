@@ -430,7 +430,10 @@ public final class SagaExecutionSupport {
      * that applies it. An input that completes the instance ends the release with it.
      * <p>
      * The release reads and writes the marks with no reorder window, so every version it applies stays in them until the
-     * instance is released. With the configured reorder window, an earlier record that raised the mark of its type
+     * instance is released, see {@link #withReleased}. An input that completes the instance trims them to
+     * {@code reorderWindow} in the same write, since a completed instance replays nothing more. An instance quarantined
+     * again during the release keeps them all, because the records after the failing one stay, and the next release
+     * reads those records against the same marks. With the configured reorder window, an earlier record that raised the mark of its type
      * would put a later record of that type behind the window, and the release would delete it without applying it. A
      * record is written only while its input is new, so without a window a record that is not new names an input the
      * instance applied, through another record of the same input or through a replay whose delete a crash prevented.
@@ -443,7 +446,8 @@ public final class SagaExecutionSupport {
      *                               version
      */
     public static <E, S extends @Nullable Object, C> Outcome<S, C> replay(Saga<E, S, C> saga, String sagaId, SagaEnvelope<S> current,
-                                                                          SkippedInput record, SagaInput<E> input, EventMeta meta, Instant now) {
+                                                                          SkippedInput record, SagaInput<E> input, EventMeta meta, Instant now,
+                                                                          int reorderWindow) {
         if (!current.isReleasing()) {
             throw new IllegalStateException("Saga instance '" + sagaId + "' is not releasing, so it cannot replay '" + record.key() + "'.");
         }
@@ -458,7 +462,10 @@ public final class SagaExecutionSupport {
         Outcome<S, C> applied = apply(saga, sagaId, current, input, meta, now, NO_REORDER_WINDOW, hasStarted, startEvent);
         SagaEnvelope<S> next = Objects.requireNonNull(applied.envelope());
         if (next.isCompleted()) {
-            return applied;
+            SagaEnvelope<S> completed = new SagaEnvelope<>(next.sagaId(), next.state(), next.status(), next.version(), next.timers(),
+                    next.streamWatermarks(), next.positionWatermark(), next.createdAt(), next.updatedAt(), next.completedAt(), next.currentStep(),
+                    next.started(), next.failure(), withinWindow(next.streamMarks(), reorderWindow), next.quarantineSkipCount());
+            return Outcome.processed(completed, applied.commands(), applied.expectedVersion());
         }
         SagaEnvelope<S> releasing = new SagaEnvelope<>(next.sagaId(), next.state(), SagaStatus.QUARANTINED, next.version(), next.timers(),
                 next.streamWatermarks(), null, next.createdAt(), next.updatedAt(), next.completedAt(), next.currentStep(), next.started(),
@@ -635,7 +642,8 @@ public final class SagaExecutionSupport {
 
     // Quarantined again during a release, under the same quarantine id. The skip count stays, since the records after
     // the failing one stay. SagaCodec refuses to read a releasing instance without one, so 0 is only ever taken for
-    // an envelope built in code
+    // an envelope built in code. The marks keep every version the release applied, since trimming them to the window
+    // would put a record that stays behind it, and the next release would delete that record without applying it
     private static <S extends @Nullable Object> SagaEnvelope<S> requarantined(SagaEnvelope<S> current, Instant now, SagaFailure record,
                                                                              Map<String, StreamMarks> streamMarks) {
         Long count = current.quarantineSkipCount();

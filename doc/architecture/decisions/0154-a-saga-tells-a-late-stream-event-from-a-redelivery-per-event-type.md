@@ -50,10 +50,12 @@ The shipped Kafka topology keeps one stream's events of one type in order, so wi
 mark per stream with a window would not be enough, because two types of one stream can be more than any window apart.
 
 **The reorder window is a `SagaRunnerConfig` field, 256 by default.** An instance records at most that many applied
-versions below the highest one, per stream and event type, except while a release replays the inputs a quarantine
-recorded, which keeps every version it applies until the instance is `ACTIVE` again (ADR 178). Outside a release the
-stored state therefore never holds more than streams times types times 256 numbers, whatever the length of the stream. `SagaRunnerConfig.withReorderWindow(int)` changes the
-window for a feed that reorders further.
+versions below the highest one, per stream and event type. A release that replays the inputs a quarantine recorded is
+the exception (ADR 178). It keeps every version it applies until the write that makes the instance `ACTIVE` or
+completes it, so the document grows by one number per replayed input until then. An instance quarantined again during
+a release keeps those versions until a later release gets that far. Every other instance never holds more than
+streams times types times 256 numbers in its stored state, whatever the length of the stream.
+`SagaRunnerConfig.withReorderWindow(int)` changes the window for a feed that reorders further.
 
 The saga does not remember every applied version. A saga that listens to some of a stream's types sees permanent gaps
 in the versions, so a record of what is missing below the mark would never close, and the state would grow with the

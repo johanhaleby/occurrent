@@ -38,12 +38,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.dao.support.PersistenceExceptionTranslator;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
+import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.CollectionCallback;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
@@ -82,6 +84,7 @@ class SpringMongoSagaStateStoreRefusalRetryTest {
     private static final int ILLEGAL_OPERATION = 20;
     private static final int BAD_VALUE = 2;
     private static final int UNKNOWN_ERROR = 8;
+    private static final String NO_JOURNALING = "cannot use 'j' option when a host does not have journaling enabled";
 
     record Payment(long amount) {
     }
@@ -137,7 +140,7 @@ class SpringMongoSagaStateStoreRefusalRetryTest {
     @Test
     void a_live_compare_and_save_that_the_server_refuses_for_journaling_throws_the_journaling_message_after_one_attempt() {
         StoredSaga instance = anInstance("order-2");
-        FailingMongoTemplate template = FailingMongoTemplate.inDurableWrites(client, database, serverAnswer(BAD_VALUE, "cannot use 'j' option when a host does not have journaling enabled"));
+        FailingMongoTemplate template = FailingMongoTemplate.inDurableWrites(client, database, serverAnswer(BAD_VALUE, NO_JOURNALING));
         SpringMongoSagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(template, COLLECTION, Payment.class, null, severalFastAttempts());
 
         Throwable thrown = catchThrowable(() -> store.compareAndSave(instance, 1));
@@ -145,6 +148,48 @@ class SpringMongoSagaStateStoreRefusalRetryTest {
         assertAll(
                 () -> assertThat(thrown).as("a refusal of j: true").isInstanceOf(IllegalStateException.class).hasMessage(SpringMongoSagaStateStore.JOURNALING_REQUIRED_MESSAGE),
                 () -> assertThat(template.attempts()).as("attempts of the write, which the server refuses again every time").isEqualTo(1)
+        );
+    }
+
+    @Test
+    void a_skip_whose_transaction_the_server_refuses_for_journaling_throws_the_journaling_message_after_one_attempt() {
+        StoredSaga instance = anInstance("order-5");
+        FailingMongoTemplate template = FailingMongoTemplate.inTransactions(client, database, serverAnswer(BAD_VALUE, NO_JOURNALING));
+        SpringMongoSagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(template, COLLECTION, Payment.class, null, severalFastAttempts());
+
+        Throwable thrown = catchThrowable(() -> store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-5@7")));
+
+        assertAll(
+                () -> assertThat(thrown).as("a refusal of j: true").isInstanceOf(IllegalStateException.class).hasMessage(SpringMongoSagaStateStore.JOURNALING_REQUIRED_MESSAGE),
+                () -> assertThat(template.attempts()).as("attempts of the transaction, which the server refuses again every time").isEqualTo(1)
+        );
+    }
+
+    @Test
+    void a_live_compare_and_save_that_fails_with_another_bad_value_is_retried_until_the_attempts_are_used() {
+        StoredSaga instance = anInstance("order-6");
+        FailingMongoTemplate template = FailingMongoTemplate.inDurableWrites(client, database, serverAnswer(BAD_VALUE, "a bad value"));
+        SpringMongoSagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(template, COLLECTION, Payment.class, null, severalFastAttempts());
+
+        Throwable thrown = catchThrowable(() -> store.compareAndSave(instance, 1));
+
+        assertAll(
+                () -> assertThat(thrown).as("the failure that used the attempts").isInstanceOf(UncategorizedMongoDbException.class),
+                () -> assertThat(template.attempts()).as("attempts of a write that failed with the journaling code and another message").isEqualTo(ATTEMPTS)
+        );
+    }
+
+    @Test
+    void a_live_compare_and_save_that_fails_with_the_journaling_message_under_another_code_is_retried_until_the_attempts_are_used() {
+        StoredSaga instance = anInstance("order-7");
+        FailingMongoTemplate template = FailingMongoTemplate.inDurableWrites(client, database, serverAnswer(UNKNOWN_ERROR, NO_JOURNALING));
+        SpringMongoSagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(template, COLLECTION, Payment.class, null, severalFastAttempts());
+
+        Throwable thrown = catchThrowable(() -> store.compareAndSave(instance, 1));
+
+        assertAll(
+                () -> assertThat(thrown).as("the failure that used the attempts").isInstanceOf(UncategorizedMongoDbException.class),
+                () -> assertThat(template.attempts()).as("attempts of a write that failed with the journaling message and another code").isEqualTo(ATTEMPTS)
         );
     }
 

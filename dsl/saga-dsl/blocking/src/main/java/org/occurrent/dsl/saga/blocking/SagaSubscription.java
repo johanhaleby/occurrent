@@ -133,17 +133,17 @@ public final class SagaSubscription implements AutoCloseable {
      * <p>
      * It takes no lease and pauses nothing, so it can be called on any node. Calling it again on an instance that is
      * releasing goes on where the release stands. The timer poller also goes on with a release, on the node that holds
-     * the timer lease when there is a competing-consumer strategy, but only once the instance has gone a whole
-     * {@code timerPollInterval} without a write. A running release writes the instance for every input it applies, so
-     * the poller skips it, on this node or another, and goes on with one that failed on an input or was
-     * interrupted. The poller can still replay the input a release is on, and its commands are then dispatched twice,
-     * when the release takes longer than {@code timerPollInterval} over one input, and when this call comes while the
-     * poller replays the instance, since it then goes on beside the poller. Two pollers can replay it together too.
-     * Without a competing-consumer strategy every node polls, and with one, two nodes can poll at once while the timer
-     * lease moves from one to the other. A release that spends longer than {@code timerPollInterval} on inputs the
-     * stream marks show as applied leaves the instance's {@code updatedAt} as it is, so the poller goes on beside it
-     * too. Neither dispatches anything for those inputs, so only the first input that isn't applied can be dispatched
-     * twice.
+     * the timer lease when there is a competing-consumer strategy, but only once the instance's {@code updatedAt} is a
+     * whole {@code timerPollInterval} old. A running release writes the instance for every input it applies, so the
+     * poller skips it, on this node or another, and goes on with one that failed on an input or was interrupted. The
+     * poller and a release, or two polls, can still replay the same input and both dispatch its commands, in five
+     * cases: the release takes longer than {@code timerPollInterval} over one input, a poller's clock is that far
+     * ahead of the writer's, this call comes while the poller replays the instance, a release spends longer than that
+     * on inputs the stream marks show as applied, which it deletes in writes that leave the instance's
+     * {@code updatedAt} as it is, and two polls go on with the instance at the same time. Without a competing-consumer
+     * strategy every node polls, and with one, two nodes can poll at once while the timer lease moves from one to the
+     * other. For inputs the stream marks show as applied neither dispatches anything, so only the first input that
+     * isn't applied can be dispatched twice.
      * <p>
      * The input the instance was quarantined on gets a full quarantine budget again, measured from the start of the
      * release. A replayed input whose event the store no longer has quarantines the instance again on that input at

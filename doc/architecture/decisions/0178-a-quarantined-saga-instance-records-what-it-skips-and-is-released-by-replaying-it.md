@@ -162,7 +162,10 @@ acknowledges, whatever `writeConcernMajorityJournalDefault` says. A server that 
    version it applies stays among the `applied` ones. With a window of 1, a record of version 3 replayed after a record
    of version 5 of the same type would read as behind the window and be deleted without being applied. A record is
    written only while its input is new, so a record that isn't new to the marks read this way names an input the
-   instance applied. The write that makes the instance `ACTIVE` trims the marks back to the window.
+   instance applied. The write that makes the instance `ACTIVE` trims the marks back to the window, and so does the
+   write of a replayed input that completes the instance. An instance quarantined again during the release keeps
+   every version, because the records after the failing one stay. Trimmed marks would put such a record behind the
+   window, and the next release would delete it without applying it.
 3. The instance becomes `ACTIVE`, with the failure record and the skip counter cleared, only in a compare-and-set that
    expects the version release read before it found no records left. Release reads the instance first and the records
    after it, so a skip that records an input between the two reads has changed the version, and the write loses. The
@@ -532,6 +535,12 @@ The upgrade guide has the procedure for operators, in
   the store runs waits without limit. That slows a skip, the start of a release and every record a release replays by
   the time a majority takes, and a replica set without a majority available fails them where `w: 1` would have
   succeeded.
+- A release keeps every stream version it applies in the instance's stream marks until the write that makes the
+  instance `ACTIVE` or completes it, see point 2, so the instance's document grows by one number per replayed input
+  until then, and an instance quarantined again keeps them until a later release gets that far. A release whose
+  backlog takes the document past MongoDB's 16 MB limit fails on every write from that record on. The instance stays
+  releasing, the failure is never recorded, so its budget never runs out, and every poll applies that record again
+  and dispatches its commands again before the write fails. Deleting the instance is the only way out.
 - A quarantined instance keeps a record of every input it skips, with no limit. The records take space in the store
   until a release replays them, a replayed input completes the instance, or the 0.35.0 store deletes the instance. The
   downgrade in point 8 keeps the records of the instances that stay quarantined in the store, and nothing reads or
@@ -584,7 +593,9 @@ The upgrade guide has the procedure for operators, in
   them, so the instance can't be released, and the saga could only warn about it once it happened. A store of its own
   without the interface is refused at startup instead, before anything is quarantined.
 - **Keep the records in a list on the instance's document.** The list grows the document toward MongoDB's 16 MB limit,
-  so it needs a limit, and an instance that skips more inputs than the limit can't be released.
+  so it needs a limit, and an instance that skips more inputs than the limit can't be released. A release grows the
+  stream marks the same way, see the consequences, but by one number per input instead of a whole record, and only
+  until the release ends.
 - **Log an input whose event is missing and drop its record.** That loses the input. A wrong `EventStoreQueries`, one
   pointed at another database for example, would find no event for any record, drop them all, and set the instance
   `ACTIVE` without any of the inputs it skipped.
