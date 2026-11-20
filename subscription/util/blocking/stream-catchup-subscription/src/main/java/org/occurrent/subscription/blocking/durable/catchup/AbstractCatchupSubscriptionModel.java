@@ -2442,7 +2442,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
         try {
             betweenHandoverLockAndAction.run();
-            UnwantedDelivery.run(actionUnwanted, delivery);
+            UnwantedDelivery.run(subscriptionId, actionUnwanted, delivery);
         } finally {
             actionReturned.complete(null);
         }

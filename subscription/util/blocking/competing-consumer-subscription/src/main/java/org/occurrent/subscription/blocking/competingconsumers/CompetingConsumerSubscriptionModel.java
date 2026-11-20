@@ -2885,13 +2885,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * {@link #awaitTheLease}. When an interrupt ended the wait and the interrupt flag was clear as the event came, the
      * action runs with the flag clear, and the flag is set again once the action returns or throws. One that withdraws
      * the event sets the flag in {@link #awaitTheLease}. Otherwise the flag is not changed here, so an interrupt that comes after the wait, or while the lease strategy is asked and it then reports
-     * the lease held, can be set while the action runs.
+     * the lease held, can be set while the action runs. The action runs with no {@link UnwantedDelivery} stage on the
+     * thread, so an event it delivers on this thread to another subscription isn't withdrawn because the wrapped model no
+     * longer wants the event of this subscription.
      */
     private Consumer<CloudEvent> deliveredUnderTheLease(SubscriptionIdAndSubscriberId key, Delivery delivery, Consumer<CloudEvent> action) {
         return event -> {
             boolean interruptedWhileWaiting = awaitTheLease(key, delivery);
             try {
-                action.accept(event);
+                // With no stage on the thread, so an event the action delivers to another subscription on this thread
+                // doesn't read the one the wrapped model set for this event
+                UnwantedDelivery.without(() -> action.accept(event));
             } finally {
                 if (interruptedWhileWaiting) {
                     Thread.currentThread().interrupt();
@@ -2985,7 +2989,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         long waitMillis = DELIVERY_FIRST_WAIT_MILLIS;
         boolean waited = false;
         FailedLooks failedLooks = new FailedLooks();
-        BooleanSupplier unwanted = unwantedByTheWrappedModel(delivery);
+        BooleanSupplier unwanted = unwantedByTheWrappedModel(key.subscriptionId(), delivery);
         // Counted before the first look, so a prohibition told while the lease strategy is asked finds the event
         delivery.waiting.incrementAndGet();
         try {
@@ -3074,9 +3078,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private static final String UNWANTED_BY_THE_WRAPPED_MODEL = "the wrapped model no longer wants it, as when a cancel or a stop ends the catch-up replay that delivered it";
 
     // Whether the wrapped model no longer wants the event delivered on this thread, which wakes the waits of delivery
-    // once it no longer does. Never, when the wrapped model set no stage for the call.
-    private static BooleanSupplier unwantedByTheWrappedModel(Delivery delivery) {
-        CompletionStage<Void> stage = UnwantedDelivery.ofTheCallOnThisThread();
+    // once it no longer does. Never, when the wrapped model set no stage for the call to this subscription.
+    private static BooleanSupplier unwantedByTheWrappedModel(String subscriptionId, Delivery delivery) {
+        CompletionStage<Void> stage = UnwantedDelivery.ofTheCallOnThisThread(subscriptionId);
         if (stage == null) {
             return () -> false;
         }
