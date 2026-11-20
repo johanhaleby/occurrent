@@ -99,7 +99,7 @@ class DurableSubscriptionModelLockOrderTest {
     void a_subscribe_and_an_evaluation_recording_at_the_same_time_store_one_first_position_and_the_evaluation_starts_from_it() {
         EvaluatesWhileHoldingTheLock wrapped = new EvaluatesWhileHoldingTheLock("seen by the subscribing thread", "seen by the evaluation");
         RecordsEverySaveWithoutEvaluatingWriteConditions storage = new RecordsEverySaveWithoutEvaluatingWriteConditions();
-        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(1).startWhenFirstPositionCanBeOverwritten(true));
         DaemonThreads threads = new DaemonThreads();
 
         CompletableFuture<Subscription> subscribing = CompletableFuture.supplyAsync(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {

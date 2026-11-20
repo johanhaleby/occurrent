@@ -306,7 +306,8 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         ConditionRecordingCheckpointStorage storage = new ConditionRecordingCheckpointStorage();
         storage.evaluatesWriteConditions = false;
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
-        ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage,
+                new ReactorDurableSubscriptionModelConfig(1).startWhenFirstPositionCanBeOverwritten(true));
 
         Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
@@ -354,7 +355,8 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
             }
         };
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
-        ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage,
+                new ReactorDurableSubscriptionModelConfig(1).startWhenFirstPositionCanBeOverwritten(true));
 
         Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
