@@ -763,8 +763,9 @@ public class OccurrentProperties {
 
         /**
          * How long one event may keep failing before its saga instance can be quarantined on it. Defaults to five
-         * minutes, matching {@code SagaRunnerConfig.defaults()}. Leave it out for the default. A blank value stops the
-         * application from starting, since it kept quarantine off in 0.34.0. Set
+         * minutes, matching {@code SagaRunnerConfig.defaults()}. Leave it out for the default. A blank value stops an
+         * application with at least one {@code @Saga} from starting while quarantine is enabled, since it kept
+         * quarantine off in 0.34.0. Set
          * {@code occurrent.saga.quarantine-enabled=false} to turn quarantine off. A quarantined instance records the
          * inputs it skips, and {@code SagaSubscription.release(sagaId)} brings it back by replaying them.
          * <p>

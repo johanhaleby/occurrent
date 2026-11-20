@@ -66,7 +66,10 @@ other sections compile fine and behave differently, so read them first.
   until you pass it one or call `disableQuarantine()`. Stop every 0.34.0 node that runs sagas before any 0.35.0 node
   starts, since a 0.34.0 node fails on every event for an instance that 0.35.0 quarantined. On MongoDB such an
   instance is stored as `QUARANTINED_RECORDING`, so a query of your own for `status: "QUARANTINED"`, such as the
-  0.34.0 runbook's, no longer finds it. Breaks the build only for a record pattern over `SagaFailure` or `SagaEnvelope`.
+  0.34.0 runbook's, no longer finds it. `SpringMongoSagaStateStore` refuses a collection name that ends in
+  `_skipped_inputs`, creates a second collection next to its own, and reads instances from the primary, with
+  quarantine on or off. Breaks the build only for a record pattern over `SagaFailure`, `SagaEnvelope` or
+  `SagaRunnerConfig`.
 - [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due). A failed
   timer is tried again after every instance that was already due. Compiles unchanged unless you use a record pattern
   over `TimerEntry`.
@@ -294,8 +297,8 @@ the dependency is 0.35.0 no type has that name, so they change nothing.
   [Five types the Spring Boot starters share move to an internal package](#five-types-the-spring-boot-starters-share-move-to-an-internal-package).
 - No recipe rewrites a `DcbConsistencyToken` or the streams that create one. See
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
-- No recipe rewrites a record pattern over `SagaFailure` or `SagaEnvelope`, and none changes how
-  quarantine is configured. See
+- No recipe rewrites a record pattern over `SagaFailure`, `SagaEnvelope` or `SagaRunnerConfig`, and none changes
+  how quarantine is configured. See
   [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
 
 ## A global position is no longer a saga redelivery key
@@ -855,14 +858,21 @@ and the issue is [#1259](https://github.com/johanhaleby/occurrent/issues/1259).
 - A saga that never configured quarantine, built from `SagaRunnerConfig.defaults()`, run with a `SagaRunner.run`
   overload that takes no `SagaRunnerConfig`, or a `@Saga` with `occurrent.saga.quarantine-after` left out. It now
   quarantines an instance whose event keeps failing.
-- A Spring Boot application that set `occurrent.saga.quarantine-after` blank to keep quarantine off. It fails at
-  startup.
+- A Spring Boot application with at least one `@Saga` that set `occurrent.saga.quarantine-after` blank to keep
+  quarantine off. It fails at startup unless it sets `occurrent.saga.quarantine-enabled=false`.
 - A `SagaRunner` you build yourself without an `EventStoreQueries`, when quarantine is on. It fails at startup.
 - A Spring Boot application with no `EventStoreQueries` bean, or several and none of them `@Primary`, when quarantine
   is on. It fails at startup.
 - A `SagaStateStore` of your own.
 - An instance that 0.34.0 quarantined.
-- A record pattern over `SagaFailure` or `SagaEnvelope`.
+- A record pattern over `SagaFailure`, `SagaEnvelope` or `SagaRunnerConfig`.
+- A `SpringMongoSagaStateStore` on a collection whose name ends in `_skipped_inputs`, which includes a `@Saga` whose
+  id makes the default `saga-<id>` name end in it. The constructor throws an `IllegalArgumentException`, with
+  quarantine on or off.
+- A `SpringMongoSagaStateStore` whose `MongoOperations` reads from secondaries. The store now reads saga instances and
+  skipped inputs from the primary.
+- Every `SpringMongoSagaStateStore`, which creates a `<collection>_skipped_inputs` collection with two indexes on it
+  when it is constructed, with quarantine on or off.
 - An upgrade from 0.34.0, which stops every 0.34.0 node that runs sagas before any 0.35.0 node starts, and a rollback
   to 0.34.0, as [Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) describes.
 
@@ -915,12 +925,19 @@ means and what to do next. In Spring Boot the saga's `SagaSubscription` is the `
 The timer poller goes on with a release that failed on an input or was interrupted. One poll replays at most
 `timerBatchLimit` records, 100 by default, shared evenly among the releasing instances it lists, at least one each, and
 the next poll goes on where the last one stopped. A `release` call has no such bound. The poller goes on with an
-instance only once it has gone a whole `timerPollInterval` without a write, so it skips a release that is still
-running on any node, as long as that release takes less than `timerPollInterval` over each input. Two more cases let
-the poller and a release replay the same input and dispatch its commands twice. A `release` call made while the poller
-replays the instance goes on beside the poller. A release that spends longer than `timerPollInterval` on inputs the
-stream marks show as applied writes nothing, so the poller goes on beside it, though neither dispatches anything until
-the first input that isn't applied.
+instance only once its `updatedAt` is a whole `timerPollInterval` old. A release writes the instance for every input it
+applies and the first time an input fails, and an input the instance skips doesn't change `updatedAt`, so the poller
+skips a release that is still running on any node. The poller and a release, or two polls, can still replay the same
+input and dispatch its commands twice, in five cases, which
+[the quarantined saga runbook](../runbooks/quarantined-saga-instance.md#5-you-release-the-instance) lists:
+
+- A release takes longer than `timerPollInterval` over one input.
+- A poller's clock is `timerPollInterval` or more ahead of the clock of the node that wrote.
+- A `release` call made while the poller replays the instance goes on beside the poller.
+- A release spends longer than `timerPollInterval` on inputs the stream marks show as applied. It writes nothing for
+  them, so the poller goes on beside it, though neither dispatches anything until the first input that isn't applied.
+- Two polls read the instance at the same time and both go on with it. Without a competing-consumer strategy every
+  node polls, and with one, two nodes can poll at once while the timer lease moves from one to the other.
 
 A timer that came due while the instance was quarantined fires after every recorded input has been replayed, because a
 saga's timers run on processing time. For a saga that uses a timer as a deadline, a replayed input from after the
@@ -984,8 +1001,8 @@ one listed and from the first id again once a poll lists fewer than `limit`. Non
 ### What to do
 
 If you don't want quarantine, turn it off with `SagaRunnerConfig.defaults().disableQuarantine()` or
-`occurrent.saga.quarantine-enabled=false`. A blank `occurrent.saga.quarantine-after` no longer keeps it off, and the
-application fails at startup on one.
+`occurrent.saga.quarantine-enabled=false`. A blank `occurrent.saga.quarantine-after` no longer keeps it off, and an
+application with at least one `@Saga` fails at startup on one while quarantine is enabled.
 
 When you build a `SagaRunner` yourself with quarantine on, call `eventStoreQueries(..)` with the event store the saga's
 subscription reads from, or the runner refuses to start.
@@ -1002,7 +1019,11 @@ An instance that 0.34.0 quarantined can't be released. Delete it as
 [the quarantined saga runbook](../runbooks/quarantined-saga-instance.md#6-you-delete-the-instance-once-you-have-decided-not-to-recover-it)
 describes, once you have decided not to recover it.
 
-Add the new bindings to a record pattern over `SagaFailure` or `SagaEnvelope`. No recipe does it.
+Add the new bindings to a record pattern over `SagaFailure`, `SagaEnvelope` or `SagaRunnerConfig`. No recipe does it.
+
+Rename a `SpringMongoSagaStateStore` collection whose name ends in `_skipped_inputs`, or the `@Saga` id behind it. Let
+the MongoDB user the store connects with create the `<collection>_skipped_inputs` collection and its indexes. When you
+sent saga reads to secondaries to spare the primary, expect that load on the primary now.
 
 ### Upgrading from 0.34.0 and rolling back to it
 

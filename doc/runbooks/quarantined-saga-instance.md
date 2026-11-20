@@ -307,7 +307,9 @@ SagaSubscription.ReleaseResult result = subscription.release("order-4711");
 ```
 
 A release takes no lease and pauses nothing, so you can call it on any node. It dispatches the commands the replayed
-inputs produce, the same commands those events would have produced had the instance never stopped. Make sure the
+inputs produce. Those are the commands the inputs would have produced had the instance never stopped, except where a
+timer is involved. A timer that came due fires only after the replay, as the paragraph on timers above says, and a
+timer a replayed input sets counts from the release, not from when the input arrived. Make sure the
 process has not finished some other way in the meantime, which is what step 4 was for.
 
 `release` reads the events with the `EventStoreQueries` the runner was given through `SagaRunner.eventStoreQueries(..)`.
@@ -327,13 +329,15 @@ What `release` returns, and what to do next:
 
 **When an input fails again.** `release` logs a `WARN` that the instance failed on the event while it was releasing,
 and returns `STILL_RELEASING`. After every poll the timer poller goes
-on with each instance that is releasing, which with a competing-consumer strategy happens only on the node that holds
-the saga's timer lease, and without one on every node. The poller also goes on with a release that a crash or a
-restart interrupted. It does either only once the instance has gone a whole `timerPollInterval`, 15 seconds by
-default, without a write, so it skips a release that is still running. You can call `release` again too, and it goes
-on where the release stands.
+on with each instance that is releasing, which with a competing-consumer strategy happens on the node that holds the
+saga's timer lease, and without one on every node. The poller also goes on with a release that a crash or a restart
+interrupted. It does either only once the instance's `updatedAt` is a whole `timerPollInterval` old, 15 seconds by
+default. A release writes the instance for every input it applies and the first time an input fails, and an input the
+instance skips doesn't change `updatedAt`, so the poller skips a release that is still running. You can call `release`
+again too, and it goes on where the release stands.
 
-The poller and a release can still replay the same input, and both dispatch its commands, in four cases:
+The poller and a release, or two polls, can still replay the same input, and both dispatch its commands, in five
+cases:
 
 - The release takes longer than `timerPollInterval` over one input.
 - The poller's clock is `timerPollInterval` or more ahead of the clock of the node that wrote.
@@ -341,6 +345,10 @@ The poller and a release can still replay the same input, and both dispatch its 
 - The release spends longer than `timerPollInterval` on inputs the stream marks show as applied. It deletes their
   records without writing the instance, so the poller goes on beside it. Neither dispatches anything for those inputs,
   so only the first input that isn't applied can have its commands dispatched twice.
+- Two polls read the instance at the same time, once its `updatedAt` is `timerPollInterval` old, and both go on with
+  it. Without a competing-consumer strategy every node polls. With one, two nodes can poll at once while the timer
+  lease moves from one to the other, so the lease does not rule this case out. An input that fails again within its
+  budget writes nothing, so while it keeps failing, every node that polls tries it again.
 
 A receiver handles such a repeat the way it handles a live input delivered twice.
 
@@ -516,7 +524,7 @@ which is the race in step 6.
 `SagaRunnerConfig.quarantineAfter` is how long one event has to keep failing before its instance can be quarantined
 on it. `SagaRunnerConfig.defaults()` sets it to 5 minutes from 0.35.0, and in 0.34.0 it was empty, which means never.
 On the annotation path it is `occurrent.saga.quarantine-after` instead, which is 5 minutes when it is left out. A
-blank value stops the application from starting.
+blank value stops an application with at least one `@Saga` from starting while quarantine is enabled.
 
 With quarantine on, from the defaults or set yourself, a `SagaRunner` on a subscription model that retains every
 event it delivers refuses to start without an `EventStoreQueries`, since `release` in step 5 reads the skipped inputs
@@ -541,9 +549,9 @@ minutes, so an instance is not quarantined for an outage that would have resolve
 Turning quarantine off restores the 0.33.0 behaviour, where the saga is never quarantined. How you say that differs
 by path. On the annotation path set `occurrent.saga.quarantine-enabled=false`, and otherwise call
 `SagaRunnerConfig.disableQuarantine()`. Removing `occurrent.saga.quarantine-after` gives the default of 5 minutes, not
-off, and leaving it blank stops the application from starting. Zero is refused on both paths,
-because a reader can take it to mean "never" or "immediately". The property stops the application from starting when
-it has at least one `@Saga` while quarantine is enabled, and `withQuarantineAfter(Duration.ZERO)` throws an `IllegalArgumentException`.
+off. Zero is refused on both paths, because a reader can take it to mean "never" or "immediately". A blank value or
+zero in the property stops the application from starting when it has at least one `@Saga` while quarantine is
+enabled, and `withQuarantineAfter(Duration.ZERO)` throws an `IllegalArgumentException`.
 
 Either way this stops the next instance being quarantined. It does not bring back one you already have, and step 5
 still can.

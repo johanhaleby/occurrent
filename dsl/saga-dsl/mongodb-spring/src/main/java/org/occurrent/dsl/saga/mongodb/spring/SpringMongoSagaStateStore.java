@@ -291,6 +291,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // Non-null only for a flow saga: used to serialize FlowState.received as CloudEvents (stable types, package-independent).
     private final @Nullable CloudEventConverter<Object> cloudEventConverter;
     private final RetryStrategy retryStrategy;
+    private final RetryStrategy skippedInputWriteRetry;
 
     /**
      * Creates a store for a core saga, whose state serializes with the application's {@code MongoConverter}.
@@ -332,6 +333,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @SuppressWarnings("unchecked")
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter, RetryStrategy retryStrategy) {
         this.retryStrategy = Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
+        this.skippedInputWriteRetry = notRetryingJournalingRequired(retryStrategy);
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName cannot be null");
         if (collectionName.endsWith(SKIPPED_INPUTS_SUFFIX)) {
@@ -583,16 +585,28 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // caller's MongoOperations or collection has. A skip is acknowledged once its record is written, so a record a
     // failover rolled back would leave a skipped input that no release replays. execute(..) still translates exceptions
     private void writeSkippedInputs(java.util.function.Function<MongoCollection<Document>, ?> write) {
-        retryStrategy.execute(() -> {
+        skippedInputWriteRetry.execute(() -> {
             try {
                 return mongoOperations.execute(skippedInputsCollectionName, collection -> write.apply(skippedInputWrites(collection)));
             } catch (RuntimeException e) {
                 if (isJournalNotSupported(e)) {
-                    throw new IllegalStateException(JOURNALING_REQUIRED_MESSAGE, e);
+                    throw new JournalingRequired(e);
                 }
                 throw e;
             }
         });
+    }
+
+    // A server without journaling refuses every attempt, so it is not retried. Only a strategy built with
+    // RetryStrategy.retry() takes a predicate, and one implemented elsewhere retries what it retries
+    private static RetryStrategy notRetryingJournalingRequired(RetryStrategy retryStrategy) {
+        return retryStrategy instanceof RetryStrategy.Retry retry ? retry.mapRetryPredicate(retryIf -> retryIf.and(failure -> !(failure instanceof JournalingRequired))) : retryStrategy;
+    }
+
+    private static final class JournalingRequired extends IllegalStateException {
+        private JournalingRequired(Throwable cause) {
+            super(JOURNALING_REQUIRED_MESSAGE, cause);
+        }
     }
 
     private static MongoCollection<Document> skippedInputWrites(MongoCollection<Document> collection) {
