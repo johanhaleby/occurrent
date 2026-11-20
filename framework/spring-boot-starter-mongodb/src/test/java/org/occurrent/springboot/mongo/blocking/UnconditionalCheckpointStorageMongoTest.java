@@ -31,7 +31,9 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -103,6 +105,31 @@ class UnconditionalCheckpointStorageMongoTest {
                 // reported by the assertion that follows
             }
             assertThat(receiver.received).extracting(TestEvent::name).containsExactly("written-once-started");
+        }
+    }
+
+    @Test
+    void the_durable_model_the_starter_builds_accepts_a_first_position_written_unconditionally_when_the_property_is_set() {
+        ConfigurableApplicationContext[] started = new ConfigurableApplicationContext[1];
+        Throwable startupFailure = catchThrowable(() -> started[0] = SpringApplication.run(new Class<?>[]{UnconditionalStorageConfiguration.class, UnconditionalStorageApplication.class}, new String[]{
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("unconditional-checkpoint-storage-direct"),
+                "--spring.main.web-application-type=none",
+                "--occurrent.event-store.capabilities=stream",
+                "--occurrent.subscription.competing-consumer.fence-checkpoints=false",
+                "--occurrent.subscription.start-when-first-position-can-be-overwritten=true",
+                "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE}));
+        assertThat(startupFailure).as("what starting the application threw").isNull();
+
+        try (ConfigurableApplicationContext context = started[0]) {
+            UnconditionalCheckpointStorage storage = context.getBean(UnconditionalCheckpointStorage.class);
+            CompetingConsumerSubscriptionModel model = context.getBean(CompetingConsumerSubscriptionModel.class);
+
+            // Directly on the model rather than through @Subscription, so nothing but the model's own config decides
+            Throwable thrown = catchThrowable(() -> model.subscribe("subscribedDirectly", null, StartAt.subscriptionModelDefault(), __ -> {
+            }).waitUntilStarted(ofSeconds(15)));
+
+            assertThat(thrown).as("what subscribing a default start with nothing stored threw").isNull();
+            assertThat(storage.checkpoints).as("checkpoints stored").containsKey("subscribedDirectly");
         }
     }
 

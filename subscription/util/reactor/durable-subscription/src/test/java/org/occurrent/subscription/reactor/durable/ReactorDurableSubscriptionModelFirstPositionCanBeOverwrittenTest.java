@@ -202,6 +202,18 @@ class ReactorDurableSubscriptionModelFirstPositionCanBeOverwrittenTest {
         assertThat(startedAtCheckpoint(delegate)).isEqualTo("position-at-subscribe");
     }
 
+    @Test
+    void the_opt_in_survives_every_copy_of_the_config() {
+        ReactorDurableSubscriptionModelConfig optedIn = new ReactorDurableSubscriptionModelConfig(1).startWhenFirstPositionCanBeOverwritten(true);
+
+        assertThat(optedIn.startWhenNoStartPositionCanBeRecorded(true).startWhenFirstPositionCanBeOverwritten).as("after startWhenNoStartPositionCanBeRecorded").isTrue();
+        assertThat(optedIn.saveQuietPositionEvery(Duration.ofSeconds(7)).startWhenFirstPositionCanBeOverwritten).as("after saveQuietPositionEvery").isTrue();
+        assertThat(optedIn.neverSaveQuietPosition().startWhenFirstPositionCanBeOverwritten).as("after neverSaveQuietPosition").isTrue();
+        assertThat(optedIn.startWhenFirstPositionCanBeOverwritten(false).startWhenFirstPositionCanBeOverwritten).as("after turning it off again").isFalse();
+        assertThat(new ReactorDurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true).saveQuietPositionEvery(Duration.ofSeconds(7)).neverSaveQuietPosition().startWhenFirstPositionCanBeOverwritten)
+                .as("a config that never opted in").isFalse();
+    }
+
     private static String startedAtCheckpoint(RecordingSubscriptionModel delegate) {
         assertThat(delegate.startedAt).hasSize(1);
         assertThat(delegate.startedAt.getFirst()).isInstanceOf(StartAt.StartAtCheckpoint.class);
