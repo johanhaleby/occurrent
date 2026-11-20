@@ -453,8 +453,10 @@ positions for good.
 
 From 0.35.0 the subscription is refused with `IllegalStateException` before anything is written for it:
 
-* `DurableSubscriptionModel` throws from `subscribe(..)`, or from the evaluation of the start position that would have
-  recorded it. Those are the places it refuses a subscription that has no start position to record.
+* `DurableSubscriptionModel` throws from `subscribe(..)`, where it refuses a subscription that has no start position to
+  record. When a cancel on another node deletes the stored checkpoint before the subscription first starts, the
+  subscription starts from the checkpoint read during `subscribe(..)` and records no first position, so it can deliver
+  events again but skips none.
 * `ReactorDurableSubscriptionModel` signals it on `Subscription.waitUntilStarted()`.
 * Both Spring Boot starters fail startup when they would store a live start as the subscription's first checkpoint.
   For a handler on a bean built after startup, the creation of that bean fails instead.

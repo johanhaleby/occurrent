@@ -35,8 +35,11 @@ is built.
 A first position that would be written to a storage answering `false` from `evaluatesWriteConditionsFor(String)` is
 refused with `IllegalStateException` before anything is written for the subscription:
 
-* `DurableSubscriptionModel` refuses it where it refuses a subscription with no start position to record, from
-  `subscribe(..)` or from the evaluation of the start position that would have recorded it.
+* `DurableSubscriptionModel` refuses it from `subscribe(..)`, where it refuses a subscription with no start position to
+  record. The blocking MongoDB models retry a refusal from a later evaluation of the start position without end, so an
+  evaluation that finds the checkpoint deleted since, for example by a cancel on another node, starts from the
+  checkpoint read during `subscribe(..)` instead of recording a first position. That can deliver events again but
+  skips none.
 * `ReactorDurableSubscriptionModel` refuses it on `Subscription.waitUntilStarted()`, the way it refuses a first position
   that lost a race it can't order.
 * Both Spring Boot starters refuse it when they would store the live start as the first checkpoint, so the application
