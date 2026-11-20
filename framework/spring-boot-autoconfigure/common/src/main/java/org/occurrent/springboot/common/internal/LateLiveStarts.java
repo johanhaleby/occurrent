@@ -19,8 +19,6 @@ package org.occurrent.springboot.common.internal;
 
 import org.jspecify.annotations.Nullable;
 
-import java.lang.ref.Reference;
-import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.util.HashMap;
 import java.util.Map;
@@ -32,32 +30,31 @@ import java.util.Map;
  * Keyed by the instance, so two creations of one bean name at the same time, a prototype or a scoped bean built on
  * two threads, each keep the boundary they read. The instance is held weakly, since Spring calls no post-processor
  * when a bean's initialization throws, and a strong key would keep every instance whose creation failed alive until
- * the context closes.
+ * the context closes. Each access drops every entry whose instance was collected, so its boundary goes at the first
+ * access after the collection.
  */
 public final class LateLiveStarts {
-    private final ReferenceQueue<Object> collected = new ReferenceQueue<>();
     private final Map<InstanceKey, String> liveStartByInstance = new HashMap<>();
 
     public synchronized void put(Object instance, String liveStart) {
         removeCollected();
-        liveStartByInstance.put(new InstanceKey(instance, collected), liveStart);
+        liveStartByInstance.put(new InstanceKey(instance), liveStart);
     }
 
     public synchronized @Nullable String remove(Object instance) {
         removeCollected();
-        return liveStartByInstance.remove(new InstanceKey(instance, null));
+        return liveStartByInstance.remove(new InstanceKey(instance));
     }
 
     public synchronized @Nullable String get(Object instance) {
         removeCollected();
-        return liveStartByInstance.get(new InstanceKey(instance, null));
+        return liveStartByInstance.get(new InstanceKey(instance));
     }
 
+    // Checked on the key itself rather than polled from a ReferenceQueue, since the JVM enqueues a cleared reference
+    // on another thread some time after the collection, and an access in between would keep the boundary
     private void removeCollected() {
-        Reference<?> key;
-        while ((key = collected.poll()) != null) {
-            liveStartByInstance.remove(key);
-        }
+        liveStartByInstance.keySet().removeIf(key -> key.refersTo(null));
     }
 
     // Equal only to a key for the same instance, by identity, since a bean's own equals and hashCode can change
@@ -65,8 +62,8 @@ public final class LateLiveStarts {
     private static final class InstanceKey extends WeakReference<Object> {
         private final int identityHash;
 
-        InstanceKey(Object instance, @Nullable ReferenceQueue<Object> queue) {
-            super(instance, queue);
+        InstanceKey(Object instance) {
+            super(instance);
             this.identityHash = System.identityHashCode(instance);
         }
 

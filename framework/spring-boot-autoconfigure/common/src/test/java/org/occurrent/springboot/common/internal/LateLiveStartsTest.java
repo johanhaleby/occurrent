@@ -21,6 +21,10 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 
+import java.lang.ref.WeakReference;
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicReference;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -102,6 +106,35 @@ class LateLiveStartsTest {
 
         assertThat(lateLiveStarts.get(second)).isEqualTo("second");
         assertThat(lateLiveStarts.get(first)).isEqualTo("first");
+    }
+
+    @Test
+    void the_boundary_of_an_instance_that_was_collected_is_gone_at_the_next_access() throws InterruptedException {
+        WeakReference<Object> instance = putAnInstanceAndItsBoundary();
+        assertThat(collected(instance)).describedAs("the instance collected after it was dropped").isTrue();
+
+        lateLiveStarts.get(new Object());
+
+        assertThat(collected(boundary.get())).describedAs("the boundary of the collected instance still reachable after the next access").isTrue();
+    }
+
+    private final AtomicReference<WeakReference<String>> boundary = new AtomicReference<>();
+
+    private WeakReference<Object> putAnInstanceAndItsBoundary() {
+        Object instance = new Object();
+        String liveStart = new String("boundary");
+        boundary.set(new WeakReference<>(liveStart));
+        lateLiveStarts.put(instance, liveStart);
+        return new WeakReference<>(instance);
+    }
+
+    private static boolean collected(WeakReference<?> reference) throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (reference.refersTo(null) == false && System.nanoTime() < deadline) {
+            System.gc();
+            Thread.sleep(10);
+        }
+        return reference.refersTo(null);
     }
 
     private static final class Equal {
