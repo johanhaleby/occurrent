@@ -52,7 +52,7 @@ public final class SagaSubscription implements AutoCloseable {
     /** What {@link #release(String)} did. */
     public enum ReleaseResult {
         /**
-         * The instance replayed the input it was quarantined on and every input it skipped, and is
+         * The instance replayed the input it was quarantined on and every input it recorded, and is
          * {@link org.occurrent.dsl.saga.SagaStatus#ACTIVE}, or {@link org.occurrent.dsl.saga.SagaStatus#COMPLETED} when
          * one of them completed it.
          */
@@ -110,11 +110,11 @@ public final class SagaSubscription implements AutoCloseable {
 
     /**
      * Release the quarantined instance {@code sagaId}. It replays the input the instance was quarantined on and then
-     * every input it skipped while quarantined, in the order they were recorded, each from the event its record holds and
-     * applied the way a delivery is, deduplicated by the event's own stream id and stream version. The
-     * instance stays {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} while that runs, so an input that arrives
-     * meanwhile is recorded and replayed too, and becomes {@link org.occurrent.dsl.saga.SagaStatus#ACTIVE} once no
-     * recorded input is left.
+     * every input it recorded while quarantined, in the order they were recorded, each from the event its record holds
+     * and applied the way a delivery is, deduplicated by the event's own stream id and stream version. The instance
+     * stays {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} while that runs, so an input that arrives meanwhile
+     * is recorded and replayed too, and becomes {@link org.occurrent.dsl.saga.SagaStatus#ACTIVE} once no recorded input
+     * is left.
      * <p>
      * A replayed input's commands are dispatched before the write that applies it, so like a live input's they are
      * dispatched at least once. A write that loses only to inputs recorded meanwhile is written again without
@@ -135,10 +135,11 @@ public final class SagaSubscription implements AutoCloseable {
      * isn't applied can be dispatched twice.
      * <p>
      * The input the instance was quarantined on gets a full quarantine budget again, measured from the start of the
-     * release. An exception that the state store throws propagates unwrapped, and the instance stays releasing.
+     * release. An exception that the state store throws while reading the instance or its records, or while starting
+     * the release, propagates unwrapped.
      * <p>
-     * The records are the only copy of the inputs the instance skipped, so deleting a quarantined instance with
-     * {@code SagaStateStore.delete(sagaId)} deletes them. Release the instance first to apply them.
+     * The records are the only copy the saga keeps of the inputs the instance skipped, so deleting a quarantined
+     * instance with {@code SagaStateStore.delete(sagaId)} deletes them. Release the instance first to apply them.
      *
      * @return what the release did, see {@link ReleaseResult}
      * @throws IllegalStateException when the instance was quarantined by 0.34.0, which recorded none of the inputs it

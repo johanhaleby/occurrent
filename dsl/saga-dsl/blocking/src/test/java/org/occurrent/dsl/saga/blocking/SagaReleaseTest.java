@@ -69,9 +69,9 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * Releasing a quarantined saga instance, <a href="https://github.com/johanhaleby/occurrent/issues/1259">#1259</a>
- * and ADR 178. A quarantined instance records the key of every input it skips, and a release replays the input it was
- * quarantined on and then those, read back from the event store. Driven through {@link SagaExecution} with a clock and
- * a state store the test controls, so every interleaving is deterministic.
+ * and ADR 178. A quarantined instance records the key and the event of the inputs it skips, and a release replays the
+ * input it was quarantined on and then those, from the events the records hold. Driven through {@link SagaExecution}
+ * with a clock and a state store the test controls, so every interleaving is deterministic.
  */
 @DisplayName("Releasing a quarantined saga instance")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -2079,7 +2079,7 @@ class SagaReleaseTest {
                             .containsExactly(streamKey(quarantined.k()), streamKey(quarantined.a()), streamKey(quarantined.b())),
                     () -> assertThat(recorded.getFirst().seq()).isEqualTo(0L),
                     () -> assertThat(recorded.getFirst().event()).isEqualTo(quarantined.k()),
-                    () -> assertThat(recorded).extracting(SkippedInput::seq).isSorted()
+                    () -> assertThat(recorded).extracting(SkippedInput::seq).isSorted().doesNotHaveDuplicates()
             );
         }
 

@@ -54,7 +54,7 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
 
     @Override
     public void requireAtomicTransitions() {
-        // Every write takes the store's lock, so a transition is atomic
+        // Every write is one compute on the instance's id, so a transition is atomic
     }
 
     @Override

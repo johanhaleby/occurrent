@@ -74,7 +74,7 @@ other sections compile fine and behave differently, so read them first.
 - [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
   A saga quarantines an instance after 5 minutes unless you turn quarantine off, and `SagaSubscription.release(sagaId)`
   brings a quarantined instance back. Every saga quarantines, a push saga included, and a quarantined instance holds
-  the event of every input it skips, so deleting it deletes them. Stop every 0.34.0 node that runs sagas before any 0.35.0 node
+  the events of the inputs it skips, so deleting it deletes them. Stop every 0.34.0 node that runs sagas before any 0.35.0 node
   starts, since a 0.34.0 node fails on every event for an instance that 0.35.0 quarantined. On MongoDB such an
   instance is stored as `QUARANTINED_RECORDING`, so a query of your own for `status: "QUARANTINED"`, such as the
   0.34.0 runbook's, no longer finds it. `SpringMongoSagaStateStore` refuses a collection name that ends in
@@ -931,7 +931,7 @@ it holds every event it delivers, which was every push feed. In 0.35.0 a push sa
 quarantines an instance like any other saga, with or without a catch-up in front of the feed.
 
 The write that quarantines an instance records the event the instance stopped on. While it is quarantined, the
-instance records the event of every input it skips, in the order they arrive. A skip used to write nothing, and now
+instance records the events of the inputs it skips, in the order they arrive. A skip used to write nothing, and now
 writes the instance and the record together, in one transaction on MongoDB. The records are kept outside the
 instance's document, so a quarantine can record any number of inputs.
 
@@ -1001,7 +1001,7 @@ quarantine on whose `SagaStateStore` bean doesn't implement it fails at startup 
 interface and `occurrent.saga.quarantine-enabled=false`.
 
 A store that implements it keeps the skipped inputs, each with its event, and returns the event from
-`findSkippedInputs` with the same data, extensions and time it was given. It changes the records only in three
+`findSkippedInputs` with the same data, extensions and time it was given. Apart from `delete(sagaId)`, it changes the records only in three
 compare-and-sets on the instance, `compareAndSaveSkipped`, `compareAndSaveReplayed` and
 `compareAndSaveQuarantineEnded`. Each writes the instance and its records in one atomic write, and on a version
 conflict returns `false` and writes neither. The write that quarantines an instance is a `compareAndSaveSkipped` too,
@@ -1066,7 +1066,7 @@ each event that failed again, once every saga node runs 0.35.0, as
 [the stored saga state for late versions](#stored-saga-state-1) describes.
 
 The rest of this section says what happens when a 0.34.0 node runs next to a 0.35.0 node anyway, and after a rollback.
-A MongoDB subscription model, and a catch-up replay, writes its position or checkpoint only after the action returns,
+A MongoDB subscription model writes its position or checkpoint only after the action returns,
 so the event the 0.34.0 node fails on, and everything after it, is still ahead of the stored position and is delivered
 again. What a push feed does with that event is in the paragraph on `PARK` above.
 

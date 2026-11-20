@@ -66,10 +66,11 @@ arrive live while the instance still waits for its replay.
 
 ## Decision
 
-### 1. A quarantined instance records every event it skips, and holds the event
+### 1. A quarantined instance records the events it skips, and holds them
 
-Every event a quarantined instance skips is recorded with its key and the event itself, in the order the events
-arrive. The write that quarantines an instance also records the input it was quarantined on, K, as the first record of
+An event a quarantined instance skips is recorded with its key and the event itself, in the order the events
+arrive, unless the instance counts it as applied already. That is a redelivery of an input it applied before it was
+quarantined, or an event further behind than the reorder window, which an active instance skips too. The write that quarantines an instance also records the input it was quarantined on, K, as the first record of
 the quarantine. A timeout records nothing, because its timer stays on the instance, see point 6. A timeout never
 quarantines an instance either, since it has no redelivery key to quarantine on.
 
@@ -82,7 +83,7 @@ quarantined or last wrote has no quarantine id, see point 2, so its skips record
 
 K is recorded in the write that quarantines the instance, `compareAndSaveSkipped`, which inserts the instance at
 version 0 when K is its first input. K gets the sequence number 0 and the skip counter starts at 1, so K comes before
-every input the instance skips. K's event is the one the failing delivery has in hand. On a push source that delivery
+every input the instance records after it. K's event is the one the failing delivery has in hand. On a push source that delivery
 may be the only time the saga sees it, so the quarantining write is the one place it can be kept. When that write
 fails, the delivery throws, K isn't acknowledged, and the instance stays as its last write left it, so a redelivery of
 K that quarantines the instance records K then.
@@ -559,7 +560,7 @@ The upgrade guide has the procedure for operators, in
   backlog takes the document past MongoDB's 16 MB limit fails on every write from that record on. The instance stays
   releasing, the failure is never recorded, so its budget never runs out, and every poll applies that record again
   and dispatches its commands again before the write fails. Deleting the instance is the only way out.
-- A quarantined instance keeps a record of every input it skips, with no limit, and each record holds a whole event.
+- A quarantined instance keeps a record of the inputs it skips, with no limit on how many, and each record holds a whole event.
   The records take space in the store until a release replays them, a replayed input completes the instance, or the
   0.35.0 store deletes the instance. The downgrade in point 8 keeps the records of the instances that stay quarantined
   in the store, and nothing reads or deletes them, since a release, a completion and a delete all go by the instance's

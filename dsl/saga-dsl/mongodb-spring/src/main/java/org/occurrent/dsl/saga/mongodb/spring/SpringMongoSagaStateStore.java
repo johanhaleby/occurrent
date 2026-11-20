@@ -118,7 +118,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * A standalone server has no failover and refuses that read concern, so there the store skips the second read.
  * The transactions below read at read concern {@code snapshot}, everything the primary has when the transaction
  * starts, and their commit at {@code majority} returns only once a majority has all of it. A release ends the
- * quarantine of an instance only in such a transaction that finds no skipped input left.
+ * quarantine of an instance only in such a transaction, one that finds no skipped input left or completes the instance.
  * <p>
  * The three writes of {@link SagaStateStoreSkippedInputs} and the {@link #delete(String)} of a quarantined instance write
  * the instance and its skipped inputs in one MongoDB transaction, through a {@link MongoTransactionManager} on the
@@ -130,9 +130,9 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * the strategy retries, a {@code RetryStrategy} you implement yourself included.
  * <p>
  * The constructor asks the server for its deployment once, with {@code hello}. On a standalone server
- * {@link #requireAtomicTransitions()} throws, so a saga with quarantine on refuses to start. With quarantine off every
- * other call works there, except the {@link #delete(String)} of an instance quarantined earlier, which the server
- * refuses with the replica set message.
+ * {@link #requireAtomicTransitions()} throws, so a saga with quarantine on refuses to start. With quarantine off a saga
+ * runs there, since the runner then makes none of the three writes. A release or a {@link #delete(String)} of an
+ * instance quarantined earlier still writes in a transaction, which the server refuses with the replica set message.
  * <p>
  * Called inside a MongoDB transaction of the caller's on the same {@link MongoDatabaseFactory}, those writes join it.
  * Inside such a transaction the store sends each read and write once, and a failure reaches the caller as MongoDB

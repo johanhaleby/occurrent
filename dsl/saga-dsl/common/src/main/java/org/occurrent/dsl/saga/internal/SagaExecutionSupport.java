@@ -355,7 +355,10 @@ public final class SagaExecutionSupport {
         return new SkipToRecord(count, key);
     }
 
-    /** The {@link SkippedInput#seq()} of the input an instance is quarantined on, which comes before every input it skips. */
+    /**
+     * The {@link SkippedInput#seq()} of the input an instance is quarantined on, which comes before every other record
+     * of the quarantine.
+     */
     private static final long QUARANTINING_INPUT_SEQ = 0;
 
     /**

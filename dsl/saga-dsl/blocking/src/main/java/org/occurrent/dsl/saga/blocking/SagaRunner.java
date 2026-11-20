@@ -97,13 +97,13 @@ import static java.util.Objects.requireNonNull;
  *       {@link OutOfMemoryError} and nothing else. It says the process ran out of heap while this delivery held the
  *       thread, and any other delivery running then would have met the same thing.
  *       <p>
- *       An event the saga correlated is charged to that instance, and a quarantine records whichever event the
- *       instance is failing on then. Each failing event keeps its own clock, so an instance where two events fail in
- *       turn measures each from its own first failure, and the record names whichever event it stopped on.
- *       The quarantined instance stops there and records the event of every input it skips, and the event it stopped on.
+ *       An event the saga correlated is charged to that instance, and a quarantine records whichever event the instance
+ *       is failing on then. Each failing event keeps its own clock, so an instance where two events fail in turn
+ *       measures each from its own first failure, and the record names whichever event it stopped on. The quarantined
+ *       instance stops there and records the events of the inputs it skips, and the event it stopped on.
  *       {@link SagaSubscription#release(String)} brings it back by replaying the event it stopped on and then those
  *       inputs, from the records, and {@code SagaStateStore.delete(sagaId)} is how you abandon it. Deleting it deletes
- *       the only copy of the events it skipped, so release it first when they matter.
+ *       the only copy the saga keeps of the events it skipped, so release it first when they matter.
  *       <p>
  *       An event the saga could <em>not</em> correlate, because the converter or the id extractor threw, is never let
  *       past, whatever the budget. Not being able to say which instance it belongs to does not mean it belongs to none,

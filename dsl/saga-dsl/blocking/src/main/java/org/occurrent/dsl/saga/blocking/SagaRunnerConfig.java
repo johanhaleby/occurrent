@@ -124,7 +124,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
     /**
      * The default configuration: poll every 15 seconds, fire up to 100 due instances per poll, retry a lost save up to 50
      * times, require redelivery detection, and quarantine an instance whose event has kept failing for five minutes,
-     * recording every input it skips meanwhile. The poll interval only bounds how late a due timer fires, and saga
+     * recording the inputs it skips meanwhile. The poll interval only bounds how late a due timer fires, and saga
      * timeouts run at a minutes-to-days timescale, so 15 seconds (the same default as JobRunr) keeps the store query
      * load low while firing well within tolerance. Lower it only when you rely on short timeouts firing promptly.
      */
@@ -158,11 +158,12 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * fails again. Replaying a parked event, turning quarantine on for an event that failed while it was off, and
      * moving a MongoDB subscription back by hand to before a failed event all produce such an event.
      * <p>
-     * A quarantined instance skips every input addressed to it and records the event of each, and of the input it stopped
-     * on. {@link SagaSubscription#release(String)} brings it back by replaying those events, the one it stopped on first.
-     * Deleting a quarantined instance deletes the only copy of the events it skipped. A timer that came due meanwhile fires after all of them, so a recorded input from after a
-     * deadline can cancel or re-arm the timer before it fires. "A quarantined saga instance can be released, and
-     * quarantine is on by default" in the 0.35.0 upgrade guide says more.
+     * A quarantined instance records the events of the inputs it skips, and of the input it stopped on.
+     * {@link SagaSubscription#release(String)} brings it back by replaying those events, the one it stopped on first.
+     * Deleting a quarantined instance deletes the only copy the saga keeps of the events it skipped. A timer that came
+     * due meanwhile fires after all of them, so a recorded input from after a deadline can cancel or re-arm the timer
+     * before it fires. "A quarantined saga instance can be released, and quarantine is on by default" in the 0.35.0
+     * upgrade guide says more.
      * <p>
      * Use {@link #disableQuarantine()} to turn quarantine off.
      *

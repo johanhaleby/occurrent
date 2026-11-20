@@ -189,7 +189,8 @@ class SagaQuarantineWarningTest {
         assertThat(model.subscribed).isEqualTo(1);
     }
 
-    // Cannot write atomically, and has no use for the rest of the skipped input methods, since the runner refuses it at start
+    // Cannot write atomically, and has no use for the rest of the skipped input methods, since with quarantine on the
+    // runner refuses it at start
     private static final class StoreWithoutAtomicTransitions<S> extends StoreWithoutSkippedInputs<S> implements SagaStateStoreSkippedInputs {
         @Override
         public void requireAtomicTransitions() {

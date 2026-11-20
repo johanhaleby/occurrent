@@ -784,8 +784,8 @@ public class OccurrentProperties {
          * <p>
          * Every saga quarantines, whichever subscription model feeds it and whether or not an event store is around,
          * because a quarantined instance holds the events it skips itself. Deleting a quarantined instance deletes the
-         * only copy of them. A saga whose state store does not implement {@code SagaStateStoreSkippedInputs} stops the
-         * application from starting while quarantine is enabled.
+         * only copy the saga keeps of them. A saga whose state store does not implement
+         * {@code SagaStateStoreSkippedInputs} stops the application from starting while quarantine is enabled.
          */
         private @Nullable Duration quarantineAfter;
 

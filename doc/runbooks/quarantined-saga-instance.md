@@ -35,7 +35,7 @@ A quarantined instance applies no further events and fires no timers, and its re
 nothing it skipped is recorded as handled. The subscription still delivers those events, and the runner still reads
 the instance before skipping each one, which step 6 comes back to.
 
-From 0.35.0 the runner also records the key and the event of each input it skips, in the order they arrive, as a
+From 0.35.0 the runner also records the key and the event of the inputs it skips, in the order they arrive, as a
 record of its own outside the instance's document, and step 5 releases the instance by replaying them. In 0.34.0 nothing brings an instance out of quarantine, and deleting it in
 step 6 is the only ending.
 
@@ -269,9 +269,9 @@ that event has been failing since then.
 ### 5. [you] Release the instance
 
 From 0.35.0 `SagaSubscription.release(sagaId)` brings a quarantined instance back. A quarantined instance records the
-event of the input it stopped on, and of every input it skips, so the release reads nothing from the event store. It
+event of the input it stopped on, and of the inputs it skips, so the release reads nothing from the event store. It
 applies the event the instance stopped on the way a delivery is applied, and then does the same for every input the
-instance skipped while it was quarantined, in the order they arrived. The instance stays `QUARANTINED` while that
+instance recorded while it was quarantined, in the order they arrived. The instance stays `QUARANTINED` while that
 runs and becomes `ACTIVE` once no recorded input is left, so an event that arrives during the release is recorded and
 replayed too. Once it is `ACTIVE`, its timers fire again.
 
@@ -413,7 +413,7 @@ addressed to that instance is still delivered and still reads the instance from 
 skips it. From 0.35.0 the skip also records the event, in one write of the instance and the record together, a
 transaction on MongoDB, so a correlation id that keeps receiving events costs a read and that write for each one.
 
-Deleting a quarantined instance deletes the only copy of what it skipped. The records hold the events the instance
+Deleting a quarantined instance deletes the only copy the saga keeps of what it skipped. The records hold the events the instance
 skipped, and both deletes below remove them with the instance, so nothing can apply those events afterwards. Release
 the instance in step 5 instead when any of them matter.
 
@@ -604,4 +604,4 @@ covers the upgrade from 0.34.0.
 
 Deleting an instance is not reversible from inside Occurrent. Take a backup first if you want one, of both the saga
 collection and `<sagaCollection>_skipped_inputs`. The delete removes the instance's skipped-input records too, and an
-instance restored without them releases as if it skipped nothing, so every input it skipped stays unapplied.
+instance restored without them releases as if it skipped nothing, so the inputs it recorded stay unapplied.

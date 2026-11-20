@@ -61,10 +61,11 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * Docker-based. A quarantined instance holds the event of every input it skips in the records collection, and a
- * release applies that held event, with no read of the event store. Checks against a MongoDB replica set that a held
+ * Docker-based. A quarantined instance holds the events of the inputs it skips in the records collection, and a
+ * release applies those held events, with no read of the event store. Checks against a MongoDB replica set that a held
  * event, with its data, its time and the extensions the event store gave it, reads back with the id, type, source,
- * data, time and extension names of the event the subscription delivered, and that the release applies what was read back.
+ * data, time and extension names of the event the subscription delivered, and that the release applies what was read
+ * back.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)

@@ -44,9 +44,9 @@ public enum MongoDeployment {
     private static final int COMMAND_NOT_FOUND = 59;
 
     /**
-     * The deployment a store runs on, to be asked once when the store is created. A mongos answers {@code msg} isdbgrid,
-     * also through a load balancer, and a replica set member answers a {@code setName}. Every failure except a server
-     * that doesn't know {@code hello} propagates.
+     * The deployment of the server {@code runCommand} runs against. A store that needs it asks once, when it is
+     * created. A mongos answers {@code msg} isdbgrid, also through a load balancer, and a replica set member answers a
+     * {@code setName}. Every failure except a server that doesn't know {@code hello} propagates.
      *
      * @param runCommand runs a command against the store's database
      */

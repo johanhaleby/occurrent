@@ -215,7 +215,7 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     /**
      * Whether the instance is quarantined and a release of it is running, which is when its failure record has
      * {@link SagaFailure#releasedAt()} set. The status stays {@link SagaStatus#QUARANTINED} until the release has
-     * applied every input it skipped.
+     * applied every input it recorded.
      */
     public boolean isReleasing() {
         return isQuarantined() && failure != null && failure.isReleasing();

@@ -69,7 +69,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists both. When the instance is quarantined, this class
  * returns normally instead of rethrowing.
  * <p>
- * A quarantined instance records every input it skips with its event, and the write that quarantines it records the
+ * A quarantined instance records the inputs it skips with their events, and the write that quarantines it records the
  * input it was quarantined on the same way. {@link #release} replays those events in the order they were recorded, from
  * the records themselves, as ADR 178 describes.
  * <p>
@@ -411,7 +411,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 // Written without the state for the same reason it was read without it. The envelope carries whatever
                 // the read gave, so saving it whole would erase the state somebody needs once the converter is repaired.
                 // The write that quarantines also records the failing event, so a release replays it from there. A
-                // failure of it propagates, which leaves the event unacknowledged.
+                // failure of it leaves the event unacknowledged, since the delivery's own failure is still thrown.
                 boolean saved = record.quarantined()
                         ? envelopes.compareAndSaveSkipped(skippedInputs(sagaId), record.envelope(), record.expectedVersion(),
                                 Objects.requireNonNull(record.envelope().quarantineId(), "quarantineId"),
