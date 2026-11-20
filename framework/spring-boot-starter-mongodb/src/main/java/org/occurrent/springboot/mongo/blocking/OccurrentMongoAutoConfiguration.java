@@ -283,7 +283,8 @@ public class OccurrentMongoAutoConfiguration<E> {
         // Checkpoints after every event by default, see DurableSubscriptionModel javadoc for the EveryN.every(n)
         // throughput tradeoff if checkpoint write volume becomes a bottleneck.
         DurableSubscriptionModelConfig durableConfig = new DurableSubscriptionModelConfig(EveryN.everyEvent())
-                .startWhenNoStartPositionCanBeRecorded(occurrentProperties.getSubscription().isStartWhenNoStartPositionCanBeRecorded());
+                .startWhenNoStartPositionCanBeRecorded(occurrentProperties.getSubscription().isStartWhenNoStartPositionCanBeRecorded())
+                .startWhenFirstPositionCanBeOverwritten(occurrentProperties.getSubscription().isStartWhenFirstPositionCanBeOverwritten());
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage, durableConfig, writeVersionSource);
         CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(useCheckpointStorage(storage, writeVersionSource)
                 .andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000));

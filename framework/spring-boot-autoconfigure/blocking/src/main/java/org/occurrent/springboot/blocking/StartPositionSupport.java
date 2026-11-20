@@ -312,8 +312,31 @@ class StartPositionSupport {
             return false;
         }
         boolean checkpointAlreadyExisted = checkpointStorage.exists(subscriptionId);
+        if (!checkpointAlreadyExisted && !checkpointStorage.evaluatesWriteConditionsFor(subscriptionId) && !startWhenFirstPositionCanBeOverwritten()) {
+            throw firstPositionCanBeOverwritten(checkpointStorage, subscriptionId);
+        }
         StartPositionPin.pinOrSaveUnconditionally(checkpointStorage, subscriptionId, checkpointAlreadyExisted, boundary);
         return !checkpointAlreadyExisted;
+    }
+
+    // Refused before the pin writes anything, where the first checkpoint could only be written unconditionally. The
+    // durable model refuses the same subscription the same way when no boundary is pinned
+    private IllegalStateException firstPositionCanBeOverwritten(CheckpointStorage checkpointStorage, String subscriptionId) {
+        return new IllegalStateException("Checkpoint storage " + checkpointStorage.getClass().getName() + " does not evaluate " +
+                                         "write conditions for subscription " + subscriptionId + ", so the start boundary " +
+                                         "pinned as its first checkpoint could only be written unconditionally. Two nodes " +
+                                         "starting it at the same moment could then overwrite each other's first checkpoint " +
+                                         "and lose the events between the two positions. The subscription is therefore " +
+                                         "refused before anything is written. Use a CheckpointStorage that evaluates " +
+                                         "CheckpointWriteCondition.ifAbsent() and answers true from " +
+                                         "evaluatesWriteConditionsFor(String), such as the storages Occurrent ships, or set " +
+                                         "occurrent.subscription.start-when-first-position-can-be-overwritten=true to start " +
+                                         "anyway, accepting that loss.");
+    }
+
+    private boolean startWhenFirstPositionCanBeOverwritten() {
+        return applicationContext.getBeanProvider(OccurrentProperties.class).getIfAvailable(OccurrentProperties::new)
+                .getSubscription().isStartWhenFirstPositionCanBeOverwritten();
     }
 
     // The competing consumer layer lets the instances compete and the durable layer stores and reads a position. A

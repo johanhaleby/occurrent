@@ -91,6 +91,16 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turns the refusal into a
  * start without a recorded position, accepting the loss window it documents.
  * <p>
+ * The first position is written with {@link CheckpointWriteCondition#ifAbsent()}, so of two nodes recording one at the
+ * same moment, only one write is stored. A {@link CheckpointStorage} that answers {@code false} from
+ * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} could only write it unconditionally, and then the two
+ * nodes could overwrite each other's and lose the events between the two positions. Such a subscription is refused with
+ * {@link IllegalStateException} where a subscription with no position to record is, before anything is written for it.
+ * A subscription with a checkpoint already stored, or with a {@link StartAt} of its own, records no first position and
+ * is never refused this way. Every storage Occurrent ships evaluates write conditions.
+ * {@link DurableSubscriptionModelConfig#startWhenFirstPositionCanBeOverwritten(boolean)} writes the first position
+ * unconditionally instead, with a warning, accepting that loss.
+ * <p>
  * The position is recorded once the wrapped model's {@code subscribe(..)} has returned, or earlier if the wrapped model
  * evaluates the start position before then, and the wrapped model gets no start position before it is stored. So with
  * the MongoDB subscription models Occurrent ships, a subscribe that the wrapped model refuses with
@@ -111,8 +121,9 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * a later {@code subscribe(..)} of the id has stopped the checkpoint writes of its subscribe. On a storage that
  * evaluates write conditions, an evaluation whose write loses starts from the position
  * {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint)} answers, or else from the one it reads back,
- * and is refused when that read fails or finds nothing. On a storage that doesn't, its write replaces whatever is
- * stored.
+ * and is refused when that read fails or finds nothing. On a storage that doesn't, the evaluation is refused, and with
+ * {@link DurableSubscriptionModelConfig#startWhenFirstPositionCanBeOverwritten(boolean) startWhenFirstPositionCanBeOverwritten(true)}
+ * its write replaces whatever is stored.
  * <p>
  * When a wrapped model's {@code subscribe(..)} throws, this model cancels nothing on the wrapped model, as in 0.33.0,
  * since a subscription the wrapped model holds for the id may belong to another subscribe. A wrapped model of your own
@@ -750,6 +761,25 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                          "StartAt of your own records no position and makes no such promise.");
     }
 
+    // Thrown where noStartPositionCanBeRecorded is, before anything is written for the subscription, so it reaches the
+    // caller of subscribe, or the evaluation that would have recorded the first position
+    private IllegalStateException firstPositionCanBeOverwritten(String subscriptionId) {
+        return new IllegalStateException("Checkpoint storage " + storage.getClass().getName() + " does not evaluate " +
+                                         "write conditions for subscription " + subscriptionId + ", so the first " +
+                                         "position recorded for it could only be written unconditionally. Two nodes " +
+                                         "recording a first position for this subscription at the same moment could " +
+                                         "then overwrite each other's and lose the events between the two positions. " +
+                                         "The subscription is therefore refused before anything is written. Use a " +
+                                         "storage that evaluates CheckpointWriteCondition.ifAbsent() and answers true " +
+                                         "from evaluatesWriteConditionsFor(String), such as the storages Occurrent " +
+                                         "ships. To start anyway, accepting that loss, configure " +
+                                         "DurableSubscriptionModelConfig.startWhenFirstPositionCanBeOverwritten(true), " +
+                                         "or set occurrent.subscription.start-when-first-position-can-be-overwritten=true " +
+                                         "when using the Spring Boot starter. A subscription with a checkpoint already " +
+                                         "stored, or with a StartAt of your own, records no first position and is never " +
+                                         "refused this way.");
+    }
+
     // Pinned with ifAbsent(), the same protocol ManualStartSubscriptionModel and ReactorDurableSubscriptionModel
     // use, rather than the read-then-write this replaced, which could overwrite a first checkpoint another node
     // wrote in between. A storage able to compare the two settles a lost race by position instead, through
@@ -757,10 +787,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // is the one this node itself computed.
     private Checkpoint saveFirstPosition(String subscriptionId, Checkpoint globalCheckpoint) {
         if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
-            // Nothing here can make a storage that writes unconditionally do otherwise, so this is the write
-            // before this method existed and two nodes recording a first position at the same moment keep the
-            // race. Logged rather than refused, because refusing would take out a storage that has worked until
-            // now over a capability it never claimed.
+            // Nothing here can make a storage that writes unconditionally do otherwise, so two nodes recording a
+            // first position at the same moment would race. Refused before anything is written, unless the config
+            // accepts that loss
+            if (!config.startWhenFirstPositionCanBeOverwritten) {
+                throw firstPositionCanBeOverwritten(subscriptionId);
+            }
             log.warn("Checkpoint storage {} does not evaluate write conditions for subscription {}, so the first " +
                      "position recorded for it is written unconditionally. Two nodes recording a first position " +
                      "for this subscription at the same moment can then lose the events between the two positions. " +

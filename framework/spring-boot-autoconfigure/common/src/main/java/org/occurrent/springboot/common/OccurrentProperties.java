@@ -421,6 +421,18 @@ public class OccurrentProperties {
         private boolean startWhenNoStartPositionCanBeRecorded = false;
 
         /**
+         * Whether a subscription whose first position would be recorded in a {@code CheckpointStorage} that answers
+         * {@code false} from {@code evaluatesWriteConditionsFor(String)} starts anyway instead of being refused. The
+         * first position is written with {@code CheckpointWriteCondition.ifAbsent()}, so of two nodes recording one at
+         * the same moment only one write is stored. A storage that can't evaluate that condition could only write it
+         * unconditionally, and then the two nodes can overwrite each other's first position and lose the events between
+         * the two positions for good. Starting anyway writes it unconditionally, with a warning. The default is
+         * {@code false}, which refuses such a subscription when it is created, before anything is written for it. Every
+         * {@code CheckpointStorage} Occurrent ships evaluates write conditions, so only one of your own is affected.
+         */
+        private boolean startWhenFirstPositionCanBeOverwritten = false;
+
+        /**
          * Tuning for the catch-up-then-live handover used by a push-fed projection's bootstrap.
          */
         private CatchupThenLiveProperties catchupThenLive = new CatchupThenLiveProperties();
@@ -450,6 +462,14 @@ public class OccurrentProperties {
 
         public void setStartWhenNoStartPositionCanBeRecorded(boolean startWhenNoStartPositionCanBeRecorded) {
             this.startWhenNoStartPositionCanBeRecorded = startWhenNoStartPositionCanBeRecorded;
+        }
+
+        public boolean isStartWhenFirstPositionCanBeOverwritten() {
+            return startWhenFirstPositionCanBeOverwritten;
+        }
+
+        public void setStartWhenFirstPositionCanBeOverwritten(boolean startWhenFirstPositionCanBeOverwritten) {
+            this.startWhenFirstPositionCanBeOverwritten = startWhenFirstPositionCanBeOverwritten;
         }
 
         // The released getter/setter shape (isX(): boolean / setX(boolean)) is kept, unlike the two getters above,

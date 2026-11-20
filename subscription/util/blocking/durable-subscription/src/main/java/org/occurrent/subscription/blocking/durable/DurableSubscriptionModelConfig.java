@@ -35,6 +35,11 @@ public class DurableSubscriptionModelConfig {
     public final Predicate<CloudEvent> persistCloudEventPositionPredicate;
     public final boolean startWhenNoStartPositionCanBeRecorded;
     /**
+     * Whether a first position is written unconditionally to a checkpoint storage that can't evaluate
+     * {@code CheckpointWriteCondition.ifAbsent()}, see {@link #startWhenFirstPositionCanBeOverwritten(boolean)}.
+     */
+    public final boolean startWhenFirstPositionCanBeOverwritten;
+    /**
      * How often the quiet position of a subscription is saved, or {@code null} when it is never saved.
      */
     public final @Nullable Duration quietPositionSaveInterval;
@@ -54,7 +59,7 @@ public class DurableSubscriptionModelConfig {
      *                                           {@link #saveQuietPositionEvery(Duration)}.
      */
     public DurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
-        this(persistCloudEventPositionPredicate, false, DEFAULT_QUIET_POSITION_SAVE_INTERVAL);
+        this(persistCloudEventPositionPredicate, false, false, DEFAULT_QUIET_POSITION_SAVE_INTERVAL);
     }
 
     /**
@@ -64,10 +69,12 @@ public class DurableSubscriptionModelConfig {
         this(new EveryN(persistPositionForEveryNCloudEvent));
     }
 
-    private DurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate, boolean startWhenNoStartPositionCanBeRecorded, @Nullable Duration quietPositionSaveInterval) {
+    private DurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate, boolean startWhenNoStartPositionCanBeRecorded,
+                                           boolean startWhenFirstPositionCanBeOverwritten, @Nullable Duration quietPositionSaveInterval) {
         Objects.requireNonNull(persistCloudEventPositionPredicate, "persistCloudEventPositionPredicate cannot be null");
         this.persistCloudEventPositionPredicate = persistCloudEventPositionPredicate;
         this.startWhenNoStartPositionCanBeRecorded = startWhenNoStartPositionCanBeRecorded;
+        this.startWhenFirstPositionCanBeOverwritten = startWhenFirstPositionCanBeOverwritten;
         this.quietPositionSaveInterval = quietPositionSaveInterval;
     }
 
@@ -83,7 +90,25 @@ public class DurableSubscriptionModelConfig {
      * @return A new instance of {@code DurableSubscriptionModelConfig}
      */
     public DurableSubscriptionModelConfig startWhenNoStartPositionCanBeRecorded(boolean startWhenNoStartPositionCanBeRecorded) {
-        return new DurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, quietPositionSaveInterval);
+        return new DurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, startWhenFirstPositionCanBeOverwritten, quietPositionSaveInterval);
+    }
+
+    /**
+     * Whether a subscription whose first position would be recorded in a {@code CheckpointStorage} that answers
+     * {@code false} from {@code evaluatesWriteConditionsFor(String)} starts anyway instead of being refused. A first
+     * position is recorded for a subscription that asks for the model default with no checkpoint stored. It is written
+     * with {@code CheckpointWriteCondition.ifAbsent()}, so of two nodes recording one at the same moment only one write
+     * is stored, and a storage that can't evaluate that condition could only write it unconditionally. Starting anyway
+     * writes it unconditionally, with a warning, so the two nodes can overwrite each other's first position and lose the
+     * events between the two positions for good. The default is {@code false}, which refuses such a subscription with
+     * {@code IllegalStateException} before anything is written for it. Every storage Occurrent ships evaluates write
+     * conditions.
+     *
+     * @param startWhenFirstPositionCanBeOverwritten {@code true} to start anyway, accepting that loss
+     * @return A new instance of {@code DurableSubscriptionModelConfig}
+     */
+    public DurableSubscriptionModelConfig startWhenFirstPositionCanBeOverwritten(boolean startWhenFirstPositionCanBeOverwritten) {
+        return new DurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, startWhenFirstPositionCanBeOverwritten, quietPositionSaveInterval);
     }
 
     /**
@@ -119,7 +144,7 @@ public class DurableSubscriptionModelConfig {
         if (interval.isZero() || interval.isNegative()) {
             throw new IllegalArgumentException("interval must be greater than zero but was " + interval);
         }
-        return new DurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, interval);
+        return new DurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, startWhenFirstPositionCanBeOverwritten, interval);
     }
 
     /**
@@ -138,7 +163,7 @@ public class DurableSubscriptionModelConfig {
      * @see #saveQuietPositionEvery(Duration)
      */
     public DurableSubscriptionModelConfig neverSaveQuietPosition() {
-        return new DurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, null);
+        return new DurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, startWhenFirstPositionCanBeOverwritten, null);
     }
 
     @Override
@@ -146,13 +171,14 @@ public class DurableSubscriptionModelConfig {
         if (this == o) return true;
         if (!(o instanceof DurableSubscriptionModelConfig that)) return false;
         return startWhenNoStartPositionCanBeRecorded == that.startWhenNoStartPositionCanBeRecorded
+               && startWhenFirstPositionCanBeOverwritten == that.startWhenFirstPositionCanBeOverwritten
                && Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate)
                && Objects.equals(quietPositionSaveInterval, that.quietPositionSaveInterval);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, quietPositionSaveInterval);
+        return Objects.hash(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, startWhenFirstPositionCanBeOverwritten, quietPositionSaveInterval);
     }
 
     @Override
@@ -160,6 +186,7 @@ public class DurableSubscriptionModelConfig {
         return new StringJoiner(", ", DurableSubscriptionModelConfig.class.getSimpleName() + "[", "]")
                 .add("persistCloudEventPositionPredicate=" + persistCloudEventPositionPredicate)
                 .add("startWhenNoStartPositionCanBeRecorded=" + startWhenNoStartPositionCanBeRecorded)
+                .add("startWhenFirstPositionCanBeOverwritten=" + startWhenFirstPositionCanBeOverwritten)
                 .add("quietPositionSaveInterval=" + quietPositionSaveInterval)
                 .toString();
     }
