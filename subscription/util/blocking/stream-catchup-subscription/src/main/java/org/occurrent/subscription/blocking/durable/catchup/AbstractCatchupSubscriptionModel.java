@@ -195,6 +195,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // the checkpoint storage is called. Exists for the same reason.
     private volatile Runnable betweenHandoverLockAndStore = () -> {
     };
+    // Runs in resumeSubscription(id) on the calling thread right after it decided whether to hand the resume over whole
+    // from an action, so a test can complete a stop there. Exists for the same reason.
+    private volatile Runnable afterTheResumeDecision = () -> {
+    };
     // One claim per subscriptionId, held by a lifecycle call for as long as it runs, see claim(..). An entry exists
     // while a thread holds the claim or waits for it, and is removed once none does, so the map holds nothing for an id
     // whose calls have all returned.
@@ -1166,7 +1170,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * thread starts the model and resumes the subscription, in turn with the {@link #start(boolean)} and {@link #stop()}
      * calls handed over around it. The handle it returns starts then, so waiting for it inside the action doesn't see it
      * start. Its {@code waitUntilStarted} answers {@code false} when a {@code shutdown()} has begun by then, and throws
-     * what the resume threw there, which is also logged at {@code ERROR}.
+     * what the resume threw there, which is also logged at {@code ERROR}. Inside such an action it decides this once,
+     * from the state the model is in when it is called, so a {@link #stop()} from another thread that completes
+     * afterwards doesn't make it start the model.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
@@ -1178,9 +1184,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return handedOver;
             }
         }
+        afterTheResumeDecision.run();
         awaitTheHandedCalls();
-        // Started before the claim is taken, since a start that fails parks the replays of other ids under their claims
-        boolean started = stopped && isPaused(subscriptionId);
+        // Started before the claim is taken, since a start that fails parks the replays of other ids under their claims.
+        // Never from an action, where the check above decides, since a stop that completed after it would get a
+        // start(false) handed over without the resume
+        boolean started = !inAnActionOfTheseModels() && stopped && isPaused(subscriptionId);
         if (started) {
             start(false);
         }
@@ -2861,6 +2870,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.betweenHandoverLockAndStore = Objects.requireNonNull(hook, "hook cannot be null");
     }
 
+    void runAfterTheResumeDecision(Runnable hook) {
+        this.afterTheResumeDecision = Objects.requireNonNull(hook, "hook cannot be null");
+    }
+
     boolean hasParkedReplay(String subscriptionId) {
         return parkedReplays.containsKey(subscriptionId);
     }
@@ -4485,6 +4498,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     private void logHandedCallThrew(Object model, String call, Throwable e) {
         log.error("{} of {}, run on the lifecycle thread once the call that made it no longer held it up, threw", call, model, e);
+    }
+
+    // Whether the calling thread runs an action of this model or of another child of the same dispatcher
+    boolean inAnActionOfTheseModels() {
+        return outermostActionOnTheCallingThread() != null;
     }
 
     // The outermost action of this model, or of another child of the same dispatcher, that the calling thread runs, so a

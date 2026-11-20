@@ -151,6 +151,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // dual-mode configurations. Null in the DCB-only configuration, where an AgnosticSubscriptionFilter routes to the
     // DCB model instead (a DCB-only store has only DCB events).
     private final @Nullable StreamCatchupSubscriptionModel agnosticCatchupSubscriptionModel;
+    // Runs in resumeSubscription(id) on the calling thread right after it decided whether to hand the resume over whole
+    // from an action, so a test can complete a stop there, which nothing outside this model can
+    private volatile Runnable afterTheResumeDecision = () -> {
+    };
 
     /**
      * Create a new instance of {@link CatchupSubscriptionModel} the uses a default {@link CatchupSubscriptionModelConfig} with a cache size of
@@ -354,6 +358,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         return anyCatchupModel().claim(subscriptionId);
     }
 
+    void runAfterTheResumeDecision(Runnable hook) {
+        this.afterTheResumeDecision = Objects.requireNonNull(hook, "hook cannot be null");
+    }
+
     // Any child, for what every child shares
     private AbstractCatchupSubscriptionModel anyCatchupModel() {
         return presentCatchupModels().findFirst().orElseThrow();
@@ -498,7 +506,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * thread starts the model and resumes the subscription, in turn with the {@link #start(boolean)} and {@link #stop()}
      * calls handed over around it. The handle it returns starts then, so waiting for it inside the action doesn't see it
      * start. Its {@code waitUntilStarted} answers {@code false} when a {@code shutdown()} has begun by then, and throws
-     * what the resume threw there, which is also logged at {@code ERROR}.
+     * what the resume threw there, which is also logged at {@code ERROR}. Inside such an action it decides this once,
+     * from the state the model is in when it is called, so a {@link #stop()} from another thread that completes
+     * afterwards doesn't make it start the model.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
@@ -510,9 +520,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 return handedOver;
             }
         }
+        afterTheResumeDecision.run();
         anyCatchupModel().awaitTheHandedCalls();
-        // Started before the claim is taken, since a start that fails parks the replays of other ids under their claims
-        boolean started = presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId);
+        // Started before the claim is taken, since a start that fails parks the replays of other ids under their claims.
+        // Never from an action, where the check above decides, since a stop that completed after it would get a
+        // start(false) handed over without the resume
+        boolean started = !anyCatchupModel().inAnActionOfTheseModels() && presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId);
         if (started) {
             start(false);
         }

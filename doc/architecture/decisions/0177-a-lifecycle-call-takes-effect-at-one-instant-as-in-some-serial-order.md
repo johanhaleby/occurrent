@@ -232,8 +232,12 @@ subscription is paused, the resume would start the model, so it throws `IllegalS
 `start(..)` does on such a thread. A `resumeSubscription(X)` from the action of a live call or a replay, made while the
 model is stopped and X is paused, goes to the lifecycle thread whole. Run on the action's thread, the `start(false)` it
 needs would only be handed over, so the model would still read as stopped and X's parked replay would park again while
-the resume returned normally. It returns at once a handle that starts once the lifecycle thread has run the resume. A
-thread already holding the model lock runs its call at once instead, since the lifecycle thread would wait for that
+the resume returned normally. It returns at once a handle that starts once the lifecycle thread has run the resume.
+Whether the model is stopped is read once there, without the model lock, which a `stop()` from another thread may hold
+while it waits for the action. When that read finds the model running and such a `stop()` completes afterwards, the
+resume doesn't start the model. A second read that found the model
+stopped would hand the `start(false)` over without the resume, and once the action returned the model would run while
+X stayed paused. A thread already holding the model lock runs its call at once instead, since the lifecycle thread would wait for that
 thread to give the lock back.
 
 A `shutdown()` doesn't wait for a `start(..)` that is inside the wrapped model's `start(..)`, because a wrapped model can
