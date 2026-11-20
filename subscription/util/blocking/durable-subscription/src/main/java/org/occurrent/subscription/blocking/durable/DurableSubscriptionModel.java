@@ -37,6 +37,7 @@ import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
@@ -591,8 +592,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
             Consumer<CloudEvent> checkpointingAction = cloudEvent -> {
                 // Taken before anything the delivery waits on, so no quiet position is saved until it has finished
+                long repositions = registration.repositionsForDelivery();
                 long delivery = registration.delivering();
-                long repositions = registration.repositions();
                 boolean stored = false;
                 try {
                     // Read before the action runs, so the write uses the token of the lease this event was
@@ -1159,25 +1160,45 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             Checkpoint previous = storage.read(subscriptionId);
             CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
             // A handler the pause stopped waiting for can still return and save the checkpoint of its event over the
-            // position stored here, so from now on that save is refused
-            repositioned(registrations.get(subscriptionId));
-            UntrackedRegistration untracked = untrackedRegistrations.get(subscriptionId);
-            repositioned(untracked == null ? null : untracked.get());
-            storage.save(subscriptionId, position, writeCondition);
+            // position stored here, so once it is stored that save is refused
+            List<CheckpointRegistration> writing = registrationsWritingFor(subscriptionId);
+            writeRepositioned(writing, 1, () -> storage.save(subscriptionId, position, writeCondition));
             try {
                 return repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(position));
             } catch (Throwable e) {
-                // Throwable, since a wrapped model written in Kotlin can throw a checked exception
-                putBack(subscriptionId, previous, writeCondition, e);
+                // Throwable, since a wrapped model written in Kotlin can throw a checked exception. With nothing to put
+                // back the position stays stored, and so does the refusal
+                if (previous == null) {
+                    throw e;
+                }
+                writeRepositioned(writing, -1, () -> putBack(subscriptionId, previous, writeCondition, e));
                 throw e;
             }
         });
     }
 
-    private static void repositioned(@Nullable CheckpointRegistration registration) {
-        if (registration != null) {
-            registration.repositioned();
+    // The tracked registration of the id and one a failed subscribe left writing, in the order their saveLocks are taken
+    private List<CheckpointRegistration> registrationsWritingFor(String subscriptionId) {
+        List<CheckpointRegistration> writing = new ArrayList<>(2);
+        CheckpointRegistration tracked = registrations.get(subscriptionId);
+        if (tracked != null) {
+            writing.add(tracked);
         }
+        UntrackedRegistration untracked = untrackedRegistrations.get(subscriptionId);
+        CheckpointRegistration kept = untracked == null ? null : untracked.get();
+        if (kept != null) {
+            writing.add(kept);
+        }
+        return writing;
+    }
+
+    // Writes while holding the saveLock of every registration, and moves their count only once the write has succeeded
+    private static void writeRepositioned(List<CheckpointRegistration> registrations, int by, Runnable write) {
+        if (registrations.isEmpty()) {
+            write.run();
+            return;
+        }
+        registrations.get(0).repositioned(by, () -> writeRepositioned(registrations.subList(1, registrations.size()), by, write));
     }
 
     // A catch-up model sharing the storage replays from what is stored, so a failed resume puts back what it found.
@@ -1572,17 +1593,22 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // Held while the checkpoint for an event, a quiet position or a first position an evaluation records outside the
         // settled outcome is written, by a cancel while it marks this registration cancelled and, unless the checkpoint is
         // kept, deletes it, and by a replacement or a shutdown while it marks this registration cancelled. No other lock of
-        // this model is taken while it is held
+        // this model is taken while it is held, apart from the saveLock of an untracked registration of the same id,
+        // which a resume at a position takes inside the tracked one
         private final ReentrantLock saveLock = new ReentrantLock();
         private boolean cancelled;
         // Counts the resumes at a position that stored their position. Written while holding saveLock, so a save that
         // started before a resume and checks it under saveLock is refused, and a save already under way finishes first
         private volatile long repositions;
+        // The count when this thread last read, for a wrapped model that asks the listener before each read. An event
+        // that read returns belongs to the run that read it, also when it is delivered after a resume
+        private final ThreadLocal<@Nullable Long> repositionsAtLastReadOnThisThread = new ThreadLocal<>();
         // Set before the registration is tracked, for a subscribe that threw and failed to cancel the subscription
         private boolean keepCheckpointWhenCancelled;
 
         void reading() {
             lastReadOnThisThread.set(reads.incrementAndGet());
+            repositionsAtLastReadOnThisThread.set(repositions);
         }
 
         void ownStartAfter(StoredBefore storedBefore) {
@@ -1654,10 +1680,16 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             return repositions;
         }
 
-        void repositioned() {
+        long repositionsForDelivery() {
+            Long atLastRead = repositionsAtLastReadOnThisThread.get();
+            return atLastRead == null ? repositions : atLastRead;
+        }
+
+        void repositioned(int by, Runnable write) {
             saveLock.lock();
             try {
-                repositions++;
+                write.run();
+                repositions += by;
             } finally {
                 saveLock.unlock();
             }
