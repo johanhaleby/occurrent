@@ -648,7 +648,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                         });
                     }
                 } finally {
-                    registration.delivered(delivery, stored);
+                    registration.delivered(delivery, stored, repositions);
                 }
             };
             FirstPosition firstPosition = firstPositionToRecord.get();
@@ -1254,10 +1254,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
             // A handler the pause stopped waiting for can still return and save the checkpoint of its event over the
             // position stored here, so from now on that save is refused
-            CheckpointRegistration registration = registrations.get(subscriptionId);
-            if (registration != null) {
-                registration.repositioned();
-            }
+            repositioned(registrations.get(subscriptionId));
+            UntrackedRegistration untracked = untrackedRegistrations.get(subscriptionId);
+            repositioned(untracked == null ? null : untracked.get());
             storage.save(subscriptionId, position, writeCondition);
             try {
                 return repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(position));
@@ -1267,6 +1266,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 throw e;
             }
         });
+    }
+
+    private static void repositioned(@Nullable CheckpointRegistration registration) {
+        if (registration != null) {
+            registration.repositioned();
+        }
     }
 
     // A catch-up model sharing the storage replays from what is stored, so a failed resume puts back what it found.
@@ -1758,12 +1763,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
         }
 
-        void delivered(long delivery, boolean stored) {
+        // A delivery that started before a resume at a position stored its own counts as stored, since the position stored
+        // is the resume's and not one this delivery could have moved past
+        void delivered(long delivery, boolean stored, long repositionsWhenDelivered) {
             deliveryLock.lock();
             try {
                 deliveriesUnderWay--;
                 if (delivery == latestCurrentDelivery) {
-                    latestStored = stored;
+                    latestStored = stored || repositions != repositionsWhenDelivered;
                 }
                 quietSaveAllowed = deliveriesUnderWay == 0 && latestStored;
             } finally {
