@@ -96,9 +96,9 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * same moment, only one write is stored. With a {@code CheckpointWriteVersionSource} that answers a version, a first
  * position this node wrote is then saved again with {@link CheckpointWriteCondition#notOlderThan(long)}, since an
  * {@code ifAbsent()} write stores no version, and a node whose lease has moved on could otherwise overwrite the first
- * position until the next checkpoint is written. That covers a lost race that resolves to this node's own position as
- * well, and a position adopted from another node isn't saved again. When that
- * second save is refused because a node with a newer lease has written since, the refusal is logged and the
+ * position until the next checkpoint is written. A lost race after which the stored position is the one this node read
+ * is saved again too, and a different position adopted from another node isn't. When that
+ * second save is refused because the storage holds a newer write version, the refusal is logged and the
  * subscription starts from the position it recorded. A {@link CheckpointStorage} that answers {@code false} from
  * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} could only write it unconditionally, and then the two
  * nodes could overwrite each other's and lose the events between the two positions. Such a subscription is refused with
@@ -830,14 +830,16 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         try {
             pinned = storage.save(subscriptionId, globalCheckpoint, CheckpointWriteCondition.ifAbsent());
         } catch (CheckpointWriteConditionNotFulfilledException e) {
-            pinned = storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint)
-                            .orElseGet(() -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, globalCheckpoint));
+            Checkpoint settled = storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint)
+                                        .orElseGet(() -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, globalCheckpoint));
+            // A race resolved to the position this node read stores it without a version too. A different position is
+            // the node's that recorded it to save again
+            if (settled.asString().equals(globalCheckpoint.asString())) {
+                stampWriteVersion(subscriptionId, settled, stamp);
+            }
+            return settled;
         }
-        // A lost race that resolves to this node's own position wrote it without a version too. A position another node
-        // recorded is that node's to save again
-        if (pinned.asString().equals(globalCheckpoint.asString())) {
-            stampWriteVersion(subscriptionId, pinned, stamp);
-        }
+        stampWriteVersion(subscriptionId, pinned, stamp);
         return pinned;
     }
 
@@ -855,7 +857,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     // An ifAbsent() write stores no version, and notOlderThan(v) accepts any write while none is stored, so without this
     // a node whose lease moved on could overwrite the first position. Every node that writes a first position saves it
-    // again with its own version, so once the node with the newest lease has, no older lease can write over it
+    // again with its own version, so once the node with the newest lease has, no older lease can write over it. Saving
+    // it again over a checkpoint written in between moves the stored checkpoint back, which only delivers events again
     private void stampWriteVersion(String subscriptionId, Checkpoint pinned, CheckpointWriteCondition stamp) {
         if (!(stamp instanceof CheckpointWriteCondition.NotOlderThan)) {
             return;
@@ -864,7 +867,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             storage.save(subscriptionId, pinned, stamp);
         } catch (CheckpointWriteConditionNotFulfilledException e) {
             log.warn("Subscription {} recorded its first position {}, and saving it again with the write version of this " +
-                     "node's lease was refused, because a node with a newer lease has written a checkpoint for it since. " +
+                     "node's lease was refused, because the checkpoint storage holds a newer write version for it. " +
                      "The subscription starts from {}, and its next checkpoint write is refused the same way.",
                     subscriptionId, pinned.asString(), pinned.asString(), e);
         } catch (Exception e) {
