@@ -3089,10 +3089,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         return unwanted::isDone;
     }
 
-    // Whether model is the delegate or a model the delegate wraps, directly or through other wrappers
+    // Whether model is the delegate or a model the delegate wraps, directly or through other wrappers. The walk ends at a
+    // wrapper it has already passed, so wrappers that wrap each other in a cycle don't wrap model unless one of them is it
     private boolean wraps(Object model) {
+        Set<SubscriptionModel> passed = Collections.newSetFromMap(new IdentityHashMap<>());
         SubscriptionModel wrapped = delegate;
-        while (wrapped != model && wrapped instanceof SubscriptionModelWrapper wrapper) {
+        while (wrapped != model && wrapped instanceof SubscriptionModelWrapper wrapper && passed.add(wrapped)) {
             wrapped = wrapper.getWrappedSubscriptionModel();
         }
         return wrapped == model;
