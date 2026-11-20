@@ -27,6 +27,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -40,6 +42,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -74,6 +77,7 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
     private static final Checkpoint LATER_THAN_THE_EVENT = new StringBasedCheckpoint("later-than-the-event");
     private static final Checkpoint EARLIER_THAN_THE_EVENT = new StringBasedCheckpoint("earlier-than-the-event");
     private static final Checkpoint EVENT_AFTER_THE_RESUME = new StringBasedCheckpoint("event-after-the-resume");
+    private static final Checkpoint EVENT_READ_BEFORE_THE_PAUSE = new StringBasedCheckpoint("event-read-before-the-pause");
     private static final Checkpoint QUIET = new StringBasedCheckpoint("quiet");
 
     private final PausableModel wrapped = new PausableModel();
@@ -233,6 +237,88 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
         }
     }
 
+    @Nested
+    @DisplayName("when the run that read before the pause calls the action after the resume")
+    class When_the_run_that_read_before_the_pause_calls_the_action_after_the_resume {
+
+        @Test
+        void the_checkpoint_of_the_event_it_read_is_not_stored_over_the_position_of_the_resume() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeFromTheStoredStart(model);
+            CountDownLatch hasRead = new CountDownLatch(1);
+            CompletableFuture<Void> run = CompletableFuture.runAsync(() -> {
+                wrapped.beforeReading(SUBSCRIPTION_ID);
+                hasRead.countDown();
+                awaitQuietly(handlerMayReturn);
+                wrapped.deliver(SUBSCRIPTION_ID, EVENT_READ_BEFORE_THE_PAUSE);
+            }, handlerThreads);
+            assertThat(awaitLatch(hasRead)).as("read before the pause").isTrue();
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT));
+
+            // When
+            handlerReturns(run);
+
+            // Then
+            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(EARLIER_THAN_THE_EVENT);
+        }
+    }
+
+    @Nested
+    @DisplayName("when a resume at a position fails")
+    class When_a_resume_at_a_position_fails {
+
+        @Test
+        void a_resume_whose_save_of_the_position_is_refused_leaves_the_running_handler_able_to_store_its_checkpoint() {
+            // Given
+            InMemoryCheckpointStorage refusing = new InMemoryCheckpointStorage() {
+                @Override
+                public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                    if (checkpoint.equals(EARLIER_THAN_THE_EVENT)) {
+                        throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.empty(), condition);
+                    }
+                    return super.save(subscriptionId, checkpoint, condition);
+                }
+            };
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, refusing);
+            refusing.save(SUBSCRIPTION_ID, START);
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+                handlerStarted.countDown();
+                awaitQuietly(handlerMayReturn);
+            });
+            CompletableFuture<Void> handler = deliverAHandlerThatStaysRunning(EVENT_OF_THE_RUNNING_HANDLER);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
+            handlerReturns(handler);
+
+            // Then
+            assertThat(refusing.read(SUBSCRIPTION_ID)).isEqualTo(EVENT_OF_THE_RUNNING_HANDLER);
+        }
+
+        @Test
+        void a_resume_whose_wrapped_resume_throws_puts_back_the_previous_checkpoint_and_the_running_handler_still_stores_its_checkpoint() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeFromTheStoredStart(model);
+            CompletableFuture<Void> handler = deliverAHandlerThatStaysRunning(EVENT_OF_THE_RUNNING_HANDLER);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(START);
+            handlerReturns(handler);
+
+            // Then
+            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(EVENT_OF_THE_RUNNING_HANDLER);
+        }
+    }
+
     private Consumer<Checkpoint> aSaverOnceTheIntervalHasPassed() {
         AtomicReference<Consumer<Checkpoint>> saver = new AtomicReference<>();
         await().atMost(5, SECONDS).until(() -> {
@@ -291,6 +377,7 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
     private static final class PausableModel implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions, QuietPositionReportingSubscriptions {
         final Set<Checkpoint> cannotRestartAt = ConcurrentHashMap.newKeySet();
         volatile boolean failsAfterAccepting;
+        volatile boolean failsResume;
         private final Map<String, Consumer<CloudEvent>> actions = new ConcurrentHashMap<>();
         private final Set<String> paused = ConcurrentHashMap.newKeySet();
         private final List<QuietPositionListener> listeners = new CopyOnWriteArrayList<>();
@@ -315,6 +402,9 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            if (failsResume) {
+                throw new IllegalStateException("resume failed for " + subscriptionId);
+            }
             if (!paused.remove(subscriptionId)) {
                 throw new IllegalStateException("Subscription " + subscriptionId + " is not paused");
             }
