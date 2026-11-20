@@ -122,6 +122,26 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
     }
 
     @Test
+    void a_lost_race_whose_stored_position_read_back_is_the_one_this_node_read_stores_this_nodes_version() {
+        RecordingStorage storage = new RecordingStorage();
+        storage.beforeTheIfAbsentWrite = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint(FIRST_POSITION));
+        Feed feed = new Feed();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
+
+        durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        });
+
+        assertAll(
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(FIRST_POSITION),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION),
+                () -> assertThatThrownBy(() -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stale-node-position"), CheckpointWriteCondition.notOlderThan(1)))
+                        .as("a node with an older version writing over it")
+                        .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class)
+        );
+    }
+
+    @Test
     void a_stamp_refused_because_a_newer_lease_holder_wrote_since_still_starts_the_subscription_from_the_recorded_position() {
         RecordingStorage storage = new RecordingStorage();
         storage.afterTheIfAbsentWrite = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("newer-nodes-position"), CheckpointWriteCondition.notOlderThan(3));
