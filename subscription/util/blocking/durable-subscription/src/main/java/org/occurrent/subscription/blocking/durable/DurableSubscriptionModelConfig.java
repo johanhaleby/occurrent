@@ -85,6 +85,11 @@ public class DurableSubscriptionModelConfig {
      * saved starts over from wherever the feed has reached by then, and an event whose delivery failed before the
      * crash is not redelivered. The default is {@code false}, which refuses such a subscription with
      * {@code IllegalStateException} from {@code subscribe(..)}.
+     * <p>
+     * With a {@code CheckpointStorage} that answers {@code false} from {@code evaluatesWriteConditionsFor(String)} for
+     * the subscription, {@code true} here isn't enough. The subscription is still refused from {@code subscribe(..)}
+     * unless {@link #startWhenFirstPositionCanBeOverwritten(boolean)} is {@code true} as well, since the first position
+     * recorded for it once the wrapped model has one could only be written unconditionally.
      *
      * @param startWhenNoStartPositionCanBeRecorded {@code true} to start anyway, accepting that loss window
      * @return A new instance of {@code DurableSubscriptionModelConfig}

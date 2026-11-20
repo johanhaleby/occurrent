@@ -42,11 +42,13 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.NestedExceptionUtils;
 import reactor.core.publisher.Mono;
 
@@ -57,9 +59,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
@@ -169,6 +173,30 @@ class FirstPositionCanBeOverwrittenLiveStartTest {
         });
     }
 
+    @Test
+    void a_handler_bean_built_after_startup_fails_its_creation_instead_of_startup_when_the_storage_cannot_evaluate_write_conditions() {
+        storage.idsWithoutConditions.add("late-handler");
+
+        runner(LateHandlerConfiguration.class).run(context -> {
+            // The scan at startup cannot see the handler, so nothing refuses startup
+            assertThat(context).hasNotFailed();
+            assertThat(storage.saves).as("the saves the storage saw at startup").isEmpty();
+
+            Throwable thrown = catchThrowable(() -> context.getBean("lateHandler"));
+
+            assertThat(thrown).isInstanceOf(BeanCreationException.class);
+            assertThat(NestedExceptionUtils.getMostSpecificCause(thrown))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(PROPERTY)
+                    .hasMessageContaining("late-handler");
+            assertThat(thrown).hasStackTraceContaining(PROPERTY);
+            assertThat(storage.saves).as("the saves the storage saw").isEmpty();
+            assertThat(storage.read("late-handler").blockOptional()).isEmpty();
+            verify(context.getBean(Subscriptions.class), never()).subscribe(eq("late-handler"), any(AgnosticSubscriptionFilter.class), any(StartAt.class), any(Function2.class));
+            assertThat(context).as("the application context after the bean failed").hasNotFailed();
+        });
+    }
+
     @SuppressWarnings("unchecked")
     private static StartAt startOf(ApplicationContext context, String subscriptionId) {
         ArgumentCaptor<StartAt> startAt = ArgumentCaptor.forClass(StartAt.class);
@@ -239,6 +267,12 @@ class FirstPositionCanBeOverwrittenLiveStartTest {
         }
     }
 
+    static class LateHandler implements LateBeanAnnotationRegistrationTest.Marker {
+        @Subscription(id = "late-handler", startAt = StartPosition.NOW, startupMode = StartupMode.BACKGROUND)
+        void on(LateBeanAnnotationRegistrationTest.TestEvent event) {
+        }
+    }
+
     static class OtherHandler {
         @Subscription(id = "other-handler", startAt = StartPosition.NOW, startupMode = StartupMode.BACKGROUND)
         void on(LateBeanAnnotationRegistrationTest.TestEvent event) {
@@ -264,6 +298,16 @@ class FirstPositionCanBeOverwrittenLiveStartTest {
         @Bean
         DefaultHandler defaultHandler() {
             return new DefaultHandler();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class LateHandlerConfiguration {
+        // Declared to return an interface and @Lazy, so the scan at startup cannot see the handler and it is built on first use
+        @Bean
+        @Lazy
+        LateBeanAnnotationRegistrationTest.Marker lateHandler() {
+            return new LateHandler();
         }
     }
 

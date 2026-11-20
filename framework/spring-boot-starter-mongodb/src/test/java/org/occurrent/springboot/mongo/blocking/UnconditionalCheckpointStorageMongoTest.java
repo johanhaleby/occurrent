@@ -151,7 +151,8 @@ class UnconditionalCheckpointStorageMongoTest {
             Throwable thrown = catchThrowable(() -> model.subscribe("subscribedDirectly", null, StartAt.subscriptionModelDefault(), __ -> {
             }).waitUntilStarted(ofSeconds(15)));
 
-            assertThat(thrown).as("what subscribing a default start with nothing stored threw").isInstanceOf(IllegalStateException.class);
+            assertThat(thrown).as("what subscribing a default start with nothing stored threw").isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("start-when-first-position-can-be-overwritten");
             assertThat(storage.checkpoints).as("checkpoints stored").isEmpty();
         }
     }

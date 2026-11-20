@@ -416,7 +416,11 @@ public class OccurrentProperties {
          * every restart, and ignores the answer when a checkpoint is stored. Starting anyway means no start position
          * is recorded before the first delivery, so a crash before the first checkpoint is saved starts over from
          * wherever the feed has reached by then, and an event whose delivery failed before the crash is not
-         * redelivered. The default is {@code false}, which refuses such a subscription when it is created.
+         * redelivered. The default is {@code false}, which refuses such a subscription when it is created. On the
+         * blocking stack, with a {@code CheckpointStorage} that answers {@code false} from
+         * {@code evaluatesWriteConditionsFor(String)} for the subscription, {@code true} here isn't enough. The
+         * subscription is still refused when it is created unless {@code start-when-first-position-can-be-overwritten}
+         * is {@code true} as well.
          */
         private boolean startWhenNoStartPositionCanBeRecorded = false;
 

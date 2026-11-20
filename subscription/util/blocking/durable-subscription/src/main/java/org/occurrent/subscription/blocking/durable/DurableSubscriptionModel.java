@@ -806,7 +806,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
             // Nothing here can make a storage that writes unconditionally do otherwise, so two nodes recording a
             // first position at the same moment would race. Refused before anything is written, unless the config
-            // accepts that loss
+            // accepts that loss. Settling refuses this first while the storage answers the same for the id, so this
+            // refuses a storage whose answer changed since
             if (!config.startWhenFirstPositionCanBeOverwritten) {
                 throw firstPositionCanBeOverwritten(subscriptionId);
             }

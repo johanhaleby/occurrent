@@ -229,6 +229,34 @@ class DurableSubscriptionModelFirstPositionCanBeOverwrittenTest {
     }
 
     @Test
+    void an_evaluation_that_finds_the_checkpoint_deleted_since_subscribe_records_the_position_of_the_wrapped_model_when_the_first_position_can_be_overwritten_by_opt_in() {
+        HoldingFeed wrapped = new HoldingFeed("position-after-the-delete");
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage(Set.of(SUBSCRIPTION_ID));
+        storage.writeWithoutRecording(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-at-subscribe"));
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage,
+                new DurableSubscriptionModelConfig(1).startWhenFirstPositionCanBeOverwritten(true));
+        durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        });
+        storage.delete(SUBSCRIPTION_ID);
+
+        StartAt held = wrapped.startedAt.getFirst();
+        List<StartAt> evaluated = new CopyOnWriteArrayList<>();
+        Throwable thrown = catchThrowable(() -> evaluated.add(held.get(new SubscriptionModelContext(HoldingFeed.class))));
+
+        assertThat(thrown).as("what the evaluation threw").isNull();
+        // The opt-in accepts an unconditional write, so the evaluation records a first position as it would on a storage
+        // that evaluates ifAbsent, and the fallback to the checkpoint read at subscribe, there only to avoid that write,
+        // is not taken
+        assertThat(evaluated.getFirst()).isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                startAt -> assertThat(startAt.checkpoint.asString()).isEqualTo("position-after-the-delete"));
+        assertThat(storage.saves).as("the saves the storage saw").hasSize(1);
+        assertThat(storage.saves.getFirst().subscriptionId).isEqualTo(SUBSCRIPTION_ID);
+        assertThat(storage.saves.getFirst().position).isEqualTo("position-after-the-delete");
+        assertThat(storage.saves.getFirst().condition).isEqualTo(CheckpointWriteCondition.any());
+        assertThat(storage.read(SUBSCRIPTION_ID)).isNotNull().extracting(Checkpoint::asString).isEqualTo("position-after-the-delete");
+    }
+
+    @Test
     void the_opt_in_writes_the_first_position_unconditionally_and_warns_as_before_the_refusal_existed() {
         HoldingFeed wrapped = new HoldingFeed("position-at-subscribe");
         wrapped.evaluatesStartAtWhenSubscribed = true;

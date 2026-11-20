@@ -90,7 +90,6 @@ import static org.occurrent.functional.Not.not;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.FULL_DOCUMENT;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
-import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Timeout(20)
@@ -275,6 +274,12 @@ public class SpringMongoCheckpointStorageTest {
         AtomicInteger numberOfWritesToBlockingSubscriptionStorage = new AtomicInteger(0);
         CheckpointStorage storage = new CheckpointStorage() {
 
+            // It reads nothing back, so a write that only holds when nothing is stored always holds
+            @Override
+            public boolean evaluatesWriteConditions() {
+                return true;
+            }
+
             @Override
             public Checkpoint read(@NonNull String subscriptionId) {
                 return null;
@@ -305,7 +310,7 @@ public class SpringMongoCheckpointStorageTest {
                 return false;
             }
         };
-        subscriptionModel = new DurableSubscriptionModel(springMongoSubscriptionModel, storage, new DurableSubscriptionModelConfig(everyEvent()).startWhenFirstPositionCanBeOverwritten(true));
+        subscriptionModel = new DurableSubscriptionModel(springMongoSubscriptionModel, storage);
         subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When
@@ -332,6 +337,12 @@ public class SpringMongoCheckpointStorageTest {
         AtomicInteger numberOfWritesToBlockingSubscriptionStorage = new AtomicInteger(0);
         CheckpointStorage storage = new CheckpointStorage() {
 
+            // It reads nothing back, so a write that only holds when nothing is stored always holds
+            @Override
+            public boolean evaluatesWriteConditions() {
+                return true;
+            }
+
             @Override
             public Checkpoint read(@NonNull String subscriptionId) {
                 return null;
@@ -362,7 +373,7 @@ public class SpringMongoCheckpointStorageTest {
                 return false;
             }
         };
-        subscriptionModel = new DurableSubscriptionModel(springMongoSubscriptionModel, storage, new DurableSubscriptionModelConfig(3).startWhenFirstPositionCanBeOverwritten(true));
+        subscriptionModel = new DurableSubscriptionModel(springMongoSubscriptionModel, storage, new DurableSubscriptionModelConfig(3));
         subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When

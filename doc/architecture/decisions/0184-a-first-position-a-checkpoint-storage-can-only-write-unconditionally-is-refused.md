@@ -41,7 +41,12 @@ refused with `IllegalStateException` before anything is written for the subscrip
   checkpoint read during `subscribe(..)` instead of recording a first position. That can deliver events again but
   skips none.
 * `ReactorDurableSubscriptionModel` refuses it on `Subscription.waitUntilStarted()`, the way it refuses a first position
-  that lost a race it can't order.
+  that lost a race it can't order. It has no fallback like the blocking one. Where it drives the feed itself, rather
+  than handing the subscription to a wrapped model that manages named subscriptions, a subscription registered while
+  the model is stopped, or resumed after a pause, reads storage only when it starts. When a cancel on another node deletes the
+  checkpoint before that, the start finds nothing stored and is refused the same way. The reactor model doesn't try
+  that start again by itself, so the refusal ends the subscription without a retry, and nothing is skipped or written
+  over another node's first position.
 * Both Spring Boot starters refuse it when they would store the live start as the first checkpoint, so the application
   fails to start. For a handler on a bean built after startup, the creation of that bean fails instead.
 

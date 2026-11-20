@@ -461,9 +461,9 @@ From 0.35.0 the subscription is refused with `IllegalStateException` before anyt
 * Both Spring Boot starters fail startup when they would store a live start as the subscription's first checkpoint.
   For a handler on a bean built after startup, the creation of that bean fails instead.
 
-Under `CompetingConsumerSubscriptionModel`, only the node that holds the lease when the subscription is made gets the
-exception from `subscribe(..)`. Every other node logs it as a warning when it gets the lease and gives the lease back,
-and does that again each time it gets the lease.
+Under `CompetingConsumerSubscriptionModel`, the exception reaches `subscribe(..)` on a node that holds the lease when
+the subscription is made, and on every node whose model is stopped then. Every other node logs it as a warning when it
+gets the lease and gives the lease back, and does that again each time it gets the lease.
 
 A subscription that records no first position isn't refused, whatever the storage answers. That covers a checkpoint
 already stored, a `StartAt` of your own that doesn't resolve to the model default, `StartAt.now()` and a dynamic one
