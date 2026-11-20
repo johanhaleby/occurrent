@@ -56,6 +56,11 @@ public final class LateLiveStarts {
         liveStartByInstance.keySet().stream().filter(key -> key.get() == instance).forEach(WeakReference::clear);
     }
 
+    // Tests use it to see whether an access dropped the keys that were cleared
+    synchronized boolean containsClearedKey() {
+        return liveStartByInstance.keySet().stream().anyMatch(key -> key.refersTo(null));
+    }
+
     // Checked on the key itself rather than polled from a ReferenceQueue, since the JVM enqueues a cleared reference
     // on another thread some time after the collection, and an access in between would keep the boundary
     private void removeCollected() {

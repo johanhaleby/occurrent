@@ -25,7 +25,6 @@ import java.lang.ref.Reference;
 import java.lang.ref.WeakReference;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -121,39 +120,38 @@ class LateLiveStartsTest {
     }
 
     @Test
-    void putting_another_instance_releases_the_boundary_of_an_instance_whose_key_was_cleared() throws InterruptedException {
-        assertThat(boundaryReleasedByAnAccessAfterItsKeyWasCleared(other -> lateLiveStarts.put(other, "other")))
-                .describedAs("the boundary of the instance whose key was cleared still reachable after a put").isTrue();
+    void putting_another_instance_drops_an_instance_whose_key_was_cleared() {
+        putAndClearItsKey();
+
+        Object other = new Object();
+        lateLiveStarts.put(other, "other");
+
+        assertThat(lateLiveStarts.containsClearedKey()).describedAs("a cleared key still held after a put").isFalse();
+        Reference.reachabilityFence(other);
     }
 
     @Test
-    void removing_another_instance_releases_the_boundary_of_an_instance_whose_key_was_cleared() throws InterruptedException {
-        assertThat(boundaryReleasedByAnAccessAfterItsKeyWasCleared(lateLiveStarts::remove))
-                .describedAs("the boundary of the instance whose key was cleared still reachable after a remove").isTrue();
+    void removing_another_instance_drops_an_instance_whose_key_was_cleared() {
+        putAndClearItsKey();
+
+        lateLiveStarts.remove(new Object());
+
+        assertThat(lateLiveStarts.containsClearedKey()).describedAs("a cleared key still held after a remove").isFalse();
     }
 
     @Test
-    void getting_another_instance_releases_the_boundary_of_an_instance_whose_key_was_cleared() throws InterruptedException {
-        assertThat(boundaryReleasedByAnAccessAfterItsKeyWasCleared(lateLiveStarts::get))
-                .describedAs("the boundary of the instance whose key was cleared still reachable after a get").isTrue();
+    void getting_another_instance_drops_an_instance_whose_key_was_cleared() {
+        putAndClearItsKey();
+
+        lateLiveStarts.get(new Object());
+
+        assertThat(lateLiveStarts.containsClearedKey()).describedAs("a cleared key still held after a get").isFalse();
     }
 
-    private boolean boundaryReleasedByAnAccessAfterItsKeyWasCleared(Consumer<Object> access) throws InterruptedException {
+    private void putAndClearItsKey() {
         Object instance = new Object();
-        WeakReference<String> boundary = putWithABoundaryHeldOnlyWeakly(instance);
+        lateLiveStarts.put(instance, "boundary");
         lateLiveStarts.clearKeyOf(instance);
-
-        access.accept(new Object());
-
-        boolean released = collected(boundary);
-        Reference.reachabilityFence(instance);
-        return released;
-    }
-
-    private WeakReference<String> putWithABoundaryHeldOnlyWeakly(Object instance) {
-        String liveStart = new String("boundary");
-        lateLiveStarts.put(instance, liveStart);
-        return new WeakReference<>(liveStart);
     }
 
     private final AtomicReference<WeakReference<String>> boundary = new AtomicReference<>();
