@@ -208,6 +208,26 @@ class DurableSubscriptionModelFirstPositionCanBeOverwrittenTest {
     }
 
     @Test
+    void an_evaluation_that_finds_the_checkpoint_deleted_since_subscribe_starts_from_the_one_read_then_on_a_storage_that_cannot_evaluate_write_conditions() {
+        HoldingFeed wrapped = new HoldingFeed("position-after-the-delete");
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage(Set.of(SUBSCRIPTION_ID));
+        storage.writeWithoutRecording(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-at-subscribe"));
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        });
+        storage.delete(SUBSCRIPTION_ID);
+
+        StartAt evaluated = wrapped.startedAt.getFirst();
+        Throwable thrown = catchThrowable(() -> wrapped.startedAt.set(0, evaluated.isDynamic() ? evaluated.get(new SubscriptionModelContext(HoldingFeed.class)) : evaluated));
+
+        assertThat(thrown).as("what the evaluation threw").isNull();
+        assertThat(wrapped.startedAt.getFirst()).isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                startAt -> assertThat(startAt.checkpoint.asString()).isEqualTo("stored-at-subscribe"));
+        assertThat(storage.saves).as("the saves the storage saw").isEmpty();
+        assertThat(storage.exists(SUBSCRIPTION_ID)).isFalse();
+    }
+
+    @Test
     void the_opt_in_writes_the_first_position_unconditionally_and_warns_as_before_the_refusal_existed() {
         HoldingFeed wrapped = new HoldingFeed("position-at-subscribe");
         wrapped.evaluatesStartAtWhenSubscribed = true;
