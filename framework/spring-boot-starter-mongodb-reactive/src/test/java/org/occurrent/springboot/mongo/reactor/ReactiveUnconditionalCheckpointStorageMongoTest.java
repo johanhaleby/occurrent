@@ -85,6 +85,7 @@ class ReactiveUnconditionalCheckpointStorageMongoTest {
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=stream",
                 "--occurrent.subscription.competing-consumer.fence-checkpoints=false",
+                "--occurrent.subscription.start-when-first-position-can-be-overwritten=true",
                 "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE}));
         assertThat(thrown).as("what starting the application threw").isNull();
 

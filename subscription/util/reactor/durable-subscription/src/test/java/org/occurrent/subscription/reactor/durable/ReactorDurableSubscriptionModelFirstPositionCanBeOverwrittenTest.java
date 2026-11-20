@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static org.awaitility.Awaitility.await;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -84,7 +85,8 @@ class ReactorDurableSubscriptionModelFirstPositionCanBeOverwrittenTest {
                 .hasMessageContaining(SUBSCRIPTION_ID);
         assertThat(storage.saves).as("the saves the storage saw").isEmpty();
         assertThat(storage.read(SUBSCRIPTION_ID).blockOptional(TIMEOUT)).isEmpty();
-        assertThat(delegate.isRunning(SUBSCRIPTION_ID)).as("the wrapped model holds the subscription").isFalse();
+        // The model cancels in the wrapped model on a thread of its own after the refusal has reached the caller
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delegate.isRunning(SUBSCRIPTION_ID)).as("the wrapped model holds the subscription").isFalse());
     }
 
     @Test
@@ -100,6 +102,34 @@ class ReactorDurableSubscriptionModelFirstPositionCanBeOverwrittenTest {
                 .hasMessageContaining(WRITE_ONLY_UNCONDITIONALLY);
         assertThat(storage.saves).as("the saves the storage saw").isEmpty();
         assertThat(delegate.startedAt).as("the start positions the wrapped model was asked for").isEmpty();
+    }
+
+    @Test
+    void a_dynamic_start_that_answers_now_is_not_refused_since_it_records_no_first_position() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("position-at-subscribe");
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage(Set.of(SUBSCRIPTION_ID));
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::now), __ -> Mono.empty());
+
+        subscription.waitUntilStarted().block(TIMEOUT);
+        assertThat(delegate.startedAt).hasSize(1);
+        assertThat(storage.saves).as("the saves the storage saw").isEmpty();
+        assertThat(storage.read(SUBSCRIPTION_ID).blockOptional(TIMEOUT)).isEmpty();
+    }
+
+    @Test
+    void a_dynamic_start_that_answers_now_over_a_wrapped_model_that_manages_named_subscriptions_is_not_refused() {
+        NamedRecordingSubscriptionModel delegate = new NamedRecordingSubscriptionModel("position-at-subscribe");
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage(Set.of(SUBSCRIPTION_ID));
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::now), __ -> Mono.empty());
+
+        subscription.waitUntilStarted().block(TIMEOUT);
+        assertThat(delegate.startedAt).hasSize(1);
+        assertThat(storage.saves).as("the saves the storage saw").isEmpty();
+        assertThat(storage.read(SUBSCRIPTION_ID).blockOptional(TIMEOUT)).isEmpty();
     }
 
     @Test

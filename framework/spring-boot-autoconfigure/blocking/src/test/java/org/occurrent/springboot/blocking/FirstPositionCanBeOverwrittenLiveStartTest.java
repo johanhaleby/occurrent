@@ -45,6 +45,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.NestedExceptionUtils;
 
 import java.util.List;
 import java.util.Map;
@@ -91,7 +92,7 @@ class FirstPositionCanBeOverwrittenLiveStartTest {
 
         runner(PinningHandlerConfiguration.class).run(context -> {
             assertThat(context).hasFailed();
-            assertThat(context.getStartupFailure()).rootCause()
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining(PROPERTY)
                     .hasMessageContaining("pinning-handler");
@@ -107,7 +108,7 @@ class FirstPositionCanBeOverwrittenLiveStartTest {
 
         runner(DefaultHandlerConfiguration.class).run(context -> {
             assertThat(context).hasFailed();
-            assertThat(context.getStartupFailure()).rootCause()
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining(PROPERTY);
             assertThat(storage.saves).as("the saves the storage saw").isEmpty();
@@ -122,7 +123,7 @@ class FirstPositionCanBeOverwrittenLiveStartTest {
             assertThat(context).hasNotFailed();
             assertThat(storage.saves).hasSize(1);
             assertThat(storage.saves.getFirst().subscriptionId()).isEqualTo("pinning-handler");
-            assertThat(storage.saves.getFirst().position()).isEqualTo(BOUNDARY);
+            assertThat(storage.saves.getFirst().position()).isEqualTo(GlobalCheckpoint.of(Long.parseLong(BOUNDARY)).asString());
             assertThat(storage.saves.getFirst().condition()).isEqualTo(CheckpointWriteCondition.any());
             assertThat(startOf(context, "pinning-handler").isDefault()).as("the registration starts at the model default").isTrue();
         });
