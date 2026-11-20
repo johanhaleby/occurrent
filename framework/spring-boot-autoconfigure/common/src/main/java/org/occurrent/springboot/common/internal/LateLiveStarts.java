@@ -51,6 +51,11 @@ public final class LateLiveStarts {
         return liveStartByInstance.get(new InstanceKey(instance));
     }
 
+    // Tests use it to enter the state of a collected instance whose key the JVM has not enqueued yet
+    synchronized void clearKeyOf(Object instance) {
+        liveStartByInstance.keySet().stream().filter(key -> key.get() == instance).forEach(WeakReference::clear);
+    }
+
     // Checked on the key itself rather than polled from a ReferenceQueue, since the JVM enqueues a cleared reference
     // on another thread some time after the collection, and an access in between would keep the boundary
     private void removeCollected() {

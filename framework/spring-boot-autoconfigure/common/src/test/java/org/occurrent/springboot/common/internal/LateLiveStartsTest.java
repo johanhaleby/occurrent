@@ -21,9 +21,11 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 
+import java.lang.ref.Reference;
 import java.lang.ref.WeakReference;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -116,6 +118,42 @@ class LateLiveStartsTest {
         lateLiveStarts.get(new Object());
 
         assertThat(collected(boundary.get())).describedAs("the boundary of the collected instance still reachable after the next access").isTrue();
+    }
+
+    @Test
+    void putting_another_instance_releases_the_boundary_of_an_instance_whose_key_was_cleared() throws InterruptedException {
+        assertThat(boundaryReleasedByAnAccessAfterItsKeyWasCleared(other -> lateLiveStarts.put(other, "other")))
+                .describedAs("the boundary of the instance whose key was cleared still reachable after a put").isTrue();
+    }
+
+    @Test
+    void removing_another_instance_releases_the_boundary_of_an_instance_whose_key_was_cleared() throws InterruptedException {
+        assertThat(boundaryReleasedByAnAccessAfterItsKeyWasCleared(lateLiveStarts::remove))
+                .describedAs("the boundary of the instance whose key was cleared still reachable after a remove").isTrue();
+    }
+
+    @Test
+    void getting_another_instance_releases_the_boundary_of_an_instance_whose_key_was_cleared() throws InterruptedException {
+        assertThat(boundaryReleasedByAnAccessAfterItsKeyWasCleared(lateLiveStarts::get))
+                .describedAs("the boundary of the instance whose key was cleared still reachable after a get").isTrue();
+    }
+
+    private boolean boundaryReleasedByAnAccessAfterItsKeyWasCleared(Consumer<Object> access) throws InterruptedException {
+        Object instance = new Object();
+        WeakReference<String> boundary = putWithABoundaryHeldOnlyWeakly(instance);
+        lateLiveStarts.clearKeyOf(instance);
+
+        access.accept(new Object());
+
+        boolean released = collected(boundary);
+        Reference.reachabilityFence(instance);
+        return released;
+    }
+
+    private WeakReference<String> putWithABoundaryHeldOnlyWeakly(Object instance) {
+        String liveStart = new String("boundary");
+        lateLiveStarts.put(instance, liveStart);
+        return new WeakReference<>(liveStart);
     }
 
     private final AtomicReference<WeakReference<String>> boundary = new AtomicReference<>();
