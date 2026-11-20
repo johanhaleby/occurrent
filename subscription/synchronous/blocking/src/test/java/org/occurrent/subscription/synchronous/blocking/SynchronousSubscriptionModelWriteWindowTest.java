@@ -24,7 +24,9 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.WriteRefusedException;
+import org.occurrent.application.service.blocking.ExecuteOptions;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher.WriteCheck;
+import org.occurrent.application.service.blocking.dcb.DcbExecuteOptions;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.eventstore.api.blocking.EventStore;
@@ -40,11 +42,18 @@ import java.net.URI;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.Assertions.fail;
 import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 
 /**
@@ -152,6 +161,129 @@ class SynchronousSubscriptionModelWriteWindowTest {
 
         assertThat(thrown).as("what the write threw").isInstanceOf(WriteRefusedException.class).hasMessageContaining("paused");
         assertThatAPauseAndAStopApply("a write that a paused subscription refused");
+    }
+
+    // A side effect that pauses or stops the model on another thread and waits for that. The write's window is closed
+    // before the side effect runs, or the pause or the stop waits for a write that waits for the side effect.
+
+    @Test
+    void a_generic_write_whose_side_effect_stops_the_model_on_another_thread_and_waits_completes_with_its_events_stored() throws Exception {
+        model.subscribe("p", StreamSubscriptionFilter.filter(Filter.type("NameDefined")), event -> handled.add(event.getType()));
+        var store = new InMemoryEventStore();
+        var applicationService = GenericApplicationService.builder((EventStore) store, new TestEventConverter()).synchronousSubscriptions(model).build();
+        String streamId = UUID.randomUUID().toString();
+        AtomicBoolean sideEffectRan = new AtomicBoolean();
+
+        var written = executeWithinTheTimeout(() -> applicationService.execute(streamId,
+                ExecuteOptions.<TestEvent>options().sideEffect(newEvents -> {
+                    sideEffectRan.set(true);
+                    runOnAnotherThreadAndWait(model::stop);
+                }), events -> List.of(new TestEvent("NameDefined"))));
+
+        assertThat(written).as("what execute returned").isNotNull();
+        assertThat(store.read(streamId).events().map(CloudEvent::getType).toList()).as("the events stored").containsExactly("NameDefined");
+        assertThat(handled).as("the events the handler got before the side effect").containsExactly("NameDefined");
+        assertThat(sideEffectRan).as("the side effect ran").isTrue();
+        assertThat(model.isRunning()).as("running once the side effect stopped the model").isFalse();
+    }
+
+    @Test
+    void a_generic_write_whose_side_effect_pauses_a_subscription_on_another_thread_and_waits_completes_with_its_events_stored() throws Exception {
+        model.subscribe("p", StreamSubscriptionFilter.filter(Filter.type("NameDefined")), event -> handled.add(event.getType()));
+        var store = new InMemoryEventStore();
+        var applicationService = GenericApplicationService.builder((EventStore) store, new TestEventConverter()).synchronousSubscriptions(model).build();
+        String streamId = UUID.randomUUID().toString();
+        AtomicBoolean sideEffectRan = new AtomicBoolean();
+
+        var written = executeWithinTheTimeout(() -> applicationService.execute(streamId,
+                ExecuteOptions.<TestEvent>options().sideEffect(newEvents -> {
+                    sideEffectRan.set(true);
+                    runOnAnotherThreadAndWait(() -> model.pauseSubscription("p"));
+                }), events -> List.of(new TestEvent("NameDefined"))));
+
+        assertThat(written).as("what execute returned").isNotNull();
+        assertThat(store.read(streamId).events().map(CloudEvent::getType).toList()).as("the events stored").containsExactly("NameDefined");
+        assertThat(handled).as("the events the handler got before the side effect").containsExactly("NameDefined");
+        assertThat(sideEffectRan).as("the side effect ran").isTrue();
+        assertThat(model.isPaused("p")).as("paused once the side effect paused it").isTrue();
+    }
+
+    @Test
+    void a_dcb_write_whose_side_effect_stops_the_model_on_another_thread_and_waits_completes_with_its_events_stored() throws Exception {
+        model.subscribe("p", StreamSubscriptionFilter.filter(Filter.type("NameDefined")), event -> handled.add(event.getType()));
+        var store = new InMemoryEventStore();
+        var applicationService = GenericDcbApplicationService.builder((DcbEventStore) store, new TestEventConverter())
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(model)
+                .build();
+        AtomicBoolean sideEffectRan = new AtomicBoolean();
+
+        var written = executeWithinTheTimeout(() -> applicationService.execute(tags(TAG),
+                DcbExecuteOptions.<TestEvent>options().sideEffect(newEvents -> {
+                    sideEffectRan.set(true);
+                    runOnAnotherThreadAndWait(model::stop);
+                }), events -> List.of(new TestEvent("NameDefined"))));
+
+        assertThat(written).as("what execute returned").isPresent();
+        assertThat(store.read(tags(TAG)).events().stream().map(CloudEvent::getType).toList()).as("the events stored").containsExactly("NameDefined");
+        assertThat(handled).as("the events the handler got before the side effect").containsExactly("NameDefined");
+        assertThat(sideEffectRan).as("the side effect ran").isTrue();
+        assertThat(model.isRunning()).as("running once the side effect stopped the model").isFalse();
+    }
+
+    @Test
+    void a_dcb_write_whose_side_effect_pauses_a_subscription_on_another_thread_and_waits_completes_with_its_events_stored() throws Exception {
+        model.subscribe("p", StreamSubscriptionFilter.filter(Filter.type("NameDefined")), event -> handled.add(event.getType()));
+        var store = new InMemoryEventStore();
+        var applicationService = GenericDcbApplicationService.builder((DcbEventStore) store, new TestEventConverter())
+                .tagGenerator(event -> Set.of(TAG))
+                .synchronousSubscriptions(model)
+                .build();
+        AtomicBoolean sideEffectRan = new AtomicBoolean();
+
+        var written = executeWithinTheTimeout(() -> applicationService.execute(tags(TAG),
+                DcbExecuteOptions.<TestEvent>options().sideEffect(newEvents -> {
+                    sideEffectRan.set(true);
+                    runOnAnotherThreadAndWait(() -> model.pauseSubscription("p"));
+                }), events -> List.of(new TestEvent("NameDefined"))));
+
+        assertThat(written).as("what execute returned").isPresent();
+        assertThat(store.read(tags(TAG)).events().stream().map(CloudEvent::getType).toList()).as("the events stored").containsExactly("NameDefined");
+        assertThat(handled).as("the events the handler got before the side effect").containsExactly("NameDefined");
+        assertThat(sideEffectRan).as("the side effect ran").isTrue();
+        assertThat(model.isPaused("p")).as("paused once the side effect paused it").isTrue();
+    }
+
+    // The call runs on a thread of its own, so a side effect that never returns fails the test, with the thread
+    // interrupted, rather than hanging it. The thread is a daemon one.
+    private static <T> T executeWithinTheTimeout(Callable<T> execute) throws Exception {
+        ExecutorService caller = Executors.newSingleThreadExecutor(action -> {
+            Thread thread = new Thread(action, "execute-caller");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try {
+            Future<T> future = caller.submit(execute);
+            try {
+                return future.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                future.cancel(true);
+                return fail("execute didn't complete within " + WAIT_SECONDS + " seconds, since its side effect waited for a pause or a stop that waited for the write");
+            }
+        } finally {
+            caller.shutdownNow();
+        }
+    }
+
+    private static void runOnAnotherThreadAndWait(Runnable action) {
+        Thread thread = start(action);
+        try {
+            thread.join();
+        } catch (InterruptedException e) {
+            thread.interrupt();
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     private void assertThatAPauseAndAStopApply(String after) throws InterruptedException {
