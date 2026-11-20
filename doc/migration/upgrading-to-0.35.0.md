@@ -474,6 +474,11 @@ throws after the write, the checkpoint stored before is put back with the write 
 with and the exception is thrown, so a failed reposition leaves the stored position as it was before the call. When
 nothing was stored before, the new checkpoint stays.
 
+The MongoDB subscription models stop waiting for a running event handler one second into a pause, so a handler can
+still be running when the resume stores the position. Once it returns, the checkpoint of its event isn't stored over
+that position, and neither is a quiet position read before the resume. A restart then resumes from the position you
+asked for.
+
 A catch-up model whose live delegate is a `DurableSubscriptionModel` now has the position stored when it resumes the
 durable model at one. [Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it) says such a resume stores nothing until the first live
 position or the quiet save. That section stays as it was released, and over a durable model it no longer holds.
