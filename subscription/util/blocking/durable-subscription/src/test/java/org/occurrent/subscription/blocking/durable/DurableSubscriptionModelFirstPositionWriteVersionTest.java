@@ -101,6 +101,27 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
     }
 
     @Test
+    void a_lost_race_that_resolves_to_this_nodes_own_position_stores_this_nodes_version() {
+        RecordingStorage storage = new RecordingStorage();
+        storage.beforeTheIfAbsentWrite = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("later-position-of-another-node"));
+        storage.replacesTheWinnerWithTheCandidate = true;
+        Feed feed = new Feed();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
+
+        durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        });
+
+        assertAll(
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(FIRST_POSITION),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION),
+                () -> assertThatThrownBy(() -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stale-node-position"), CheckpointWriteCondition.notOlderThan(1)))
+                        .as("a node with an older version writing over it")
+                        .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class)
+        );
+    }
+
+    @Test
     void a_stamp_refused_because_a_newer_lease_holder_wrote_since_still_starts_the_subscription_from_the_recorded_position() {
         RecordingStorage storage = new RecordingStorage();
         storage.afterTheIfAbsentWrite = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("newer-nodes-position"), CheckpointWriteCondition.notOlderThan(3));
@@ -158,6 +179,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
         @Nullable Runnable beforeTheIfAbsentWrite;
         @Nullable Runnable afterTheIfAbsentWrite;
         boolean answersTheWinnerOfALostRace = false;
+        boolean replacesTheWinnerWithTheCandidate = false;
 
         @Override
         public @Nullable Checkpoint read(String subscriptionId) {
@@ -200,6 +222,9 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
 
         @Override
         public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+            if (replacesTheWinnerWithTheCandidate) {
+                return Optional.of(delegate.save(subscriptionId, candidate));
+            }
             return answersTheWinnerOfALostRace ? Optional.ofNullable(delegate.read(subscriptionId)) : Optional.empty();
         }
     }
