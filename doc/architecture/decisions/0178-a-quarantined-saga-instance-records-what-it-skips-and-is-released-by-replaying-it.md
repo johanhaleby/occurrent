@@ -569,12 +569,16 @@ The upgrade guide has the procedure for operators, in
   succeeded.
 - A release keeps every stream version it applies in the instance's stream marks until the write that ends it, see
   point 2, so the instance's document grows by one number per replayed input during one release. Before a release
-  applies a record it counts the versions the marks keep, and at 500,000 it stops without applying the record or
-  dispatching its commands. The instance is quarantined again on that record with its marks trimmed to the reorder
-  window, the release returns `QUARANTINED_AGAIN`, and an ERROR names the instance. A further release goes on from that
-  record. On MongoDB 500,000 versions take about 8 MB of the 16 MB a document may hold, which leaves the rest for the
-  state. A longer backlog takes more than one release. Keeping the
-  versions a release applies outside the instance's document would remove the bound, and is left for later.
+  dispatches a record's commands it asks the store whether it can write the instance with the record applied, through
+  `SagaStateStoreSkippedInputs.fits`. When the write doesn't fit, the release applies and dispatches nothing for the
+  record. The instance is quarantined again on that record with its marks trimmed to the reorder window, the release
+  returns `QUARANTINED_AGAIN`, and an ERROR names the instance. When the record applied to the trimmed instance fits,
+  the ERROR says to release the instance again, and a further release goes on from that record. Otherwise the ERROR
+  says a further release stops on the record too. `SpringMongoSagaStateStore` refuses a write of more than 16 MB less
+  16 KiB, which leaves room for the failure record. A store that keeps the default of `fits` refuses nothing, and a
+  release on it dispatches the commands of a record whose write the store then fails. A backlog long enough takes more
+  than one release. Keeping the versions a release applies outside the instance's document would remove the limit, and
+  is left for later.
 - A quarantined instance keeps a record of the inputs it skips, with no limit on how many, and each record holds a whole event.
   The records take space in the store until a release replays them, a replayed input completes the instance, or the
   0.35.0 store deletes the instance. The downgrade in point 8 keeps the records of the instances that stay quarantined

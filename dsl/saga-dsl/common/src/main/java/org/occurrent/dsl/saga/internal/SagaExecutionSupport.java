@@ -591,46 +591,49 @@ public final class SagaExecutionSupport {
     }
 
     /**
-     * The most applied versions a releasing instance keeps in its stream marks before a release applies another record.
-     * A release keeps every version it applies until it ends, see {@link #replay}, so each stream event it applies adds
-     * one. MongoDB stores a version in about 16 bytes, so an instance at the bound keeps about 8 MB of the 16 MB it
-     * allows a document, and the rest is left for the state and the other fields.
-     */
-    public static final int MAX_APPLIED_VERSIONS_IN_A_RELEASE = 500_000;
-
-    /**
-     * How many applied versions {@code current} keeps in its stream marks, over every stream and event type. A release
-     * compares it with {@link #MAX_APPLIED_VERSIONS_IN_A_RELEASE} before it applies a record.
-     */
-    public static <S extends @Nullable Object> long appliedVersions(SagaEnvelope<S> current) {
-        long count = 0;
-        for (StreamMarks marks : current.streamMarks().values()) {
-            for (TypeMark typeMark : marks.byType().values()) {
-                count += typeMark.applied().size();
-            }
-        }
-        return count;
-    }
-
-    /**
-     * What to write when a release reached {@link #MAX_APPLIED_VERSIONS_IN_A_RELEASE} before the record {@code key}, or
-     * {@code null} when the instance applied that record's input already, and the release deletes the record as it
-     * would anyway. Save it with {@code compareAndSaveWithoutState(..., expectedVersion())}.
+     * What to write when the store cannot write the instance a release computed for the record {@code meta} names, or
+     * {@code null} when the instance applied that record's input already, and the release deletes the record as it would
+     * anyway. Save it with {@code compareAndSaveWithoutState(..., expectedVersion())}.
      * <p>
      * The instance is quarantined again on the record, as {@link #onReleaseFailure} quarantines it when the input's
      * budget has run out, whatever the budget, so quarantine turned off does not change it. The marks are trimmed to
      * {@code reorderWindow}, the record and the ones after it stay, and a further release goes on from that record.
-     * {@code reason} names the bound in the failure record.
+     * {@code reason} says why in the failure record.
      */
-    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseBound(SagaEnvelope<S> current, EventMeta meta,
-                                                                                         Throwable reason, Instant now, int reorderWindow) {
+    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseTooLarge(SagaEnvelope<S> current, EventMeta meta,
+                                                                                            Throwable reason, Instant now, int reorderWindow) {
         return onReleaseFailure(current, meta, reason, now, Duration.ZERO, reorderWindow, true);
+    }
+
+    /**
+     * The instance a further release would write for the record {@code meta} names, once {@code requarantined}, which
+     * {@link #onReleaseTooLarge} returned for it, is released again at {@code now}. That is {@code applied}, which the
+     * release computed for the record, with the trimmed marks and the failure record the further release starts from,
+     * and the record's version applied to those marks. Its version is {@code applied}'s, lower than the further release
+     * writes, which takes the same bytes. When the store cannot write this either, no further release gets past the
+     * record.
+     */
+    public static <S extends @Nullable Object> SagaEnvelope<S> appliedAfterReleasingAgain(SagaEnvelope<S> applied, SagaEnvelope<S> requarantined,
+                                                                                          EventMeta meta, Instant now, int reorderWindow) {
+        SagaEnvelope<S> releasing = Objects.requireNonNull(startRelease(requarantined, now));
+        Map<String, StreamMarks> streamMarks = new LinkedHashMap<>(releasing.streamMarks());
+        if (meta.streamId() != null && meta.streamVersion() != null) {
+            streamMarks.put(meta.streamId(), recorded(streamMarks.get(meta.streamId()), releasing.streamWatermarks().get(meta.streamId()), meta, NO_REORDER_WINDOW));
+        }
+        // As replay(..) builds it, which trims the marks of an input that completes the instance and keeps the failure
+        // record of one that does not
+        boolean completed = applied.isCompleted();
+        return new SagaEnvelope<>(applied.sagaId(), applied.state(), applied.status(), applied.version(), applied.timers(),
+                applied.streamWatermarks(), null, applied.createdAt(), applied.updatedAt(), applied.completedAt(), applied.currentStep(),
+                applied.started(), completed ? applied.failure() : releasing.failure(),
+                completed ? withinWindow(streamMarks, reorderWindow) : streamMarks,
+                completed ? applied.quarantineSkipCount() : releasing.quarantineSkipCount());
     }
 
     private static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseFailure(SagaEnvelope<S> current, EventMeta meta,
                                                                                             Throwable failure, Instant now,
                                                                                             Duration quarantineAfter, int reorderWindow,
-                                                                                            boolean atTheBound) {
+                                                                                            boolean tooLarge) {
         String input = meta.skipKey();
         if (input == null) {
             return null;
@@ -646,7 +649,7 @@ public final class SagaExecutionSupport {
             return null;
         }
         Instant failingSince = failingSince(current, meta, now);
-        boolean budgetUsedUp = atTheBound || Duration.between(failingSince, now).compareTo(quarantineAfter) >= 0;
+        boolean budgetUsedUp = tooLarge || Duration.between(failingSince, now).compareTo(quarantineAfter) >= 0;
         // An input with no stream has its clock on the record alone, so the record naming it is enough
         if (!budgetUsedUp && existing.input().equals(input) && (!streamKeyed || isPending(current.streamMarks().get(meta.streamId()), meta))) {
             return null;

@@ -108,6 +108,12 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
         return records.compareAndSaveReplayed(codec.encode(envelope), expectedVersion, quarantineId, replayed);
     }
 
+    /** Whether {@code records} can write the whole {@code envelope}, see {@link SagaStateStoreSkippedInputs#fits}. */
+    public boolean fits(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope) {
+        requireNonNull(records, "records cannot be null");
+        return records.fits(codec.encode(envelope));
+    }
+
     /** End a quarantine, see {@link SagaStateStoreSkippedInputs#compareAndSaveQuarantineEnded}. The whole envelope is written. */
     public boolean compareAndSaveQuarantineEnded(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope, long expectedVersion, String quarantineId) {
         requireNonNull(records, "records cannot be null");
