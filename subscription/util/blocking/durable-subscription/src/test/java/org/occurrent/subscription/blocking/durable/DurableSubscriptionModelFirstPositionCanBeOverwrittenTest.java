@@ -217,11 +217,12 @@ class DurableSubscriptionModelFirstPositionCanBeOverwrittenTest {
         });
         storage.delete(SUBSCRIPTION_ID);
 
-        StartAt evaluated = wrapped.startedAt.getFirst();
-        Throwable thrown = catchThrowable(() -> wrapped.startedAt.set(0, evaluated.isDynamic() ? evaluated.get(new SubscriptionModelContext(HoldingFeed.class)) : evaluated));
+        StartAt held = wrapped.startedAt.getFirst();
+        List<StartAt> evaluated = new CopyOnWriteArrayList<>();
+        Throwable thrown = catchThrowable(() -> evaluated.add(held.get(new SubscriptionModelContext(HoldingFeed.class))));
 
         assertThat(thrown).as("what the evaluation threw").isNull();
-        assertThat(wrapped.startedAt.getFirst()).isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+        assertThat(evaluated.getFirst()).isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
                 startAt -> assertThat(startAt.checkpoint.asString()).isEqualTo("stored-at-subscribe"));
         assertThat(storage.saves).as("the saves the storage saw").isEmpty();
         assertThat(storage.exists(SUBSCRIPTION_ID)).isFalse();
