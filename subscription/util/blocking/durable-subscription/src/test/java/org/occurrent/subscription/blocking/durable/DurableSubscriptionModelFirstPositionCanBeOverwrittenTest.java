@@ -118,6 +118,23 @@ class DurableSubscriptionModelFirstPositionCanBeOverwrittenTest {
     }
 
     @Test
+    void a_dynamic_start_that_answers_the_model_default_is_refused_the_same_way() {
+        HoldingFeed wrapped = new HoldingFeed("position-at-subscribe");
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage(Set.of(SUBSCRIPTION_ID));
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+
+        assertThatThrownBy(() -> durable.subscribe(SUBSCRIPTION_ID, StartAt.dynamic(StartAt::subscriptionModelDefault), __ -> {
+        }))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(WRITE_ONLY_UNCONDITIONALLY)
+                .hasMessageContaining(SUBSCRIPTION_ID);
+
+        assertThat(storage.saves).as("the saves the storage saw").isEmpty();
+        assertThat(storage.exists(SUBSCRIPTION_ID)).isFalse();
+        assertThat(wrapped.subscriptions).as("the subscriptions the wrapped model holds").isEmpty();
+    }
+
+    @Test
     void only_the_subscription_id_the_storage_cannot_evaluate_write_conditions_for_is_refused() {
         HoldingFeed wrapped = new HoldingFeed("position-at-subscribe");
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage(Set.of(SUBSCRIPTION_ID));
@@ -192,6 +209,18 @@ class DurableSubscriptionModelFirstPositionCanBeOverwrittenTest {
         assertThat(warnings()).hasSize(1).first().asString()
                 .contains("does not evaluate write conditions for subscription " + SUBSCRIPTION_ID)
                 .contains("written unconditionally");
+    }
+
+    @Test
+    void the_opt_in_survives_every_copy_of_the_config() {
+        DurableSubscriptionModelConfig optedIn = new DurableSubscriptionModelConfig(1).startWhenFirstPositionCanBeOverwritten(true);
+
+        assertThat(optedIn.startWhenNoStartPositionCanBeRecorded(true).startWhenFirstPositionCanBeOverwritten).as("after startWhenNoStartPositionCanBeRecorded").isTrue();
+        assertThat(optedIn.saveQuietPositionEvery(Duration.ofSeconds(7)).startWhenFirstPositionCanBeOverwritten).as("after saveQuietPositionEvery").isTrue();
+        assertThat(optedIn.neverSaveQuietPosition().startWhenFirstPositionCanBeOverwritten).as("after neverSaveQuietPosition").isTrue();
+        assertThat(optedIn.startWhenFirstPositionCanBeOverwritten(false).startWhenFirstPositionCanBeOverwritten).as("after turning it off again").isFalse();
+        assertThat(new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true).saveQuietPositionEvery(Duration.ofSeconds(7)).neverSaveQuietPosition().startWhenFirstPositionCanBeOverwritten)
+                .as("a config that never opted in").isFalse();
     }
 
     private List<String> warnings() {
