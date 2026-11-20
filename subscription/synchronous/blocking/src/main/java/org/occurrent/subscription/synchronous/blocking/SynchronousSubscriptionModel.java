@@ -132,6 +132,9 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
      * whose events a paused subscription matches. A handler skipped either way would never see those events. A
      * {@link #stop()} or {@link #pauseSubscription(String)} that comes after this call waits until the check is closed,
      * so the subscriptions it let the write through for still get its events.
+     * <p>
+     * A write this call admits before a {@code subscribe} returns may not reach that subscription, whether the model is
+     * running or stopped with no handlers, since nothing orders the two.
      *
      * @throws WriteRefusedException when this model is stopped and has handlers registered
      */

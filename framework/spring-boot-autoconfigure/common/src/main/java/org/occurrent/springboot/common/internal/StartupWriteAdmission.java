@@ -28,8 +28,9 @@ import java.util.function.Supplier;
  * Every write it admits reaches every synchronous handler the context ever registers, or the bean that declares that
  * handler fails its creation. The starters start no asynchronous subscription before the gate opens, so nothing the
  * startup scan starts can write while it runs. Until the gate opens, the starter takes every bean that declares a
- * synchronous handler that isn't registered yet and registers it before opening. Once the gate is open, such a bean
- * fails its creation before its {@code @PostConstruct} method runs. A bean whose initialization began before the gate
+ * synchronous handler that isn't registered yet and registers it before opening. Once the gate is open, and so is
+ * the other stack's when both are in the context, such a bean fails its creation before its {@code @PostConstruct}
+ * method runs, see {@link StartupGap}. A bean whose initialization began before the gate
  * opened fails once it is initialized instead, and so does a bean that another post-processor replaced with an object
  * that declares such a handler. A write such a bean made during its initialization may already be stored by then,
  * and the handler won't get it once the bean is fixed either, since it has no replay.

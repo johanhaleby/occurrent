@@ -226,12 +226,14 @@ other sections compile fine and behave differently, so read them first.
   handler declared with a type variable gets only the type the bean's class gives it, which can narrow a handler that
   ran in 0.34.0, one of the bridge kind or one on a JDK proxy that can't be unwrapped. Compiles unchanged.
 - [A write through the application service is refused while the application starts](#a-write-through-the-application-service-is-refused-while-the-application-starts).
-  A write from a `@PostConstruct` method, an `InitializingBean` or a `@Bean` method fails startup with
-  `WriteRefusedException`. A context whose event store bean is a Mockito mock fails startup with an
-  `IllegalStateException`. Under `MANUAL` the synchronous handlers run on every write from the start. A handler that
-  starts live, `@Projection` and `@Saga` by default among them, gets what is written directly to the event store
-  while the application starts. A write while the synchronous subscription model is stopped, or one a paused
-  synchronous subscription matches, is refused, also without a starter. Compiles unchanged.
+  A blocking write from a `@PostConstruct` method, an `InitializingBean` or a `@Bean` method fails startup with
+  `WriteRefusedException`, and so does a reactive one whose error reaches that method, for example because it blocks
+  on the `Mono`. A reactive write subscribed without an error consumer stores nothing, and the application starts. A
+  context whose event store bean is a Mockito mock fails startup with an `IllegalStateException`. Under `MANUAL` the
+  synchronous handlers run on every write from the start. A handler that starts live, `@Projection` and `@Saga` by
+  default among them, gets what is written directly to the event store while the application starts. A write while the
+  synchronous subscription model is stopped, or one a paused synchronous subscription matches, is refused, also
+  without a starter. Compiles unchanged.
 - [A synchronous event dispatcher you implement breaks on `beforeWrite()`](#a-synchronous-event-dispatcher-you-implement-breaks-on-beforewrite).
   **Breaks the build** if you implement `SynchronousEventDispatcher` or `ReactiveSynchronousEventDispatcher` yourself,
   and an implementation compiled against 0.34.0 throws `AbstractMethodError`.

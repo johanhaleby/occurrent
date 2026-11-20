@@ -143,6 +143,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // Refuses every write through the application service until the startup scan has registered every handler, and
     // the creation of a bean whose synchronous handler would register after that
     private final StartupWriteAdmission writeAdmission = new StartupWriteAdmission();
+    // Every gap in the context, this post-processor's included, set when the startup scan begins. With both stacks'
+    // post-processors in the context there are two, and a write is refused until both admit it, see StartupGap
+    private volatile List<StartupGap> startupGaps = List.of();
     // The asynchronous subscriptions the startup scan registers, started once the gate is open
     private final StartupSubscribes startupSubscribes = new StartupSubscribes();
     // The synchronous handler methods each class declares, read once per class, since every bean is checked as it is created
@@ -203,7 +206,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             userClassByBeanName.put(beanName, userClass);
             // Before the bean's @PostConstruct method, so a refused bean writes nothing
             @Nullable Method synchronousHandler = unregisteredSynchronousHandler(beanName, userClass);
-            if (synchronousHandler != null) {
+            // Refused only once every gap admits writes, since until then no write can have been admitted without
+            // the handler, and the callback below registers it
+            if (synchronousHandler != null && everyGapAdmitsWrites()) {
                 // Looked up again once the gate is open, since the drain may have registered it after the lookup above
                 writeAdmission.refuseIfOpen(beanName, () -> unregisteredSynchronousHandler(beanName, userClass));
             }
@@ -290,35 +295,36 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 builtWhileScanning.add(new BuiltWhileScanning(beanName, bean));
             }
         });
-        if (!handedOver && synchronousHandler != null) {
-            // Looked up again, since the drain may have registered it before the gate opened
-            @Nullable Method stillUnregistered = unregisteredSynchronousHandler(beanName, bean, target);
-            if (stillUnregistered != null) {
-                throw StartupWriteAdmission.refusalAfterInitialization(beanName, stillUnregistered);
-            }
-        }
-        // Read again rather than reused, so a bean finishing as the scan ends is registered by whichever of the two
-        // sees the flag set. Registering it twice is not possible, since both check the same RegisteredHandlers.
-        if (startupScanComplete) {
-            boolean defined = beanFactory.containsBeanDefinition(beanName);
-            // A FactoryBean's product takes the boundary its own factory read in the callback above, before the
-            // product's getObject ran, as LateFactoryLiveStarts describes, and none when its factory was built before
-            // the startup scan ended. Any other bean's is taken also for an instance with no bean definition, so its
-            // entry does not stay in the map
-            boolean product = defined && beanFactory.isFactoryBean(beanName);
-            @Nullable String lateLiveStart = product ? lateFactoryLiveStart(beanName, beanFactory) : takeLateLiveStart(bean);
-            if (defined) {
-                // Counted while the gate is closed, because the scan claims a handler before it subscribes it, and the
-                // startup thread's drain would skip a handler claimed here and could open the gate before the subscribe
-                boolean counted = writeAdmission.registrationStarts();
-                try {
-                    scanBuiltAfterStartup(beanFactory, beanName, bean, beanFactory.isSingleton(beanName), false, false, lateLiveStart);
-                } finally {
-                    if (counted) {
-                        writeAdmission.registrationEnds();
-                    }
+        // Counted on every gap still closed, which keeps it closed until the registration below ends, because the
+        // scan claims a handler before it subscribes it, and a drain would skip a handler claimed here and could open
+        // its gate before the subscribe. With both stacks' post-processors in the context, the other one's gap stays
+        // closed until its own scan ends, so no write is admitted before then, and a bean that one builds registers
+        // here rather than being refused.
+        List<StartupGap> counted = startupScanComplete ? registrationStartsOnEveryClosedGap() : List.of();
+        try {
+            if (!handedOver && synchronousHandler != null && counted.isEmpty()) {
+                // Looked up again, since the drain may have registered it before the gate opened
+                @Nullable Method stillUnregistered = unregisteredSynchronousHandler(beanName, bean, target);
+                if (stillUnregistered != null) {
+                    throw StartupWriteAdmission.refusalAfterInitialization(beanName, stillUnregistered);
                 }
             }
+            // Read again rather than reused, so a bean finishing as the scan ends is registered by whichever of the two
+            // sees the flag set. Registering it twice is not possible, since both check the same RegisteredHandlers.
+            if (startupScanComplete) {
+                boolean defined = beanFactory.containsBeanDefinition(beanName);
+                // A FactoryBean's product takes the boundary its own factory read in the callback above, before the
+                // product's getObject ran, as LateFactoryLiveStarts describes, and none when its factory was built
+                // before the startup scan ended. Any other bean's is taken also for an instance with no bean
+                // definition, so its entry does not stay in the map
+                boolean product = defined && beanFactory.isFactoryBean(beanName);
+                @Nullable String lateLiveStart = product ? lateFactoryLiveStart(beanName, beanFactory) : takeLateLiveStart(bean);
+                if (defined) {
+                    scanBuiltAfterStartup(beanFactory, beanName, bean, beanFactory.isSingleton(beanName), false, false, lateLiveStart);
+                }
+            }
+        } finally {
+            counted.forEach(StartupGap::registrationEnds);
         }
         return bean;
     }
@@ -389,10 +395,15 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // does the gate open and the held-back starts run, in the order they registered, each WAIT_UNTIL_STARTED one
     // finishing its replay before the next starts. With both stacks' post-processors in the context, the held-back
     // starts of both run once the second scan opened its gate, see StartupGap. A bean that would register a new
-    // synchronous handler after the gate opened, such as one a replay builds for the first time, fails its creation,
+    // synchronous handler once every gap is open, such as one a replay builds for the first time, fails its creation,
     // see StartupWriteAdmission.
     @Override
     public void afterSingletonsInstantiated() {
+        List<StartupGap> gaps = new ArrayList<>(applicationContext.getBeanProvider(StartupGap.class).orderedStream().toList());
+        if (!gaps.contains(this)) {
+            gaps.add(this);
+        }
+        startupGaps = List.copyOf(gaps);
         synchronized (registrationLock) {
             scanningThread = Thread.currentThread();
             String[] beanNames = applicationContext.getBeanDefinitionNames();
@@ -406,7 +417,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             } while (!writeAdmission.openIfNothingLeft(builtWhileScanning::isEmpty));
             scanningThread = null;
         }
-        StartupGap.startHeldBackOnceEveryGapAdmitsWrites(this, applicationContext.getBeanProvider(StartupGap.class).orderedStream().toList());
+        StartupGap.startHeldBackOnceEveryGapAdmitsWrites(this, startupGaps);
     }
 
     @Override
@@ -417,6 +428,30 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     @Override
     public void startHeldBack() {
         startupSubscribes.start();
+    }
+
+    @Override
+    public boolean registrationStarts() {
+        return writeAdmission.registrationStarts();
+    }
+
+    @Override
+    public void registrationEnds() {
+        writeAdmission.registrationEnds();
+    }
+
+    private boolean everyGapAdmitsWrites() {
+        return writeAdmission.admitsWrite() && startupGaps.stream().allMatch(StartupGap::admitsWrite);
+    }
+
+    private List<StartupGap> registrationStartsOnEveryClosedGap() {
+        List<StartupGap> counted = new ArrayList<>();
+        for (StartupGap gap : startupGaps) {
+            if (gap.registrationStarts()) {
+                counted.add(gap);
+            }
+        }
+        return counted;
     }
 
     // The first synchronous handler type declares that isn't registered under the name the scan registers beanName

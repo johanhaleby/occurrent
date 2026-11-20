@@ -26,7 +26,10 @@ import java.util.List;
  * write it misses it never sees.
  * <p>
  * The starter asks {@link #admitsWrite()} before every write through the application service and refuses the write
- * when it answers {@code false}.
+ * when it answers {@code false}. A context with both the blocking and the reactor post-processor has two gaps, and a
+ * write is refused while either is closed. So a post-processor refuses a bean whose synchronous handler isn't
+ * registered only once every gap admits writes. Until then it registers the handler, counted on every gap still
+ * closed, so none of them opens before the handler is subscribed.
  */
 public interface StartupGap {
 
@@ -40,6 +43,20 @@ public interface StartupGap {
      * and a second call runs nothing.
      */
     void startHeldBack();
+
+    /**
+     * Called before another gap's post-processor registers a handler it can no longer refuse, since this gap may still
+     * be closed.
+     *
+     * @return Whether the registration is counted, in which case this gap stays closed until
+     * {@link #registrationEnds()}, and {@code false} once it admits writes
+     */
+    boolean registrationStarts();
+
+    /**
+     * Called once a registration that {@link #registrationStarts()} counted has ended, whether or not it succeeded.
+     */
+    void registrationEnds();
 
     /**
      * Runs the held-back subscriptions of every gap in the context, {@code self} included, when every one of them admits

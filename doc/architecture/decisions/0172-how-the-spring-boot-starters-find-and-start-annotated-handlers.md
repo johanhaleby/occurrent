@@ -469,9 +469,11 @@ events since then a second time.
 - There is no OpenRewrite recipe, because nothing in the code says whether an inherited handler was meant to run. The
   code compiles unchanged. [The upgrade guide](../../migration/upgrading-to-0.35.0.md#a-handler-method-the-bean-inherits-is-registered)
   says who is affected and what to do.
-- **A write through the application service from a `@PostConstruct` method, an `InitializingBean` or a `@Bean`
-  method fails startup with `WriteRefusedException`.** It worked in 0.34.0, and the synchronous handlers registered
-  after it never got it. Moving the write to an `ApplicationRunner` or an `ApplicationReadyEvent` listener fixes it.
+- **A blocking write through the application service from a `@PostConstruct` method, an `InitializingBean` or a
+  `@Bean` method fails startup with `WriteRefusedException`, and so does a reactive one whose error reaches that
+  method.** Such a write worked in 0.34.0, and the synchronous handlers registered after it never got it. A reactive
+  write subscribed without an error consumer stores nothing, and the application starts. Moving the write to an
+  `ApplicationRunner` or an `ApplicationReadyEvent` listener fixes it.
 - A test whose context has a Mockito mock of the event store fails to start with an `IllegalStateException` until the
   mock returns a scope from `openCatchupReadScope`.
 - A subscription that starts live gets the events written directly to the event store while the application starts,
