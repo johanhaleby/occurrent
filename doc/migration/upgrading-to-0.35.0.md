@@ -230,8 +230,9 @@ other sections compile fine and behave differently, so read them first.
   `WriteRefusedException`, and so does a reactive one whose error reaches that method, for example because it blocks
   on the `Mono`. A reactive write subscribed without an error consumer stores nothing, and the application starts. A
   context whose event store bean is a Mockito mock fails startup with an `IllegalStateException`. Under `MANUAL` the
-  synchronous handlers run on every write from the start. A handler that starts live, `@Projection` and `@Saga` by
-  default among them, gets what is written directly to the event store while the application starts. A write while the
+  synchronous handlers run from the start on writes through the application service. A handler that starts live,
+  `@Projection` and `@Saga` by default among them, can get what is written directly to the event store while the
+  application starts, except in the cases that section lists. A write while the
   synchronous subscription model is stopped, or one a paused synchronous subscription matches, is refused, also
   without a starter. Compiles unchanged.
 - [A synchronous event dispatcher you implement breaks on `beforeWrite()`](#a-synchronous-event-dispatcher-you-implement-breaks-on-beforewrite).
