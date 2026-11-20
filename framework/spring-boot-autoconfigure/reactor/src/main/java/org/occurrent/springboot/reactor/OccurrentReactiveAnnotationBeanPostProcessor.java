@@ -191,12 +191,16 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     @Override
     public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
         if (bean instanceof FactoryBean<?>) {
+            ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
+            boolean prototype = beanFactory.containsBeanDefinition(beanName) && beanFactory.getMergedBeanDefinition(beanName).isPrototype();
             if (startupScanComplete) {
-                ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
-                boolean prototype = beanFactory.containsBeanDefinition(beanName) && beanFactory.getMergedBeanDefinition(beanName).isPrototype();
                 // Never earlier than a factory of this name a product on this thread can still take the boundary of
                 @Nullable String notBefore = prototype ? lateFactoryLiveStarts.newestUnclaimedLiveStart(beanName) : null;
                 lateFactoryLiveStarts.factoryCreated(beanName, bean, prototype, startPositionSupport.readLateLiveStart(notBefore));
+            } else if (prototype) {
+                // With no boundary, which is the boundary of the context. Its getObject can run after the scan ends and
+                // write before it creates another factory of this name, and the product must not take that one's
+                lateFactoryLiveStarts.factoryCreated(beanName, bean, true, null);
             }
         } else {
             // put rather than putIfAbsent, because a creation that failed is retried and the retry can produce a
@@ -322,6 +326,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 if (defined) {
                     scanBuiltAfterStartup(beanFactory, beanName, bean, beanFactory.isSingleton(beanName), false, false, lateLiveStart);
                 }
+            } else if (beanFactory.containsBeanDefinition(beanName) && beanFactory.isFactoryBean(beanName)
+                    && beanFactory.getMergedBeanDefinition(beanName).isPrototype()) {
+                // Claimed before the scan ends too, so its factory isn't left for a later product of this name on
+                // this thread to take the boundary of
+                lateFactoryLiveStarts.claimPrototypeFactory(beanName);
             }
         } finally {
             counted.forEach(StartupGap::registrationEnds);

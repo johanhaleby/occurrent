@@ -49,7 +49,8 @@ import java.util.Map;
  * A new prototype factory reads its boundary with {@link #newestUnclaimedLiveStart(String)} as the earliest the event
  * store may return, so of those factories the oldest is the earliest even when two reads of the store could go back,
  * as two MongoDB sessions can when the primary changes. A product whose factory was built before the startup scan
- * ended takes none, and starts at the boundary of the context.
+ * ended takes none, and starts at the boundary of the context. A prototype factory built then is recorded with no
+ * boundary, so a product that takes the boundary of the oldest one starts there too.
  * <p>
  * Keyed by the factory instance and held weakly, so a factory whose creation failed, or a prototype factory whose
  * product is built, takes its boundary with it once it's collected. The boundary itself goes at the next access after
