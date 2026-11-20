@@ -426,6 +426,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         if (interval == null || registration == null || !registration.quietSaveAllowed() || System.nanoTime() - registration.lastWrite.get() < interval.toNanos()) {
             return null;
         }
+        long repositions = registration.repositions();
         CheckpointWriteCondition writeCondition;
         try {
             writeCondition = writeConditionFor(subscriptionId);
@@ -434,17 +435,18 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             log.warn("Could not read the write version for subscription {}, so its quiet position is not saved this time. Trying again in {}.", subscriptionId, interval, e);
             return null;
         }
-        return quietPosition -> saveQuietPosition(subscriptionId, quietPosition, writeCondition, registration);
+        return quietPosition -> saveQuietPosition(subscriptionId, quietPosition, writeCondition, registration, repositions);
     }
 
     // A refused write is thrown, so the wrapped model ends delivery on a node whose lease moved, as it does for an
     // event. Any other failure is logged and tried again after the interval, since the subscription has lost nothing
-    private void saveQuietPosition(String subscriptionId, Checkpoint quietPosition, CheckpointWriteCondition writeCondition, CheckpointRegistration registration) {
+    private void saveQuietPosition(String subscriptionId, Checkpoint quietPosition, CheckpointWriteCondition writeCondition, CheckpointRegistration registration,
+                                   long repositions) {
         runUnderLockFor(subscriptionId, () -> {
             if (registrations.get(subscriptionId) != registration) {
                 return;
             }
-            registration.saveQuietPositionIfAllowed(() -> {
+            registration.saveQuietPositionIfAllowed(repositions, () -> {
                 registration.lastWrite.set(System.nanoTime());
                 try {
                     storage.save(subscriptionId, quietPosition, writeCondition);
@@ -590,6 +592,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             Consumer<CloudEvent> checkpointingAction = cloudEvent -> {
                 // Taken before anything the delivery waits on, so no quiet position is saved until it has finished
                 long delivery = registration.delivering();
+                long repositions = registration.repositions();
                 boolean stored = false;
                 try {
                     // Read before the action runs, so the write uses the token of the lease this event was
@@ -598,7 +601,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     action.accept(cloudEvent);
                     if (persistCheckpoint.test(cloudEvent)) {
                         Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
-                        stored = registration.saveUnlessCancelled(() -> {
+                        stored = registration.saveUnlessCancelledOrRepositioned(repositions, () -> {
                             storage.save(subscriptionId, checkpoint, writeCondition);
                             registration.lastWrite.set(System.nanoTime());
                         });
@@ -1104,7 +1107,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * {@code false} for a catch-up's position, a time, and any other checkpoint their change stream can't open at. A
      * model that doesn't override it answers {@code false} for every checkpoint, so nothing is stored over it.</li>
      * </ul>
-     * The checkpoint is stored with the same write condition as every other checkpoint this model writes. When the
+     * The checkpoint is stored with the same write condition as every other checkpoint this model writes. An action
+     * still running when the subscription was paused, because the wrapped model stopped waiting for it, doesn't store
+     * the checkpoint of its event over the stored position once it returns, and neither does a quiet position read
+     * before this call. When the
      * checkpoint storage refuses the write with {@link CheckpointWriteConditionNotFulfilledException}, because another
      * node has written with a newer lease, the exception propagates and the subscription stays paused. When the wrapped
      * model's resume throws after the write, the checkpoint stored before is put back with the write condition the
@@ -1152,6 +1158,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             // write would otherwise overwrite
             Checkpoint previous = storage.read(subscriptionId);
             CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
+            // A handler the pause stopped waiting for can still return and save the checkpoint of its event over the
+            // position stored here, so from now on that save is refused
+            CheckpointRegistration registration = registrations.get(subscriptionId);
+            if (registration != null) {
+                registration.repositioned();
+            }
             storage.save(subscriptionId, position, writeCondition);
             try {
                 return repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(position));
@@ -1558,6 +1570,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // this model is taken while it is held
         private final ReentrantLock saveLock = new ReentrantLock();
         private boolean cancelled;
+        // Counts the resumes at a position that stored their position. Written while holding saveLock, so a save that
+        // started before a resume and checks it under saveLock is refused, and a save already under way finishes first
+        private volatile long repositions;
         // Set before the registration is tracked, for a subscribe that threw and failed to cancel the subscription
         private boolean keepCheckpointWhenCancelled;
 
@@ -1628,14 +1643,28 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             return quietSaveAllowed;
         }
 
-        // Taken inside deliveryLock, so it writes nothing once this registration has stopped writing
-        void saveQuietPositionIfAllowed(Runnable save) {
+        long repositions() {
+            return repositions;
+        }
+
+        void repositioned() {
+            saveLock.lock();
+            try {
+                repositions++;
+            } finally {
+                saveLock.unlock();
+            }
+        }
+
+        // Taken inside deliveryLock, so it writes nothing once this registration has stopped writing, nor a position
+        // read before a resume at a position stored its own
+        void saveQuietPositionIfAllowed(long repositionsWhenRead, Runnable save) {
             deliveryLock.lock();
             try {
                 if (quietSaveAllowed) {
                     saveLock.lock();
                     try {
-                        if (!cancelled) {
+                        if (!cancelled && repositions == repositionsWhenRead) {
                             save.run();
                         }
                     } finally {
@@ -1660,11 +1689,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
         }
 
-        // Whether it saved
-        boolean saveUnlessCancelled(Runnable save) {
+        // Whether it saved. A delivery that started before a resume at a position stored its own saves nothing
+        boolean saveUnlessCancelledOrRepositioned(long repositionsWhenDelivered, Runnable save) {
             saveLock.lock();
             try {
-                if (cancelled) {
+                if (cancelled || repositions != repositionsWhenDelivered) {
                     return false;
                 }
                 save.run();
