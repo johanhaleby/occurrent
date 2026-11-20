@@ -31,27 +31,59 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * A saga on the annotation path takes its quarantine budget from {@code occurrent.saga.quarantine-after}. The property
- * has no default, and leaving it out keeps quarantine off. Zero is refused rather than read as off, because it reads
- * as "never" as easily as "immediately", and a negative value is refused as well.
+ * A saga on the annotation path takes its quarantine budget from {@code occurrent.saga.quarantine-after}. Leaving it out
+ * gives the runner's default of five minutes, and {@code occurrent.saga.quarantine-enabled=false} turns quarantine off.
+ * Zero is refused rather than read as off, because it reads as "never" as easily as "immediately", and a negative value
+ * is refused as well.
  */
 @DisplayName("The saga quarantine budget property")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaQuarantineBudgetPropertyTest {
 
     @Test
-    void has_no_default_which_agrees_with_the_runner_never_quarantining_by_default() {
+    void has_no_value_of_its_own_and_quarantine_is_on_with_the_runner_default_of_five_minutes() {
+        OccurrentProperties.SagaProperties properties = new OccurrentProperties.SagaProperties();
+
         assertAll(
-                () -> assertThat(new OccurrentProperties.SagaProperties().getQuarantineAfter()).isNull(),
-                () -> assertThat(SagaRunnerConfig.defaults().quarantineAfter()).isEmpty()
+                () -> assertThat(properties.getQuarantineAfter()).isNull(),
+                () -> assertThat(properties.isQuarantineEnabled()).isTrue(),
+                () -> assertThat(SagaRunnerConfig.defaults().quarantineAfter()).contains(Duration.ofMinutes(5))
         );
     }
 
     @Test
-    void leaves_quarantine_off_when_the_property_is_not_set() {
+    void quarantines_after_five_minutes_when_the_property_is_not_set() {
         Duration unset = new OccurrentProperties.SagaProperties().getQuarantineAfter();
 
-        assertThat(SagaAnnotationRegistrar.withQuarantineBudget(SagaRunnerConfig.defaults(), unset).quarantineAfter()).isEmpty();
+        // Starts from a config with quarantine off, so the five minutes come from the unset property and not from it
+        assertThat(SagaAnnotationRegistrar.withQuarantineBudget(SagaRunnerConfig.defaults().disableQuarantine(), unset).quarantineAfter())
+                .contains(Duration.ofMinutes(5));
+    }
+
+    @Test
+    void quarantines_after_five_minutes_when_neither_the_budget_nor_the_switch_is_set() {
+        OccurrentProperties.SagaProperties properties = new OccurrentProperties.SagaProperties();
+
+        SagaRunnerConfig config = SagaAnnotationRegistrar.withQuarantine(SagaRunnerConfig.defaults().disableQuarantine(), properties);
+
+        assertThat(config.quarantineAfter()).contains(Duration.ofMinutes(5));
+    }
+
+    @Test
+    void turns_quarantine_off_when_it_is_disabled_even_with_a_budget_set() {
+        OccurrentProperties.SagaProperties properties = new OccurrentProperties.SagaProperties();
+        properties.setQuarantineAfter(Duration.ofSeconds(30));
+        properties.setQuarantineEnabled(false);
+
+        assertThat(SagaAnnotationRegistrar.withQuarantine(SagaRunnerConfig.defaults(), properties).quarantineAfter()).isEmpty();
+    }
+
+    @Test
+    void passes_the_budget_to_the_runner() {
+        OccurrentProperties.SagaProperties properties = new OccurrentProperties.SagaProperties();
+        properties.setQuarantineAfter(Duration.ofSeconds(30));
+
+        assertThat(SagaAnnotationRegistrar.withQuarantine(SagaRunnerConfig.defaults(), properties).quarantineAfter()).contains(Duration.ofSeconds(30));
     }
 
     @Test

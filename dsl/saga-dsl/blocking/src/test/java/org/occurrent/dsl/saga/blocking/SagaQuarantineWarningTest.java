@@ -34,9 +34,12 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.saga.Saga;
+import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -44,12 +47,15 @@ import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -163,27 +169,182 @@ class SagaQuarantineWarningTest {
     }
 
     /**
-     * Quarantine is off unless asked for, so a saga on the default configuration has given nothing up and there is
-     * nothing to warn about. Without this the message would fire for every saga on a feed that cannot retain events.
+     * The default configuration quarantines after five minutes, so a saga on it gives quarantine up on such a model. It
+     * never asked for quarantine, so this is a debug line and not a warning.
      */
     @ParameterizedTest
     @MethodSource("modelsThatCannotSupportQuarantine")
-    @DisplayName("says nothing under the default configuration")
-    void says_nothing_under_the_default_configuration(Subscribable model) {
+    @DisplayName("says that quarantine is switched off under the default configuration at debug and not at warn")
+    void says_that_quarantine_is_switched_off_under_the_default_configuration_at_debug_and_not_at_warn(Subscribable model) {
+        runnerLog.setLevel(Level.DEBUG);
+
         SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
                 .run("orders", saga(), SagaStateStore.inMemory(), c -> {
                 }, null, SagaRunnerConfig.defaults())
                 .close();
 
-        assertThat(warnings()).isEmpty();
+        assertAll(
+                () -> assertThat(switchedOffLines(Level.WARN)).as("the lines at WARN").isEmpty(),
+                () -> assertThat(switchedOffLines(Level.DEBUG)).as("the lines at DEBUG").hasSize(1)
+        );
+    }
+
+    /**
+     * Setting the budget to what the default is still asks for quarantine, so it is told at warn.
+     */
+    @ParameterizedTest
+    @MethodSource("modelsThatCannotSupportQuarantine")
+    @DisplayName("warns that quarantine is switched off when a budget equal to the default was set explicitly")
+    void warns_that_quarantine_is_switched_off_when_a_budget_equal_to_the_default_was_set_explicitly(Subscribable model) {
+        runnerLog.setLevel(Level.DEBUG);
+
+        SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .run("orders", saga(), SagaStateStore.inMemory(), c -> {
+                }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)))
+                .close();
+
+        assertAll(
+                () -> assertThat(switchedOffLines(Level.WARN)).as("the lines at WARN").hasSize(1),
+                () -> assertThat(switchedOffLines(Level.DEBUG)).as("the lines at DEBUG").isEmpty()
+        );
+    }
+
+    private List<String> switchedOffLines(Level level) {
+        return new ArrayList<>(appender.list).stream()
+                .filter(event -> event.getLevel() == level)
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.contains("quarantine is switched off for this saga"))
+                .toList();
     }
 
     private static Stream<Subscribable> modelsThatCannotSupportQuarantine() {
         return Stream.of(new RetainsNothing(), new RetainsSomeEvents());
     }
 
+    /**
+     * A model that holds every event it delivers lets a quarantined saga skip them, and the release then asks the event
+     * store for what it skipped. A runner with nothing to ask would quarantine and never be able to release, so it
+     * refuses to start and names both ways out.
+     */
+    @Test
+    void refuses_to_start_when_quarantine_is_on_the_model_holds_every_event_and_there_is_no_event_store_queries() {
+        Retains model = new Retains();
+
+        Throwable thrown = catchThrowable(() -> SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .run("orders", saga(), SagaStateStore.inMemory(), c -> {
+                }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5))));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class),
+                () -> assertThat(thrown).hasMessageContaining("SagaRunner.eventStoreQueries(..)"),
+                () -> assertThat(thrown).hasMessageContaining("SagaRunnerConfig.disableQuarantine()"),
+                () -> assertThat(model.subscribed).isZero()
+        );
+    }
+
+    /**
+     * Quarantine records what the instance skips and a release reads it back, both through the optional
+     * SagaStateStoreSkippedInputs capability. A store without it would quarantine and then have nowhere to put the
+     * skipped inputs, so the runner refuses to start instead of finding out on the first quarantine.
+     */
+    @Test
+    void refuses_to_start_when_quarantine_is_on_the_model_holds_every_event_and_the_store_cannot_record_skipped_inputs() {
+        Retains model = new Retains();
+
+        Throwable thrown = catchThrowable(() -> SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .eventStoreQueries(new InMemoryEventStore())
+                .run("orders", saga(), new StoreWithoutSkippedInputs<>(), c -> {
+                }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5))));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class),
+                () -> assertThat(thrown).hasMessageContaining("SagaStateStoreSkippedInputs"),
+                () -> assertThat(thrown).hasMessageContaining("SagaRunnerConfig.disableQuarantine()"),
+                () -> assertThat(model.subscribed).isZero()
+        );
+    }
+
+    @Test
+    void starts_with_a_store_that_cannot_record_skipped_inputs_when_quarantine_is_switched_off() {
+        Retains model = new Retains();
+
+        SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .eventStoreQueries(new InMemoryEventStore())
+                .run("orders", saga(), new StoreWithoutSkippedInputs<>(), c -> {
+                }, null, SagaRunnerConfig.defaults().disableQuarantine())
+                .close();
+
+        assertAll(
+                () -> assertThat(model.subscribed).isEqualTo(1),
+                () -> assertThat(warnings()).isEmpty()
+        );
+    }
+
+    @Test
+    void starts_without_event_store_queries_when_quarantine_is_off_on_a_model_that_holds_every_event() {
+        Retains model = new Retains();
+
+        SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .run("orders", saga(), SagaStateStore.inMemory(), c -> {
+                }, null, SagaRunnerConfig.defaults().disableQuarantine())
+                .close();
+
+        assertAll(
+                () -> assertThat(model.subscribed).isEqualTo(1),
+                () -> assertThat(warnings()).isEmpty()
+        );
+    }
+
+    @Test
+    void starts_without_event_store_queries_on_a_model_that_cannot_hold_every_event_with_quarantine_switched_off() {
+        RetainsSomeEvents model = new RetainsSomeEvents();
+
+        SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .run("orders", saga(), SagaStateStore.inMemory(), c -> {
+                }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)))
+                .close();
+
+        assertAll(
+                () -> assertThat(model.subscribed).isEqualTo(1),
+                () -> assertThat(warnings()).hasSize(1),
+                () -> assertThat(warning()).contains("quarantine is switched off")
+        );
+    }
+
+    @Test
+    void starts_on_a_model_that_holds_every_event_when_there_are_event_store_queries() {
+        Retains model = new Retains();
+
+        run(model);
+
+        assertAll(
+                () -> assertThat(model.subscribed).isEqualTo(1),
+                () -> assertThat(warnings()).isEmpty()
+        );
+    }
+
+    // The Spring Boot registrar sets the event store first and the strategy second, so the copy the strategy setter
+    // returns has to carry the queries along
+    @Test
+    void starts_with_quarantine_on_when_the_competing_consumer_strategy_is_set_after_the_event_store_queries() {
+        Retains model = new Retains();
+
+        Throwable thrown = catchThrowable(() -> SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .eventStoreQueries(new InMemoryEventStore())
+                .competingConsumerStrategy(new NeverLeader())
+                .run("orders", saga(), SagaStateStore.inMemory(), c -> {
+                }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)))
+                .close());
+
+        assertAll(
+                () -> assertThat(thrown).isNull(),
+                () -> assertThat(model.subscribed).isEqualTo(1)
+        );
+    }
+
     private void run(Subscribable model) {
         SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .eventStoreQueries(new InMemoryEventStore())
                 .run("orders", saga(), SagaStateStore.inMemory(), c -> {
                 }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)))
                 .close();
@@ -205,9 +366,37 @@ class SagaQuarantineWarningTest {
         return warnings().getFirst();
     }
 
+    // Delegates to the in-memory store and, unlike it, does not implement SagaStateStoreSkippedInputs
+    private static final class StoreWithoutSkippedInputs<S> implements SagaStateStore<S> {
+        private final SagaStateStore<S> delegate = SagaStateStore.inMemory();
+
+        @Override
+        public Optional<SagaEnvelope<S>> find(String sagaId) {
+            return delegate.find(sagaId);
+        }
+
+        @Override
+        public boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
+            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        }
+
+        @Override
+        public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
+            return delegate.findWithDueTimers(now, limit);
+        }
+
+        @Override
+        public void delete(String sagaId) {
+            delegate.delete(sagaId);
+        }
+    }
+
     private static class RetainsNothing implements Subscribable {
+        int subscribed;
+
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            subscribed++;
             return new NoopSubscription(subscriptionId);
         }
     }
@@ -230,6 +419,34 @@ class SagaQuarantineWarningTest {
         @Override
         public boolean retains(CloudEvent event) {
             return false;
+        }
+    }
+
+    private static final class NeverLeader implements CompetingConsumerStrategy {
+        @Override
+        public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
+            return false;
+        }
+
+        @Override
+        public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
+        }
+
+        @Override
+        public void releaseCompetingConsumer(String subscriptionId, String subscriberId) {
+        }
+
+        @Override
+        public boolean hasLock(String subscriptionId, String subscriberId) {
+            return false;
+        }
+
+        @Override
+        public void addListener(CompetingConsumerListener listenerConsumer) {
+        }
+
+        @Override
+        public void removeListener(CompetingConsumerListener listenerConsumer) {
         }
     }
 

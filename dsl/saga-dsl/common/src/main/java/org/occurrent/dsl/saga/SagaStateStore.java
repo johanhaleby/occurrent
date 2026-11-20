@@ -29,10 +29,15 @@ import java.util.Optional;
  * store is also queried for instances with a due timer, since timers live in the envelope rather than an external
  * scheduler.
  * <p>
- * This is the minimal contract the executor needs. Two of its six methods are {@code default}, and both are about
- * reading and writing an instance without its application state, which is how the executor quarantines an instance
- * whose state no longer decodes. A store inherits them and works, and only a store that overrides them lets such an
- * instance be considered for quarantine at all.
+ * This is the minimal contract the executor needs. Two of its methods are {@code default}, and both are about reading
+ * and writing an instance without its application state, which is how the executor quarantines an instance whose state
+ * no longer decodes. A store inherits them and works, and only a store that overrides them lets such an instance be
+ * considered for quarantine at all.
+ * <p>
+ * Quarantine needs a second capability. A store that also implements {@link SagaStateStoreSkippedInputs} records the
+ * inputs a quarantined instance skips and lets the instance be released. On a subscription model that holds every
+ * event, the runner refuses to start a saga with quarantine on when its store does not implement it, and
+ * {@code SagaRunnerConfig.disableQuarantine()} runs the saga without quarantine on such a store.
  * <p>
  * Observing instances is an optional capability layered on top. A store that also implements
  * {@link SagaStateStoreQueries} can be enumerated, which is what a progress view or a stuck-instance sweep needs. A
@@ -135,6 +140,12 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * event recreate the instance from its start event and run the process a second time. Delete an instance only once its
      * source can no longer redeliver any of its events, until then let a TTL expire it, so a late redelivery still finds
      * the terminal instance and is skipped rather than resurrecting it.
+     * <p>
+     * A store that implements {@link SagaStateStoreSkippedInputs} also deletes the records under the quarantine id the
+     * deleted instance had, after the instance itself. Records under any other quarantine id stay, so a later instance
+     * with the same id, which records under a quarantine id of its own, keeps its records even when it was created and
+     * quarantined between those two deletes. A record under a quarantine id no instance has is never read again, so one
+     * left behind takes up storage and nothing else.
      */
     void delete(String sagaId);
 

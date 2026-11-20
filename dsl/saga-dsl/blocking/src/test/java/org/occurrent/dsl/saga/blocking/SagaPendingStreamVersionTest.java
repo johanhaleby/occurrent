@@ -73,9 +73,9 @@ class SagaPendingStreamVersionTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
     private static final Duration BUDGET = Duration.ofMinutes(5);
     private static final String ITEM_ADDED_TYPE = ItemAdded.class.getName();
-    private static final SagaRunnerConfig WINDOW_OF_2 = SagaRunnerConfig.defaults().withReorderWindow(2);
+    private static final SagaRunnerConfig WINDOW_OF_2 = SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2);
     private static final SagaRunnerConfig WINDOW_OF_2_WITH_QUARANTINE = WINDOW_OF_2.withQuarantineAfter(BUDGET);
-    private static final SagaRunnerConfig WINDOW_OF_1 = SagaRunnerConfig.defaults().withReorderWindow(1);
+    private static final SagaRunnerConfig WINDOW_OF_1 = SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(1);
     private static final SagaRunnerConfig WINDOW_OF_1_WITH_QUARANTINE = WINDOW_OF_1.withQuarantineAfter(BUDGET);
 
     sealed interface BasketEvent permits BasketOpened, ItemAdded {

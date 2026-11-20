@@ -16,7 +16,14 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import com.mongodb.MongoServerException;
+import com.mongodb.ReadPreference;
+import com.mongodb.WriteConcern;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.UpdateOptions;
+import com.mongodb.client.model.Updates;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
@@ -32,7 +39,9 @@ import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
 import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStateStoreQueries;
+import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
@@ -44,6 +53,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
+import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 
@@ -51,6 +61,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -75,14 +86,41 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * fields are top-level fields. Reading them is a projection that excludes the state, and writing them is a
  * {@code findAndModify} that does not touch it, so an instance whose state no longer decodes can still be quarantined
  * and still has that state afterwards.
+ * <p>
+ * A release is stored the same way, in the top-level fields {@code failureReleasedAt}, {@code failureQuarantineId} and
+ * {@code quarantineSkipCount}. A document written before 0.35.0 has none of them, and reads back as not releasing, with
+ * no quarantine id and no count. {@link #findReleasingSagaIds(String, int)} finds the instances that have
+ * {@code failureReleasedAt} set. The inputs a quarantined instance skips are stored one document each, in a collection
+ * next to the instances named after it with {@code _skipped_inputs} appended. Each holds {@code sagaId},
+ * {@code quarantineId}, {@code seq} and {@code key}, with a unique index on {@code sagaId}, {@code quarantineId} and
+ * {@code key}, and an index on {@code sagaId}, {@code quarantineId} and {@code seq} for the order a release reads them
+ * in. The constructor refuses a collection name that ends in {@code _skipped_inputs}, because a store on {@code orders}
+ * keeps its skipped inputs in {@code orders_skipped_inputs}, and a store on that name would share the collection.
+ * <p>
+ * An instance quarantined with a quarantine id is stored with the status {@value #QUARANTINED_RECORDING} rather than
+ * {@code QUARANTINED}, and both read back as {@link SagaStatus#QUARANTINED}. See {@link #QUARANTINED_RECORDING} for why.
  *
  * @param <S> the user state type
  */
 @NullMarked
-public final class SpringMongoSagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S> {
+public final class SpringMongoSagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S>, SagaStateStoreSkippedInputs {
 
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
 
+    private static final String SKIPPED_INPUTS_SUFFIX = "_skipped_inputs";
+    // How long each attempt of a skipped-input write waits for a journaled majority before it fails. A client timeoutMS
+    // above 0 bounds the attempt instead
+    private static final Duration SKIPPED_INPUT_WRITE_TIMEOUT = Duration.ofSeconds(10);
+    // With j: true a majority has the write in its on-disk journal before it acknowledges, whatever
+    // writeConcernMajorityJournalDefault says
+    private static final WriteConcern SKIPPED_INPUT_WRITE_CONCERN = WriteConcern.MAJORITY.withJournal(true)
+            .withWTimeout(SKIPPED_INPUT_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    // The refusal of j: true by a WiredTiger server that runs without journaling (BadValue). Other refusals share the
+    // code, so the message is matched too
+    private static final int JOURNAL_NOT_SUPPORTED_ERROR_CODE = 2;
+    private static final String JOURNAL_NOT_SUPPORTED_ERROR_MESSAGE = "cannot use 'j' option when a host does not have journaling enabled";
+    static final String JOURNALING_REQUIRED_MESSAGE = "SpringMongoSagaStateStore needs a MongoDB server with journaling to record the inputs a quarantined saga instance skips. "
+                                                      + "The server refused j: true because it runs without journaling, and a crash could then lose a recorded input that a release has to replay.";
     private static final String ID = "_id";
     private static final String STATE = "state";
     private static final String STATUS = "status";
@@ -127,6 +165,27 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String FAILURE_FIRST_FAILED_AT = "failureFirstFailedAt";
     private static final String FAILURE_TYPE = "failureType";
     private static final String FAILURE_MESSAGE = "failureMessage";
+    private static final String FAILURE_RELEASED_AT = "failureReleasedAt";
+    private static final String FAILURE_QUARANTINE_ID = "failureQuarantineId";
+    // Top-level like the failure fields, so a quarantine can be recorded without decoding any state
+    private static final String QUARANTINE_SKIP_COUNT = "quarantineSkipCount";
+
+    /**
+     * The status an instance is stored with when it is quarantined with a quarantine id, which is every instance 0.35.0
+     * or later quarantines. It reads back as {@link SagaStatus#QUARANTINED}. 0.34.0 decodes the status with
+     * {@code SagaStatus.valueOf} and throws on a string it does not know, so a 0.34.0 node that meets such an instance
+     * during a rolling upgrade fails on it instead of skipping its inputs without recording them, which would leave a
+     * release with inputs it never replays. The subscription, or the source's delivery failure policy, decides what then
+     * happens to the input.
+     */
+    public static final String QUARANTINED_RECORDING = "QUARANTINED_RECORDING";
+    private static final List<String> QUARANTINED_STATUSES = List.of(SagaStatus.QUARANTINED.name(), QUARANTINED_RECORDING);
+
+    // Fields of a document in the skipped inputs collection
+    private static final String SKIPPED_SAGA_ID = "sagaId";
+    private static final String SKIPPED_QUARANTINE_ID = "quarantineId";
+    private static final String SKIPPED_SEQ = "seq";
+    private static final String SKIPPED_KEY = "key";
 
     // Every field this store writes apart from the _id, the state, and currentStep, which is what
     // compareAndSaveWithoutState sets and unsets so that a save leaves the stored state alone without leaving any other
@@ -136,7 +195,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final List<String> EVERY_FIELD_EXCEPT_THE_STATE = List.of(STATUS, VERSION, TIMERS,
             NEXT_TIMER_FIRES_AT, STREAM_WATERMARKS, POSITION_WATERMARK, STREAM_MARKS, CREATED_AT, UPDATED_AT,
             COMPLETED_AT, STARTED, FAILURE_INPUT, FAILURE_POSITION, FAILURE_FIRST_FAILED_AT, FAILURE_TYPE,
-            FAILURE_MESSAGE);
+            FAILURE_MESSAGE, FAILURE_RELEASED_AT, FAILURE_QUARANTINE_ID, QUARANTINE_SKIP_COUNT);
 
     // Field names inside a persisted FlowState document.
     private static final String FLOW_CURRENT_STEP = "currentStep";
@@ -212,6 +271,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private final MongoOperations mongoOperations;
     private final String collectionName;
+    private final String skippedInputsCollectionName;
     private final Class<S> stateType;
     // Non-null only for a flow saga: used to serialize FlowState.received as CloudEvents (stable types, package-independent).
     private final @Nullable CloudEventConverter<Object> cloudEventConverter;
@@ -223,7 +283,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * {@value #DEFAULT_MAX_ATTEMPTS} attempts.
      *
      * @param mongoOperations the {@link MongoOperations} used to read and write instance documents
-     * @param collectionName  the collection the instances are stored in
+     * @param collectionName  the collection the instances are stored in, which must not end in {@code _skipped_inputs}
      * @param stateType       the user state type, needed to read the stored state back into an object
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType) {
@@ -236,7 +296,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * core saga.
      *
      * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
-     * @param collectionName      the collection the instances are stored in
+     * @param collectionName      the collection the instances are stored in, which must not end in {@code _skipped_inputs}
      * @param stateType           the user state type, needed to read the stored state back into an object
      * @param cloudEventConverter the converter used to (de)serialize a flow saga's received events, or {@code null}
      */
@@ -249,7 +309,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * Pass {@link RetryStrategy#none()} to have every failure reach the caller on the first attempt.
      *
      * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
-     * @param collectionName      the collection the instances are stored in
+     * @param collectionName      the collection the instances are stored in, which must not end in {@code _skipped_inputs}
      * @param stateType           the user state type, needed to read the stored state back into an object
      * @param cloudEventConverter the converter used to (de)serialize a flow saga's received events, or {@code null} for a core saga
      * @param retryStrategy       the strategy used when a read or a write fails
@@ -259,6 +319,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         this.retryStrategy = Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName cannot be null");
+        if (collectionName.endsWith(SKIPPED_INPUTS_SUFFIX)) {
+            String sharedWith = collectionName.substring(0, collectionName.length() - SKIPPED_INPUTS_SUFFIX.length());
+            throw new IllegalArgumentException("collectionName '" + collectionName + "' ends in '" + SKIPPED_INPUTS_SUFFIX + "', and a store on '" + sharedWith
+                                               + "' keeps its skipped inputs in that collection, so the two would share it. Pick a name that does not end in '" + SKIPPED_INPUTS_SUFFIX + "'.");
+        }
+        this.skippedInputsCollectionName = collectionName + SKIPPED_INPUTS_SUFFIX;
         this.stateType = Objects.requireNonNull(stateType, "stateType cannot be null");
         if (stateType == FlowState.class && cloudEventConverter == null) {
             // A flow saga's FlowState holds domain events, and this store serializes them as CloudEvents through the
@@ -270,12 +336,18 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // Safe: the converter only ever sees domain events read out of a FlowState, whose element type is erased anyway.
         this.cloudEventConverter = (CloudEventConverter<Object>) cloudEventConverter;
         // Retried like every other call this store makes, so a MongoDB error that a second attempt would clear does not
-        // fail the saga's registration while an application is starting. Neither index has options, so nothing a user
-        // configures can make MongoDB refuse one permanently, and an index an operator has already created with
-        // different options fails the constructor after the attempt limit rather than being retried forever.
+        // fail the saga's registration while an application is starting. Only the unique index has an option, and no
+        // setting changes it, so nothing a user configures can make MongoDB refuse one permanently. An index an operator
+        // has already created with different options fails the constructor after the attempt limit rather than being
+        // retried forever. The unique index on the skipped inputs is what makes recording a key twice store one document.
         retryStrategy.execute(() -> {
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(UPDATED_AT)));
+            mongoOperations.getCollection(skippedInputsCollectionName).createIndex(
+                    Indexes.compoundIndex(Indexes.ascending(SKIPPED_SAGA_ID), Indexes.ascending(SKIPPED_QUARANTINE_ID), Indexes.ascending(SKIPPED_KEY)),
+                    new IndexOptions().unique(true));
+            mongoOperations.getCollection(skippedInputsCollectionName).createIndex(
+                    Indexes.compoundIndex(Indexes.ascending(SKIPPED_SAGA_ID), Indexes.ascending(SKIPPED_QUARANTINE_ID), Indexes.ascending(SKIPPED_SEQ), Indexes.ascending(SKIPPED_KEY)));
         });
     }
 
@@ -293,7 +365,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         // Decoding happens outside the retried supplier, so a stored state that no longer reads back throws once
         // instead of being attempted ten times.
-        Supplier<@Nullable Document> read = () -> mongoOperations.findById(sagaId, Document.class, collectionName);
+        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(primary(Query.query(where(ID).is(sagaId))), Document.class, collectionName);
         return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
     }
 
@@ -335,7 +407,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // record it writes carries them over untouched, so projecting them away would quarantine the instance and
         // drop them at the same time.
         query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK).include(STREAM_MARKS);
-        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(query, Document.class, collectionName);
+        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(primary(query), Document.class, collectionName);
         return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
     }
 
@@ -382,7 +454,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // SagaInstance, and every member of that view must be populated on any envelope a store hands back. They are
         // three longs and a string, and decode no state, so the cost the exclusion above protects against is untouched.
         projectEverySagaInstanceMember(query);
-        Supplier<List<Document>> read = () -> mongoOperations.find(query, Document.class, collectionName);
+        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, collectionName);
         return retryStrategy.execute(read).stream().map(this::toEnvelope).toList();
     }
 
@@ -395,15 +467,135 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             // nothing. Reject it here rather than let that through as a surprise full scan.
             throw new IllegalArgumentException("limit must be positive, was " + limit);
         }
-        Query query = Query.query(where(STATUS).is(status.name()).and(UPDATED_AT).lt(updatedBefore.toEpochMilli()))
+        Query query = Query.query(statusIs(status).and(UPDATED_AT).lt(updatedBefore.toEpochMilli()))
                 .with(Sort.by(Sort.Direction.ASC, UPDATED_AT))
                 .limit(limit);
         // Projected exactly like the due-timer query: every SagaInstance member and no state. currentStep is a top-level
         // field, so observing a flow saga never decodes its received log. That also means this query cannot fail on an
         // instance whose state no longer decodes, because it never decodes any.
         projectEverySagaInstanceMember(query);
-        Supplier<List<Document>> read = () -> mongoOperations.find(query, Document.class, collectionName);
+        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, collectionName);
         return retryStrategy.execute(read).stream().map(this::toEnvelope).toList();
+    }
+
+    @Override
+    public List<String> findReleasingSagaIds(@Nullable String after, int limit) {
+        if (limit < 1) {
+            // A Mongo limit of 0 means no limit
+            throw new IllegalArgumentException("limit must be positive, was " + limit);
+        }
+        Criteria releasing = statusIs(SagaStatus.QUARANTINED).and(FAILURE_RELEASED_AT).exists(true);
+        if (after != null) {
+            releasing = releasing.and(ID).gt(after);
+        }
+        Query query = Query.query(releasing)
+                .with(Sort.by(Sort.Direction.ASC, ID))
+                .limit(limit);
+        query.fields().include(ID);
+        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, collectionName);
+        return retryStrategy.execute(read).stream().map(document -> document.getString(ID)).toList();
+    }
+
+    // QUARANTINED is stored as either of two strings, see QUARANTINED_RECORDING
+    private static Criteria statusIs(SagaStatus status) {
+        return status == SagaStatus.QUARANTINED ? where(STATUS).in(QUARANTINED_STATUSES) : where(STATUS).is(status.name());
+    }
+
+    @Override
+    public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
+        Objects.requireNonNull(input, "input cannot be null");
+        Document filter = skippedInputFilter(sagaId, quarantineId, input.key());
+        // Two writers that upsert the same key race to insert it, and the server retries the loser's duplicate-key error
+        // itself, since the filter is an equality on exactly the fields of the unique index. The loser then finds the
+        // record the winner stored and keeps it, the outcome it wanted. This store opens no session or transaction of its
+        // own. Inside a transaction a caller opened, the server doesn't retry it, and the error ends that transaction, so
+        // catching it here couldn't save the write either.
+        writeSkippedInputs(collection -> collection.updateOne(filter, Updates.setOnInsert(SKIPPED_SEQ, input.seq()), new UpdateOptions().upsert(true)));
+    }
+
+    @Override
+    public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
+        if (limit < 1) {
+            // A Mongo limit of 0 means no limit
+            throw new IllegalArgumentException("limit must be positive, was " + limit);
+        }
+        Query query = Query.query(where(SKIPPED_SAGA_ID).is(Objects.requireNonNull(sagaId, "sagaId cannot be null"))
+                        .and(SKIPPED_QUARANTINE_ID).is(Objects.requireNonNull(quarantineId, "quarantineId cannot be null")))
+                .with(Sort.by(Sort.Direction.ASC, SKIPPED_SEQ, SKIPPED_KEY))
+                .limit(limit);
+        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, skippedInputsCollectionName);
+        return retryStrategy.execute(read).stream().map(SpringMongoSagaStateStore::toSkippedInput).toList();
+    }
+
+    private static SkippedInput toSkippedInput(Document document) {
+        return new SkippedInput(((Number) document.get(SKIPPED_SEQ)).longValue(), document.getString(SKIPPED_KEY));
+    }
+
+    @Override
+    public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
+        Objects.requireNonNull(head, "head cannot be null");
+        Document filter = skippedInputFilter(sagaId, quarantineId, head.key());
+        // A race to insert the same record is retried by the server, as recordSkippedInput says
+        writeSkippedInputs(collection -> collection.updateOne(filter, Updates.set(SKIPPED_SEQ, head.seq()), new UpdateOptions().upsert(true)));
+    }
+
+    @Override
+    public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
+        Objects.requireNonNull(input, "input cannot be null");
+        Document filter = skippedInputFilter(sagaId, quarantineId, input.key()).append(SKIPPED_SEQ, input.seq());
+        writeSkippedInputs(collection -> collection.deleteOne(filter));
+    }
+
+    @Override
+    public void deleteSkippedInputs(String sagaId, String quarantineId) {
+        Document filter = new Document(SKIPPED_SAGA_ID, Objects.requireNonNull(sagaId, "sagaId cannot be null"))
+                .append(SKIPPED_QUARANTINE_ID, Objects.requireNonNull(quarantineId, "quarantineId cannot be null"));
+        writeSkippedInputs(collection -> collection.deleteMany(filter));
+    }
+
+    private static Document skippedInputFilter(String sagaId, String quarantineId, String key) {
+        return new Document(SKIPPED_SAGA_ID, Objects.requireNonNull(sagaId, "sagaId cannot be null"))
+                .append(SKIPPED_QUARANTINE_ID, Objects.requireNonNull(quarantineId, "quarantineId cannot be null"))
+                .append(SKIPPED_KEY, Objects.requireNonNull(key, "key cannot be null"));
+    }
+
+    // Every write and delete of a skipped-input record waits for a journaled majority, whatever write concern the
+    // caller's MongoOperations or collection has. A skip is acknowledged once its record is written, so a record a
+    // failover rolled back would leave a skipped input that no release replays. execute(..) still translates exceptions
+    private void writeSkippedInputs(java.util.function.Function<MongoCollection<Document>, ?> write) {
+        // A server without journaling refuses every attempt, so the retried call returns the refusal instead of throwing
+        // it, and it is thrown once execute(..) has returned, where no strategy can retry it
+        Optional<IllegalStateException> refused = retryStrategy.execute(() -> {
+            try {
+                mongoOperations.execute(skippedInputsCollectionName, collection -> write.apply(skippedInputWrites(collection)));
+                return Optional.<IllegalStateException>empty();
+            } catch (RuntimeException e) {
+                if (isJournalNotSupported(e)) {
+                    return Optional.of(new IllegalStateException(JOURNALING_REQUIRED_MESSAGE, e));
+                }
+                throw e;
+            }
+        });
+        if (refused.isPresent()) {
+            throw refused.get();
+        }
+    }
+
+    private static MongoCollection<Document> skippedInputWrites(MongoCollection<Document> collection) {
+        MongoCollection<Document> majority = collection.withWriteConcern(SKIPPED_INPUT_WRITE_CONCERN);
+        // A client timeoutMS makes the driver drop the wtimeout, and a timeoutMS of 0 waits forever
+        Long timeoutMillis = majority.getTimeout(TimeUnit.MILLISECONDS);
+        return timeoutMillis != null && timeoutMillis == 0 ? majority.withTimeout(SKIPPED_INPUT_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS) : majority;
+    }
+
+    private static boolean isJournalNotSupported(Throwable throwable) {
+        for (Throwable cause = throwable; cause != null; cause = cause.getCause()) {
+            if (cause instanceof MongoServerException serverException && serverException.getCode() == JOURNAL_NOT_SUPPORTED_ERROR_CODE
+                && serverException.getMessage() != null && serverException.getMessage().contains(JOURNAL_NOT_SUPPORTED_ERROR_MESSAGE)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // The fields backing SagaInstance, which is the whole observable surface of an instance: enough for both enumeration
@@ -412,13 +604,24 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         query.fields().include(ID).include(STATUS).include(VERSION).include(TIMERS).include(NEXT_TIMER_FIRES_AT)
                 .include(CURRENT_STEP).include(CREATED_AT).include(UPDATED_AT).include(COMPLETED_AT).include(STARTED)
                 .include(FAILURE_INPUT).include(FAILURE_POSITION).include(FAILURE_FIRST_FAILED_AT).include(FAILURE_TYPE)
-                .include(FAILURE_MESSAGE);
+                .include(FAILURE_MESSAGE).include(FAILURE_RELEASED_AT).include(FAILURE_QUARANTINE_ID)
+                .include(QUARANTINE_SKIP_COUNT);
     }
 
     @Override
     public void delete(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        retryStrategy.execute(() -> mongoOperations.remove(Query.query(where(ID).is(sagaId)), collectionName));
+        Query query = Query.query(where(ID).is(sagaId));
+        query.fields().include(FAILURE_QUARANTINE_ID);
+        Document removed = retryStrategy.execute(() -> mongoOperations.findAndRemove(query, Document.class, collectionName));
+        // After the instance, so a crash in between leaves records no instance reads rather than an instance whose
+        // records are gone. Only the records of the instance removed here, so a later instance with the same id, created
+        // and quarantined in between, keeps the ones it wrote under a quarantine id of its own. A retried remove that
+        // finds the instance gone already returns nothing, and its records stay, read by nothing
+        String quarantineId = removed == null ? null : removed.getString(FAILURE_QUARANTINE_ID);
+        if (quarantineId != null) {
+            deleteSkippedInputs(sagaId, quarantineId);
+        }
         synchronized (retainedEventWarningLatch) {
             retainedEventWarningLatch.remove(sagaId);
         }
@@ -435,7 +638,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private Document toDocumentWithoutTheState(String sagaId, SagaEnvelope<S> envelope) {
         Document document = new Document(ID, sagaId)
-                .append(STATUS, envelope.status().name())
+                .append(STATUS, storedStatus(envelope))
                 .append(VERSION, envelope.version());
         List<Document> timers = new ArrayList<>();
         for (TimerEntry timer : envelope.timers()) {
@@ -481,8 +684,25 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             if (failure.failureMessage() != null) {
                 document.append(FAILURE_MESSAGE, failure.failureMessage());
             }
+            if (failure.releasedAt() != null) {
+                document.append(FAILURE_RELEASED_AT, failure.releasedAt().toEpochMilli());
+            }
+            if (failure.quarantineId() != null) {
+                document.append(FAILURE_QUARANTINE_ID, failure.quarantineId());
+            }
+        }
+        if (envelope.quarantineSkipCount() != null) {
+            document.append(QUARANTINE_SKIP_COUNT, envelope.quarantineSkipCount());
         }
         return document;
+    }
+
+    private static String storedStatus(SagaEnvelope<?> envelope) {
+        return envelope.quarantineId() != null ? QUARANTINED_RECORDING : envelope.status().name();
+    }
+
+    private static SagaStatus readStatus(String stored) {
+        return QUARANTINED_RECORDING.equals(stored) ? SagaStatus.QUARANTINED : SagaStatus.valueOf(stored);
     }
 
     // Serialize the state. A flow saga's FlowState is written field by field with its received events as CloudEvents (see
@@ -576,7 +796,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private SagaEnvelope<S> toEnvelope(Document document) {
         String sagaId = document.getString(ID);
         S state = readState(document.get(STATE));
-        SagaStatus status = SagaStatus.valueOf(document.getString(STATUS));
+        SagaStatus status = readStatus(document.getString(STATUS));
         long version = document.getLong(VERSION);
 
         List<TimerEntry> timers = new ArrayList<>();
@@ -601,7 +821,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // currentStep is only honoured when the state was projected away; with a state present the envelope re-derives it.
         return new SagaEnvelope<>(sagaId, state, status, version, timers, streamWatermarks, positionWatermark,
                 readInstant(document, CREATED_AT), readInstant(document, UPDATED_AT), readInstant(document, COMPLETED_AT),
-                document.getString(CURRENT_STEP), started, toFailure(document), toStreamMarks(document));
+                document.getString(CURRENT_STEP), started, toFailure(document), toStreamMarks(document),
+                document.get(QUARANTINE_SKIP_COUNT) instanceof Number count ? count.longValue() : null);
     }
 
     private static List<Document> toMarksDocuments(Map<String, StreamMarks> streamMarks) {
@@ -672,7 +893,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 position == null ? null : ((Number) position).longValue(),
                 Objects.requireNonNull(readInstant(document, FAILURE_FIRST_FAILED_AT), "failureFirstFailedAt"),
                 Objects.requireNonNull(document.getString(FAILURE_TYPE), "failureType"),
-                document.getString(FAILURE_MESSAGE));
+                document.getString(FAILURE_MESSAGE),
+                readInstant(document, FAILURE_RELEASED_AT),
+                document.getString(FAILURE_QUARANTINE_ID));
     }
 
     @SuppressWarnings("unchecked")
@@ -746,5 +969,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private static @Nullable Instant readInstant(Document document, String field) {
         return document.containsKey(field) ? Instant.ofEpochMilli(document.getLong(field)) : null;
+    }
+
+    // Every read is from the primary, whatever read preference the MongoOperations has. A release turns an instance
+    // ACTIVE once its read of the skipped-input records finds none, and a secondary that lags can find none while a
+    // record is written, so that input, acknowledged when it was skipped, would never be applied. The instance is read
+    // from the primary too, so it and its records come from the same server
+    private static Query primary(Query query) {
+        return query.withReadPreference(ReadPreference.primary());
     }
 }

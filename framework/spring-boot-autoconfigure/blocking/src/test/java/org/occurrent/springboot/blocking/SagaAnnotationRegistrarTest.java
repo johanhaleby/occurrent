@@ -27,6 +27,7 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.springboot.common.SubscriptionResumePoints;
@@ -38,6 +39,7 @@ import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.core.env.StandardEnvironment;
 
 import java.lang.reflect.Method;
 import java.net.URI;
@@ -116,6 +118,13 @@ class SagaAnnotationRegistrarTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<SubscriptionResumePoints> resumePointsProvider = mock(ObjectProvider.class);
         when(applicationContext.getBeanProvider(SubscriptionResumePoints.class)).thenReturn(resumePointsProvider);
+        // Empty, since this saga has no event store to release a quarantined instance from
+        @SuppressWarnings("unchecked")
+        ObjectProvider<EventStoreQueries> eventStoreQueriesProvider = mock(ObjectProvider.class);
+        when(applicationContext.getBeanProvider(EventStoreQueries.class)).thenReturn(eventStoreQueriesProvider);
+        when(applicationContext.getBeanNamesForType(EventStoreQueries.class)).thenReturn(new String[0]);
+        // Empty, so the quarantine budget is the default
+        when(applicationContext.getEnvironment()).thenReturn(new StandardEnvironment());
 
         StartPositionSupport startPositionSupport = new StartPositionSupport(applicationContext);
         SagaAnnotationRegistrar registrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport, startedSubscribes());

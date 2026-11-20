@@ -809,7 +809,7 @@ class SagaLateStreamVersionTest {
         private SagaExecution<BasketEvent, Basket, BasketCommand> afterVersionsOneAndTenApplied() {
             refusing = new RefusesToLoadTheState(store);
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = new SagaExecution<>("baskets", basketSaga(), refusing,
-                    command -> issued.add(command), converter, FAST_POLL_CONFIG.withReorderWindow(2), event -> true);
+                    command -> issued.add(command), converter, FAST_POLL_CONFIG.disableQuarantine().withReorderWindow(2), event -> true);
             execution.onCloudEvent(streamKeyed(STREAM, 1, added("one")));
             execution.onCloudEvent(streamKeyed(STREAM, 10, added("ten")));
             refusing.refuseFullLoads();

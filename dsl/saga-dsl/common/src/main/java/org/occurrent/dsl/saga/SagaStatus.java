@@ -53,8 +53,13 @@ public enum SagaStatus {
      * saga threw it or reading the history from the event store did, the model refuses the subscription's live events
      * from then on, and either source stops for good on a record the model refuses.
      * <p>
-     * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
-     * which input the instance stopped on, when that input first failed, and what the saga threw.
+     * This is not terminal. {@link SagaInstance#failure()} says which input the instance stopped on, when that input
+     * first failed, and what the saga threw. While quarantined, the instance records the key of every input it skips,
+     * and {@code SagaSubscription.release(sagaId)} brings it back by replaying the input it stopped on and then those
+     * inputs, in order. The instance stays quarantined while that runs, with {@link SagaFailure#releasedAt()} set, and
+     * becomes {@link #ACTIVE} in a write after the last of them, once a read finds none left. A crash between the two
+     * leaves it quarantined and releasing with nothing to replay, and the next release finishes it. An instance quarantined by 0.34.0 recorded
+     * nothing and cannot be released that way.
      * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided not to recover it.
      * <p>
      * Note that {@code findByStatus(ACTIVE, ...)} does not return a quarantined instance. Enumerate this status too when

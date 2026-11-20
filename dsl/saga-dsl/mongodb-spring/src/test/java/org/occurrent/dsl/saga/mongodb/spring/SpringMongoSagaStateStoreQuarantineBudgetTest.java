@@ -182,8 +182,9 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
     @Test
     void a_transient_store_failure_does_not_start_the_instance_s_quarantine_budget() {
         MongoOperations mongoOperations = mongoOperations();
-        SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(failing(mongoOperations, "findById", 1), COLLECTION, String.class);
+        SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(failing(mongoOperations, "findOne", 1), COLLECTION, String.class);
         subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(new RetainsEverything(subscriptionModel), converter)
+                .eventStoreQueries(eventStore)
                 .run(STREAM, shippingSaga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)));
 
         eventStore.write("order-1", converter.toCloudEvents(List.of(new OrderPlaced("order-1"))));
@@ -211,8 +212,9 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
     @Test
     void a_genuine_store_failure_does_start_the_instance_s_quarantine_budget() {
         MongoOperations mongoOperations = mongoOperations();
-        SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(failing(mongoOperations, "findById", 1), COLLECTION, String.class, null, RetryStrategy.none());
+        SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(failing(mongoOperations, "findOne", 1), COLLECTION, String.class, null, RetryStrategy.none());
         subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(new RetainsEverything(subscriptionModel), converter)
+                .eventStoreQueries(eventStore)
                 .run(STREAM, shippingSaga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)));
 
         eventStore.write("order-2", converter.toCloudEvents(List.of(new OrderPlaced("order-2"))));

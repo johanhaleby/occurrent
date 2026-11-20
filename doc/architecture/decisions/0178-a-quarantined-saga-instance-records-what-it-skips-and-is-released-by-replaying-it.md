@@ -143,6 +143,20 @@ when `SagaStateStore.delete(sagaId)` removed the instance and its records after 
 the release wrote K's record, since the release's compare-and-set then loses and it finds no instance. Such records
 take up storage and nothing else.
 
+`SpringMongoSagaStateStore` reads the instance and its records from the primary, whatever read preference the
+`MongoOperations` it is given has. A release turns the instance `ACTIVE` once its read of the records finds none, and
+the compare-and-set of that write checks only the version of the instance's document. A read from a secondary that lags can find no
+record while one is written, so the release would turn the instance `ACTIVE` with an input that was acknowledged when
+it was skipped and is never applied.
+
+Every write and delete of a record uses `WriteConcern.MAJORITY` with `j: true`, whatever write concern the
+`MongoOperations` or its collection has. A skip acknowledges its input once the record is written, so a record
+written with `w: 1` that a failover rolled back would leave an input that no release replays. With `j: true` a majority
+has the record in its on-disk journal before it acknowledges, whatever `writeConcernMajorityJournalDefault` says. A server that runs without journaling
+refuses `j: true`, and the write then fails after one attempt, whatever the store's `RetryStrategy` retries, with an
+`IllegalStateException` that says the store needs journaling. The
+writes to the instance's own document keep the caller's write concern.
+
 ### 3. Release replays the input the instance stopped on, then the records
 
 `SagaSubscription.release(String sagaId)` releases one instance. K is the input the instance was quarantined on.
@@ -162,7 +176,20 @@ take up storage and nothing else.
    says nothing about whether the input it names was applied, and the stream marks alone decide whether a record's
    input was applied. K is applied once, as its record. A record whose input the stream marks show as applied already,
    after a crash between that write and the delete or behind another node's release, is deleted without being applied
-   again, also when it is K's or the failure record names its input.
+   again, also when it is K's or the failure record names its input. Release reads and writes the stream marks with no
+   reorder window, so every version it applies stays among the `applied` ones until the release ends, also one at or
+   below the horizon of its type. With a window of 1, a record of version 3 replayed after a record of version 5 of the
+   same type would read as behind the window and be skipped without being applied. A record of an input with a stream
+   id and version is written only while its input is new, so a record whose input the marks read this way list as
+   applied names an input the instance applied.
+   Every write that ends the release trims the marks back to the window: the one that makes the instance `ACTIVE`, the
+   write of a replayed input that completes the instance, and the write that quarantines it again. The instance is
+   quarantined again only on the first record left, and release applies the records in order, so every record that
+   stays names an input no release applied. When the trim puts such a record behind the window, the next release
+   applies it all the same, since release skips only an input the marks list as applied. An input without a stream id
+   and version, which only `RedeliveryDetection.BEST_EFFORT` takes (ADR 109), is recorded without being checked against
+   the marks, so when the instance applied the same event before the quarantine, the release applies it again. That
+   is what `BEST_EFFORT` already does with any redelivery.
 3. The instance becomes `ACTIVE`, with the failure record and the skip counter cleared, only in a compare-and-set that
    expects the version release read before it found no records left. Release reads the instance first and the records
    after it, so a skip that finishes between the two reads has changed the version, and the write loses. A skip that
@@ -256,6 +283,32 @@ last paragraph of this point says how a poll pages through it. The poller is wha
 retries the failed input until it succeeds or its budget runs out, and it also resumes a release that a crash
 interrupted.
 
+The poller goes on with an instance only when its `updatedAt` is at least `timerPollInterval` old. A release writes
+the instance for every input it applies and the first time an input fails, and a skip doesn't change `updatedAt`, so an
+instance whose release is still running was written within that time, and the poller skips it, whichever node runs
+the release. Without that, a release that runs longer than one poll interval has the poller replay the same
+records beside it, and both dispatch each record's commands. The poller starts each poll a `timerPollInterval` after
+the last one ended, so a release it went on with itself is old enough by the next poll.
+
+In five cases a release and the poller, or two releases, can still replay the same record and both dispatch its
+commands, which delivery at least once allows:
+
+- A release that takes longer than `timerPollInterval` over one input.
+- A poller whose clock is `timerPollInterval` or more ahead of the clock of the node that wrote.
+- A `release` call on an instance that the poller or another call is replaying. The instance is releasing already, so
+  the call goes on with the replay without the check, beside the other one.
+- A release working through records whose inputs the stream marks show as applied. It deletes them without writing the
+  instance, so after `timerPollInterval` of that the poller goes on beside it. Neither dispatches anything for those
+  records, so only the first record that isn't applied can have its commands dispatched by both, the same at-least-once
+  dispatch a live input has.
+- Two polls that read the instance at the same time, once its last write is `timerPollInterval` old. Without a
+  competing-consumer strategy every node polls, and with one, two nodes can poll at once while the timer lease moves
+  from one to the other. A retry that fails again on the same input within its budget writes nothing, so while that
+  input keeps failing, every node that polls retries it.
+
+A claim stored on the instance would rule all five out, at the cost of a write to take and give back for every release
+and a way to take over the claim of a node that crashed.
+
 The poller polls only while the `timersEnabled` that `SagaRunner.run` takes returns `true`, so that gate holds back the
 continuation of a release as well as the saga's timers. On a subscription model that reports whether it runs, the
 Spring Boot starter keeps the gate closed while the saga's subscription isn't running, and on one that also reports a
@@ -284,12 +337,6 @@ inputs arrive faster than the poller replays its share doesn't finish on the pol
 bound and replays on the calling thread until it reaches one of the outcomes point 3 lists, so it finishes such an
 instance. A live input skipped while it runs only makes it write its result again on top of the skip, without
 dispatching it again, as point 3 says.
-
-The poller doesn't leave out an instance that a `release` call is replaying. A direct release that is still running
-at the next poll, which starts a poll interval after the last one ended, 15 seconds by default, competes with the poller for the same records, and both
-read the first record each time. Both dispatch its reaction before their compare-and-set, so any record of such a
-release can have its reaction dispatched twice, up to every record. Duplicate dispatch is the expected case for a long
-direct release, and a receiver has to handle it the way it handles a redelivered live input.
 
 When the budget runs out, the instance is quarantined again under the same quarantine id. The input that failed becomes
 the failure record's input, `releasedAt` is cleared, and the records after it stay in order. A later release replays the
@@ -438,7 +485,8 @@ every instance of the saga, not only the events of the quarantined instance.
 
 After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease, so the stall lasts until the instance is
 stored with a status 0.34.0 reads, or deleted, with competing consumers or without. A node whose catch-up stopped on
-the event also has to restart before its subscription goes live. A downgrade that doesn't stall anything goes like this, with steps 1 to 5 on 0.35.0 nodes:
+the event also has to restart before its subscription goes live. A downgrade that doesn't stall anything goes like
+this, with steps 1 to 5 on 0.35.0 nodes:
 
 1. Turn quarantine off on every node, and have that running on every node before step 2. A node that still has
    quarantine on can quarantine another instance after the instances are listed.
@@ -508,6 +556,14 @@ The upgrade guide has the procedure for operators, in
   continues a release, the saga's timers wait for at most one batch of records per poll.
 - A skip by a quarantined instance is now three writes, two compare-and-sets on the instance and the record between
   them.
+- On MongoDB every write and delete of a skipped-input record waits for a majority of the replica set to journal it,
+  up to 10 seconds an attempt, or the client's `timeoutMS` when it sets one above 0. That slows a skip, the start of a release and every record a release deletes by the
+  time a majority takes, and a replica set without a majority available fails them where `w: 1` would have succeeded.
+- A release keeps every stream version it applies in the instance's stream marks until the write that ends it, see
+  point 2, so the instance's document grows by one number per replayed input during one release. A release whose
+  backlog takes the document past MongoDB's 16 MB limit fails on every write from that record on. The instance stays
+  releasing, the failure is never recorded, so its budget never runs out, and every poll applies that record again
+  and dispatches its commands again before the write fails. Deleting the instance is the only way out.
 - A quarantined instance keeps a record of every input it skips, with no limit. The records take space in the store
   until a release replays them, a replayed input completes the instance, or the 0.35.0 store deletes the instance.
   Records left under an earlier quarantine id, see points 2 and 3, stay in the store, and nothing reads or deletes
@@ -559,7 +615,9 @@ The upgrade guide has the procedure for operators, in
   them, so the instance can't be released, and the saga could only warn about it once it happened. A store of its own
   without the interface is refused at startup instead, before anything is quarantined.
 - **Keep the records in a list on the instance's document.** The list grows the document toward MongoDB's 16 MB limit,
-  so it needs a limit, and an instance that skips more inputs than the limit can't be released.
+  so it needs a limit, and an instance that skips more inputs than the limit can't be released. A release grows the
+  stream marks the same way, see the consequences, but by one number per input instead of a whole record, and only
+  until the release ends.
 - **Log an input whose event is missing and drop its record.** That loses the input. A wrong `EventStoreQueries`, one
   pointed at another database for example, would find no event for any record, drop them all, and set the instance
   `ACTIVE` without any of the inputs it skipped.

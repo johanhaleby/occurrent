@@ -92,9 +92,18 @@ class SagaRunnerConfigTest {
     class When_no_quarantine_budget_is_asked_for {
 
         @Test
-        void defaults_never_quarantine() {
+        void defaults_quarantine_after_five_minutes() {
             // When
             SagaRunnerConfig config = SagaRunnerConfig.defaults();
+
+            // Then
+            assertThat(config.quarantineAfter()).contains(Duration.ofMinutes(5));
+        }
+
+        @Test
+        void disableQuarantine_turns_the_default_budget_off() {
+            // When
+            SagaRunnerConfig config = SagaRunnerConfig.defaults().disableQuarantine();
 
             // Then
             assertThat(config.quarantineAfter()).isEmpty();
@@ -119,12 +128,12 @@ class SagaRunnerConfigTest {
         }
 
         @Test
-        void is_turned_on_by_withQuarantineAfter_on_the_defaults() {
+        void withQuarantineAfter_replaces_the_default_budget() {
             // When
-            SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5));
+            SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(2));
 
             // Then
-            assertThat(config.quarantineAfter()).isEqualTo(Optional.of(Duration.ofMinutes(5)));
+            assertThat(config.quarantineAfter()).isEqualTo(Optional.of(Duration.ofMinutes(2)));
         }
     }
 
@@ -284,6 +293,33 @@ class SagaRunnerConfigTest {
 
             // Then
             assertThat(copies).extracting(SagaRunnerConfig::reorderWindow).containsOnly(17);
+        }
+
+        @Test
+        void withReorderWindow_keeps_a_defaulted_quarantine_budget_defaulted() {
+            // When
+            SagaRunnerConfig config = SagaRunnerConfig.defaults().withReorderWindow(17);
+
+            // Then
+            assertThat(config.quarantineAfterDefaulted()).isTrue();
+        }
+
+        @Test
+        void withReorderWindow_keeps_an_explicit_quarantine_budget_explicit() {
+            // When
+            SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER).withReorderWindow(17);
+
+            // Then
+            assertThat(config.quarantineAfterDefaulted()).isFalse();
+        }
+
+        @Test
+        void a_configuration_that_never_quarantines_has_no_defaulted_budget_even_when_built_as_defaulted() {
+            // When
+            SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofSeconds(7), 13, 9, RedeliveryDetection.BEST_EFFORT, Optional.empty(), 256, true);
+
+            // Then
+            assertThat(config.quarantineAfterDefaulted()).isFalse();
         }
 
         @ParameterizedTest

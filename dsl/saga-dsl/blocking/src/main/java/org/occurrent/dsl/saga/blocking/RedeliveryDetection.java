@@ -40,7 +40,8 @@ public enum RedeliveryDetection {
     /**
      * Take the event anyway, logging a warning the first time. Choose this for a feed that genuinely carries no stream
      * key, and only when every command the saga issues is safe to receive more than once, since a redelivery runs
-     * every reaction again.
+     * every reaction again. Releasing a quarantined instance can also apply such an input again, when the instance
+     * applied the same event before it was quarantined.
      */
     BEST_EFFORT
 }
