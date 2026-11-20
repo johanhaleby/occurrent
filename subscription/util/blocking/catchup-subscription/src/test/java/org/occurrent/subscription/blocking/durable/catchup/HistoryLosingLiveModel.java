@@ -24,6 +24,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
@@ -183,6 +184,9 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     public Subscription resumeSubscription(String subscriptionId) {
         Open held = paused.remove(subscriptionId);
         if (held == null) {
+            if (running.containsKey(subscriptionId)) {
+                throw new SubscriptionAlreadyRunningException(subscriptionId);
+            }
             throw new IllegalStateException("Subscription " + subscriptionId + " is not paused");
         }
         resumeCalls.add(subscriptionId);
@@ -204,6 +208,9 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         }
         Open held = paused.remove(subscriptionId);
         if (held == null) {
+            if (running.containsKey(subscriptionId)) {
+                throw new SubscriptionAlreadyRunningException(subscriptionId);
+            }
             throw new IllegalStateException("Subscription " + subscriptionId + " is not paused");
         }
         resumeCalls.add(subscriptionId);

@@ -2673,24 +2673,31 @@ class StreamCatchupSubscriptionModelTest {
 
     @Test
     @Timeout(30)
-    void a_stop_called_from_inside_the_action_of_a_replay_is_refused_and_the_replay_goes_on() throws InterruptedException {
+    void a_stop_called_from_inside_the_action_of_a_replay_returns_at_once_and_stops_the_model_once_the_action_has_returned() throws InterruptedException {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
         write(eventStore, nameDefined("event1"));
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
         AtomicReference<Throwable> thrownByTheStop = new AtomicReference<>();
         CountDownLatch stopReturnedOrThrew = new CountDownLatch(1);
+        CountDownLatch releaseTheAction = new CountDownLatch(1);
 
         try {
             subscription.subscribe("subscription", StartAtTime.beginningOfTime(), cloudEvent -> {
                 thrownByTheStop.set(catchThrowable(subscription::stop));
                 stopReturnedOrThrew.countDown();
+                awaitLatch(releaseTheAction);
             });
 
-            assertThat(stopReturnedOrThrew.await(5, TimeUnit.SECONDS)).as("the stop made from the action returned or threw").isTrue();
-            assertThat(thrownByTheStop.get()).as("what the stop made from the action of a replay of the model threw").isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Call it from another thread.").hasMessageContaining("Nothing was changed.");
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(subscription.isRunning("subscription")).as("whether the replay handed over to the live subscription after the refused stop").isTrue());
+            assertThat(stopReturnedOrThrew.await(5, TimeUnit.SECONDS)).as("the stop made from the action returned or threw while the action still ran").isTrue();
+            assertThat(thrownByTheStop.get()).as("what the stop made from the action of a replay of the model threw").isNull();
+            assertThat(subscription.isRunning()).as("whether the model runs while the action that made the stop still runs").isTrue();
+            releaseTheAction.countDown();
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                assertThat(subscription.isRunning()).as("whether the model runs once the action that made the stop has returned").isFalse();
+                assertThat(subscription.isRunning("subscription")).as("whether the subscription runs once the action that made the stop has returned").isFalse();
+            });
         } finally {
+            releaseTheAction.countDown();
             subscription.shutdown();
         }
     }

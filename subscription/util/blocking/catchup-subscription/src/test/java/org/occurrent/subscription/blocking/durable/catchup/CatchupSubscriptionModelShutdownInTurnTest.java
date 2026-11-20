@@ -86,7 +86,7 @@ class CatchupSubscriptionModelShutdownInTurnTest {
 
     @Test
     @Timeout(40)
-    void a_shutdown_from_a_replay_action_while_a_start_is_inside_the_live_delegate_returns_at_once_and_shuts_the_live_delegate_down_after_the_start() throws InterruptedException {
+    void a_shutdown_from_a_replay_action_while_a_start_is_inside_the_live_delegate_returns_at_once_and_shuts_the_live_delegate_down_without_waiting_for_the_start() throws InterruptedException {
         // Given
         write("1");
         CountDownLatch inTheAction = new CountDownLatch(1);
@@ -113,10 +113,10 @@ class CatchupSubscriptionModelShutdownInTurnTest {
         // Then
         assertThat(theShutdownReturned.await(10, TimeUnit.SECONDS)).as("the shutdown from the action returned or threw").isTrue();
         assertThat(thrown.get()).as("what the shutdown from the action of a replay threw").isNull();
-        assertThat(live.events()).as("what the live delegate was asked while the start was inside it").doesNotContain(SHUTDOWN);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked while the start was inside it").containsExactly(SHUTDOWN));
         startGate.countDown();
         calls.forEach(CallOnAThread::awaitEnded);
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(START_RETURNED, SHUTDOWN));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(SHUTDOWN, START_RETURNED, SHUTDOWN));
     }
 
     @Test
@@ -145,11 +145,12 @@ class CatchupSubscriptionModelShutdownInTurnTest {
         // When
         theStartIsInTheLiveDelegate.countDown();
         assertThat(theShutdownReturned.await(10, TimeUnit.SECONDS)).as("the shutdown from the action of the parked replay returned").isTrue();
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked while the start was inside it").containsExactly(SHUTDOWN));
         startGate.countDown();
         calls.forEach(CallOnAThread::awaitEnded);
 
         // Then
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(START_RETURNED, SHUTDOWN));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(SHUTDOWN, START_RETURNED, SHUTDOWN));
         assertThat(delivered).as("the events the parked replay delivered, which a start after the shutdown doesn't run again").containsExactly("1");
     }
 
