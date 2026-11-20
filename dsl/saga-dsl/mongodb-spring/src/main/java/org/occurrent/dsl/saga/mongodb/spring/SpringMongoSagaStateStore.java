@@ -75,6 +75,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -119,7 +120,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * starts, and their commit at {@code majority} returns only once a majority has all of it. A release ends the
  * quarantine of an instance only in such a transaction that finds no skipped input left.
  * <p>
- * The four writes of {@link SagaStateStoreSkippedInputs} and the {@link #delete(String)} of a quarantined instance write
+ * The three writes of {@link SagaStateStoreSkippedInputs} and the {@link #delete(String)} of a quarantined instance write
  * the instance and its skipped inputs in one MongoDB transaction, through a {@link MongoTransactionManager} on the
  * template's {@link MongoDatabaseFactory}. So quarantine needs a replica set or a sharded cluster, and the store throws an
  * {@link IllegalStateException} when the server refuses a transaction. A transaction that fails with the
@@ -224,6 +225,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String SKIPPED_QUARANTINE_ID = "quarantineId";
     private static final String SKIPPED_SEQ = "seq";
     private static final String SKIPPED_KEY = "key";
+    private static final String SKIPPED_EVENT = "event";
 
     /**
      * How many times a read or a write calls MongoDB before it gives up, 10, the same number
@@ -350,8 +352,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // has already created with different options fails the constructor after the attempt limit rather than being
         // retried forever. The unique index on the skipped inputs is what makes recording a key twice store one document.
         // The deployment is asked once here, like the indexes, and a failure of the probe other than a server that does
-        // not know hello propagates once the attempts are used
-        this.deployment = retryStrategy.execute(() -> MongoDeployment.detect(mongoOperations::executeCommand));
+        // not know hello propagates once the attempts are used. A Runnable, like the indexes, so a caller's strategy
+        // tells setup apart from the store's reads and writes
+        AtomicReference<MongoDeployment> detected = new AtomicReference<>();
+        retryStrategy.execute(() -> detected.set(MongoDeployment.detect(mongoOperations::executeCommand)));
+        this.deployment = Objects.requireNonNull(detected.get(), "deployment");
         retryStrategy.execute(() -> {
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(UPDATED_AT)));
@@ -640,7 +645,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     private static SkippedInput toSkippedInput(Document document) {
-        return new SkippedInput(((Number) document.get(SKIPPED_SEQ)).longValue(), document.getString(SKIPPED_KEY));
+        CloudEvent event = CLOUD_EVENT_JSON_FORMAT.deserialize(document.getString(SKIPPED_EVENT).getBytes(StandardCharsets.UTF_8));
+        return new SkippedInput(((Number) document.get(SKIPPED_SEQ)).longValue(), document.getString(SKIPPED_KEY), event);
     }
 
     @Override
@@ -648,22 +654,17 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return joiningCallersTransaction(() -> {
             Objects.requireNonNull(saga, "saga cannot be null");
             Objects.requireNonNull(input, "input cannot be null");
-            Bson update = withoutStateUnlessInsert(saga, expectedVersion);
+            // An expected version of 0 inserts the instance whole, which is how an instance whose first input failed is
+            // quarantined. Written as an upsert that only sets on insert, so an instance that exists already is a lost
+            // compare-and-set and not a duplicate key error, which would abort the transaction
+            Function<MongoDatabase, Boolean> writeInstance = expectedVersion == 0
+                    ? database -> instances(database).updateOne(Filters.eq(ID, saga.sagaId()), setOnInsert(toDocument(saga)), new UpdateOptions().upsert(true)).getUpsertedId() != null
+                    : database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), withoutState(saga)).getMatchedCount() > 0;
             Document filter = skippedInputFilter(saga.sagaId(), quarantineId, input.key());
-            return transition(database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
-                    database -> skippedInputs(database).updateOne(filter, Updates.setOnInsert(SKIPPED_SEQ, input.seq()), new UpdateOptions().upsert(true)));
-        });
-    }
-
-    @Override
-    public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-        return joiningCallersTransaction(() -> {
-            Objects.requireNonNull(saga, "saga cannot be null");
-            Objects.requireNonNull(head, "head cannot be null");
-            Bson update = withoutStateUnlessInsert(saga, expectedVersion);
-            Document filter = skippedInputFilter(saga.sagaId(), quarantineId, head.key());
-            return transition(database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
-                    database -> skippedInputs(database).updateOne(filter, Updates.set(SKIPPED_SEQ, head.seq()), new UpdateOptions().upsert(true)));
+            // Set on insert, so a record of the key keeps its first seq and event
+            Bson record = Updates.combine(Updates.setOnInsert(SKIPPED_SEQ, input.seq()),
+                    Updates.setOnInsert(SKIPPED_EVENT, new String(CLOUD_EVENT_JSON_FORMAT.serialize(input.event()), StandardCharsets.UTF_8)));
+            return transition(writeInstance, database -> skippedInputs(database).updateOne(filter, record, new UpdateOptions().upsert(true)));
         });
     }
 
@@ -696,11 +697,14 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         });
     }
 
-    private static Bson withoutStateUnlessInsert(StoredSaga saga, long expectedVersion) {
-        if (expectedVersion == 0) {
-            throw new IllegalArgumentException("A write without state cannot insert saga " + saga.sagaId() + ", since it holds no state. Insert it with compareAndSave.");
-        }
-        return withoutState(saga);
+    private static Bson setOnInsert(Document document) {
+        List<Bson> updates = new ArrayList<>();
+        document.forEach((field, value) -> {
+            if (!ID.equals(field)) {
+                updates.add(Updates.setOnInsert(field, value));
+            }
+        });
+        return Updates.combine(updates);
     }
 
     private static Document skippedInputFilter(String sagaId, String quarantineId, String key) {

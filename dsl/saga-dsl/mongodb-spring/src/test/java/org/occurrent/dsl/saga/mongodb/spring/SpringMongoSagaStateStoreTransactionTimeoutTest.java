@@ -97,7 +97,7 @@ class SpringMongoSagaStateStoreTransactionTimeoutTest {
             envelopes.compareAndSave("order-1", envelope(1), 0);
             commits.clear();
 
-            assertThat(envelopes.compareAndSaveSkipped(store, envelope(2), 1, QUARANTINE_ID, new SkippedInput(0, "order-1@8"))).isTrue();
+            assertThat(envelopes.compareAndSaveSkipped(store, envelope(2), 1, QUARANTINE_ID, new SkippedInput(0, "order-1@8", heldEvent("order-1@8")))).isTrue();
         }
         assertThat(commits).as("commitTransaction commands the store sent").hasSize(1);
         return commits.get(0);
@@ -142,5 +142,9 @@ class SpringMongoSagaStateStoreTransactionTimeoutTest {
         BsonDocument commit = commitOfAStoreTransactionOnAClient(settings -> settings.timeout(2_000, MILLISECONDS));
 
         assertThat(maxTimeMs(commit)).as("maxTimeMS of %s", commit).isBetween(1L, 2_000L);
+    }
+
+    private static io.cloudevents.CloudEvent heldEvent(String key) {
+        return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test").build();
     }
 }

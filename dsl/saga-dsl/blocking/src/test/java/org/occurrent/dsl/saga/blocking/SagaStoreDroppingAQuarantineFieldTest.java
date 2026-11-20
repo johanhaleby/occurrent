@@ -107,7 +107,7 @@ class SagaStoreDroppingAQuarantineFieldTest {
     private final java.util.concurrent.atomic.AtomicInteger eventIds = new AtomicInteger();
     private final FieldDroppingStore store = new FieldDroppingStore(new InMemorySagaStateStore<>());
     private final SagaExecution<OrderEvent, Order, Object> execution =
-            new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, event -> true, now::get, eventStore);
+            new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, now::get);
     private final SagaSubscription subscription = new SagaSubscription(new NoSubscription(), Executors.newSingleThreadExecutor(), SagaInstances.of(store), null, null, null, execution::release);
 
     private ListAppender<ILoggingEvent> appender;
@@ -315,11 +315,6 @@ class SagaStoreDroppingAQuarantineFieldTest {
         @Override
         public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
             return delegate.compareAndSaveSkipped(withoutTheField(saga), expectedVersion, quarantineId, input);
-        }
-
-        @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-            return delegate.compareAndSaveReleaseStarted(withoutTheField(saga), expectedVersion, quarantineId, head);
         }
 
         @Override

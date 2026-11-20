@@ -90,16 +90,8 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         requireNonNull(saga, "saga cannot be null");
         requireNonNull(quarantineId, "quarantineId cannot be null");
         requireNonNull(input, "input cannot be null");
-        return compareAndSet(saga, expectedVersion, withoutState(saga, expectedVersion), quarantineId,
+        return compareAndSet(saga, expectedVersion, withoutStateUnlessInsert(saga, expectedVersion), quarantineId,
                 records -> records.containsKey(input.key()) ? records : with(records, input));
-    }
-
-    @Override
-    public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-        requireNonNull(saga, "saga cannot be null");
-        requireNonNull(quarantineId, "quarantineId cannot be null");
-        requireNonNull(head, "head cannot be null");
-        return compareAndSet(saga, expectedVersion, withoutState(saga, expectedVersion), quarantineId, records -> with(records, head));
     }
 
     @Override
@@ -125,6 +117,11 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
         return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga), quarantineId,
                 records -> completes || records.isEmpty(), records -> Map.of());
+    }
+
+    // The write that quarantines an instance whose first input failed inserts it, and an insert has no stored state to leave alone
+    private static UnaryOperator<@Nullable StoredSaga> withoutStateUnlessInsert(StoredSaga saga, long expectedVersion) {
+        return expectedVersion == 0 ? existing -> indexed(saga.encoded(), saga) : withoutState(saga, expectedVersion);
     }
 
     private static UnaryOperator<@Nullable StoredSaga> withoutState(StoredSaga saga, long expectedVersion) {

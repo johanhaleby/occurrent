@@ -126,7 +126,7 @@ class SagaReleaseStaleRecordsReadTest {
     // An instance quarantined on "poison", with the records of "a" and "b" that it skipped afterwards
     @BeforeEach
     void aQuarantinedInstanceThatHasSkippedTwoInputs() {
-        execution = new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, event -> true, now::get, eventStore);
+        execution = new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, now::get);
         execution.onCloudEvent(append(new OrderPlaced(nextEventId(), ORDER)));
         poisonFails = true;
         CloudEvent poison = append(new ItemAdded(nextEventId(), ORDER, "poison"));
@@ -242,11 +242,6 @@ class SagaReleaseStaleRecordsReadTest {
         @Override
         public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
             return inMemory.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input);
-        }
-
-        @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-            return inMemory.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
         }
 
         @Override

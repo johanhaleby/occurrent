@@ -110,10 +110,6 @@ class InMemorySagaStateStoreTest {
         return store.compareAndSaveSkipped(codec.encodeWithoutState(next(sagaId)), store.find(sagaId).orElseThrow().version(), quarantineId, input);
     }
 
-    private boolean startRelease(String sagaId, String quarantineId, SkippedInput head) {
-        return store.compareAndSaveReleaseStarted(codec.encodeWithoutState(next(sagaId)), store.find(sagaId).orElseThrow().version(), quarantineId, head);
-    }
-
     private boolean replayed(String sagaId, String quarantineId, SkippedInput replayed) {
         return store.compareAndSaveReplayed(codec.encode(next(sagaId)), store.find(sagaId).orElseThrow().version(), quarantineId, replayed);
     }
@@ -549,56 +545,56 @@ class InMemorySagaStateStoreTest {
         @Test
         void are_read_in_seq_order_whatever_order_they_were_written_in() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(7, "b@2"));
-            skip("s1", "q1", new SkippedInput(-1, "a@1"));
-            skip("s1", "q1", new SkippedInput(3, "c@3"));
+            skip("s1", "q1", new SkippedInput(7, "b@2", heldEvent("b@2")));
+            skip("s1", "q1", new SkippedInput(-1, "a@1", heldEvent("a@1")));
+            skip("s1", "q1", new SkippedInput(3, "c@3", heldEvent("c@3")));
 
-            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(3, "c@3"), new SkippedInput(7, "b@2"));
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1", heldEvent("a@1")), new SkippedInput(3, "c@3", heldEvent("c@3")), new SkippedInput(7, "b@2", heldEvent("b@2")));
         }
 
         @Test
         void with_the_same_seq_are_read_in_key_order_whatever_order_they_were_written_in() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(-1, "b@2"));
-            skip("s1", "q1", new SkippedInput(-1, "a@1"));
-            skip("s1", "q1", new SkippedInput(3, "g@7"));
-            skip("s1", "q1", new SkippedInput(3, "f@6"));
-            skip("s1", "q1", new SkippedInput(3, "e@5"));
-            skip("s1", "q1", new SkippedInput(3, "d@4"));
-            skip("s1", "q1", new SkippedInput(3, "c@3"));
+            skip("s1", "q1", new SkippedInput(-1, "b@2", heldEvent("b@2")));
+            skip("s1", "q1", new SkippedInput(-1, "a@1", heldEvent("a@1")));
+            skip("s1", "q1", new SkippedInput(3, "g@7", heldEvent("g@7")));
+            skip("s1", "q1", new SkippedInput(3, "f@6", heldEvent("f@6")));
+            skip("s1", "q1", new SkippedInput(3, "e@5", heldEvent("e@5")));
+            skip("s1", "q1", new SkippedInput(3, "d@4", heldEvent("d@4")));
+            skip("s1", "q1", new SkippedInput(3, "c@3", heldEvent("c@3")));
 
             assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(
-                    new SkippedInput(-1, "a@1"), new SkippedInput(-1, "b@2"),
-                    new SkippedInput(3, "c@3"), new SkippedInput(3, "d@4"), new SkippedInput(3, "e@5"), new SkippedInput(3, "f@6"), new SkippedInput(3, "g@7"));
+                    new SkippedInput(-1, "a@1", heldEvent("a@1")), new SkippedInput(-1, "b@2", heldEvent("b@2")),
+                    new SkippedInput(3, "c@3", heldEvent("c@3")), new SkippedInput(3, "d@4", heldEvent("d@4")), new SkippedInput(3, "e@5", heldEvent("e@5")), new SkippedInput(3, "f@6", heldEvent("f@6")), new SkippedInput(3, "g@7", heldEvent("g@7")));
         }
 
         @Test
         void keep_the_first_record_of_a_key_and_its_seq_when_skipped_again() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(2, "a@1"));
-            skip("s1", "q1", new SkippedInput(5, "a@1"));
+            skip("s1", "q1", new SkippedInput(2, "a@1", heldEvent("a@1")));
+            skip("s1", "q1", new SkippedInput(5, "a@1", heldEvent("a@1")));
 
-            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(2, "a@1"));
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(2, "a@1", heldEvent("a@1")));
         }
 
         @Test
         void are_read_for_one_saga_and_quarantine_id_only() {
             instance("s1", "s2");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
-            skip("s1", "q2", new SkippedInput(0, "b@1"));
-            skip("s2", "q1", new SkippedInput(0, "c@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q2", new SkippedInput(0, "b@1", heldEvent("b@1")));
+            skip("s2", "q1", new SkippedInput(0, "c@1", heldEvent("c@1")));
 
-            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(0, "a@1"));
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1")));
         }
 
         @Test
         void are_read_up_to_the_limit_from_the_lowest_seq() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(2, "c@3"));
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
-            skip("s1", "q1", new SkippedInput(1, "b@2"));
+            skip("s1", "q1", new SkippedInput(2, "c@3", heldEvent("c@3")));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q1", new SkippedInput(1, "b@2", heldEvent("b@2")));
 
-            assertThat(store.findSkippedInputs("s1", "q1", 2)).containsExactly(new SkippedInput(0, "a@1"), new SkippedInput(1, "b@2"));
+            assertThat(store.findSkippedInputs("s1", "q1", 2)).containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1")), new SkippedInput(1, "b@2", heldEvent("b@2")));
         }
 
         @Test
@@ -606,139 +602,91 @@ class InMemorySagaStateStoreTest {
             assertThatThrownBy(() -> store.findSkippedInputs("s1", "q1", 0)).isInstanceOf(IllegalArgumentException.class);
         }
 
-        @Test
-        void get_a_record_of_a_key_that_has_none_when_the_release_starts() {
-            instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "b@2"));
 
-            startRelease("s1", "q1", new SkippedInput(-1, "a@1"));
 
-            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(0, "b@2"));
-        }
-
-        @Test
-        void move_the_record_of_a_key_to_the_seq_the_release_starts_with_and_keep_one_record_of_it() {
-            instance("s1");
-            skip("s1", "q1", new SkippedInput(4, "a@1"));
-            skip("s1", "q1", new SkippedInput(5, "b@2"));
-
-            startRelease("s1", "q1", new SkippedInput(-1, "a@1"));
-
-            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(5, "b@2"));
-        }
-
-        @Test
-        void keep_one_record_of_a_key_when_a_skip_and_a_release_start_race_from_the_same_version() throws Exception {
-            ExecutorService executor = Executors.newFixedThreadPool(2);
-            try {
-                for (int round = 0; round < 50; round++) {
-                    String sagaId = "s" + round;
-                    instance(sagaId);
-                    StoredSaga read = store.find(sagaId).orElseThrow();
-                    StoredSaga written = codec.encodeWithoutState(atVersion(codec.decode(read), read.version() + 1));
-                    CountDownLatch go = new CountDownLatch(1);
-                    Future<Boolean> head = executor.submit(() -> {
-                        go.await();
-                        return store.compareAndSaveReleaseStarted(written, read.version(), "q1", new SkippedInput(-1, "a@1"));
-                    });
-                    Future<Boolean> skipped = executor.submit(() -> {
-                        go.await();
-                        return store.compareAndSaveSkipped(written, read.version(), "q1", new SkippedInput(7, "a@1"));
-                    });
-                    go.countDown();
-                    boolean headWon = head.get(10, TimeUnit.SECONDS);
-                    boolean skipWon = skipped.get(10, TimeUnit.SECONDS);
-
-                    assertThat(headWon ^ skipWon).as("exactly one of them wins the version").isTrue();
-                    assertThat(store.findSkippedInputs(sagaId, "q1", 10)).containsExactly(headWon ? new SkippedInput(-1, "a@1") : new SkippedInput(7, "a@1"));
-                }
-            } finally {
-                executor.shutdownNow();
-            }
-        }
 
         @Test
         void are_deleted_by_a_replay_exactly_when_the_key_and_the_seq_both_match() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
-            skip("s1", "q1", new SkippedInput(1, "b@2"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q1", new SkippedInput(1, "b@2", heldEvent("b@2")));
 
-            replayed("s1", "q1", new SkippedInput(0, "a@1"));
+            replayed("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
-            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(1, "b@2"));
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(1, "b@2", heldEvent("b@2")));
         }
 
         @Test
         void keep_a_record_of_the_same_key_with_another_seq_when_replayed() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(-1, "a@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
-            replayed("s1", "q1", new SkippedInput(3, "a@1"));
+            replayed("s1", "q1", new SkippedInput(3, "a@1", heldEvent("a@1")));
 
-            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"));
+            assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1")));
         }
 
         @Test
         void keep_a_record_of_the_same_key_and_seq_under_another_quarantine_id_or_instance_when_replayed() {
             instance("s1", "s2");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
-            skip("s1", "q2", new SkippedInput(0, "a@1"));
-            skip("s2", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q2", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s2", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
-            replayed("s1", "q1", new SkippedInput(0, "a@1"));
+            replayed("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
             assertAll(
                     () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
-                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "a@1")),
-                    () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "a@1"))
+                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1"))),
+                    () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1")))
             );
         }
 
         @Test
         void are_deleted_with_the_instance_under_its_quarantine_id_only_and_only_for_that_instance() {
             instance("s1", "s2");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
-            skip("s1", "q2", new SkippedInput(0, "b@1"));
-            skip("s2", "q1", new SkippedInput(0, "c@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q2", new SkippedInput(0, "b@1", heldEvent("b@1")));
+            skip("s2", "q1", new SkippedInput(0, "c@1", heldEvent("c@1")));
 
             store.delete("s1");
 
             assertAll(
                     () -> assertThat(find("s1")).isEmpty(),
                     () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
-                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1")),
-                    () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "c@1"))
+                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1", heldEvent("b@1"))),
+                    () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "c@1", heldEvent("c@1")))
             );
         }
 
         @Test
         void are_kept_when_the_instance_deleted_has_no_quarantine_id_or_there_is_none() {
             compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
             store.delete("s1");
             store.delete("missing");
 
             assertAll(
                     () -> assertThat(find("s1")).isEmpty(),
-                    () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(0, "a@1"))
+                    () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1")))
             );
         }
 
         @Test
         void are_deleted_for_one_quarantine_id_only_by_the_write_that_ends_the_quarantine() {
             instance("s1", "s2");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
-            skip("s1", "q2", new SkippedInput(0, "b@1"));
-            skip("s2", "q1", new SkippedInput(0, "c@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q2", new SkippedInput(0, "b@1", heldEvent("b@1")));
+            skip("s2", "q1", new SkippedInput(0, "c@1", heldEvent("c@1")));
 
             boolean ended = quarantineEndedByCompletion("s1", "q1");
 
             assertAll(
                     () -> assertThat(ended).isTrue(),
                     () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
-                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1")),
-                    () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "c@1"))
+                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1", heldEvent("b@1"))),
+                    () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "c@1", heldEvent("c@1")))
             );
         }
 
@@ -751,7 +699,7 @@ class InMemorySagaStateStoreTest {
             instance("s1", "noise-1", "noise-2");
             for (int i = 0; i < 20_000; i++) {
                 instance("other-" + i);
-                skip("other-" + i, "q1", new SkippedInput(i, "x@" + i));
+                skip("other-" + i, "q1", new SkippedInput(i, "x@" + i, heldEvent("x@" + i)));
             }
             AtomicLong completed = new AtomicLong();
             AtomicReference<String> violation = new AtomicReference<>();
@@ -761,7 +709,7 @@ class InMemorySagaStateStoreTest {
                 Future<?> writer = executor.submit(() -> {
                     go.await();
                     for (int i = 0; i < recorded; i++) {
-                        skip("s1", "q1", new SkippedInput(i, "s@" + i));
+                        skip("s1", "q1", new SkippedInput(i, "s@" + i, heldEvent("s@" + i)));
                         completed.incrementAndGet();
                     }
                     return null;
@@ -769,7 +717,7 @@ class InMemorySagaStateStoreTest {
                 List<Future<Object>> noise = List.of(1, 2).stream().map(thread -> executor.submit(() -> {
                     go.await();
                     for (int i = 0; i < recorded && completed.get() < recorded; i++) {
-                        skip("noise-" + thread, "q1", new SkippedInput(i, "n@" + i));
+                        skip("noise-" + thread, "q1", new SkippedInput(i, "n@" + i, heldEvent("n@" + i)));
                     }
                     return null;
                 })).toList();
@@ -817,7 +765,7 @@ class InMemorySagaStateStoreTest {
         @Test
         void is_refused_while_a_record_is_under_the_quarantine_id_and_leaves_the_instance_and_the_record_as_they_were() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
             StoredSaga before = store.find("s1").orElseThrow();
 
             boolean ended = quarantineEnded("s1", "q1");
@@ -825,14 +773,14 @@ class InMemorySagaStateStoreTest {
             assertAll(
                     () -> assertThat(ended).as("an instance that is not completed ends its quarantine only with no record left").isFalse(),
                     () -> assertThat(store.find("s1")).as("the instance as it was, version and fields").contains(before),
-                    () -> recordsOf("s1", new SkippedInput(0, "a@1")));
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1", heldEvent("a@1"))));
         }
 
         @Test
         void succeeds_once_no_record_is_under_the_quarantine_id() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
-            replayed("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            replayed("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
             long version = store.find("s1").orElseThrow().version();
 
             boolean ended = quarantineEnded("s1", "q1");
@@ -845,20 +793,20 @@ class InMemorySagaStateStoreTest {
         @Test
         void is_not_refused_by_a_record_under_another_quarantine_id() {
             instance("s1");
-            skip("s1", "q2", new SkippedInput(0, "b@1"));
+            skip("s1", "q2", new SkippedInput(0, "b@1", heldEvent("b@1")));
 
             boolean ended = quarantineEnded("s1", "q1");
 
             assertAll(
                     () -> assertThat(ended).isTrue(),
-                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1")));
+                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1", heldEvent("b@1"))));
         }
 
         @Test
         void that_completes_the_instance_deletes_every_record_under_the_quarantine_id() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
-            skip("s1", "q1", new SkippedInput(1, "b@2"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q1", new SkippedInput(1, "b@2", heldEvent("b@2")));
 
             boolean ended = quarantineEndedByCompletion("s1", "q1");
 
@@ -880,48 +828,49 @@ class InMemorySagaStateStoreTest {
         void a_skip_that_fails_writing_the_instance_records_no_input() {
             instance("s1");
 
-            assertThatThrownBy(() -> store.compareAndSaveSkipped(unreadable("s1", 2), 1, "q1", new SkippedInput(0, "a@1"))).isInstanceOf(RuntimeException.class);
+            assertThatThrownBy(() -> store.compareAndSaveSkipped(unreadable("s1", 2), 1, "q1", new SkippedInput(0, "a@1", heldEvent("a@1")))).isInstanceOf(RuntimeException.class);
 
             assertAll(
                     () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(1),
                     () -> recordsOf("s1"));
         }
 
-        @Test
-        void a_release_start_that_fails_writing_the_instance_records_no_head() {
-            instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "b@2"));
-
-            assertThatThrownBy(() -> store.compareAndSaveReleaseStarted(unreadable("s1", 3), 2, "q1", new SkippedInput(-1, "a@1"))).isInstanceOf(RuntimeException.class);
-
-            assertAll(
-                    () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(2),
-                    () -> recordsOf("s1", new SkippedInput(0, "b@2")));
-        }
 
         @Test
         void a_replay_that_fails_writing_the_instance_keeps_the_record() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
-            assertThatThrownBy(() -> store.compareAndSaveReplayed(unreadable("s1", 3), 2, "q1", new SkippedInput(0, "a@1"))).isInstanceOf(RuntimeException.class);
+            assertThatThrownBy(() -> store.compareAndSaveReplayed(unreadable("s1", 3), 2, "q1", new SkippedInput(0, "a@1", heldEvent("a@1")))).isInstanceOf(RuntimeException.class);
 
             assertAll(
                     () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(2),
-                    () -> recordsOf("s1", new SkippedInput(0, "a@1")));
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1", heldEvent("a@1"))));
         }
 
         @Test
         void an_end_of_the_quarantine_that_fails_writing_the_instance_keeps_every_record() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
-            skip("s1", "q1", new SkippedInput(1, "b@2"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q1", new SkippedInput(1, "b@2", heldEvent("b@2")));
 
             assertThatThrownBy(() -> store.compareAndSaveQuarantineEnded(unreadableCompleted("s1", 4), 3, "q1")).isInstanceOf(RuntimeException.class);
 
             assertAll(
                     () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(3),
-                    () -> recordsOf("s1", new SkippedInput(0, "a@1"), new SkippedInput(1, "b@2")));
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1", heldEvent("a@1")), new SkippedInput(1, "b@2", heldEvent("b@2"))));
+        }
+
+        @Test
+        void a_skip_at_version_0_inserts_the_instance_with_its_state_and_records_the_input() {
+            StoredSaga inserted = codec.encode(releasingEnvelope("s1"));
+
+            boolean saved = store.compareAndSaveSkipped(inserted, 0, "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+
+            assertAll(
+                    () -> assertThat(saved).isTrue(),
+                    () -> assertThat(codec.decode(store.find("s1").orElseThrow())).isEqualTo(releasingEnvelope("s1")),
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1", heldEvent("a@1"))));
         }
 
         @Test
@@ -929,7 +878,7 @@ class InMemorySagaStateStoreTest {
             instance("s1");
             StoredSaga written = codec.encodeWithoutState(next("s1"));
 
-            boolean saved = store.compareAndSaveSkipped(written, 7, "q1", new SkippedInput(0, "a@1"));
+            boolean saved = store.compareAndSaveSkipped(written, 7, "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
             assertAll(
                     () -> assertThat(saved).isFalse(),
@@ -937,51 +886,40 @@ class InMemorySagaStateStoreTest {
                     () -> recordsOf("s1"));
         }
 
-        @Test
-        void a_release_start_that_loses_the_version_writes_no_head() {
-            instance("s1");
-            StoredSaga written = codec.encodeWithoutState(next("s1"));
-
-            boolean saved = store.compareAndSaveReleaseStarted(written, 7, "q1", new SkippedInput(-1, "a@1"));
-
-            assertAll(
-                    () -> assertThat(saved).isFalse(),
-                    () -> recordsOf("s1"));
-        }
 
         @Test
         void a_replay_that_loses_the_version_deletes_no_record() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
             StoredSaga written = codec.encode(next("s1"));
 
-            boolean saved = store.compareAndSaveReplayed(written, 7, "q1", new SkippedInput(0, "a@1"));
+            boolean saved = store.compareAndSaveReplayed(written, 7, "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
             assertAll(
                     () -> assertThat(saved).isFalse(),
                     () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(2),
-                    () -> recordsOf("s1", new SkippedInput(0, "a@1")));
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1", heldEvent("a@1"))));
         }
 
         @Test
         void an_end_of_the_quarantine_that_loses_the_version_deletes_no_record() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
             StoredSaga written = codec.encode(next("s1"));
 
             boolean saved = store.compareAndSaveQuarantineEnded(written, 7, "q1");
 
             assertAll(
                     () -> assertThat(saved).isFalse(),
-                    () -> recordsOf("s1", new SkippedInput(0, "a@1")));
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1", heldEvent("a@1"))));
         }
 
         @Test
         void a_replay_of_the_last_record_leaves_no_record_under_the_quarantine_id() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
-            replayed("s1", "q1", new SkippedInput(0, "a@1"));
+            replayed("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
             recordsOf("s1");
         }
@@ -989,7 +927,7 @@ class InMemorySagaStateStoreTest {
         @Test
         void a_delete_removes_the_instance_and_its_records_together() {
             instance("s1");
-            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
             store.delete("s1");
 
@@ -1061,10 +999,10 @@ class InMemorySagaStateStoreTest {
                     sagaId -> {
                         instance(sagaId);
                         for (int record = 0; record < RECORDS_PER_ROUND; record++) {
-                            skip(sagaId, "q1", new SkippedInput(record, "a@" + record));
+                            skip(sagaId, "q1", new SkippedInput(record, "a@" + record, heldEvent("a@" + record)));
                         }
                     },
-                    (sagaId, record) -> assertThat(replayed(sagaId, "q1", new SkippedInput(record, "a@" + record))).isTrue(),
+                    (sagaId, record) -> assertThat(replayed(sagaId, "q1", new SkippedInput(record, "a@" + record, heldEvent("a@" + record)))).isTrue(),
                     round -> {
                         long firstVersion = store.find(round.sagaId()).orElseThrow().version();
                         List<SkippedInput> lowest = store.findSkippedInputs(round.sagaId(), "q1", 1);
@@ -1082,7 +1020,7 @@ class InMemorySagaStateStoreTest {
         void that_find_a_skipped_record_are_followed_by_an_instance_read_at_the_version_that_skipped_it() throws Exception {
             writesWhileReading(
                     sagaId -> instance(sagaId),
-                    (sagaId, record) -> assertThat(skip(sagaId, "q1", new SkippedInput(record, "a@" + record))).isTrue(),
+                    (sagaId, record) -> assertThat(skip(sagaId, "q1", new SkippedInput(record, "a@" + record, heldEvent("a@" + record)))).isTrue(),
                     round -> {
                         long firstVersion = store.find(round.sagaId()).orElseThrow().version();
                         int skippedRecords = store.findSkippedInputs(round.sagaId(), "q1", RECORDS_PER_ROUND).size();
@@ -1136,5 +1074,9 @@ class InMemorySagaStateStoreTest {
         Map<String, Object> fields = new LinkedHashMap<>(saga.encoded().fields());
         fields.put(SagaCodec.CURRENT_STEP, currentStep);
         return new StoredSaga(saga.sagaId(), saga.version(), new EncodedSaga(fields), saga.index());
+    }
+
+    private static io.cloudevents.CloudEvent heldEvent(String key) {
+        return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test").build();
     }
 }

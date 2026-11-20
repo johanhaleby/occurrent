@@ -177,7 +177,6 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
 
     private void runSagaOn(UnaryOperator<CloudEvent> deliveredAs, SagaRunnerConfig config) {
         subscription = SagaRunner.<OrderEvent, String>agnostic(new Feed(subscriptionModel, deliveredAs), converter)
-                .eventStoreQueries(eventStore)
                 .run("orders", orderFulfillment(), stateStore, dispatched::add, null, config);
     }
 

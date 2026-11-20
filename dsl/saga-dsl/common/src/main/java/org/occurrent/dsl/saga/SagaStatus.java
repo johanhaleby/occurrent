@@ -72,9 +72,7 @@ public enum SagaStatus {
      * <ul>
      *   <li>The saga worked out which instance the event belongs to. A failure in the converter or the id extractor is
      *       never charged to an instance.</li>
-     *   <li>Quarantine is switched off neither by {@code SagaRunnerConfig.disableQuarantine()} nor by the runner at
-     *       startup. The runner switches it off on a subscription model that cannot guarantee it holds every event it
-     *       delivers.</li>
+     *   <li>Quarantine is not switched off by {@code SagaRunnerConfig.disableQuarantine()}.</li>
      *   <li>The event carries a redelivery key, which is a stream id with its stream version. An event with only a global
      *       position has none.</li>
      *   <li>What was thrown is not an {@link OutOfMemoryError}.</li>
@@ -85,9 +83,6 @@ public enum SagaStatus {
      * An event that meets all of them is quarantined only when all of these hold as well, and any one of them can refuse
      * on its own.
      * <ul>
-     *   <li>The subscription model confirms, for that event, that acknowledging it is not what would destroy the last
-     *       copy of it. A check that throws counts as a refusal, except for an {@link OutOfMemoryError}, which
-     *       propagates instead. The runner logs a WARN for a refusal, though not for every repeat of it.</li>
      *   <li>The store read the decision is made on and the write that records it both complete. When either throws, the
      *       runner logs nothing of its own about the quarantine.</li>
      *   <li>The compare-and-set write wins within {@code maxCasAttempts} attempts. When another writer changed the

@@ -227,7 +227,7 @@ class SpringMongoSagaStateStoreFailoverTest {
         Throwable transition;
         Throwable compareAndSet;
         try {
-            transition = catchThrowable(() -> envelopes.compareAndSaveSkipped(store, releasing("order-1", 2), 1, QUARANTINE_ID, new SkippedInput(1, "a@1")));
+            transition = catchThrowable(() -> envelopes.compareAndSaveSkipped(store, releasing("order-1", 2), 1, QUARANTINE_ID, new SkippedInput(1, "a@1", heldEvent("a@1"))));
             compareAndSet = catchThrowable(() -> envelopes.compareAndSave("order-2", releasing("order-2", 1), 0));
         } finally {
             secondaries.forEach(i -> MEMBERS.get(i).getDockerClient().unpauseContainerCmd(MEMBERS.get(i).getContainerId()).exec());
@@ -247,8 +247,8 @@ class SpringMongoSagaStateStoreFailoverTest {
         SpringMongoSagaStateStore<Payment> store = storeOn(oldPrimary, database, RetryStrategy.none());
         SagaEnvelopes<Payment> envelopes = SagaEnvelopes.of(store, null);
         assertThat(envelopes.compareAndSave("order-1", releasing("order-1", 1), 0)).isTrue();
-        assertThat(envelopes.compareAndSaveSkipped(store, releasing("order-1", 2), 1, QUARANTINE_ID, new SkippedInput(1, "a@1"))).isTrue();
-        assertThat(envelopes.compareAndSaveSkipped(store, releasing("order-1", 3), 2, QUARANTINE_ID, new SkippedInput(2, "b@2"))).isTrue();
+        assertThat(envelopes.compareAndSaveSkipped(store, releasing("order-1", 2), 1, QUARANTINE_ID, new SkippedInput(1, "a@1", heldEvent("a@1")))).isTrue();
+        assertThat(envelopes.compareAndSaveSkipped(store, releasing("order-1", 3), 2, QUARANTINE_ID, new SkippedInput(2, "b@2", heldEvent("b@2")))).isTrue();
 
         try (MongoClient admin = direct(oldPrimary)) {
             admin.getDatabase("admin").runCommand(new Document("replSetStepDown", 30).append("secondaryCatchUpPeriodSecs", 10).append("force", true));
@@ -260,7 +260,11 @@ class SpringMongoSagaStateStoreFailoverTest {
 
         assertAll(
                 () -> assertThat(SagaEnvelopes.of(onTheNewPrimary, null).find("order-1").orElseThrow().version()).as("version on the new primary").isEqualTo(3),
-                () -> assertThat(onTheNewPrimary.findSkippedInputs("order-1", QUARANTINE_ID, 10)).as("records on the new primary").containsExactly(new SkippedInput(1, "a@1"), new SkippedInput(2, "b@2"))
+                () -> assertThat(onTheNewPrimary.findSkippedInputs("order-1", QUARANTINE_ID, 10)).as("records on the new primary").containsExactly(new SkippedInput(1, "a@1", heldEvent("a@1")), new SkippedInput(2, "b@2", heldEvent("b@2")))
         );
+    }
+
+    private static io.cloudevents.CloudEvent heldEvent(String key) {
+        return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test").build();
     }
 }

@@ -103,7 +103,7 @@ class SagaRecordedTheSkipTest {
     private final UndecodableStore store = new UndecodableStore();
     private final SagaEnvelopes<Order> envelopes = SagaEnvelopes.of(inMemory, null);
     private final SagaExecution<OrderEvent, Order, Object> execution =
-            new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, event -> true, now::get, eventStore);
+            new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, now::get);
 
     private Saga<OrderEvent, Order, Object> saga() {
         return Saga.<OrderEvent, Order, Object>builder(null)
@@ -209,7 +209,7 @@ class SagaRecordedTheSkipTest {
                 () -> assertThat(store.skips.get()).as("control: the write was tried maxCasAttempts times").isEqualTo(CONFIG.maxCasAttempts()),
                 () -> assertThat(thrown).as("the delivery fails, so the subscription does not move past the input").isNotNull(),
                 () -> assertThat(thePropagatedFailureIsTheLoadFailure(thrown)).as(String.valueOf(thrown)).isTrue(),
-                () -> assertThat(inMemory.findSkippedInputs(ORDER, instance().quarantineId(), Integer.MAX_VALUE)).as("nothing is recorded").isEmpty()
+                () -> assertThat(inMemory.findSkippedInputs(ORDER, instance().quarantineId(), Integer.MAX_VALUE)).as("only the input the instance was quarantined on is recorded").extracting(SkippedInput::seq).containsExactly(0L)
         );
     }
 
@@ -282,11 +282,6 @@ class SagaRecordedTheSkipTest {
         @Override
         public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
             return inMemory.findSkippedInputs(sagaId, quarantineId, limit);
-        }
-
-        @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-            return inMemory.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
         }
 
         @Override

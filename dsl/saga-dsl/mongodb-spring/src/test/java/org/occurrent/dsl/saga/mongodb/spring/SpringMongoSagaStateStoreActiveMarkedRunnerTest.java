@@ -174,7 +174,6 @@ class SpringMongoSagaStateStoreActiveMarkedRunnerTest {
 
     private SagaSubscription run(SagaRunnerConfig config) {
         subscription = SagaRunner.<OrderEvent, OrderCommand>agnostic(new RetainsEverything(subscriptionModel), converter)
-                .eventStoreQueries(eventStore)
                 .run(STREAM, saga(), stateStore, dispatched::add, null, config);
         return subscription;
     }

@@ -65,20 +65,9 @@ public final class SagaSubscription implements AutoCloseable {
         /**
          * The instance is quarantined again and not releasing, because an input kept failing during the release until
          * its budget ran out. That input is the failure record's input now, and the inputs after it stay recorded, so a
-         * later release replays it first and then those. Also what a release gives when the event store hands back a
-         * recorded input's event without a stream id and stream version, which only an {@code EventStoreQueries} other
-         * than Occurrent's own event stores can do. No budget applies then, and the failure record's type says so.
+         * later release replays it first and then those.
          */
         QUARANTINED_AGAIN,
-        /**
-         * The instance is quarantined again and not releasing, because the event store no longer has the event of the
-         * input the instance was quarantined on or of a recorded input. No budget applies. That input is the failure
-         * record's input now, the record's type and message say the event is missing, and the inputs after it stay
-         * recorded. Restore the event and release the instance again, or delete the instance with
-         * {@code SagaStateStore.delete(sagaId)}. Restarting the saga's subscription releases nothing, since a
-         * quarantined instance skips every event it is offered.
-         */
-        QUARANTINED_EVENT_MISSING,
         /** The instance is not quarantined, so there was nothing to release. */
         NOT_QUARANTINED,
         /** No instance has that id. */
@@ -121,8 +110,8 @@ public final class SagaSubscription implements AutoCloseable {
 
     /**
      * Release the quarantined instance {@code sagaId}. It replays the input the instance was quarantined on and then
-     * every input it skipped while quarantined, in the order they were recorded, each read back from the event store by
-     * its key and applied the way a delivery is, deduplicated by the event's own stream id and stream version. The
+     * every input it skipped while quarantined, in the order they were recorded, each from the event its record holds and
+     * applied the way a delivery is, deduplicated by the event's own stream id and stream version. The
      * instance stays {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} while that runs, so an input that arrives
      * meanwhile is recorded and replayed too, and becomes {@link org.occurrent.dsl.saga.SagaStatus#ACTIVE} once no
      * recorded input is left.
@@ -146,16 +135,15 @@ public final class SagaSubscription implements AutoCloseable {
      * isn't applied can be dispatched twice.
      * <p>
      * The input the instance was quarantined on gets a full quarantine budget again, measured from the start of the
-     * release. A replayed input whose event the store no longer has quarantines the instance again on that input at
-     * once. A read of the store that throws propagates, and the instance stays releasing. Exceptions that the
-     * {@code EventStoreQueries} or the state store throw propagate unwrapped.
+     * release. An exception that the state store throws propagates unwrapped, and the instance stays releasing.
+     * <p>
+     * The records are the only copy of the inputs the instance skipped, so deleting a quarantined instance with
+     * {@code SagaStateStore.delete(sagaId)} deletes them. Release the instance first to apply them.
      *
      * @return what the release did, see {@link ReleaseResult}
      * @throws IllegalStateException when the instance was quarantined by 0.34.0, which recorded none of the inputs it
      *                               skipped. The message names the way out, {@code SagaStateStore.delete(sagaId)}. Also
-     *                               thrown when the runner was built without an
-     *                               {@link org.occurrent.eventstore.api.blocking.EventStoreQueries}, when the state store
-     *                               does not implement {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs}, and
+     *                               thrown when the state store does not implement {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs}, and
      *                               when the store gives back an instance stored as {@code QUARANTINED_RECORDING}
      *                               without its failure input, quarantine id or skip count. The message names the
      *                               missing field

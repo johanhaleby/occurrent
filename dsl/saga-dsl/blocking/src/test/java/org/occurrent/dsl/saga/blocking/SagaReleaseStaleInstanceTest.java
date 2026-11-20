@@ -116,7 +116,7 @@ class SagaReleaseStaleInstanceTest {
     }
 
     private SagaExecution<OrderEvent, Order, Object> execution(SagaStateStore<Order> store) {
-        return new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, event -> true, now::get, eventStore);
+        return new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, now::get);
     }
 
     private CloudEvent append(OrderEvent event) {
@@ -202,11 +202,6 @@ class SagaReleaseStaleInstanceTest {
         @Override
         public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
             return inMemory.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input);
-        }
-
-        @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-            return inMemory.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
         }
 
         @Override

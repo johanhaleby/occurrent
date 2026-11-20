@@ -223,7 +223,7 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
     @Test
     void find_skipped_inputs_reads_from_the_primary_whatever_the_read_preference_of_the_template() {
         writerEnvelopes.compareAndSave("order-1", envelope("order-1", SagaStatus.QUARANTINED, List.of(), releasingFailure()), 0);
-        writerEnvelopes.compareAndSaveSkipped(writer, atVersion(envelope("order-1", SagaStatus.QUARANTINED, List.of(), releasingFailure()), 2), 1, QUARANTINE_ID, new SkippedInput(0, "order-1@8"));
+        writerEnvelopes.compareAndSaveSkipped(writer, atVersion(envelope("order-1", SagaStatus.QUARANTINED, List.of(), releasingFailure()), 2), 1, QUARANTINE_ID, new SkippedInput(0, "order-1@8", heldEvent("order-1@8")));
 
         AtomicReference<List<SkippedInput>> read = new AtomicReference<>();
 
@@ -231,7 +231,11 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
 
         assertAll(
                 () -> assertThat(sent).as("read preference of each find").isNotEmpty().containsOnly(primaryOnTheWire()),
-                () -> assertThat(read.get()).containsExactly(new SkippedInput(0, "order-1@8"))
+                () -> assertThat(read.get()).containsExactly(new SkippedInput(0, "order-1@8", heldEvent("order-1@8")))
         );
+    }
+
+    private static io.cloudevents.CloudEvent heldEvent(String key) {
+        return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test").build();
     }
 }

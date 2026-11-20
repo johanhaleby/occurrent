@@ -122,7 +122,7 @@ class SagaReleaseConcurrentCallersTest {
     }
 
     private SagaExecution<OrderEvent, Order, Object> execution(SagaStateStore<Order> store) {
-        return new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, event -> true, now::get, eventStore);
+        return new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, now::get);
     }
 
     private CloudEvent append(OrderEvent event) {
@@ -151,7 +151,7 @@ class SagaReleaseConcurrentCallersTest {
 
     @Test
     void a_second_release_call_starting_the_release_after_the_first_finished_it_loses_and_does_not_lose_the_input() throws Exception {
-        HeadRacingStore store = new HeadRacingStore();
+        StartRacingStore store = new StartRacingStore();
         SagaExecution<OrderEvent, Order, Object> execution = execution(store);
         execution.onCloudEvent(append(new OrderPlaced(nextEventId(), ORDER)));
         poisonFails = true;
@@ -191,9 +191,6 @@ class SagaReleaseConcurrentCallersTest {
         execution.onCloudEvent(append(new ItemAdded(nextEventId(), ORDER, "a")));
         execution.onCloudEvent(append(new ItemAdded(nextEventId(), ORDER, "b")));
         String quarantineId = instance().quarantineId();
-        // The record an earlier release left for the input it was quarantined on, at a seq after the records of the inputs it skipped
-        SagaEnvelope<Order> current = instance();
-        envelopes.compareAndSaveSkipped(inMemory, SagaExecutionSupport.withSkipCounted(current), current.version(), quarantineId, new SkippedInput(1_000_000, poison.getExtension(OccurrentCloudEventExtension.STREAM_ID) + "@" + poison.getExtension(OccurrentCloudEventExtension.STREAM_VERSION)));
 
         CompletableFuture<ReleaseResult> b = CompletableFuture.supplyAsync(() -> {
             store.b = Thread.currentThread();
@@ -223,7 +220,7 @@ class SagaReleaseConcurrentCallersTest {
         quarantineOn(execution, append(new OrderPlaced(nextEventId(), ORDER)));
         String quarantineId = instance().quarantineId();
         execution.onCloudEvent(append(new ItemAdded(nextEventId(), ORDER, "r1")));
-        assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE)).hasSize(1);
+        assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE)).as("the input it was quarantined on and r1").hasSize(2);
         placedFails = false;
 
         CompletableFuture<ReleaseResult> r = CompletableFuture.supplyAsync(() -> {
@@ -307,11 +304,6 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-            return inMemory.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
-        }
-
-        @Override
         public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
             return inMemory.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
         }
@@ -334,7 +326,7 @@ class SagaReleaseConcurrentCallersTest {
 
     // Call order: B reads, A reads, A starts the release and finishes it, B resumes and tries to start the release it read
     // the instance for, which must lose
-    private final class HeadRacingStore extends DelegatingStore {
+    private final class StartRacingStore extends DelegatingStore {
         volatile @Nullable Thread b;
         final CountDownLatch bHasRead = new CountDownLatch(1);
         final CountDownLatch aFinished = new CountDownLatch(1);
@@ -355,14 +347,14 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
             if (isB()) {
                 await(aFinished);
-                boolean saved = super.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
+                boolean saved = super.compareAndSaveWithoutState(saga, expectedVersion);
                 bStartWon.set(saved);
                 return saved;
             }
-            return super.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
+            return super.compareAndSaveWithoutState(saga, expectedVersion);
         }
     }
 
@@ -401,16 +393,16 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
             if (isB()) {
                 await(aIsAboutToReadTheRecords);
-                boolean saved = super.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
+                boolean saved = super.compareAndSaveWithoutState(saga, expectedVersion);
                 bStartWon.set(saved);
                 bTriedToStart.countDown();
                 await(aFinished);
                 return saved;
             }
-            return super.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
+            return super.compareAndSaveWithoutState(saga, expectedVersion);
         }
     }
 
@@ -437,8 +429,8 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-            boolean saved = super.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            boolean saved = super.compareAndSaveWithoutState(saga, expectedVersion);
             if (isR() && rWrites.incrementAndGet() == 1) {
                 rHasStartedTheRelease.countDown();
                 await(pHasReadTheInstance);
@@ -461,10 +453,10 @@ class SagaReleaseConcurrentCallersTest {
         @Override
         public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
             boolean saved = super.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
-            if (isR() && replayed.seq() < 0) {
+            if (isR() && replayed.seq() == 0) {
                 rDeletedTheStartRecord.countDown();
             }
-            if (isP() && replayed.seq() >= 0) {
+            if (isP() && replayed.seq() > 0) {
                 pDeletedItsRecord.countDown();
             }
             return saved;

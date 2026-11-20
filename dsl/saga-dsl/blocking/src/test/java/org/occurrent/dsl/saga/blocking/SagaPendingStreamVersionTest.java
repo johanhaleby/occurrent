@@ -37,6 +37,8 @@ import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
+import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.LoggerFactory;
@@ -151,7 +153,7 @@ class SagaPendingStreamVersionTest {
     }
 
     private SagaExecution<BasketEvent, Basket, BasketCommand> execution(SagaRunnerConfig config) {
-        return new SagaExecution<>("baskets", basketSaga(), store, this::dispatch, converter, config, event -> true, now::get);
+        return new SagaExecution<>("baskets", basketSaga(), store, this::dispatch, converter, config, now::get);
     }
 
     private void dispatch(BasketCommand command) {
@@ -912,8 +914,9 @@ class SagaPendingStreamVersionTest {
      * Counts what the executor does to the store and can make it fail, without knowing which of the read and write
      * methods the executor uses for a given step.
      */
-    private static final class ObservedStore implements SagaStateStore<Basket> {
+    private static final class ObservedStore implements SagaStateStore<Basket>, SagaStateStoreSkippedInputs {
         private final SagaStateStore<Basket> delegate;
+        private final SagaStateStoreSkippedInputs delegateRecords;
         private final AtomicInteger reads = new AtomicInteger();
         private final AtomicInteger writeAttempts = new AtomicInteger();
         private final AtomicInteger writesToLose = new AtomicInteger();
@@ -923,6 +926,7 @@ class SagaPendingStreamVersionTest {
 
         ObservedStore(SagaStateStore<Basket> delegate) {
             this.delegate = delegate;
+            this.delegateRecords = (SagaStateStoreSkippedInputs) delegate;
         }
 
         void resetCounters() {
@@ -1006,6 +1010,36 @@ class SagaPendingStreamVersionTest {
         @Override
         public void delete(String sagaId) {
             delegate.delete(sagaId);
+        }
+
+        @Override
+        public void requireAtomicTransitions() {
+            delegateRecords.requireAtomicTransitions();
+        }
+
+        @Override
+        public List<String> findReleasingSagaIds(@Nullable String after, int limit) {
+            return delegateRecords.findReleasingSagaIds(after, limit);
+        }
+
+        @Override
+        public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
+            return delegateRecords.findSkippedInputs(sagaId, quarantineId, limit);
+        }
+
+        @Override
+        public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
+            return write(() -> delegateRecords.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input));
+        }
+
+        @Override
+        public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+            return write(() -> delegateRecords.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed));
+        }
+
+        @Override
+        public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+            return write(() -> delegateRecords.compareAndSaveQuarantineEnded(saga, expectedVersion, quarantineId));
         }
     }
 }

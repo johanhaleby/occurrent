@@ -370,7 +370,7 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
 
             Throwable thrown;
             try (FailPoint failure = FailPoint.failing(client, "commitTransaction", ATTEMPTS, BAD_VALUE)) {
-                thrown = catchThrowable(() -> store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-11@7")));
+                thrown = catchThrowable(() -> store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-11@7", heldEvent("order-11@7"))));
             }
 
             assertAll(
@@ -386,7 +386,7 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
 
             boolean saved;
             try (FailPoint failure = FailPoint.failing(client, "commitTransaction", 1, BAD_VALUE, UNKNOWN_COMMIT_RESULT)) {
-                saved = store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-12@7"));
+                saved = store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-12@7", heldEvent("order-12@7")));
             }
 
             assertAll(
@@ -431,5 +431,9 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
                     () -> assertThat(strategy.attempts.get()).as("attempts").isEqualTo(2)
             );
         }
+    }
+
+    private static io.cloudevents.CloudEvent heldEvent(String key) {
+        return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test").build();
     }
 }

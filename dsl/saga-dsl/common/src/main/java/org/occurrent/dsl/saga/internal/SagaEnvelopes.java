@@ -89,16 +89,17 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
         return store.compareAndSaveWithoutState(codec.encodeWithoutState(envelope), expectedVersion);
     }
 
-    /** Skip an input, see {@link SagaStateStoreSkippedInputs#compareAndSaveSkipped}. {@code envelope}'s state is not written. */
+    /**
+     * Skip an input, see {@link SagaStateStoreSkippedInputs#compareAndSaveSkipped}. {@code envelope}'s state is not
+     * written, except by an insert, which is an expected version of 0 and writes the whole envelope.
+     */
     public boolean compareAndSaveSkipped(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope, long expectedVersion, String quarantineId, SkippedInput input) {
         requireNonNull(records, "records cannot be null");
+        if (expectedVersion == 0) {
+            forgetOnInsert(envelope.sagaId(), expectedVersion);
+            return records.compareAndSaveSkipped(codec.encode(envelope), expectedVersion, quarantineId, input);
+        }
         return records.compareAndSaveSkipped(codec.encodeWithoutState(envelope), expectedVersion, quarantineId, input);
-    }
-
-    /** Start a release, see {@link SagaStateStoreSkippedInputs#compareAndSaveReleaseStarted}. {@code envelope}'s state is not written. */
-    public boolean compareAndSaveReleaseStarted(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope, long expectedVersion, String quarantineId, SkippedInput head) {
-        requireNonNull(records, "records cannot be null");
-        return records.compareAndSaveReleaseStarted(codec.encodeWithoutState(envelope), expectedVersion, quarantineId, head);
     }
 
     /** Apply or drop a replayed input, see {@link SagaStateStoreSkippedInputs#compareAndSaveReplayed}. The whole envelope is written. */

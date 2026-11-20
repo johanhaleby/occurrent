@@ -156,7 +156,7 @@ class SpringMongoSagaStateStoreDowngradeTest {
         write(new ItemAdded(RECORDING, "skipped-1"));
         write(new ItemAdded(RECORDING, "skipped-2"));
         write(new ItemAdded(RELEASING, "skipped-in-release"));
-        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(Arrays.asList(skipCount(RECORDING), skipCount(RELEASING))).as("skip counts of the two quarantined instances").containsExactly(2L, 1L));
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(Arrays.asList(skipCount(RECORDING), skipCount(RELEASING))).as("skip counts of the two quarantined instances").containsExactly(3L, 2L));
 
         failing.remove("poison-releasing");
         failing.add("skipped-in-release");
@@ -172,7 +172,7 @@ class SpringMongoSagaStateStoreDowngradeTest {
         assertThat(recordingBefore).containsEntry(SagaCodec.STATUS, "QUARANTINED_RECORDING").containsKeys(SagaCodec.FAILURE_QUARANTINE_ID, SagaCodec.QUARANTINE_SKIP_COUNT);
         assertThat(releasingBefore).containsEntry(SagaCodec.STATUS, "QUARANTINED_RECORDING").containsKeys(SagaCodec.FAILURE_QUARANTINE_ID, SagaCodec.FAILURE_RELEASED_AT);
         assertThat(markedBefore).containsEntry(SagaCodec.STATUS, "ACTIVE_MARKED");
-        assertThat(skippedBefore).hasSize(3);
+        assertThat(skippedBefore).hasSize(4);
 
         runTheDowngradeCommands();
     }
@@ -227,7 +227,6 @@ class SpringMongoSagaStateStoreDowngradeTest {
 
     private SagaSubscription run() {
         subscription = SagaRunner.<OrderEvent, Pack>agnostic(new RetainsEverything(subscriptionModel), converter)
-                .eventStoreQueries(eventStore)
                 .run(STREAM, saga(), stateStore, dispatched::add, null,
                         SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofHours(1)).withQuarantineAfter(Duration.ofMillis(300)));
         return subscription;

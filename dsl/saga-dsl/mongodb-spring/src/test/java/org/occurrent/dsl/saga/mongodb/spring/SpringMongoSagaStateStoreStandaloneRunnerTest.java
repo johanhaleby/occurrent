@@ -172,7 +172,6 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
 
     private SagaSubscription runWithQuarantineOn() {
         subscription = SagaRunner.<OrderEvent, OrderCommand>agnostic(new RetainsEverything(subscriptionModel), converter)
-                .eventStoreQueries(eventStore)
                 .run(STREAM, saga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofMillis(50)));
         return subscription;
     }

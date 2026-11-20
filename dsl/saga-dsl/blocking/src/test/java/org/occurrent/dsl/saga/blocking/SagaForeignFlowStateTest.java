@@ -88,7 +88,7 @@ class SagaForeignFlowStateTest {
 
         Throwable thrown = catchThrowable(() -> {
             SagaExecution<OrderEvent, FlowState<OrderEvent>, OrderCommand> execution = new SagaExecution<>("orders", saga, store, dispatched::add, converter,
-                    SagaRunnerConfig.defaults(), event -> true);
+                    SagaRunnerConfig.defaults());
             execution.onCloudEvent(placed());
         });
 

@@ -30,7 +30,6 @@ import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.springboot.common.internal.AsynchronousSubscribables;
@@ -42,7 +41,6 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CancellableSubscriptions;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
@@ -160,10 +158,9 @@ class SagaAnnotationRegistrar {
         SagaRunner<E, C> configured = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
         CompetingConsumerStrategy competingConsumerStrategy = resolveSagaCompetingConsumerStrategy();
         SagaRunner<E, C> withStrategy = competingConsumerStrategy == null ? configured : configured.competingConsumerStrategy(competingConsumerStrategy);
-        rejectStoreWithoutSkippedInputs(id, config, subscribable, stateStore);
-        EventStoreQueries eventStoreQueries = resolveEventStoreQueries(id, config, subscribable);
+        rejectStoreWithoutSkippedInputs(id, config, stateStore);
         // Effectively final, so a withheld push saga can close over it and run the same registration later.
-        final SagaRunner<E, C> runner = eventStoreQueries == null ? withStrategy : withStrategy.eventStoreQueries(eventStoreQueries);
+        final SagaRunner<E, C> runner = withStrategy;
 
         // A saga replaying its history from the beginning defaults to starting in the background, exactly as
         // @Subscription and @Projection do. startupMode was accepted and ignored here until now, so a saga always
@@ -647,34 +644,13 @@ class SagaAnnotationRegistrar {
         return (CommandDispatcher<C>) dispatcherBean;
     }
 
-    // getIfUnique gives null both for no bean and for several without a primary one. Either fails here only for a saga
-    // whose SagaRunner refuses to start without an EventStoreQueries, so the message is the starter's and not the runner's
-    private @Nullable EventStoreQueries resolveEventStoreQueries(String id, SagaRunnerConfig config, Subscribable subscribable) {
-        EventStoreQueries unique = applicationContext.getBeanProvider(EventStoreQueries.class).getIfUnique();
-        if (unique != null || config.quarantineAfter().isEmpty()) {
-            return unique;
-        }
-        String[] names = applicationContext.getBeanNamesForType(EventStoreQueries.class);
-        boolean retainsEveryEvent = HistoryRetainingSubscriptions.findIn(subscribable).map(HistoryRetainingSubscriptions::retainsEveryEvent).orElse(false);
-        if (names.length > 1 && retainsEveryEvent) {
-            throw new IllegalStateException("@Saga '%s' quarantines an instance that keeps failing and needs an EventStoreQueries to release a quarantined instance from, but found %d EventStoreQueries beans (%s) and none of them is @Primary. Mark the one the saga reads from @Primary, or turn quarantine off with occurrent.saga.quarantine-enabled=false.".formatted(id, names.length, String.join(", ", names)));
-        }
-        if (names.length == 0 && retainsEveryEvent) {
-            throw new IllegalStateException("@Saga '%s' quarantines an instance that keeps failing and needs an EventStoreQueries to release a quarantined instance from, but no EventStoreQueries bean exists. Define the event store as a bean, or turn quarantine off with occurrent.saga.quarantine-enabled=false.".formatted(id));
-        }
-        return null;
-    }
-
     // The runner refuses such a store too, but names only SagaRunnerConfig.disableQuarantine(), which an application on
     // the starter does not call
-    private static void rejectStoreWithoutSkippedInputs(String id, SagaRunnerConfig config, Subscribable subscribable, SagaStateStore<?> stateStore) {
+    private static void rejectStoreWithoutSkippedInputs(String id, SagaRunnerConfig config, SagaStateStore<?> stateStore) {
         if (config.quarantineAfter().isEmpty() || stateStore instanceof SagaStateStoreSkippedInputs) {
             return;
         }
-        boolean retainsEveryEvent = HistoryRetainingSubscriptions.findIn(subscribable).map(HistoryRetainingSubscriptions::retainsEveryEvent).orElse(false);
-        if (retainsEveryEvent) {
-            throw new IllegalStateException("@Saga '%s' quarantines an instance that keeps failing, and its state store %s does not implement SagaStateStoreSkippedInputs, so a quarantined instance could neither record the inputs it skips nor be released. Implement SagaStateStoreSkippedInputs on the store, as the in-memory and MongoDB stores do, or turn quarantine off with occurrent.saga.quarantine-enabled=false.".formatted(id, stateStore.getClass().getName()));
-        }
+        throw new IllegalStateException("@Saga '%s' quarantines an instance that keeps failing, and its state store %s does not implement SagaStateStoreSkippedInputs, so a quarantined instance could neither record the inputs it skips nor be released. Implement SagaStateStoreSkippedInputs on the store, as the in-memory and MongoDB stores do, or turn quarantine off with occurrent.saga.quarantine-enabled=false.".formatted(id, stateStore.getClass().getName()));
     }
 
     private Duration sagaTimerPollInterval() {
@@ -698,12 +674,11 @@ class SagaAnnotationRegistrar {
         return withQuarantineBudget(config, properties.getQuarantineAfter());
     }
 
-    // Zero is refused because a reader can take it to mean "never" or "immediately". A budget left out is the default,
-    // marked as one nothing configured, so SagaRunner turns it off at DEBUG and not at WARN
+    // Zero is refused because a reader can take it to mean "never" or "immediately"
     static SagaRunnerConfig withQuarantineBudget(SagaRunnerConfig config, @Nullable Duration configured) {
         if (configured == null) {
             return new SagaRunnerConfig(config.timerPollInterval(), config.timerBatchLimit(), config.maxCasAttempts(), config.redeliveryDetection(),
-                    Optional.of(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER), config.reorderWindow(), true);
+                    Optional.of(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER), config.reorderWindow());
         }
         if (configured.isZero() || configured.isNegative()) {
             throw new IllegalArgumentException("occurrent.saga.quarantine-after must be a positive duration, such as 5m, but was " + configured + ". Leave the property out for the default of 5m, or set occurrent.saga.quarantine-enabled=false to turn quarantine off.");

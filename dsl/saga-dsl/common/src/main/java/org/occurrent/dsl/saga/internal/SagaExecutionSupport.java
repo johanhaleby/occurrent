@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.internal;
 
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.saga.*;
@@ -158,12 +159,12 @@ public final class SagaExecutionSupport {
                                                          @Nullable SagaEnvelope<S> envelope,
                                                          List<C> commands,
                                                          long expectedVersion,
-                                                         @Nullable SkippedInput skipToRecord) {
+                                                         @Nullable SkipToRecord skipToRecord) {
         static <S extends @Nullable Object, C> Outcome<S, C> skip() {
             return new Outcome<>(false, null, List.of(), 0, null);
         }
 
-        static <S extends @Nullable Object, C> Outcome<S, C> skipToRecord(SkippedInput toRecord) {
+        static <S extends @Nullable Object, C> Outcome<S, C> skipToRecord(SkipToRecord toRecord) {
             return new Outcome<>(false, null, List.of(), 0, toRecord);
         }
 
@@ -307,8 +308,21 @@ public final class SagaExecutionSupport {
         return Outcome.processed(next, commands, expectedVersion);
     }
 
+    /**
+     * What a quarantined instance records for an input it skips, before it has the input's event in hand. The executor
+     * completes it into a {@link SkippedInput} with {@link #of(CloudEvent)}.
+     *
+     * @param seq the {@link SkippedInput#seq()} of the record
+     * @param key the {@link SkippedInput#key()} of the record
+     */
+    public record SkipToRecord(long seq, String key) {
+        public SkippedInput of(CloudEvent event) {
+            return new SkippedInput(seq, key, event);
+        }
+    }
+
     private static <S extends @Nullable Object, C> Outcome<S, C> recordingSkip(SagaEnvelope<S> current, EventMeta meta, int reorderWindow) {
-        SkippedInput toRecord = skipToRecord(current, meta, reorderWindow);
+        SkipToRecord toRecord = skipToRecord(current, meta, reorderWindow);
         return toRecord == null ? Outcome.skip() : Outcome.skipToRecord(toRecord);
     }
 
@@ -325,13 +339,12 @@ public final class SagaExecutionSupport {
      * <p>
      * Nothing is recorded when the instance is not quarantined, was quarantined by 0.34.0 and has no quarantine id or
      * no count, when the input is a timer or an event with no key, when the instance counts the input as applied
-     * already, or when the key is the failure record's input, which a release replays first anyway.
+     * already.
      */
-    public static <S extends @Nullable Object> @Nullable SkippedInput skipToRecord(SagaEnvelope<S> current, EventMeta meta, int reorderWindow) {
+    public static <S extends @Nullable Object> @Nullable SkipToRecord skipToRecord(SagaEnvelope<S> current, EventMeta meta, int reorderWindow) {
         String key = meta.skipKey();
         Long count = current.quarantineSkipCount();
-        SagaFailure failure = current.failure();
-        if (current.quarantineId() == null || count == null || key == null || failure == null || failure.input().equals(key)) {
+        if (current.quarantineId() == null || count == null || key == null) {
             return null;
         }
         // An input the instance applied before it was quarantined is skipped as a redelivery anyway, so there is nothing
@@ -339,7 +352,27 @@ public final class SagaExecutionSupport {
         if (classify(current, meta, reorderWindow) != Delivery.NEW) {
             return null;
         }
-        return new SkippedInput(count, key);
+        return new SkipToRecord(count, key);
+    }
+
+    /** The {@link SkippedInput#seq()} of the input an instance is quarantined on, which comes before every input it skips. */
+    private static final long QUARANTINING_INPUT_SEQ = 0;
+
+    /**
+     * The record of the input a write quarantines the instance on, from the {@code event} that failed. Save it with
+     * {@code quarantined}, the envelope {@link #onFailure} gives for that write, with
+     * {@code SagaStateStoreSkippedInputs.compareAndSaveSkipped(..., quarantineId, ...)}, in one write. The record is the
+     * first of the quarantine, so a release replays the input first, and the skip count of {@code quarantined} is the
+     * one after it.
+     *
+     * @throws IllegalStateException when {@code quarantined} is not quarantined by a failure that has a quarantine id
+     */
+    public static <S extends @Nullable Object> SkippedInput quarantiningInput(SagaEnvelope<S> quarantined, CloudEvent event) {
+        SagaFailure failure = quarantined.failure();
+        if (!quarantined.isQuarantined() || failure == null || quarantined.quarantineId() == null) {
+            throw new IllegalStateException("Saga instance '" + quarantined.sagaId() + "' is not quarantined by a failure, so it has no input it was quarantined on.");
+        }
+        return new SkippedInput(QUARANTINING_INPUT_SEQ, failure.input(), event);
     }
 
     /**
@@ -360,23 +393,11 @@ public final class SagaExecutionSupport {
         return withBookkeeping(current, current.status(), current.updatedAt(), current.failure(), current.streamMarks(), current.quarantineSkipCount());
     }
 
-    /** The {@link SkippedInput#seq()} a release records the input the instance was quarantined on under, before every skip. */
-    public static final long RELEASE_HEAD_SEQ = -1;
-
-    /**
-     * The record a release of {@code current} writes for the input the instance was quarantined on, at
-     * {@link #RELEASE_HEAD_SEQ}, so it is replayed first. The executor records it at the head in the write of
-     * {@link #startRelease}, with {@code SagaStateStoreSkippedInputs.compareAndSaveReleaseStarted}. The record an earlier
-     * release kept when it was quarantined again on this input would otherwise keep its place.
-     */
-    public static <S extends @Nullable Object> SkippedInput releaseHead(SagaEnvelope<S> current) {
-        return new SkippedInput(RELEASE_HEAD_SEQ, Objects.requireNonNull(current.failure(), "failure").input());
-    }
-
     /**
      * The quarantined instance {@code current} with a release started, or {@code null} when a release of it is running
-     * already, which the caller then goes on with. Save it together with the record of {@link #releaseHead}, with
-     * {@code SagaStateStoreSkippedInputs.compareAndSaveReleaseStarted(..., current.version(), ...)}.
+     * already, which the caller then goes on with. Save it with
+     * {@code SagaStateStore.compareAndSaveWithoutState(..., current.version())}. It writes no record, since the input
+     * the instance was quarantined on has the first record of the quarantine already.
      * <p>
      * The write sets {@link SagaFailure#releasedAt()} to {@code now}. It restarts the
      * quarantine budget of the input the instance was quarantined on at {@code now}, on the failure record and on that
@@ -420,10 +441,10 @@ public final class SagaExecutionSupport {
 
     /**
      * Apply {@code record}, the first record of a releasing instance, with the quarantined skip bypassed for that one
-     * input. {@code input} and {@code meta} are the event read back from the event store by the record's key, and
-     * {@code meta} carries that event's own stream id and stream version, whatever kind of key the record has. So the
-     * input is deduplicated by its stream marks like any other, and a record of an input the instance applied already
-     * is recognised.
+     * input. {@code input} and {@code meta} describe the event the record holds, so the input is deduplicated by its
+     * stream marks like any other, and a record of an input the instance applied already is recognised. An event
+     * without a stream id and stream version has no marks to be recognised by, and is applied as it would have been
+     * live.
      * <p>
      * It applies the input through the same steps as {@link #process}. The instance stays {@link SagaStatus#QUARANTINED}
      * and keeps its failure record, with {@link SagaFailure#releasedAt()}. The executor deletes the record in the write
@@ -433,8 +454,7 @@ public final class SagaExecutionSupport {
      * release ends, also one at or below the horizon of its type. With the configured window, an earlier record that
      * raised the mark of its type would put a later record of that type behind the window, and the release would skip it.
      * Every write that ends a release trims the marks to {@code reorderWindow}: the one that releases the instance, see
-     * {@link #withReleased}, an input that completes it, and a quarantine again, see {@link #onReleaseFailure},
-     * {@link #withMissingInputQuarantined} and {@link #withInputWithoutStreamKeyQuarantined}.
+     * {@link #withReleased}, an input that completes it, and a quarantine again, see {@link #onReleaseFailure}.
      * <p>
      * A record is written only while its input is new, and the write that applies a record's input is a compare-and-set
      * on the version the release read the instance at. So a record whose input the marks show as applied names an input
@@ -448,17 +468,13 @@ public final class SagaExecutionSupport {
      * skip outside a release too, comes back as an outcome that is not {@link Outcome#processed()} and has no envelope,
      * and the executor deletes the record in a write of {@link #oneVersionUp}.
      *
-     * @throws IllegalStateException when the instance is not releasing, or {@code meta} has no stream id and stream
-     *                               version
+     * @throws IllegalStateException when the instance is not releasing
      */
     public static <E, S extends @Nullable Object, C> Outcome<S, C> replay(Saga<E, S, C> saga, String sagaId, SagaEnvelope<S> current,
                                                                           SkippedInput record, SagaInput<E> input, EventMeta meta, Instant now,
                                                                           int reorderWindow) {
         if (!current.isReleasing()) {
             throw new IllegalStateException("Saga instance '" + sagaId + "' is not releasing, so it cannot replay '" + record.key() + "'.");
-        }
-        if (meta.redeliveryKey() == null) {
-            throw new IllegalStateException("Saga instance '" + sagaId + "' cannot replay '" + record.key() + "', because the event read back has no stream id and stream version.");
         }
         boolean hasStarted = current.started();
         @Nullable E startEvent = startEventOrNull(saga, hasStarted, input);
@@ -558,19 +574,18 @@ public final class SagaExecutionSupport {
      * that the instance stays {@link SagaStatus#QUARANTINED} and releasing. When the input's budget has run out, the
      * instance is quarantined on it again, with the same quarantine id. The input becomes the failure record's input,
      * {@link SagaFailure#releasedAt()} is cleared, and the record stays, so a later release replays the input first and
-     * then the records after it. When the record's key is a CloudEvent key, the failure record names the input by its
-     * stream key instead, and the later release replays the record after that input and only deletes it, since it is
-     * applied by then.
-     *
-     * @throws IllegalStateException when {@code meta} has no stream id and stream version, which a release never
-     *                               replays
+     * then the records after it.
+     * <p>
+     * {@code null} also when {@code meta} has no stream id and stream version, as for {@link #onFailure}. A failure on
+     * such an event does not quarantine the instance again, so the release stops and goes on with the event on its next
+     * poll.
      */
-    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseFailure(SagaEnvelope<S> current, String key, EventMeta meta,
+    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseFailure(SagaEnvelope<S> current, EventMeta meta,
                                                                                            Throwable failure, Instant now,
                                                                                            Duration quarantineAfter, int reorderWindow) {
         String input = meta.redeliveryKey();
         if (input == null) {
-            throw new IllegalStateException("Saga instance '" + current.sagaId() + "' failed on '" + key + "' during a release, but the event has no stream id and stream version, which a release never replays.");
+            return null;
         }
         SagaFailure existing = current.failure();
         if (!current.isReleasing() || existing == null) {
@@ -601,53 +616,6 @@ public final class SagaExecutionSupport {
                 current.version(), false);
     }
 
-    /**
-     * The releasing instance {@code current} quarantined again on the record {@code key}, because the event store no
-     * longer has that event. Save it with {@code compareAndSaveWithoutState(..., current.version())}. The record
-     * stays, and a later release moves it to the head.
-     * <p>
-     * No budget applies. The missing input becomes the failure record's input, by the key it was recorded under, which
-     * is a CloudEvent key for an input that arrived without a stream id and version. The quarantine id stays,
-     * {@link SagaFailure#releasedAt()} is cleared, and the records after it stay. Nothing is dropped, so a later release,
-     * once the event is back, replays it first. The record's {@code failureType} is {@link #MISSING_EVENT_FAILURE_TYPE}
-     * and its message names the key. When the missing input is the one the instance was quarantined on, the record keeps
-     * that input's position. A recorded input's record has no position, since the position is read from the event.
-     *
-     * @throws IllegalStateException when the instance is not releasing
-     */
-    public static <S extends @Nullable Object> SagaEnvelope<S> withMissingInputQuarantined(SagaEnvelope<S> current, String key, Instant now,
-                                                                                          int reorderWindow) {
-        return withUnreplayableInputQuarantined(current, key, now, MISSING_EVENT_FAILURE_TYPE, "The event '" + key + MISSING_INPUT_MESSAGE_END, reorderWindow);
-    }
-
-    /**
-     * The releasing instance {@code current} quarantined again on the record {@code key}, because the event the store
-     * gave back for it has no stream id and stream version, which only an {@code EventStoreQueries} other than
-     * Occurrent's own event stores can give. A release replays an input by its stream id and stream version only, since
-     * that is what tells an input it applied already from one it has not. Saved as {@link #withMissingInputQuarantined} is,
-     * with the record kept and no budget, and the failure record names the key with
-     * {@link #EVENT_WITHOUT_STREAM_KEY_FAILURE_TYPE} as its {@code failureType}.
-     *
-     * @throws IllegalStateException when the instance is not releasing
-     */
-    public static <S extends @Nullable Object> SagaEnvelope<S> withInputWithoutStreamKeyQuarantined(SagaEnvelope<S> current, String key, Instant now,
-                                                                                                    int reorderWindow) {
-        return withUnreplayableInputQuarantined(current, key, now, EVENT_WITHOUT_STREAM_KEY_FAILURE_TYPE,
-                "The event '" + key + "' has no stream id and stream version, so the release could not replay it", reorderWindow);
-    }
-
-    private static <S extends @Nullable Object> SagaEnvelope<S> withUnreplayableInputQuarantined(SagaEnvelope<S> current, String key, Instant now,
-                                                                                                String failureType, String failureMessage,
-                                                                                                int reorderWindow) {
-        SagaFailure releasing = current.failure();
-        if (!current.isReleasing() || releasing == null) {
-            throw new IllegalStateException("Saga instance '" + current.sagaId() + "' is not releasing, so it cannot be quarantined again on '" + key + "'.");
-        }
-        Long position = key.equals(releasing.input()) ? releasing.position() : null;
-        SagaFailure record = new SagaFailure(key, position, now, failureType, failureMessage, null, releasing.quarantineId());
-        return requarantined(current, now, record, current.streamMarks(), reorderWindow);
-    }
-
     // Quarantined again during a release, under the same quarantine id. The skip count stays, since the records after
     // the failing one stay. SagaCodec refuses to read a releasing instance without one, so 0 is only ever taken for
     // an envelope built in code. The marks are trimmed to the window, as the write that releases the instance trims
@@ -659,25 +627,8 @@ public final class SagaExecutionSupport {
         return withBookkeeping(current, SagaStatus.QUARANTINED, now, record, withinWindow(streamMarks, reorderWindow), count == null ? 0L : count);
     }
 
-    /** The {@link SagaFailure#failureType()} of an instance quarantined again because an event it replays is missing from the store. */
-    public static final String MISSING_EVENT_FAILURE_TYPE = "EventMissingFromStore";
-
-    /**
-     * The {@link SagaFailure#failureType()} of an instance quarantined again because an event it replays has no stream id
-     * and stream version.
-     */
-    public static final String EVENT_WITHOUT_STREAM_KEY_FAILURE_TYPE = "EventWithoutStreamKey";
-
     // No reorder window, so the marks forget no version however far apart two versions are, see replay(..)
     private static final OptionalInt NO_REORDER_WINDOW = OptionalInt.empty();
-
-    private static final String MISSING_INPUT_MESSAGE_END = "' is missing from the event store, so the release could not replay it";
-
-    /** Whether {@code failure} is the record {@link #withMissingInputQuarantined} writes. */
-    public static boolean namesAMissingInput(@Nullable SagaFailure failure) {
-        return failure != null && MISSING_EVENT_FAILURE_TYPE.equals(failure.failureType())
-               && ("The event '" + failure.input() + MISSING_INPUT_MESSAGE_END).equals(failure.failureMessage());
-    }
 
     // The instance one version up with its status, failure record and quarantine bookkeeping replaced. The state,
     // timers and watermarks stay as they are, and the position watermark is dropped, as everywhere else.
@@ -874,7 +825,7 @@ public final class SagaExecutionSupport {
             boolean quarantining = status == SagaStatus.QUARANTINED;
             SagaEnvelope<S> inserted = new SagaEnvelope<>(sagaId, saga.initialState(), status, 1, List.of(), Map.of(),
                     null, now, now, null, null, false, quarantining ? withNewQuarantineId(record) : record,
-                    withPending(Map.of(), Map.of(), meta, reorderWindow, now), quarantining ? 0L : null);
+                    withPending(Map.of(), Map.of(), meta, reorderWindow, now), quarantining ? 1L : null);
             return new FailureRecord<>(inserted, 0, quarantined);
         }
         return new FailureRecord<>(withFailure(current, record, status, now, meta, replaced, reorderWindow), current.version(), quarantined);
@@ -884,7 +835,8 @@ public final class SagaExecutionSupport {
     // was not handled, and a quarantined instance's timers stop because the store's due-timer query asks for ACTIVE ones.
     // The stream marks gain the failed version as pending and nothing else. The position watermark is dropped, as in
     // process, since nothing reads it. The write that quarantines the instance gives it a new quarantine id and a skip
-    // count of 0. The id is what tells it apart from an instance quarantined by 0.34.0
+    // count of 1, since the input it quarantines on takes seq 0, see quarantiningInput. The id is what tells it apart
+    // from an instance quarantined by 0.34.0
     private static <S extends @Nullable Object> SagaEnvelope<S> withFailure(SagaEnvelope<S> current, @Nullable SagaFailure record,
                                                                            SagaStatus status, Instant now,
                                                                            EventMeta meta, @Nullable SagaFailure replaced, int reorderWindow) {
@@ -894,7 +846,7 @@ public final class SagaExecutionSupport {
                 current.currentStep(), current.started(), quarantining && record != null ? withNewQuarantineId(record) : record,
                 withPending(withReplacedFailure(current.streamMarks(), current.streamWatermarks(), replaced, meta),
                         current.streamWatermarks(), meta, reorderWindow, failingSince(current, meta, now)),
-                quarantining ? Long.valueOf(0L) : current.quarantineSkipCount());
+                quarantining ? Long.valueOf(1L) : current.quarantineSkipCount());
     }
 
     // An instance that goes from active to quarantined starts a quarantine of its own, which the inputs it skips are

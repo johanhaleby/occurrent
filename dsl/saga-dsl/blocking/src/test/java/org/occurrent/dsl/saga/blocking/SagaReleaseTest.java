@@ -40,10 +40,7 @@ import org.occurrent.dsl.saga.*;
 import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
 import org.occurrent.dsl.saga.blocking.SagaSubscription.ReleaseResult;
 import org.occurrent.dsl.saga.internal.SkippedInputKey;
-import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
-import org.occurrent.filter.Filter;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.slf4j.LoggerFactory;
 
@@ -64,7 +61,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -152,7 +148,6 @@ class SagaReleaseTest {
     private final Instant start = Instant.parse("2026-01-01T00:00:00Z");
     private final AtomicReference<Instant> now = new AtomicReference<>(start);
     private final InMemoryEventStore eventStore = new InMemoryEventStore();
-    private final EventStoreReads queries = new EventStoreReads(eventStore);
     private final CloudEventConverter<OrderEvent> converter = new JacksonCloudEventConverter.Builder<OrderEvent>(new ObjectMapper(), URI.create("urn:orders"))
             .idMapper(OrderEvent::eventId).build();
     private final InterceptingStore store = new InterceptingStore();
@@ -161,7 +156,7 @@ class SagaReleaseTest {
     private SagaExecution<OrderEvent, Order, OrderCommand> execution = execution(CONFIG);
 
     private SagaExecution<OrderEvent, Order, OrderCommand> execution(SagaRunnerConfig config) {
-        return new SagaExecution<>("orders", saga(), store, dispatched::add, converter, config, event -> true, now::get, queries);
+        return new SagaExecution<>("orders", saga(), store, dispatched::add, converter, config, now::get);
     }
 
     private CloudEvent append(OrderEvent event) {
@@ -288,7 +283,7 @@ class SagaReleaseTest {
     class WhenEveryInputCanBeApplied {
 
         @Test
-        void the_quarantined_instance_records_each_skipped_input_by_its_key_and_moves_no_watermark() {
+        void the_quarantined_instance_records_the_input_it_was_quarantined_on_and_each_skipped_input_by_its_key_and_moves_no_watermark() {
             deliver(placed());
             failing.add("poison");
             CloudEvent k = added("poison");
@@ -305,7 +300,7 @@ class SagaReleaseTest {
             catchThrowable(() -> deliver(k));
 
             assertAll(
-                    () -> assertThat(recordedKeys()).containsExactly(cloudEventKey(a), streamKey(b)),
+                    () -> assertThat(recordedKeys()).containsExactly(streamKey(k), cloudEventKey(a), streamKey(b)),
                     () -> assertThat(instance().streamWatermarks().get(ORDER)).isEqualTo(watermarkWhenQuarantined),
                     () -> assertThat(instance().failure().input()).isEqualTo(streamKey(k))
             );
@@ -332,12 +327,13 @@ class SagaReleaseTest {
         }
 
         @Test
-        void an_instance_quarantined_on_its_start_event_records_what_it_skips_and_starts_when_it_is_released() {
+        void an_instance_quarantined_on_its_start_event_records_it_and_what_it_skips_and_starts_when_it_is_released() {
             failing.add("placed");
-            quarantineOn(placed());
+            CloudEvent start = placed();
+            quarantineOn(start);
             CloudEvent a = added("a");
             deliver(a);
-            assertThat(recordedKeys()).containsExactly(streamKey(a));
+            assertThat(recordedKeys()).containsExactly(streamKey(start), streamKey(a));
             failing.clear();
 
             ReleaseResult result = execution.release(ORDER);
@@ -517,86 +513,19 @@ class SagaReleaseTest {
     }
 
     @Nested
-    class WhenAnEventToReplayIsMissingFromTheStore {
+    class WhenTheRecordsToReplayCannotBeRead {
 
         @Test
-        void the_input_it_was_quarantined_on_quarantines_it_again_at_once_keeping_its_position_and_every_record() {
-            Quarantined quarantined = quarantinedOnPoisonWithTwoSkipped();
-            Long position = instance().failure().position();
-            queries.hide(quarantined.k());
-            failing.clear();
-            Instant releasedAt = start.plus(Duration.ofHours(1));
-            now.set(releasedAt);
-
-            ReleaseResult result = execution.release(ORDER);
-
-            SagaEnvelope<Order> requarantined = instance();
-            assertAll(
-                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_EVENT_MISSING),
-                    () -> assertThat(position).isNotNull(),
-                    () -> assertThat(requarantined.status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(requarantined.isReleasing()).isFalse(),
-                    () -> assertThat(requarantined.failure().input()).isEqualTo(streamKey(quarantined.k())),
-                    () -> assertThat(requarantined.failure().position()).isEqualTo(position),
-                    () -> assertThat(requarantined.failure().failureType()).isEqualTo("EventMissingFromStore"),
-                    () -> assertThat(requarantined.failure().failureMessage()).contains(streamKey(quarantined.k())),
-                    () -> assertThat(requarantined.failure().firstFailedAt()).isEqualTo(releasedAt),
-                    () -> assertThat(recordedKeys()).containsExactly(streamKey(quarantined.k()), cloudEventKey(quarantined.a()), streamKey(quarantined.b())),
-                    () -> assertThat(requarantined.state().items()).isEmpty(),
-                    () -> assertThat(packed()).isEmpty()
-            );
-        }
-
-        @Test
-        void a_recorded_input_quarantines_it_again_at_once_with_no_position_and_keeps_its_record() {
-            Quarantined quarantined = quarantinedOnPoisonWithTwoSkipped();
-            queries.hide(quarantined.a());
-            failing.clear();
-
-            ReleaseResult result = execution.release(ORDER);
-
-            SagaEnvelope<Order> requarantined = instance();
-            assertAll(
-                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_EVENT_MISSING),
-                    () -> assertThat(requarantined.status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(requarantined.failure().releasedAt()).isNull(),
-                    () -> assertThat(requarantined.failure().input()).isEqualTo(cloudEventKey(quarantined.a())),
-                    () -> assertThat(requarantined.failure().position()).isNull(),
-                    () -> assertThat(requarantined.failure().failureType()).isEqualTo("EventMissingFromStore"),
-                    () -> assertThat(requarantined.failure().failureMessage()).contains(cloudEventKey(quarantined.a())),
-                    () -> assertThat(recordedKeys()).containsExactly(cloudEventKey(quarantined.a()), streamKey(quarantined.b())),
-                    () -> assertThat(requarantined.state().items()).containsExactly("poison")
-            );
-        }
-
-        @Test
-        void a_later_release_completes_once_the_event_is_back() {
-            Quarantined quarantined = quarantinedOnPoisonWithTwoSkipped();
-            queries.hide(quarantined.a());
-            failing.clear();
-            assertThat(execution.release(ORDER)).isEqualTo(ReleaseResult.QUARANTINED_EVENT_MISSING);
-            queries.restore(quarantined.a());
-
-            ReleaseResult result = execution.release(ORDER);
-
-            assertAll(
-                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
-                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
-                    () -> assertThat(items()).containsExactly("poison", "a", "b")
-            );
-        }
-
-        @Test
-        void a_read_that_throws_makes_the_release_throw_and_leaves_the_instance_releasing_for_the_poller() {
+        void a_read_of_the_records_that_throws_makes_the_release_throw_and_leaves_the_instance_releasing_for_the_poller() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoSkipped();
             failing.clear();
-            IllegalStateException storeDown = new IllegalStateException("event store is down");
-            queries.failReadsWith(storeDown);
+            IllegalStateException storeDown = new IllegalStateException("state store is down");
+            store.findSkippedInputsFailure = storeDown;
 
             Throwable thrown = catchThrowable(() -> execution.release(ORDER));
             SagaEnvelope<Order> afterTheFailedRead = instance();
             List<String> recordsAfterTheFailedRead = recordedKeys();
-            queries.failReadsWith(null);
+            store.findSkippedInputsFailure = null;
             pollAfterTheInterval();
 
             assertAll(
@@ -626,25 +555,6 @@ class SagaReleaseTest {
                             .hasMessageContaining("SagaStateStore.delete(\"" + ORDER + "\")")
                             .hasMessageNotContaining("restart"),
                     () -> assertThat(instance().isReleasing()).isFalse()
-            );
-        }
-
-        @Test
-        void a_runner_without_event_store_queries_is_refused_naming_how_to_give_it_one() {
-            SagaExecution<OrderEvent, Order, OrderCommand> withoutQueries = new SagaExecution<>("orders", saga(), store, dispatched::add, converter,
-                    CONFIG, event -> true, now::get);
-            execution = withoutQueries;
-            quarantinedOnPoisonWithTwoSkipped();
-            failing.clear();
-
-            Throwable thrown = catchThrowable(() -> withoutQueries.release(ORDER));
-
-            assertAll(
-                    () -> assertThat(thrown).isInstanceOf(IllegalStateException.class)
-                            .hasMessageContaining("EventStoreQueries")
-                            .hasMessageContaining("SagaRunner.eventStoreQueries(..)"),
-                    () -> assertThat(instance().isReleasing()).isFalse(),
-                    () -> assertThat(recordedKeys()).hasSize(2)
             );
         }
     }
@@ -1098,16 +1008,6 @@ class SagaReleaseTest {
             return execution.release(ORDER);
         }
 
-        private ReleaseResult quarantinedAgainOnI5Missing() {
-            queries.hide(event("i5"));
-            return execution.release(ORDER);
-        }
-
-        private ReleaseResult quarantinedAgainOnI5WithoutAStreamKey() {
-            queries.stripStreamKeyFrom(event("i5"));
-            return execution.release(ORDER);
-        }
-
         private void assertRecordsLeftBehindTheWindow() {
             assertAll(
                     () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
@@ -1168,32 +1068,6 @@ class SagaReleaseTest {
         }
 
         @Test
-        void leaves_the_marks_within_the_window_when_the_event_of_a_record_is_missing() {
-            quarantinedOnPoisonThenSkippingHighVersionsFirst();
-
-            ReleaseResult result = quarantinedAgainOnI5Missing();
-
-            assertAll(
-                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_EVENT_MISSING),
-                    () -> assertThat(beyondTheWindowDuringTheRelease()).as("the type marks beyond the window during the release").isNotEmpty(),
-                    () -> assertThat(beyondTheWindow(instance())).as("the type marks beyond the window").isEmpty()
-            );
-        }
-
-        @Test
-        void leaves_the_marks_within_the_window_when_the_event_of_a_record_is_read_back_without_a_stream_key() {
-            quarantinedOnPoisonThenSkippingHighVersionsFirst();
-
-            ReleaseResult result = quarantinedAgainOnI5WithoutAStreamKey();
-
-            assertAll(
-                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
-                    () -> assertThat(beyondTheWindowDuringTheRelease()).as("the type marks beyond the window during the release").isNotEmpty(),
-                    () -> assertThat(beyondTheWindow(instance())).as("the type marks beyond the window").isEmpty()
-            );
-        }
-
-        @Test
         void applies_each_record_left_behind_the_window_once_in_the_next_release_after_the_budget_of_a_record_ran_out() {
             quarantinedOnPoisonThenSkippingHighVersionsFirst();
             quarantinedAgainOnTheBudgetOfI5();
@@ -1206,35 +1080,11 @@ class SagaReleaseTest {
         }
 
         @Test
-        void applies_each_record_left_behind_the_window_once_in_the_next_release_after_the_event_of_a_record_was_missing() {
-            quarantinedOnPoisonThenSkippingHighVersionsFirst();
-            quarantinedAgainOnI5Missing();
-            assertRecordsLeftBehindTheWindow();
-            queries.restore(event("i5"));
-
-            ReleaseResult result = execution.release(ORDER);
-
-            assertEveryItemIsAppliedOnceAndTheInstanceIsReleasedWithinTheWindow(result);
-        }
-
-        @Test
-        void applies_each_record_left_behind_the_window_once_in_the_next_release_after_the_event_of_a_record_had_no_stream_key() {
-            quarantinedOnPoisonThenSkippingHighVersionsFirst();
-            quarantinedAgainOnI5WithoutAStreamKey();
-            assertRecordsLeftBehindTheWindow();
-            queries.keepStreamKeyOf(event("i5"));
-
-            ReleaseResult result = execution.release(ORDER);
-
-            assertEveryItemIsAppliedOnceAndTheInstanceIsReleasedWithinTheWindow(result);
-        }
-
-        @Test
         void quarantines_the_instance_again_on_a_record_behind_the_window_that_keeps_failing_once_its_budget_is_used_up() {
             quarantinedOnPoisonThenSkippingHighVersionsFirst();
-            quarantinedAgainOnI5Missing();
+            quarantinedAgainOnTheBudgetOfI5();
             assertRecordsLeftBehindTheWindow();
-            queries.restore(event("i5"));
+            failing.remove("i5");
             failing.add("i3");
 
             ReleaseResult first = execution.release(ORDER);
@@ -1256,9 +1106,9 @@ class SagaReleaseTest {
         @Test
         void applies_a_record_behind_the_window_once_when_the_release_crashes_before_the_write_that_applies_it() {
             quarantinedOnPoisonThenSkippingHighVersionsFirst();
-            quarantinedAgainOnI5Missing();
+            quarantinedAgainOnTheBudgetOfI5();
             assertRecordsLeftBehindTheWindow();
-            queries.restore(event("i5"));
+            failing.remove("i5");
             store.beforeNextDeleteOfARecord(() -> store.beforeNextDeleteOfARecord(() -> {
                 throw new OutOfMemoryError("crash before the write that applies i3");
             }));
@@ -1313,14 +1163,12 @@ class SagaReleaseTest {
             now.set(start.plus(Duration.ofHours(1)));
             SagaExecution<OrderEvent, Order, OrderCommand> otherNode = execution(CONFIG);
             AtomicInteger deletesWhenOtherCallEnded = new AtomicInteger();
-            AtomicInteger readsWhenOtherCallEnded = new AtomicInteger();
             store.afterNextNonEmptyRead(() -> {
                 failing.add("a");
                 assertThat(otherNode.release(ORDER)).isEqualTo(ReleaseResult.STILL_RELEASING);
                 now.set(now.get().plus(BUDGET));
                 assertThat(otherNode.release(ORDER)).isEqualTo(ReleaseResult.QUARANTINED_AGAIN);
                 deletesWhenOtherCallEnded.set(store.deletedRecords.size());
-                readsWhenOtherCallEnded.set(queries.reads.get());
             });
             AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
 
@@ -1332,8 +1180,6 @@ class SagaReleaseTest {
                     () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
                     () -> assertThat(store.deletedRecords.subList(deletesWhenOtherCallEnded.get(), store.deletedRecords.size()))
                             .as("the records the release deleted after the other call quarantined the instance again").isEmpty(),
-                    () -> assertThat(queries.reads.get() - readsWhenOtherCallEnded.get())
-                            .as("the reads of the event store after the other call quarantined the instance again").isZero(),
                     () -> assertThat(items()).containsExactly("poison"),
                     () -> assertThat(recordedKeysOf(quarantineId)).containsExactly(streamKey(quarantined.a()), streamKey(quarantined.b()))
             );
@@ -1346,11 +1192,9 @@ class SagaReleaseTest {
             now.set(start.plus(Duration.ofHours(1)));
             SagaExecution<OrderEvent, Order, OrderCommand> otherNode = execution(CONFIG);
             AtomicInteger deletesWhenOtherCallEnded = new AtomicInteger();
-            AtomicInteger readsWhenOtherCallEnded = new AtomicInteger();
             store.afterNextNonEmptyRead(() -> {
                 assertThat(otherNode.release(ORDER)).isEqualTo(ReleaseResult.RELEASED);
                 deletesWhenOtherCallEnded.set(store.deletedRecords.size());
-                readsWhenOtherCallEnded.set(queries.reads.get());
             });
             AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
 
@@ -1361,8 +1205,6 @@ class SagaReleaseTest {
                     () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(store.deletedRecords.subList(deletesWhenOtherCallEnded.get(), store.deletedRecords.size()))
                             .as("the records the release deleted after the other call released the instance").isEmpty(),
-                    () -> assertThat(queries.reads.get() - readsWhenOtherCallEnded.get())
-                            .as("the reads of the event store after the other call released the instance").isZero(),
                     () -> assertThat(items()).containsExactly("poison", "a", "b"),
                     () -> assertThat(packed()).containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b"))
             );
@@ -1555,22 +1397,24 @@ class SagaReleaseTest {
         }
 
         @Test
-        void a_release_that_finds_the_instance_quarantined_again_on_a_missing_event_by_another_call_returns_that_result() {
-            Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
+        void a_release_that_finds_the_instance_quarantined_again_by_another_call_returns_that_result() {
+            quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             failing.clear();
             now.set(start.plus(Duration.ofHours(1)));
             SagaExecution<OrderEvent, Order, OrderCommand> otherNode = execution(CONFIG);
             AtomicReference<@Nullable ReleaseResult> otherResult = new AtomicReference<>();
             store.afterNextWriteWithoutState(() -> {
-                queries.hide(quarantined.k());
+                failing.add("poison");
+                assertThat(otherNode.release(ORDER)).isEqualTo(ReleaseResult.STILL_RELEASING);
+                now.set(now.get().plus(BUDGET));
                 otherResult.set(otherNode.release(ORDER));
             });
 
             ReleaseResult result = execution.release(ORDER);
 
             assertAll(
-                    () -> assertThat(otherResult).hasValue(ReleaseResult.QUARANTINED_EVENT_MISSING),
-                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_EVENT_MISSING),
+                    () -> assertThat(otherResult).hasValue(ReleaseResult.QUARANTINED_AGAIN),
+                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
                     () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
                     () -> assertThat(instance().isReleasing()).isFalse()
             );
@@ -1693,9 +1537,8 @@ class SagaReleaseTest {
         }
     }
 
-    // A release that quarantines the instance again leaves the record it replayed, and the next release moves it to
-    // the head. Were it to delete the record after its write, a second release that started in between and wrote
-    // the same input again as its head would lose it. The hook stands for that delete, so it only runs when the
+    // A release that quarantines the instance again keeps the record it replayed. Were it to delete the record after
+    // its write, a second release that started in between would lose it. The hook stands for that delete, so it only runs when the
     // release deletes after the write that quarantined the instance again, and the tests pass without it running
     private void onADeleteOnceQuarantinedAgain(java.util.function.Predicate<SagaEnvelope<Order>> quarantinedAgain, Runnable secondRelease) {
         store.beforeNextDeleteOfARecord(new Runnable() {
@@ -1715,13 +1558,10 @@ class SagaReleaseTest {
     }
 
     // A hook still armed from the first release is disarmed, so the next release does not run it at its first delete
-    private void assertEveryInputIsAppliedByTheNextRelease(SagaExecution<OrderEvent, Order, OrderCommand> node, ReleaseResult firstResult, ReleaseResult expectedFirst, CloudEvent... hidden) {
+    private void assertEveryInputIsAppliedByTheNextRelease(SagaExecution<OrderEvent, Order, OrderCommand> node, ReleaseResult firstResult, ReleaseResult expectedFirst) {
         store.beforeNextDeleteOfARecord(() -> {
         });
         failing.clear();
-        for (CloudEvent event : hidden) {
-            queries.restore(event);
-        }
         String quarantineId = instance().quarantineId();
         ReleaseResult last = node.release(ORDER);
         assertAll(
@@ -1734,7 +1574,7 @@ class SagaReleaseTest {
     }
 
     @Nested
-    class WhenARecordAfterTheHeadIsLeftByTheReleaseThatQuarantinedTheInstanceAgain {
+    class WhenARecordIsLeftByTheReleaseThatQuarantinedTheInstanceAgain {
 
         @Test
         void an_input_that_failed_again_is_applied_by_the_release_that_goes_active() {
@@ -1753,49 +1593,33 @@ class SagaReleaseTest {
             assertEveryInputIsAppliedByTheNextRelease(secondNode, firstResult, ReleaseResult.QUARANTINED_AGAIN);
         }
 
-        @Test
-        void an_input_missing_from_the_store_is_applied_by_the_release_that_goes_active() {
-            Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
-            failing.clear();
-            queries.hide(quarantined.a());
-            SagaExecution<OrderEvent, Order, OrderCommand> secondNode = execution(CONFIG);
-            onADeleteOnceQuarantinedAgain(quarantinedAgainOn(streamKey(quarantined.a())), () -> {
-                queries.restore(quarantined.a());
-                failing.add("a");
-                secondNode.release(ORDER);
-            });
-
-            ReleaseResult firstResult = execution.release(ORDER);
-
-            assertEveryInputIsAppliedByTheNextRelease(secondNode, firstResult, ReleaseResult.QUARANTINED_EVENT_MISSING, quarantined.a());
-        }
-
         /**
-         * The record is under a CloudEvent key and the failure names the stream key the event was read back with, so the
-         * two do not match by key. The next release applies the input from the failure, and the record left under the
-         * other key is only deleted, which is the second apply that would show an input applied twice.
+         * With no stream key there is no redelivery key to name the failure by, so a quarantine on it cannot be recorded,
+         * as for the same event arriving live.
          */
         @Test
-        void an_input_skipped_under_a_cloud_event_key_that_failed_again_is_applied_once_and_its_leftover_record_deleted() {
+        void an_input_held_without_a_stream_key_that_keeps_failing_leaves_the_instance_releasing_and_is_applied_once_it_stops() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoSkipped();
             Instant releasedAt = start.plus(Duration.ofHours(1));
             now.set(releasedAt);
             failing.clear();
             failing.add("a");
-            assertThat(execution.release(ORDER)).isEqualTo(ReleaseResult.STILL_RELEASING);
+            ReleaseResult beforeTheBudget = execution.release(ORDER);
             now.set(releasedAt.plus(BUDGET));
-            ReleaseResult firstResult = execution.release(ORDER);
-            SagaEnvelope<Order> requarantined = instance();
-            List<String> leftOver = recordedKeys();
-            String quarantineId = requarantined.quarantineId();
+            ReleaseResult pastTheBudget = execution.release(ORDER);
+            SagaEnvelope<Order> stillReleasing = instance();
+            List<String> recordsLeft = recordedKeys();
+            String quarantineId = stillReleasing.quarantineId();
             failing.clear();
 
             ReleaseResult last = execution.release(ORDER);
 
             assertAll(
-                    () -> assertThat(firstResult).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
-                    () -> assertThat(requarantined.failure().input()).isEqualTo(streamKey(quarantined.a())),
-                    () -> assertThat(leftOver).contains(cloudEventKey(quarantined.a())),
+                    () -> assertThat(beforeTheBudget).isEqualTo(ReleaseResult.STILL_RELEASING),
+                    () -> assertThat(pastTheBudget).isEqualTo(ReleaseResult.STILL_RELEASING),
+                    () -> assertThat(stillReleasing.isReleasing()).isTrue(),
+                    () -> assertThat(stillReleasing.failure().input()).isEqualTo(streamKey(quarantined.k())),
+                    () -> assertThat(recordsLeft).containsExactly(cloudEventKey(quarantined.a()), streamKey(quarantined.b())),
                     () -> assertThat(last).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(items()).containsExactly("poison", "a", "b"),
@@ -1805,7 +1629,7 @@ class SagaReleaseTest {
     }
 
     @Nested
-    class WhenTheHeadRecordIsLeftByTheReleaseThatQuarantinedTheInstanceAgain {
+    class WhenTheRecordOfTheQuarantiningInputIsLeftByTheReleaseThatQuarantinedTheInstanceAgain {
 
         @Test
         void the_input_the_instance_was_quarantined_on_that_failed_again_is_applied_by_the_release_that_goes_active() {
@@ -1820,23 +1644,6 @@ class SagaReleaseTest {
             ReleaseResult firstResult = execution.release(ORDER);
 
             assertEveryInputIsAppliedByTheNextRelease(secondNode, firstResult, ReleaseResult.QUARANTINED_AGAIN);
-        }
-
-        @Test
-        void the_input_the_instance_was_quarantined_on_that_is_missing_from_the_store_is_applied_by_the_release_that_goes_active() {
-            Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
-            queries.hide(quarantined.k());
-            SagaExecution<OrderEvent, Order, OrderCommand> secondNode = execution(CONFIG);
-            // Not asked of the instance quarantined on it, which is what the release starts from
-            onADeleteOnceQuarantinedAgain(envelope -> !envelope.isReleasing() && "EventMissingFromStore".equals(envelope.failure().failureType()), () -> {
-                queries.restore(quarantined.k());
-                failing.add("poison");
-                secondNode.release(ORDER);
-            });
-
-            ReleaseResult firstResult = execution.release(ORDER);
-
-            assertEveryInputIsAppliedByTheNextRelease(secondNode, firstResult, ReleaseResult.QUARANTINED_EVENT_MISSING, quarantined.k());
         }
     }
 
@@ -2041,9 +1848,9 @@ class SagaReleaseTest {
             deliver(c);
 
             assertAll(
-                    () -> assertThat(records()).extracting(SkippedInput::key).containsExactly(streamKey(quarantined.a()), streamKey(quarantined.b()), streamKey(c)),
+                    () -> assertThat(records()).extracting(SkippedInput::key).containsExactly(streamKey(quarantined.k()), streamKey(quarantined.a()), streamKey(quarantined.b()), streamKey(c)),
                     () -> assertThat(records()).extracting(SkippedInput::seq).doesNotHaveDuplicates().isSorted(),
-                    () -> assertThat(instance().quarantineSkipCount()).isEqualTo(3L)
+                    () -> assertThat(instance().quarantineSkipCount()).isEqualTo(4L)
             );
         }
 
@@ -2051,7 +1858,8 @@ class SagaReleaseTest {
         void a_skip_whose_record_was_never_written_leaves_a_gap_and_the_inputs_still_replay_in_the_order_they_arrived_across_streams() {
             deliver(placed());
             failing.add("poison");
-            quarantineOn(added("poison"));
+            CloudEvent k = added("poison");
+            quarantineOn(k);
             CloudEvent x = appendOn("o1-other", new ItemAdded(nextEventId(), ORDER, "x"));
             store.beforeNextRecord(() -> {
                 throw new IllegalStateException("crash after the count and before the record");
@@ -2067,7 +1875,7 @@ class SagaReleaseTest {
             failing.clear();
             ReleaseResult result = execution.release(ORDER);
             assertAll(
-                    () -> assertThat(records).extracting(SkippedInput::key).containsExactly(streamKey(y), streamKey(x)),
+                    () -> assertThat(records).extracting(SkippedInput::key).containsExactly(streamKey(k), streamKey(y), streamKey(x)),
                     () -> assertThat(records).extracting(SkippedInput::seq).doesNotHaveDuplicates().isSorted(),
                     () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(items()).containsExactly("poison", "y", "x")
@@ -2078,7 +1886,8 @@ class SagaReleaseTest {
         void a_skip_whose_record_was_written_but_not_finished_keeps_its_place_when_it_is_offered_again_after_a_later_input() {
             deliver(placed());
             failing.add("poison");
-            quarantineOn(added("poison"));
+            CloudEvent k = added("poison");
+            quarantineOn(k);
             CloudEvent x = appendOn("o1-other", new ItemAdded(nextEventId(), ORDER, "x"));
             store.afterNextRecord(() -> {
                 throw new IllegalStateException("crash after the record and before the version");
@@ -2086,7 +1895,7 @@ class SagaReleaseTest {
             assertThatThrownBy(() -> deliver(x)).hasMessage("crash after the record and before the version");
             CloudEvent y = added("y");
             deliver(y);
-            SkippedInput recordedFirst = records().getFirst();
+            SkippedInput recordedFirst = records().get(1);
 
             deliver(x);
 
@@ -2095,8 +1904,8 @@ class SagaReleaseTest {
             ReleaseResult result = execution.release(ORDER);
             assertAll(
                     () -> assertThat(recordedFirst.key()).isEqualTo(streamKey(x)),
-                    () -> assertThat(records).extracting(SkippedInput::key).containsExactly(streamKey(x), streamKey(y)),
-                    () -> assertThat(records.getFirst()).isEqualTo(recordedFirst),
+                    () -> assertThat(records).extracting(SkippedInput::key).containsExactly(streamKey(k), streamKey(x), streamKey(y)),
+                    () -> assertThat(records.get(1)).isEqualTo(recordedFirst),
                     () -> assertThat(records).extracting(SkippedInput::seq).doesNotHaveDuplicates().isSorted(),
                     () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(items()).containsExactly("poison", "x", "y")
@@ -2107,7 +1916,8 @@ class SagaReleaseTest {
         void a_skip_whose_last_write_loses_to_another_skip_keeps_its_record_and_its_place() {
             deliver(placed());
             failing.add("poison");
-            quarantineOn(added("poison"));
+            CloudEvent k = added("poison");
+            quarantineOn(k);
             CloudEvent x = appendOn("o1-other", new ItemAdded(nextEventId(), ORDER, "x"));
             CloudEvent y = added("y");
             // y is skipped in full between x's record and x's last write, so x's last write loses while the instance stays quarantined
@@ -2119,7 +1929,7 @@ class SagaReleaseTest {
             failing.clear();
             ReleaseResult result = execution.release(ORDER);
             assertAll(
-                    () -> assertThat(records).extracting(SkippedInput::key).containsExactly(streamKey(x), streamKey(y)),
+                    () -> assertThat(records).extracting(SkippedInput::key).containsExactly(streamKey(k), streamKey(x), streamKey(y)),
                     () -> assertThat(records).extracting(SkippedInput::seq).doesNotHaveDuplicates().isSorted(),
                     () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(items()).containsExactly("poison", "x", "y")
@@ -2146,7 +1956,7 @@ class SagaReleaseTest {
         void a_record_left_under_an_earlier_quarantine_id_is_never_replayed() {
             quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             CloudEvent ghost = added("ghost");
-            recordUnder(ORDER, "earlier", new SkippedInput(0, streamKey(ghost)));
+            recordUnder(ORDER, "earlier", new SkippedInput(0, streamKey(ghost), ghost));
             failing.clear();
 
             ReleaseResult result = execution.release(ORDER);
@@ -2162,14 +1972,14 @@ class SagaReleaseTest {
     class TheQuarantiningWrite {
 
         @Test
-        void sets_the_skip_count_to_0_and_a_quarantine_id_when_an_active_instance_is_quarantined() {
+        void sets_the_skip_count_to_1_and_a_quarantine_id_when_an_active_instance_is_quarantined() {
             deliver(placed());
             failing.add("poison");
 
             quarantineOn(added("poison"));
 
             assertAll(
-                    () -> assertThat(instance().quarantineSkipCount()).isZero(),
+                    () -> assertThat(instance().quarantineSkipCount()).isEqualTo(1L),
                     () -> assertThat(instance().quarantineId()).isNotBlank()
             );
         }
@@ -2235,23 +2045,6 @@ class SagaReleaseTest {
         }
 
         @Test
-        void keeps_the_quarantine_id_and_the_skip_count_when_the_event_it_replays_is_missing() {
-            Quarantined quarantined = quarantinedOnPoisonWithTwoSkipped();
-            String quarantineId = instance().quarantineId();
-            Long skipCount = instance().quarantineSkipCount();
-            queries.hide(quarantined.k());
-            failing.clear();
-
-            ReleaseResult result = execution.release(ORDER);
-
-            assertAll(
-                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_EVENT_MISSING),
-                    () -> assertThat(instance().quarantineId()).isEqualTo(quarantineId),
-                    () -> assertThat(instance().quarantineSkipCount()).isEqualTo(skipCount)
-            );
-        }
-
-        @Test
         void is_released_by_a_second_release_that_applies_the_input_it_was_quarantined_on_and_then_the_records() {
             quarantinedOnPoisonWithTwoSkipped();
             Instant releasedAt = start.plus(Duration.ofHours(1));
@@ -2276,18 +2069,17 @@ class SagaReleaseTest {
     class TheInputTheInstanceWasQuarantinedOn {
 
         @Test
-        void is_recorded_in_the_write_that_starts_the_release_at_a_number_below_every_other_and_replaces_a_record_of_its_key() {
+        void is_recorded_with_its_event_in_the_write_that_quarantines_the_instance_at_a_number_below_every_other() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
-            recordUnder(ORDER, instance().quarantineId(), new SkippedInput(5, streamKey(quarantined.k())));
-            AtomicReference<List<SkippedInput>> whenTheReleaseStarts = new AtomicReference<>();
-            store.afterNextWriteWithoutState(() -> whenTheReleaseStarts.set(records()));
 
-            execution.release(ORDER);
+            List<SkippedInput> recorded = records();
 
             assertAll(
-                    () -> assertThat(whenTheReleaseStarts.get()).extracting(SkippedInput::key)
+                    () -> assertThat(recorded).extracting(SkippedInput::key)
                             .containsExactly(streamKey(quarantined.k()), streamKey(quarantined.a()), streamKey(quarantined.b())),
-                    () -> assertThat(whenTheReleaseStarts.get().getFirst().seq()).isEqualTo(-1L)
+                    () -> assertThat(recorded.getFirst().seq()).isEqualTo(0L),
+                    () -> assertThat(recorded.getFirst().event()).isEqualTo(quarantined.k()),
+                    () -> assertThat(recorded).extracting(SkippedInput::seq).isSorted()
             );
         }
 
@@ -2459,7 +2251,8 @@ class SagaReleaseTest {
         @Test
         void the_records_still_left_are_deleted_under_its_quarantine_id_only() {
             String quarantineId = quarantinedWithDoneAndLateSkipped();
-            recordUnder(ORDER, "later", new SkippedInput(0, "ghost@1"));
+            CloudEvent ghost = added("ghost");
+            recordUnder(ORDER, "later", new SkippedInput(0, streamKey(ghost), ghost));
 
             ReleaseResult result = execution.release(ORDER);
 
@@ -2468,34 +2261,10 @@ class SagaReleaseTest {
                     () -> assertThat(instance().status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(items()).containsExactly("poison", "done"),
                     () -> assertThat(store.delegate.findSkippedInputs(ORDER, quarantineId, 10)).isEmpty(),
-                    () -> assertThat(store.delegate.findSkippedInputs(ORDER, "later", 10)).containsExactly(new SkippedInput(0, "ghost@1"))
+                    () -> assertThat(store.delegate.findSkippedInputs(ORDER, "later", 10)).containsExactly(new SkippedInput(0, streamKey(ghost), ghost))
             );
         }
 
-    }
-
-    @Nested
-    class WhenAnEventReadBackHasNoStreamIdAndVersion {
-
-        @Test
-        void the_instance_is_quarantined_again_at_once_with_a_failure_type_of_its_own_and_its_record_is_kept() {
-            Quarantined quarantined = quarantinedOnPoisonWithTwoSkipped();
-            queries.stripStreamKeyFrom(quarantined.a());
-            failing.clear();
-
-            ReleaseResult result = execution.release(ORDER);
-
-            SagaEnvelope<Order> requarantined = instance();
-            assertAll(
-                    () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
-                    () -> assertThat(requarantined.status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(requarantined.isReleasing()).isFalse(),
-                    () -> assertThat(requarantined.failure().failureType()).isEqualTo("EventWithoutStreamKey"),
-                    () -> assertThat(requarantined.failure().input()).isEqualTo(cloudEventKey(quarantined.a())),
-                    () -> assertThat(recordedKeys()).containsExactly(cloudEventKey(quarantined.a()), streamKey(quarantined.b())),
-                    () -> assertThat(requarantined.state().items()).containsExactly("poison")
-            );
-        }
     }
 
     @Nested
@@ -2504,7 +2273,7 @@ class SagaReleaseTest {
         @Test
         void a_release_is_refused_with_a_message_that_names_the_capability() {
             SagaExecution<OrderEvent, Order, OrderCommand> withoutRecords = new SagaExecution<>("orders", saga(), new StoreWithoutSkippedInputs(),
-                    dispatched::add, converter, CONFIG, event -> true, now::get, queries);
+                    dispatched::add, converter, CONFIG, now::get);
 
             assertThatThrownBy(() -> withoutRecords.release(ORDER))
                     .isInstanceOf(IllegalStateException.class)
@@ -2773,19 +2542,10 @@ class SagaReleaseTest {
         }
 
         @Test
-        void release_reaches_the_runner_s_event_store_queries() {
-            SagaSubscription subscription = run(SagaRunner.<OrderEvent, OrderCommand>agnostic(subscriptionModel, converter).eventStoreQueries(queries));
+        void release_reaches_the_subscription_of_the_runner() {
+            SagaSubscription subscription = run(SagaRunner.<OrderEvent, OrderCommand>agnostic(subscriptionModel, converter));
 
             assertThat(subscription.release("unknown")).isEqualTo(ReleaseResult.NOT_FOUND);
-        }
-
-        @Test
-        void release_is_refused_naming_EventStoreQueries_when_the_runner_was_given_none() {
-            SagaSubscription subscription = run(SagaRunner.agnostic(subscriptionModel, converter));
-
-            assertThatThrownBy(() -> subscription.release("unknown"))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("SagaRunner.eventStoreQueries(..)");
         }
 
         @Test
@@ -2796,7 +2556,7 @@ class SagaReleaseTest {
             assertThat(execution.release(ORDER)).isEqualTo(ReleaseResult.STILL_RELEASING);
             failing.clear();
             AtomicBoolean timersEnabled = new AtomicBoolean(false);
-            SagaRunner<OrderEvent, OrderCommand> runner = SagaRunner.<OrderEvent, OrderCommand>agnostic(subscriptionModel, converter).eventStoreQueries(queries);
+            SagaRunner<OrderEvent, OrderCommand> runner = SagaRunner.<OrderEvent, OrderCommand>agnostic(subscriptionModel, converter);
             SagaSubscription subscription = runner.run("orders", saga(), store, dispatched::add, null,
                     CONFIG.withTimerPollInterval(Duration.ofMillis(20)), timersEnabled::get);
             subscriptions.add(subscription);
@@ -2820,60 +2580,6 @@ class SagaReleaseTest {
         List<String> appended = new ArrayList<>(list == null ? List.of() : list);
         appended.addAll(List.of(keys));
         return appended;
-    }
-
-    /** Reads the event store, with events that can be hidden as if deleted and reads that can be made to throw. */
-    private static final class EventStoreReads implements EventStoreQueries {
-        private final EventStoreQueries delegate;
-        private final Set<String> hidden = ConcurrentHashMap.newKeySet();
-        final AtomicInteger reads = new AtomicInteger();
-        private final Set<String> withoutStreamKey = ConcurrentHashMap.newKeySet();
-        private volatile @Nullable RuntimeException readFailure;
-
-        private EventStoreReads(EventStoreQueries delegate) {
-            this.delegate = delegate;
-        }
-
-        void hide(CloudEvent event) {
-            hidden.add(event.getId());
-        }
-
-        void restore(CloudEvent event) {
-            hidden.remove(event.getId());
-        }
-
-        void stripStreamKeyFrom(CloudEvent event) {
-            withoutStreamKey.add(event.getId());
-        }
-
-        void keepStreamKeyOf(CloudEvent event) {
-            withoutStreamKey.remove(event.getId());
-        }
-
-        void failReadsWith(@Nullable RuntimeException failure) {
-            readFailure = failure;
-        }
-
-        @Override
-        public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
-            reads.incrementAndGet();
-            RuntimeException failure = readFailure;
-            if (failure != null) {
-                throw failure;
-            }
-            return delegate.query(filter, skip, limit, sortBy).filter(event -> !hidden.contains(event.getId()))
-                    .map(event -> withoutStreamKey.contains(event.getId()) ? withoutStream(event) : event);
-        }
-
-        @Override
-        public long count(Filter filter) {
-            return delegate.count(filter);
-        }
-
-        @Override
-        public boolean exists(Filter filter) {
-            return delegate.exists(filter);
-        }
     }
 
     // The in-memory store without the optional SagaStateStoreSkippedInputs capability
@@ -3101,11 +2807,6 @@ class SagaReleaseTest {
         @Override
         public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
             return skipWrite(saga, () -> delegate.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input));
-        }
-
-        @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-            return skipWrite(saga, () -> delegate.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head));
         }
 
         @Override

@@ -183,7 +183,6 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
         SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(template("none", 0), COLLECTION, String.class);
         FailPoint failedFind = aFailedFind();
         subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(new RetainsEverything(subscriptionModel), converter)
-                .eventStoreQueries(eventStore)
                 .run(STREAM, shippingSaga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)));
 
         eventStore.write("order-1", converter.toCloudEvents(List.of(new OrderPlaced("order-1"))));
@@ -215,7 +214,6 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
         SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(template("none", 0), COLLECTION, String.class, null, RetryStrategy.none());
         FailPoint failedFind = aFailedFind();
         subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(new RetainsEverything(subscriptionModel), converter)
-                .eventStoreQueries(eventStore)
                 .run(STREAM, shippingSaga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)));
 
         eventStore.write("order-2", converter.toCloudEvents(List.of(new OrderPlaced("order-2"))));
