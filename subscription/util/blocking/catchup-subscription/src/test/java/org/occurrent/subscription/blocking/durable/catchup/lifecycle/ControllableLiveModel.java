@@ -41,6 +41,12 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     final ThreadLocal<StartFailure> failStartOnThisThread = ThreadLocal.withInitial(() -> StartFailure.NONE);
     // Answers the live start check, false when the feed no longer has the history back to the checkpoint
     volatile Predicate<Checkpoint> canResume = checkpoint -> true;
+    // Runs at the start of resumeSubscription(id), before the model's monitor is taken, so a test can hold a resume in the live model
+    volatile Runnable beforeResume = () -> {
+    };
+    // Runs at the start of subscribe(id, ..), before the model's monitor is taken, so a test can hold a handover in the live model
+    volatile Consumer<String> beforeSubscribe = id -> {
+    };
     final Map<String, FakeSubscription> subscriptions = new ConcurrentHashMap<>();
 
     @Override
@@ -54,7 +60,12 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     }
 
     @Override
-    public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        beforeSubscribe.accept(subscriptionId);
+        return subscribeHoldingTheMonitor(subscriptionId, action);
+    }
+
+    private synchronized Subscription subscribeHoldingTheMonitor(String subscriptionId, Consumer<CloudEvent> action) {
         FakeSubscription subscription = new FakeSubscription(subscriptionId, action);
         subscription.started = running;
         subscriptions.put(subscriptionId, subscription);
@@ -122,7 +133,12 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     }
 
     @Override
-    public synchronized Subscription resumeSubscription(String subscriptionId) {
+    public Subscription resumeSubscription(String subscriptionId) {
+        beforeResume.run();
+        return resumeHoldingTheMonitor(subscriptionId);
+    }
+
+    private synchronized Subscription resumeHoldingTheMonitor(String subscriptionId) {
         FakeSubscription subscription = subscriptions.get(subscriptionId);
         if (subscription == null) {
             throw new UnknownSubscriptionException(subscriptionId);

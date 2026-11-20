@@ -352,26 +352,32 @@ class StreamCatchupLiveActionLifecycleCallTest {
 
     @Test
     @Timeout(40)
-    void a_resumeReplay_from_a_live_action_returns_at_once_and_lets_the_next_replay_run_only_once_the_action_has_returned() {
+    void a_resumeReplay_and_then_a_subscribe_from_a_live_action_run_in_that_order_once_the_action_has_returned_so_the_new_replay_runs() throws Exception {
         // Given
         write("1");
         model.stopReplay();
         AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
-        AtomicBoolean replayPausedInTheAction = new AtomicBoolean();
+        AtomicBoolean replayRunsInTheAction = new AtomicBoolean(true);
+        AtomicBoolean replayPausedInTheAction = new AtomicBoolean(true);
+        List<String> replayed = new CopyOnWriteArrayList<>();
         model.subscribe(ID, null, StartAt.now(), event -> {
             thrown.set(catchThrowable(model::resumeReplay));
-            model.subscribe("replay", StartAtTime.beginningOfTime(), replayed -> {
-            });
+            model.subscribe("replay", StartAtTime.beginningOfTime(), replayedEvent -> replayed.add(replayedEvent.getId()));
+            replayRunsInTheAction.set(model.isRunning("replay"));
             replayPausedInTheAction.set(model.isPaused("replay"));
         });
 
         // When
         run(() -> live.callTheKeptAction(ID)).awaitEnded();
+        model.awaitTheHandedCalls();
 
-        // Then
+        // Then the outcome is that of the resumeReplay() followed by the subscribe, both after the action returned
         assertThat(thrown.get()).as("what the resumeReplay() from the action threw").isNull();
-        assertThat(replayPausedInTheAction.get()).as("whether a replay subscribed right after the resumeReplay() from the action was kept waiting to run").isTrue();
-        await().atMost(WAIT).untilAsserted(() -> assertThat(model.stopped).as("whether the model still counts as stopped once the action has returned").isFalse());
+        assertThat(replayRunsInTheAction.get()).as("whether a replay subscribed from the action runs before the action has returned").isFalse();
+        assertThat(replayPausedInTheAction.get()).as("whether a replay subscribed from the action is paused before the action has returned").isFalse();
+        assertThat(model.stopped).as("whether the model still counts as stopped once the action has returned and the calls it handed over ran").isFalse();
+        await().atMost(WAIT).untilAsserted(() -> assertThat(replayed).as("the events the replay subscribed from the action received").containsExactly("1"));
+        assertThat(model.isPaused("replay")).as("whether the replay subscribed from the action is paused once the resumeReplay() ran before it").isFalse();
     }
 
     private List<ILoggingEvent> errorsLoggedForTheLeftCall() {

@@ -39,7 +39,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -158,23 +157,24 @@ class StreamCatchupResumeFromAReplayActionOnAStoppedModelTest {
     }
 
     @Test
-    void a_stop_that_completes_after_the_action_of_a_replay_decided_to_resume_leaves_the_model_stopped_and_the_subscription_paused_until_the_next_start() throws Exception {
-        // Given a replay of x whose action is held, and a replay of y whose action is held, on a model that runs
+    void a_stop_from_another_thread_made_after_the_action_of_a_replay_called_resume_runs_after_the_resume_and_leaves_the_model_stopped_and_the_subscription_paused_until_the_next_start() throws Exception {
+        // Given a replay of x whose action is held, and a replay of y whose action is held, and a stop that gave up waiting for them and parked y
         eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
-        AtomicReference<Thread> threadOfX = new AtomicReference<>();
-        AtomicBoolean stopRun = new AtomicBoolean();
+        CountDownLatch resumeReturned = new CountDownLatch(1);
+        CountDownLatch secondStopReturned = new CountDownLatch(1);
         model.subscribe(X, StartAtTime.beginningOfTime(), event -> {
             if (resumeCalled.compareAndSet(false, true)) {
-                threadOfX.set(Thread.currentThread());
                 inTheActionOfX.countDown();
                 awaitLatch(resumeNow);
                 try {
                     resumed.complete(model.resumeSubscription(Y));
                 } catch (Throwable e) {
                     resumed.completeExceptionally(e);
-                } finally {
-                    actionOfXReturned.countDown();
                 }
+                resumeReturned.countDown();
+                // A stop from another thread made after the resume was handed over runs after it, so it cannot return before this action does
+                awaitUpTo(secondStopReturned, Duration.ofMillis(1500));
+                actionOfXReturned.countDown();
             }
         });
         model.subscribe(Y, StartAtTime.beginningOfTime(), event -> {
@@ -183,36 +183,24 @@ class StreamCatchupResumeFromAReplayActionOnAStoppedModelTest {
         });
         assertThat(inTheActionOfX.await(10, TimeUnit.SECONDS)).as("whether the replay of x reached its action").isTrue();
         assertThat(inTheActionOfY.await(10, TimeUnit.SECONDS)).as("whether the replay of y reached its action").isTrue();
+        CompletableFuture.runAsync(model::stop, daemonExecutor("first-stop-of-the-model")).get(10, TimeUnit.SECONDS);
+        assertThat(model.isPaused(Y)).as("whether y reads as paused after the first stop parked its replay").isTrue();
+        releaseY.countDown();
 
-        // And a stop, on another thread, that completes right after the resume decided the model runs, and parks the replay of y
-        model.runAfterTheResumeDecision(() -> {
-            if (Thread.currentThread() == threadOfX.get() && stopRun.compareAndSet(false, true)) {
-                try {
-                    CompletableFuture.runAsync(model::stop, daemonExecutor("stop-of-the-model")).get(10, TimeUnit.SECONDS);
-                } catch (Exception e) {
-                    throw new IllegalStateException("stop() did not return within 10 s", e);
-                }
-                releaseY.countDown();
-            }
-        });
-
-        // When the action of x resumes y, the stop completes in between, and the action returns
+        // When the action of x resumes y, a stop from another thread is made, and the action returns
         resumeNow.countDown();
-        assertThat(actionOfXReturned.await(30, TimeUnit.SECONDS)).as("whether the action of x returned within 30 s of calling resumeSubscription(y)").isTrue();
-        Throwable resumeThrew = null;
-        Subscription handle = null;
-        try {
-            handle = resumed.get(10, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            resumeThrew = e;
-        }
-        assertThat(resumeThrew).as("what resumeSubscription(y) threw when a stop completed after the action of x decided to resume").isNull();
-        assertThat(stopRun.get()).as("whether the stop ran between the decision to resume and the rest of the resume").isTrue();
-        model.awaitTheHandedCalls();
+        assertThat(resumeReturned.await(10, TimeUnit.SECONDS)).as("whether resumeSubscription(y) returned to the action of x within 10 s").isTrue();
+        CompletableFuture<Void> secondStop = CompletableFuture.runAsync(() -> {
+            model.stop();
+            secondStopReturned.countDown();
+        }, daemonExecutor("second-stop-of-the-model"));
+        assertThat(actionOfXReturned.await(10, TimeUnit.SECONDS)).as("whether the action of x returned within 10 s of calling resumeSubscription(y)").isTrue();
+        secondStop.get(30, TimeUnit.SECONDS);
+        Subscription handle = resumed.get(10, TimeUnit.SECONDS);
 
         // Then the outcome is that of resuming and then stopping
-        assertThat(model.isRunning()).as("whether the model runs after the action of x returned and every call handed to the lifecycle thread ran").isFalse();
-        assertThat(model.isPaused(Y)).as("whether y is paused after the action of x returned and every call handed to the lifecycle thread ran").isTrue();
+        assertThat(model.isRunning()).as("whether the model runs after the resume and the second stop ran").isFalse();
+        assertThat(model.isPaused(Y)).as("whether y is paused after the resume and the second stop ran").isTrue();
 
         // And the next start runs the replay of y again
         model.start();
@@ -223,8 +211,16 @@ class StreamCatchupResumeFromAReplayActionOnAStoppedModelTest {
         }
         assertThat(model.isRunning(Y)).as("whether y runs within 10 s of the next start()").isTrue();
         assertThat(model.isPaused(Y)).as("whether y is still paused within 10 s of the next start()").isFalse();
-        assertThat(handle).as("the handle resumeSubscription(y) returned").isNotNull();
         assertThat(handle.waitUntilStarted(Duration.ofSeconds(10))).as("whether the handle resumeSubscription(y) returned started within 10 s of the next start()").isTrue();
+    }
+
+    private static void awaitUpTo(CountDownLatch latch, Duration timeout) {
+        try {
+            latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     private static Executor daemonExecutor(String name) {

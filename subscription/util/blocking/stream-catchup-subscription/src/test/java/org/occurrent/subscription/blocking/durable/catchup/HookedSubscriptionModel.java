@@ -35,7 +35,7 @@ import java.util.function.Consumer;
 
 /**
  * A live delegate over the in-memory model that runs a hook of the test before each of its {@code start(..)},
- * {@code stop()} and {@code shutdown()}, and counts them, so a test can hold, fail or look at a call from inside it. It
+ * {@code stop()}, {@code shutdown()} and {@code resumeSubscription(id)}, and counts them, so a test can hold, fail or look at a call from inside it. It
  * records each id passed to {@code resumeSubscription(..)}.
  */
 class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
@@ -49,6 +49,10 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
     volatile Runnable beforeStop = () -> {
     };
     volatile Runnable beforeShutdown = () -> {
+    };
+    volatile Runnable beforeResume = () -> {
+    };
+    volatile Consumer<String> beforeSubscribe = id -> {
     };
     // Off, a shutdown() is counted and hooked but leaves the in-memory delegate running. Its own shutdown() waits for an
     // action that is still running
@@ -71,6 +75,7 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        beforeSubscribe.accept(subscriptionId);
         return delegate.subscribe(subscriptionId, filter, StartAt.now(), action);
     }
 
@@ -111,6 +116,7 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         resumed.add(subscriptionId);
+        beforeResume.run();
         return delegate.resumeSubscription(subscriptionId);
     }
 
