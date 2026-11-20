@@ -2717,7 +2717,8 @@ either stack.
 ### What changes
 
 A `@SynchronousSubscription` runs on the thread that writes through the application service, and nothing replays a
-write to it, so it never gets a write made before it registered. For such a write the blocking application service
+write to it, so it never gets a write made before it registered unless your code passes that write's events to the
+`SynchronousSubscriptionModel` directly. For such a write the blocking application service
 now throws `WriteRefusedException` from `execute`, and the reactor one returns a `Mono` that fails with it when it is
 subscribed. Nothing is stored. A `@PostConstruct` method that writes fails the creation of its bean, so the
 application doesn't start, and the message says where to write instead:

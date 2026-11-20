@@ -49,15 +49,15 @@ import java.lang.annotation.*;
  * blocking one, for example from an in-memory event store's write listener. It gets no others:
  * </p>
  * <ul>
- * <li>It has no replay, so it doesn't get the events stored before it registered. A synchronous handler added to an
- * application whose event store already has events starts from nothing. To build a read model from the events already
- * stored, use an asynchronous handler that starts at the beginning.</li>
- * <li>An event written directly to the event store, without going through the application service, doesn't reach
- * it unless your code also passes it to the model.</li>
- * <li>An event that another process writes doesn't reach it. Every process that writes through an application service
- * must run the same synchronous handlers, so add or remove one with every process stopped, or use an asynchronous
- * handler. During a rolling deploy, a process still running the previous version writes events that a handler only
- * the new version declares never gets.</li>
+ * <li>It has no replay, so it doesn't get the events stored before it registered unless your code passes them to the
+ * model. A synchronous handler added to an application whose event store already has events starts from nothing. To
+ * build a read model from the events already stored, use an asynchronous handler that starts at the beginning.</li>
+ * <li>An event written directly to the event store, without going through the application service, doesn't reach it
+ * unless your code also passes it to the model.</li>
+ * <li>An event that another process writes doesn't reach it unless your code passes it to the model. Every process that
+ * writes through an application service must run the same synchronous handlers, so add or remove one with every process
+ * stopped, or use an asynchronous handler. During a rolling deploy, a process still running the previous version writes
+ * events that a handler only the new version declares never gets, unless your code passes them to the model.</li>
  * <li>Without a transaction executor, delivery is best-effort, as described below.</li>
  * </ul>
  * <p>

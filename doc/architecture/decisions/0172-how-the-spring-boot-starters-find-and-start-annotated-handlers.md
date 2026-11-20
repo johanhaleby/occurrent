@@ -349,7 +349,8 @@ such a handler when the bean was built, and it missed every write before that.
 
 The starters refuse such a write also when the application declares no synchronous handler, since the scan that would
 show there is none hasn't run yet either. A write made directly with `EventStore.write` or `DcbEventStore.append` is
-not refused. It never reaches a synchronous handler, whenever it is made, and decision point 2 gives it to a
+not refused. It never reaches a synchronous handler, whenever it is made, unless code passes its events to the
+`SynchronousSubscriptionModel` directly, and decision point 2 gives it to a
 subscription that starts live.
 
 The synchronous subscription model also refuses a write while it is stopped and has a handler registered, and a write
@@ -395,7 +396,9 @@ error, with the place to write from in its message.
 ### 4. A synchronous handler gets the writes of its own process's application service, after it registered
 
 A synchronous handler has no replay and no checkpoint. It gets the events written through the application service of
-the process it runs in, from the moment it registers. These don't reach it:
+the process it runs in, from the moment it registers, and the events code passes to the `SynchronousSubscriptionModel`
+directly, with `dispatch` on either stack or `accept` on the blocking one. These don't reach it unless code passes them
+to the model that way:
 
 - The events stored before it registered. A synchronous handler added to an application whose event store has events
   starts from nothing. ADR 59 says a synchronous projection "has no history to catch up on", which is true only of an

@@ -153,9 +153,10 @@ public @interface Projection {
      * application service of this process, so once that write returns the read model has its events. It also gets the
      * events your code passes to the {@code SynchronousSubscriptionModel} directly, and no others, which
      * {@link SynchronousSubscription} lists in full. It has no replay, so a synchronous projection added to an
-     * application whose event store already has events starts empty. A write made directly to the event store, or by
-     * another process, doesn't reach it unless your code passes it to the model, so every process that writes must run
-     * the same synchronous projections. Without a transaction executor the update is best-effort.
+     * application whose event store already has events starts empty, and gets those events only if your code passes
+     * them to the model. A write made directly to the event store, or by another process, doesn't reach it unless your
+     * code passes it to the model, so every process that writes must run the same synchronous projections. Without a
+     * transaction executor the update is best-effort.
      * <p>
      * To read your own writes over the events already stored, use {@link Mode#ASYNC} with {@link #startAt()} set to
      * {@link StartPosition#BEGINNING} and {@link #recordAppliedAppends()} set to {@code true}, and wait for the write
