@@ -137,9 +137,9 @@ other sections compile fine and behave differently, so read them first.
   rebuild takes a new subscription id. Compiles unchanged.
 - [A blocking catch-up's cancel and stop wait for a replayed event in the action](#a-blocking-catch-ups-cancel-and-stop-wait-for-a-replayed-event-in-the-action).
   The call waits up to a second for an action the replay already started, and logs a `WARN` past that. Compiles unchanged.
-- [A blocking catch-up's start and stop throw from inside a replay's action](#a-blocking-catch-ups-start-and-stop-throw-from-inside-a-replays-action).
-  A `start(..)` or `stop()` from a replay's action throws `IllegalStateException`, and one from a live call's action
-  takes effect once the action has returned. Compiles unchanged.
+- [A blocking catch-up's start and stop from inside an action take effect once the action has returned](#a-blocking-catch-ups-start-and-stop-from-inside-an-action-take-effect-once-the-action-has-returned).
+  A `start(..)` or `stop()` from a replay's or a live call's action returns at once and takes effect once the action
+  has returned. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
   `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached. Over
   `ReactorMongoSubscriptionModel` it fails only when MongoDB's reply to `hello` has no `localTime`, where 0.34.0 didn't
@@ -2865,8 +2865,10 @@ the subscriber's action that is under way.
   `resumeSubscription(id)` that the action of `id` makes on the replay thread while another thread holds that claim
   throws `IllegalStateException` at once, as in 0.34.0. That can now happen for up to a second longer per
   cancel.
-* A cancel made from inside a replay's action doesn't wait for that action. A stop made there throws, see
-  [below](#a-blocking-catch-ups-start-and-stop-throw-from-inside-a-replays-action). `shutdown()` doesn't wait.
+* A cancel made from inside a replay's action doesn't wait for that action. A stop made there takes effect once the
+  action has returned, see
+  [below](#a-blocking-catch-ups-start-and-stop-from-inside-an-action-take-effect-once-the-action-has-returned).
+  `shutdown()` doesn't wait.
 * A subscribe of an id right after a cancel of it returns at once, as in 0.34.0. Its replay waits on its own thread
   until the cancelled replay's call to the action has returned, also when a `stop()` came between the cancel and the
   subscribe.
@@ -2899,56 +2901,66 @@ runs, so give a checkpoint storage that can block a timeout of its own. A live s
 catch-up wraps must return from `cancelSubscription` without waiting for a call to the action under way, and must
 not store its position past an event whose action threw `AttemptNotMade`.
 
-## A blocking catch-up's start and stop throw from inside a replay's action
+## A blocking catch-up's start and stop from inside an action take effect once the action has returned
 
 `start(..)` and `stop()` on the blocking `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` and
 `CatchupSubscriptionModel` now run one at a time, together with `shutdown()`. A `start(..)` or `stop()` called from
-inside the action of a replay of the same model throws `IllegalStateException` and changes nothing. One called from
-inside the action of a live call returns at once and takes effect on another thread once the action has returned. See
+inside the action of a replay or a live call of the same model returns at once and takes effect on another thread once
+the action has returned. See
 [ADR 177](../architecture/decisions/0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md).
 
 ### Who is affected
 
 Code that stops or starts a blocking catch-up model from the action of one of its subscriptions. In 0.34.0 a `stop()`
 from a replay's action parked the replay and returned, and a `start(..)` or `stop()` from a live call's action ran
-before the action returned. A call from the action of another model's subscription is not affected.
+before the action returned. A call to a model that wraps the catch-up reaches it from inside the action too, so the
+`stop()` of the `CompetingConsumerSubscriptionModel` that the blocking Spring Boot starter puts over its
+`CatchupSubscriptionModel` is affected when the action calls it. A call from the action of a model that doesn't wrap
+the catch-up is not affected.
 
 ### What changes
 
-* A `start(..)` or `stop()` from a replay's action throws `IllegalStateException` with "Nothing was changed." in its
-  message, and so does one from a thread on which the model is in the middle of a call for one of its subscriptions.
-* A `start(..)` or `stop()` from the action once the subscription has gone live returns at once, without waiting for
-  another `start(..)`, `stop()` or `shutdown()` of the model, since the call under way can be waiting in the wrapped
-  model for that action to return. A lifecycle thread, shared by the models of one dispatcher, runs the call
-  once the action has returned and no other of the three calls is under way, in the order the calls came. It doesn't
-  run the call once a `shutdown()` has begun, and logs an `ERROR` naming the model when the call throws.
-* After a `stop()` from a live call's action, the wrapped model can go on delivering live events to the action until
-  the lifecycle thread runs the `stop()`. In 0.34.0 the wrapped model had stopped by the time `stop()` returned. The
-  tests of this release run these calls over test models of the wrapped model, not over the MongoDB subscription
-  models the Spring Boot starter sets up.
-* A `start(..)`, `stop()` or `shutdown()` from any other thread, made while a call a live call's action handed over
+* A `start(..)` or `stop()` from the action of a replay or a live call returns at once, without waiting for another
+  `start(..)`, `stop()` or `shutdown()` of the model, since the call under way can be waiting for that action to
+  return. A lifecycle thread, shared by the models of one dispatcher, runs the call once the action has returned and
+  no other of the three calls is under way, in the order the calls came. It doesn't run the call once a `shutdown()`
+  has begun, and logs an `ERROR` naming the model when the call throws.
+* After a `stop()` from a replay's action, the replay goes on to its next event until the lifecycle thread runs the
+  `stop()`, which then parks it. After a `stop()` from a live call's action, the wrapped model can go on delivering live
+  events to the action until then. In 0.34.0 the wrapped model had stopped by the time `stop()` returned. The tests of
+  this release run these calls over test models of the wrapped model, not over the MongoDB subscription models the
+  Spring Boot starter sets up.
+* A `start(..)`, `stop()` or `resumeSubscription(id)` from any other thread, made while a call an action handed over
   hasn't run yet, waits for it and takes effect after it. So when the action signals another thread to call `start(..)`
-  after its own `stop()`, the model ends up started.
+  or `resumeSubscription(id)` after its own `stop()`, the model ends up started.
+* A `start(..)` or `stop()` throws `IllegalStateException` with "Nothing was changed." in its message when called on a
+  replay's thread outside the action, such as in a `CatchupListener`, or on a thread on which the model is in the
+  middle of a call for one of its subscriptions.
 * The public `stopReplay()` and `resumeReplay()` of `StreamCatchupSubscriptionModel` throw in the same places as
-  `stop()`, and take effect after a live call's action as `stop()` does.
-* `shutdown()` from any of those threads doesn't throw and doesn't wait. It forgets the catch-ups at once, and returns
-  before the wrapped model is shut down. The lifecycle thread shuts the wrapped model down once a live call's action the
-  `shutdown()` came from has returned and no `start(..)` or `stop()` is under way, and logs an `ERROR` naming the model
-  when that throws. A `start(..)` under way resumes no subscription after the `shutdown()` began. Once the wrapped
-  model's `shutdown()` has returned normally, a later `shutdown()` doesn't call it again. After one that threw, the next
-  `shutdown()` calls it again. A `start(..)` after a `shutdown()` calls the wrapped model's `start(..)`, as in 0.34.0, and
-  the next `shutdown()` calls its `shutdown()` again. In 0.34.0 every `shutdown()` called the wrapped model's `shutdown()`.
+  `stop()`, and take effect after an action as `stop()` does. From any other thread they now wait, with no deadline,
+  for a `start(..)`, `stop()` or `shutdown()` under way. In 0.34.0 `resumeReplay()` only cleared the replay's stopped
+  state.
+* `shutdown()` doesn't throw. From an action, or from a thread on which the model is in the middle of a call for one of
+  its subscriptions, it doesn't wait. It forgets the catch-ups at once, and returns before the wrapped model is shut
+  down. The lifecycle thread shuts the wrapped model down once the action has returned and the calls handed over before
+  it have run, and logs an `ERROR` naming the model when that throws. From any other thread it doesn't wait for the
+  calls handed over, which then change nothing. A `start(..)` under way resumes no subscription after the `shutdown()`
+  began. Once the wrapped model's `shutdown()` has returned normally, a later `shutdown()` doesn't call it again. After
+  one that threw, the next `shutdown()` calls it again. A `start(..)` after a `shutdown()` calls the wrapped model's
+  `start(..)`, as in 0.34.0, and the next `shutdown()` calls its `shutdown()` again. In 0.34.0 every `shutdown()` called
+  the wrapped model's `shutdown()`.
 * Elsewhere, each of `start(..)`, `stop()` and `shutdown()` waits, with no deadline, until one already under way on
-  the model has returned.
+  the model has returned. The one exception is a `shutdown()` from outside an action while a `start(..)` is inside the
+  wrapped model's `start(..)`. It calls the wrapped model's `shutdown()` without waiting for that start, since a wrapped
+  model can hold its start until it's shut down, as a MongoDB subscription model retrying its start through an outage
+  does, and then calls it once more after the start has returned.
 
 ### What to do
 
-From a replay's action, hand the call to another thread, for example an executor the action submits it to, and let the
-action return. Don't wait in the action for that call to finish, since a `stop()` waits up to a second for the action.
-From a live call's action, the call can stay where it is, but code after it in the action runs before the call takes
-effect, so don't rely on the model being stopped or started there. Don't wait in the action for a call you asked
-another thread to make after it, since that call waits for the action to return. An action that never returns keeps the
-call it made, and every call made after it, from taking effect.
+From an action, the call can stay where it is, but code after it in the action runs before the call takes effect, so
+don't rely on the model being stopped or started there. Don't wait in the action for a call you asked another thread to
+make after it, since that call waits for the action to return. An action that never returns keeps the call it made,
+and every call made after it, from taking effect.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 

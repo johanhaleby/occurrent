@@ -65,7 +65,7 @@ class StreamCatchupShutdownInTurnTest {
     private static final String ID = "subscription";
 
     enum Lifecycle {
-        START(START_RETURNED) {
+        START(START_RETURNED, List.of(SHUTDOWN), List.of(SHUTDOWN, START_RETURNED, SHUTDOWN)) {
             @Override
             void call(StreamCatchupSubscriptionModel model) {
                 model.start(true);
@@ -77,7 +77,7 @@ class StreamCatchupShutdownInTurnTest {
                 return gate;
             }
         },
-        STOP(STOP_RETURNED) {
+        STOP(STOP_RETURNED, List.of(), List.of(STOP_RETURNED, SHUTDOWN)) {
             @Override
             void call(StreamCatchupSubscriptionModel model) {
                 model.stop();
@@ -91,9 +91,14 @@ class StreamCatchupShutdownInTurnTest {
         };
 
         final String returned;
+        // A shutdown ends a start that is inside the live delegate at once, and waits for a stop that is inside it
+        final List<String> askedWhileInside;
+        final List<String> askedOnceReturned;
 
-        Lifecycle(String returned) {
+        Lifecycle(String returned, List<String> askedWhileInside, List<String> askedOnceReturned) {
             this.returned = returned;
+            this.askedWhileInside = askedWhileInside;
+            this.askedOnceReturned = askedOnceReturned;
         }
 
         abstract void call(StreamCatchupSubscriptionModel model);
@@ -130,14 +135,14 @@ class StreamCatchupShutdownInTurnTest {
     @ParameterizedTest
     @EnumSource(Lifecycle.class)
     @Timeout(40)
-    void a_shutdown_from_a_replay_action_while_a_call_is_inside_the_live_delegate_returns_at_once_and_shuts_the_live_delegate_down_after_that_call(Lifecycle lifecycle) throws InterruptedException {
+    void a_shutdown_from_a_replay_action_while_a_call_is_inside_the_live_delegate_returns_at_once_and_shuts_the_live_delegate_down_at_once_past_a_start_and_after_a_stop(Lifecycle lifecycle) throws InterruptedException {
         shutdownFromAnActionWhileACallIsInsideTheLiveDelegate(lifecycle, ActionKind.REPLAY);
     }
 
     @ParameterizedTest
     @EnumSource(Lifecycle.class)
     @Timeout(40)
-    void a_shutdown_from_a_live_action_while_a_call_is_inside_the_live_delegate_returns_at_once_and_shuts_the_live_delegate_down_after_that_call(Lifecycle lifecycle) throws InterruptedException {
+    void a_shutdown_from_a_live_action_while_a_call_is_inside_the_live_delegate_returns_at_once_and_shuts_the_live_delegate_down_at_once_past_a_start_and_after_a_stop(Lifecycle lifecycle) throws InterruptedException {
         shutdownFromAnActionWhileACallIsInsideTheLiveDelegate(lifecycle, ActionKind.LIVE);
     }
 
@@ -174,17 +179,17 @@ class StreamCatchupShutdownInTurnTest {
         // Then
         assertThat(theShutdownReturned.await(10, TimeUnit.SECONDS)).as("the shutdown from the action returned or threw").isTrue();
         assertThat(thrown.get()).as("what the shutdown from the action threw").isNull();
-        assertThat(live.events()).as("what the live delegate was asked while the " + lifecycle + " was inside it").doesNotContain(SHUTDOWN);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked while the " + lifecycle + " was inside it").containsExactlyElementsOf(lifecycle.askedWhileInside));
 
         gate.release();
         calls.forEach(CallOnAThread::awaitEnded);
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the " + lifecycle + " returned").containsExactly(lifecycle.returned, SHUTDOWN));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the " + lifecycle + " returned").containsExactlyElementsOf(lifecycle.askedOnceReturned));
     }
 
     @ParameterizedTest
     @EnumSource(Lifecycle.class)
     @Timeout(40)
-    void a_shutdown_from_another_thread_that_comes_while_a_call_is_inside_the_live_delegate_shuts_the_live_delegate_down_after_that_call(Lifecycle lifecycle) throws InterruptedException {
+    void a_shutdown_from_another_thread_that_comes_while_a_call_is_inside_the_live_delegate_shuts_the_live_delegate_down_at_once_past_a_start_and_after_a_stop(Lifecycle lifecycle) throws InterruptedException {
         // Given
         Gate gate = lifecycle.hold(live, newGate());
         run(() -> lifecycle.call(model));
@@ -196,10 +201,10 @@ class StreamCatchupShutdownInTurnTest {
 
         // Then
         assertThat(shutdown.hasReturned()).as("whether the shutdown returned while the " + lifecycle + " was inside the live delegate").isFalse();
-        assertThat(live.events()).as("what the live delegate was asked while the " + lifecycle + " was inside it").doesNotContain(SHUTDOWN);
+        assertThat(live.events()).as("what the live delegate was asked while the " + lifecycle + " was inside it").containsExactlyElementsOf(lifecycle.askedWhileInside);
         gate.release();
         calls.forEach(CallOnAThread::awaitEnded);
-        assertThat(live.events()).as("what the live delegate was asked once the " + lifecycle + " returned").containsExactly(lifecycle.returned, SHUTDOWN);
+        assertThat(live.events()).as("what the live delegate was asked once the " + lifecycle + " returned").containsExactlyElementsOf(lifecycle.askedOnceReturned);
     }
 
     @ParameterizedTest
@@ -261,7 +266,7 @@ class StreamCatchupShutdownInTurnTest {
         calls.forEach(CallOnAThread::awaitEnded);
 
         // Then
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(START_RETURNED, SHUTDOWN));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(live.events()).as("what the live delegate was asked once the start returned").containsExactly(SHUTDOWN, START_RETURNED, SHUTDOWN));
         assertThat(delivered).as("the events the parked replay delivered, which a start after the shutdown doesn't run again").containsExactly("1");
     }
 

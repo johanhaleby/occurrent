@@ -1635,7 +1635,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         try {
             if (cc.isRunning() && isRunningInTheWrappedModel(subscriptionId)) {
                 pauseInTheWrappedModel(subscriptionId);
-                if (isRunningInTheWrappedModel(subscriptionId)) {
+                // A catch-up model whose replay still runs for the subscription reads as running and paused, since it
+                // holds the subscription paused once the replay hands over or parks. A stop() called from the replay's
+                // action parks it once the action has returned.
+                if (isRunningInTheWrappedModel(subscriptionId) && !isPausedInTheWrappedModel(subscriptionId)) {
                     throw new IllegalStateException("Subscription " + subscriptionId + " still runs in the wrapped subscription model after it was paused there, so this node keeps its lease");
                 }
             }

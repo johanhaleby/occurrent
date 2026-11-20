@@ -23,13 +23,12 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
-import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -50,10 +49,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -177,38 +176,103 @@ class StreamCatchupStartStopOrderTest {
         assertThat(wrapped.isRunning()).as("whether the wrapped model runs once the stop and then the start returned").isTrue();
     }
 
-    static Stream<Arguments> lifecycleCallsThatAreRefused() {
-        return Stream.of(
-                Arguments.of(Named.of("start(true)", (Consumer<StreamCatchupSubscriptionModel>) m -> m.start(true))),
-                Arguments.of(Named.of("stop()", (Consumer<StreamCatchupSubscriptionModel>) StreamCatchupSubscriptionModel::stop)));
+    private enum LifecycleCall {
+        START("start(true)", m -> m.start(true)),
+        STOP("stop()", StreamCatchupSubscriptionModel::stop),
+        STOP_REPLAY("stopReplay()", StreamCatchupSubscriptionModel::stopReplay),
+        RESUME_REPLAY("resumeReplay()", StreamCatchupSubscriptionModel::resumeReplay);
+
+        private final String description;
+        private final Consumer<StreamCatchupSubscriptionModel> call;
+
+        LifecycleCall(String description, Consumer<StreamCatchupSubscriptionModel> call) {
+            this.description = description;
+            this.call = call;
+        }
+
+        @Override
+        public String toString() {
+            return description;
+        }
     }
 
-    @ParameterizedTest
-    @MethodSource("lifecycleCallsThatAreRefused")
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(LifecycleCall.class)
     @Timeout(30)
-    void a_start_or_stop_called_from_the_action_of_a_replay_is_refused_and_the_replay_goes_on(Consumer<StreamCatchupSubscriptionModel> lifecycleCall) throws InterruptedException {
+    void a_lifecycle_call_from_the_action_of_a_replay_returns_at_once_and_takes_effect_once_the_action_has_returned(LifecycleCall lifecycleCall) throws InterruptedException {
         write("1");
-        write("2");
-        write("3");
+        AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
+        AtomicInteger startsBeforeTheCall = new AtomicInteger();
+        CountDownLatch inTheAction = new CountDownLatch(1);
+        CountDownLatch makeTheCall = new CountDownLatch(1);
+        CountDownLatch called = new CountDownLatch(1);
+        CountDownLatch releaseTheAction = new CountDownLatch(1);
+        AtomicBoolean first = new AtomicBoolean(true);
+
+        try {
+            model.subscribe("subscription", StartAtTime.beginningOfTime(), event -> {
+                if (first.compareAndSet(true, false)) {
+                    inTheAction.countDown();
+                    awaitLatch(makeTheCall);
+                    startsBeforeTheCall.set(wrapped.starts.get());
+                    thrown.set(catchThrowable(() -> lifecycleCall.call.accept(model)));
+                    called.countDown();
+                    awaitLatch(releaseTheAction);
+                }
+            });
+            assertThat(inTheAction.await(5, TimeUnit.SECONDS)).as("the replay is in its action").isTrue();
+            if (lifecycleCall == LifecycleCall.RESUME_REPLAY) {
+                run(model::stopReplay);
+                await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(model.stopped).as("whether the replays are stopped before the action resumes them").isTrue());
+            }
+            makeTheCall.countDown();
+
+            assertThat(called.await(5, TimeUnit.SECONDS)).as("the call from the action returned or threw while the action still ran").isTrue();
+            assertThat(thrown.get()).as("what the %s from the action of a replay of the model threw", lifecycleCall).isNull();
+            assertThat(tookEffect(lifecycleCall, startsBeforeTheCall.get())).as("whether the %s took effect while the action that made it still ran", lifecycleCall).isFalse();
+        } finally {
+            releaseTheAction.countDown();
+        }
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(tookEffect(lifecycleCall, startsBeforeTheCall.get())).as("whether the %s took effect once the action had returned", lifecycleCall).isTrue());
+    }
+
+    private boolean tookEffect(LifecycleCall lifecycleCall, int startsBeforeTheCall) {
+        return switch (lifecycleCall) {
+            case START -> wrapped.starts.get() > startsBeforeTheCall;
+            case STOP -> !model.isRunning() && !wrapped.isRunning();
+            case STOP_REPLAY -> model.stopped;
+            case RESUME_REPLAY -> !model.stopped;
+        };
+    }
+
+    @Test
+    @Timeout(30)
+    void a_stop_from_a_catchup_listener_callback_on_the_replay_thread_is_refused_and_changes_nothing() throws InterruptedException {
+        write("1");
         AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
         CountDownLatch called = new CountDownLatch(1);
-        AtomicBoolean first = new AtomicBoolean(true);
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
 
-        model.subscribe("subscription", StartAtTime.beginningOfTime(), event -> {
-            received.add(event.getId());
-            if (first.compareAndSet(true, false)) {
-                thrown.set(catchThrowable(() -> lifecycleCall.accept(model)));
+        model.listenForCatchup("subscription", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                thrown.set(catchThrowable(model::stop));
                 called.countDown();
             }
-        });
 
-        assertThat(called.await(5, TimeUnit.SECONDS)).as("the call from the action returned or threw").isTrue();
-        assertThat(thrown.get()).as("what the call from the action of a replay of the model threw").isInstanceOf(IllegalStateException.class)
+            @Override
+            public void historyRead(Object episode) {
+            }
+        });
+        model.subscribe("subscription", StartAtTime.beginningOfTime(), event -> received.add(event.getId()));
+
+        assertThat(called.await(5, TimeUnit.SECONDS)).as("the stop from the catch-up listener returned or threw").isTrue();
+        assertThat(thrown.get()).as("what a stop from a catch-up listener callback on the replay thread threw").isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(CALL_FROM_ANOTHER_THREAD).hasMessageContaining(NOTHING_WAS_CHANGED);
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).as("the events the replay delivered after the refused call").hasSize(3));
-        assertThat(model.isRunning()).as("whether the model runs after the refused call").isTrue();
-        assertThat(wrapped.isRunning()).as("whether the wrapped model runs after the refused call").isTrue();
+        assertThat(model.isRunning()).as("whether the model runs after the refused stop").isTrue();
+        assertThat(wrapped.isRunning()).as("whether the wrapped model runs after the refused stop").isTrue();
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).as("the events the replay delivered after the refused stop").containsExactly("1"));
     }
 
     @Test
@@ -283,21 +347,29 @@ class StreamCatchupStartStopOrderTest {
 
     @Test
     @Timeout(30)
-    void a_shutdown_that_comes_while_a_start_is_inside_the_wrapped_start_waits_for_it() throws InterruptedException {
-        model.stop();
-        Gate startGate = holdStarts();
-        run(() -> model.start(true));
+    void a_shutdown_from_another_thread_returns_while_an_action_that_handed_a_stop_over_still_runs_and_the_handed_stop_then_stops_nothing() throws InterruptedException {
+        write("1");
+        CountDownLatch handedTheStop = new CountDownLatch(1);
+        CountDownLatch releaseTheAction = new CountDownLatch(1);
+        int stopsBefore = wrapped.stops.get();
 
         try {
-            assertThat(startGate.entered.await(5, TimeUnit.SECONDS)).as("the start is inside the wrapped model's start").isTrue();
+            model.subscribe("subscription", StartAtTime.beginningOfTime(), event -> {
+                model.stop();
+                handedTheStop.countDown();
+                awaitLatch(releaseTheAction);
+            });
+            assertThat(handedTheStop.await(5, TimeUnit.SECONDS)).as("the action handed the stop over").isTrue();
             Call shutdown = run(model::shutdown);
-            shutdown.awaitReturnedOrWaiting();
 
-            assertThat(shutdown.hasReturned()).as("whether the shutdown returned while the start was still inside the wrapped model's start").isFalse();
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(shutdown.hasReturned()).as("whether the shutdown returned while the action that handed the stop over still ran").isTrue());
         } finally {
-            startGate.release();
+            releaseTheAction.countDown();
         }
         calls.forEach(Call::awaitEnded);
+        model.awaitTheHandedCalls();
+
+        assertThat(wrapped.stops.get() - stopsBefore).as("the calls the handed stop made to the wrapped model's stop after the shutdown").isZero();
     }
 
     @Test
@@ -461,6 +533,8 @@ class StreamCatchupStartStopOrderTest {
         private final InMemorySubscriptionModel delegate;
         volatile @Nullable Gate startGate;
         volatile @Nullable Gate stopGate;
+        final AtomicInteger starts = new AtomicInteger();
+        final AtomicInteger stops = new AtomicInteger();
 
         private GatedLifecycleSubscriptionModel(InMemorySubscriptionModel delegate) {
             this.delegate = delegate;
@@ -489,6 +563,7 @@ class StreamCatchupStartStopOrderTest {
 
         @Override
         public void stop() {
+            stops.incrementAndGet();
             Gate gate = stopGate;
             if (gate != null) {
                 gate.pass();
@@ -498,6 +573,7 @@ class StreamCatchupStartStopOrderTest {
 
         @Override
         public void start(boolean resumeSubscriptionsAutomatically) {
+            starts.incrementAndGet();
             Gate gate = startGate;
             if (gate != null) {
                 gate.pass();
