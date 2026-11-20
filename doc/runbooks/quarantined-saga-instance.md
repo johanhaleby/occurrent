@@ -499,6 +499,10 @@ Or against MongoDB, where a released instance no longer matches:
 db.getCollection("saga-order-fulfilment").countDocuments({ _id: "order-4711", status: { $in: ["QUARANTINED", "QUARANTINED_RECORDING"] } })
 ```
 
+The document of a released `ACTIVE` instance usually reads `ACTIVE_MARKED` in MongoDB, which `find` reads back as
+`ACTIVE`. The
+[0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#stored-saga-state-1) says why.
+
 After a delete, the instance is gone:
 
 ```java
@@ -573,10 +577,13 @@ acknowledges it, and a push feed loses it unless its caller pushes it again. The
 release doesn't replay such an event. A subscription model stores no position past that event. On a live subscription it retries the event in place and keeps the saga's competing-consumer
 lease while it does, so the saga's subscription stalls. The stall holds up every later event of that saga
 subscription, not only the events of the quarantined instance. It ends when a 0.35.0 node takes the lease, or when a
-0.35.0 node releases or deletes the instance. A node whose catch-up replay failed on the event also has to restart
-before its subscription goes live. After a downgrade no 0.35.0 node is left to take the lease or release the instance,
-so the stall lasts until the instance is stored with a status 0.34.0 reads, as step 6 does, or deleted. To downgrade
-without that stall, do steps 1 to 5 while the nodes run 0.35.0:
+0.35.0 node deletes the instance. A release doesn't end it, because a released instance is stored as `ACTIVE_MARKED`
+when it holds stream marks, which 0.34.0 can't decode either. A node whose catch-up replay failed on the event also
+has to restart before its subscription goes live. After a downgrade no 0.35.0 node is left to take the lease, so the
+stall lasts until the instance is stored with a status 0.34.0 reads, as step 6 does, or deleted. It ends then because
+the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is left to store it as
+`QUARANTINED_RECORDING` or `ACTIVE_MARKED` again. To downgrade without that stall, do steps 1 to 5 while the nodes run
+0.35.0:
 
 1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or
    `occurrent.saga.quarantine-enabled=false`, and have that running on every node before step 2. A node that still has
@@ -596,17 +603,21 @@ without that stall, do steps 1 to 5 while the nodes run 0.35.0:
 5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `QUARANTINED_AGAIN` or
    `QUARANTINED_EVENT_MISSING`, or that keeps failing for a cause you can't fix.
 6. Stop every 0.35.0 node. Then, from a process that runs no `SagaRunner`, store every instance that is still
-   `QUARANTINED_RECORDING` as `QUARANTINED`, without its quarantine id, skip count and release time. On MongoDB, run
-   this on each saga's collection:
+   `QUARANTINED_RECORDING` as `QUARANTINED`, without its quarantine id, skip count and release time, and every
+   `ACTIVE_MARKED` instance as `ACTIVE`. A released instance is `ACTIVE_MARKED` when it holds stream marks. On MongoDB,
+   run this on each saga's collection:
 
    ```
    db.getCollection("saga-order-fulfilment").updateMany(
      { status: "QUARANTINED_RECORDING" },
      { $set: { status: "QUARANTINED" }, $unset: { failureQuarantineId: "", quarantineSkipCount: "", failureReleasedAt: "" } })
+   db.getCollection("saga-order-fulfilment").updateMany({ status: "ACTIVE_MARKED" }, { $set: { status: "ACTIVE" } })
    ```
 
-   A store of your own needs the same change in the form it stores. With no `SagaRunner` running, nothing releases an
-   instance or delivers it an input while the update runs.
+   Before the second update, list the instances that hold a version 0.34.0 may never apply, with the query in
+   [the 0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#stored-saga-state-1), which also says what else 0.34.0 loses. A store of your own needs the
+   same change in the form it stores. With no `SagaRunner` running, nothing releases an instance or delivers it an
+   input while the updates run.
 7. Start the 0.34.0 nodes.
 
 No step deletes an instance. 0.34.0 reads an instance that step 6 updated as one it quarantined itself, with its state

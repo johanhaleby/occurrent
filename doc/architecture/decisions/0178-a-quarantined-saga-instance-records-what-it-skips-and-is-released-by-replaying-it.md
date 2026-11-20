@@ -484,9 +484,11 @@ The subscription delivers one event at a time, so the stall holds up every later
 every instance of the saga, not only the events of the quarantined instance.
 
 After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease, so the stall lasts until the instance is
-stored with a status 0.34.0 reads, or deleted, with competing consumers or without. A node whose catch-up stopped on
-the event also has to restart before its subscription goes live. A downgrade that doesn't stall anything goes like
-this, with steps 1 to 5 on 0.35.0 nodes:
+stored with a status 0.34.0 reads, or deleted, with competing consumers or without. The 0.34.0 node reads the instance
+again on every retry, so the stall on an `ACTIVE_MARKED` instance ends once it is stored as `ACTIVE`, since no 0.35.0
+node is left to store it as `ACTIVE_MARKED` again. A node whose catch-up stopped on the event also has to restart
+before its subscription goes live. A downgrade that doesn't stall anything goes like this, with steps 1 to 5 on 0.35.0
+nodes:
 
 1. Turn quarantine off on every node, and have that running on every node before step 2. A node that still has
    quarantine on can quarantine another instance after the instances are listed.
@@ -578,8 +580,9 @@ The upgrade guide has the procedure for operators, in
   push it again loses it, and a release never replays either. On a subscription model that delivers the event again,
   the node stalls the saga's subscription for every later event. In a mixed cluster the stall ends once a 0.35.0 node
   holds the saga's competing-consumer lease, or once a 0.35.0 node deletes the instance. A release doesn't end it,
-  since a released instance is stored as `ACTIVE_MARKED` (ADR 154). Without competing consumers it ends when the
-  0.34.0 node stops. After a downgrade it ends when the instance is stored as `QUARANTINED` again, or deleted.
+  since a released instance is stored as `ACTIVE_MARKED` when it holds stream marks (ADR 154). Without competing
+  consumers it ends when the 0.34.0 node stops. After a downgrade it ends when the instance is stored as `QUARANTINED`
+  again, or as `ACTIVE` for a released instance, or deleted.
   A downgrade that first turns quarantine off on every node and releases those instances, then stops every 0.35.0
   node, stores the ones that stay quarantined as `QUARANTINED` and sets `ACTIVE_MARKED` back to `ACTIVE`, stalls
   nothing and deletes no instance.

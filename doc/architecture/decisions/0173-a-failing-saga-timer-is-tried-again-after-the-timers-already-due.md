@@ -103,7 +103,10 @@ I rejected three other designs.
 - **A rolling deploy works both ways.** 0.34.0 reads only `name` and `firesAtEpochMilli` from a timer subdocument, so
   it ignores the new field. It selects by `nextTimerFiresAt`, which for a failed timer is one millisecond after the poll
   that tried it, so a later poll still finds the timer. A 0.34.0 write rewrites the timers and recomputes `nextTimerFiresAt` from
-  `firesAt`, which drops the record and gives that instance the 0.34.0 order again. No timer is lost.
+  `firesAt`, which drops the record and gives that instance the 0.34.0 order again. No timer is lost. The exception
+  is an instance stored as `ACTIVE_MARKED` (ADR 154), which every `ACTIVE` instance that holds stream marks is. 0.34.0
+  never selects it and throws on reading it, so no 0.34.0 save rewrites its timers, and they wait for a 0.35.0 node. A
+  0.34.0 `delete(sagaId)` still removes it, since a delete doesn't read the instance.
 - **The recorded instant comes from the poller's clock.** A poller whose clock runs ahead records instants that far
   ahead, and after the competing consumer's lease moves to a node with a correct clock, the instance waits that long
   before it is tried again.

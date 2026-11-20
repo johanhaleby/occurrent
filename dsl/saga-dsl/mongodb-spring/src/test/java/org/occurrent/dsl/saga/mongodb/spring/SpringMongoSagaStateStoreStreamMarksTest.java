@@ -36,11 +36,16 @@ import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.BasicQuery;
 import org.springframework.data.mongodb.core.query.Query;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
@@ -1060,6 +1065,138 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
             // Then
             assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(4L, since));
+        }
+    }
+
+    @Nested
+    @DisplayName("when the instances that lose a version on a downgrade are listed")
+    class WhenTheInstancesThatLoseAVersionOnADowngradeAreListed {
+
+        private static final String GUIDE = "doc/migration/upgrading-to-0.35.0.md";
+        private static final String GUIDE_ANCHOR = "so it lists more instances than the ones that lose one:";
+        private static final String GUIDE_UPDATE_ANCHOR = "Give every `ACTIVE_MARKED` instance back its plain status before a 0.34.0 node starts:";
+        private static final Map<String, StreamMarks> LEGACY_FAILED_ONLY_MARKS = Map.of(
+                STREAM_ID, new StreamMarks(3, Map.of(PLACED_TYPE, new TypeMark(12, List.of(9L, 10L, 11L), 8)), Map.of(), List.of(5L, 7L)),
+                "other", new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(), List.of()));
+
+        /**
+         * Reads the javascript block that follows the anchor sentence in the migration guide, so the tests fail when
+         * the guide changes. Never falls back to a default.
+         */
+        private static String guideBlockAfter(String anchorSentence) {
+            Path directory = Path.of("").toAbsolutePath();
+            while (directory != null && !Files.isRegularFile(directory.resolve(GUIDE))) {
+                directory = directory.getParent();
+            }
+            assertThat(directory).as("a directory above %s that holds %s", Path.of("").toAbsolutePath(), GUIDE).isNotNull();
+            String guide;
+            try {
+                guide = Files.readString(directory.resolve(GUIDE));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            int anchor = guide.indexOf(anchorSentence);
+            assertThat(anchor).as("the sentence \"%s\" in %s", anchorSentence, GUIDE).isNotNegative();
+            int fence = guide.indexOf("```javascript", anchor);
+            assertThat(fence).as("a fenced javascript block after the sentence \"%s\" in %s", anchorSentence, GUIDE).isNotNegative();
+            int blockEnd = guide.indexOf("```", fence + 3);
+            assertThat(blockEnd).as("the closing fence of the javascript block after \"%s\" in %s", anchorSentence, GUIDE).isNotNegative();
+            return guide.substring(fence + "```javascript".length(), blockEnd);
+        }
+
+        /** The object literal that opens at the first brace at or after {@code from}, braces balanced, and the index after it. */
+        private static String[] objectAfter(String block, int from, String what) {
+            int start = block.indexOf('{', from);
+            assertThat(start).as("the object after %s in %s", what, GUIDE).isNotNegative();
+            int depth = 0;
+            for (int i = start; i < block.length(); i++) {
+                char c = block.charAt(i);
+                if (c == '{') {
+                    depth++;
+                } else if (c == '}' && --depth == 0) {
+                    return new String[]{block.substring(start, i + 1), String.valueOf(i + 1)};
+                }
+            }
+            throw new AssertionError("the object after " + what + " in " + GUIDE + " has no closing brace");
+        }
+
+        private static String guideFilter() {
+            String block = guideBlockAfter(GUIDE_ANCHOR);
+            int find = block.indexOf(".find(");
+            assertThat(find).as("a .find( call in the javascript block after the anchor in %s", GUIDE).isNotNegative();
+            return objectAfter(block, find, ".find(")[0];
+        }
+
+        /** The filter and the update of the {@code updateMany} in the guide's block that gives marked instances back their plain status. */
+        private static String[] guideUpdateMany() {
+            String block = guideBlockAfter(GUIDE_UPDATE_ANCHOR);
+            int updateMany = block.indexOf(".updateMany(");
+            assertThat(updateMany).as("an .updateMany( call in the javascript block after the update anchor in %s", GUIDE).isNotNegative();
+            String[] filter = objectAfter(block, updateMany, ".updateMany(");
+            String[] update = objectAfter(block, Integer.parseInt(filter[1]), "the .updateMany( filter");
+            return new String[]{filter[0], update[0]};
+        }
+
+        private void saveWithId(String id, Map<String, StreamMarks> marks) {
+            SagaEnvelope<String> envelope = new SagaEnvelope<>(id, "awaiting-payment", SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM_ID, 12L, "other", 1L), null,
+                    NOW, NOW, null, null, true, null, marks);
+            assertThat(stateStore.compareAndSave(id, envelope, 0)).isTrue();
+        }
+
+        private Document rawDocument(String id) {
+            return requireNonNull(mongoOperations.findOne(Query.query(where("_id").is(id)), Document.class, COLLECTION));
+        }
+
+        private void saveQuarantinedWithMarks(String id) {
+            saveWithId(id, PENDING_MARKS);
+            mongoOperations.getCollection(COLLECTION).updateOne(Document.parse("{ _id: '" + id + "' }"), Document.parse("{ $set: { status: 'QUARANTINED' } }"));
+        }
+
+        @Test
+        void the_guide_filter_lists_exactly_the_marked_instances_with_a_pending_or_legacy_failed_version() {
+            // Given
+            saveWithId("1", PENDING_MARKS);
+            saveWithId("2", LEGACY_FAILED_ONLY_MARKS);
+            saveWithId("3", MARKS);
+            saveWithId("4", Map.of());
+            saveQuarantinedWithMarks("5");
+
+            // When
+            List<Document> listed = mongoOperations.find(new BasicQuery(guideFilter(), "{ state: 0 }"), Document.class, COLLECTION);
+
+            // Then
+            assertAll(
+                    () -> assertThat(rawDocument("1").getString("status")).isEqualTo("ACTIVE_MARKED"),
+                    () -> assertThat(rawDocument("2").getString("status")).isEqualTo("ACTIVE_MARKED"),
+                    () -> assertThat(rawDocument("3").getString("status")).isEqualTo("ACTIVE_MARKED"),
+                    () -> assertThat(rawDocument("4").getString("status")).isEqualTo("ACTIVE"),
+                    () -> assertThat(rawDocument("5").getString("status")).isEqualTo("QUARANTINED"),
+                    () -> assertThat(listed).extracting(d -> d.getString("_id")).containsExactlyInAnyOrder("1", "2")
+            );
+        }
+        @Test
+        void the_guide_update_many_gives_only_the_active_marked_instances_their_plain_status_back() {
+            // Given
+            saveWithId("1", PENDING_MARKS);
+            saveWithId("2", LEGACY_FAILED_ONLY_MARKS);
+            saveWithId("3", MARKS);
+            saveWithId("4", Map.of());
+            saveQuarantinedWithMarks("5");
+            Document activeBefore = rawDocument("4");
+            Document quarantinedBefore = rawDocument("5");
+            String[] updateMany = guideUpdateMany();
+
+            // When
+            mongoOperations.getCollection(COLLECTION).updateMany(Document.parse(updateMany[0]), Document.parse(updateMany[1]));
+
+            // Then
+            assertAll(
+                    () -> assertThat(rawDocument("1").getString("status")).isEqualTo("ACTIVE"),
+                    () -> assertThat(rawDocument("2").getString("status")).isEqualTo("ACTIVE"),
+                    () -> assertThat(rawDocument("3").getString("status")).isEqualTo("ACTIVE"),
+                    () -> assertThat(rawDocument("4")).isEqualTo(activeBefore),
+                    () -> assertThat(rawDocument("5")).isEqualTo(quarantinedBefore)
+            );
         }
     }
 }
