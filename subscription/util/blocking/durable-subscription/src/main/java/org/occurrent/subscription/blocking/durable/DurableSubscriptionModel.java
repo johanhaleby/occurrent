@@ -1386,6 +1386,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             if (stored == null && position == null && !config.startWhenNoStartPositionCanBeRecorded) {
                 throw noStartPositionCanBeRecorded(subscriptionId);
             }
+            // With nothing stored, a first position is recorded now or, when the override let a missing position through,
+            // by a later evaluation once the wrapped model has one. A refusal there comes after subscribe has returned,
+            // and the blocking MongoDB models retry it without end, so it is refused here, where it reaches subscribe
+            if (stored == null && !config.startWhenFirstPositionCanBeOverwritten && !storage.evaluatesWriteConditionsFor(subscriptionId)) {
+                throw firstPositionCanBeOverwritten(subscriptionId);
+            }
             settling.lock();
             try {
                 outcome = settled;
