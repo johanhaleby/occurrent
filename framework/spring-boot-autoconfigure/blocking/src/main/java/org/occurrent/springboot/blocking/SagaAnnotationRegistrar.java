@@ -158,7 +158,7 @@ class SagaAnnotationRegistrar {
         SagaRunner<E, C> configured = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
         CompetingConsumerStrategy competingConsumerStrategy = resolveSagaCompetingConsumerStrategy();
         SagaRunner<E, C> withStrategy = competingConsumerStrategy == null ? configured : configured.competingConsumerStrategy(competingConsumerStrategy);
-        rejectStoreWithoutSkippedInputs(id, config, stateStore);
+        rejectStoreThatCannotQuarantine(id, config, stateStore);
         // Effectively final, so a withheld push saga can close over it and run the same registration later.
         final SagaRunner<E, C> runner = withStrategy;
 
@@ -645,9 +645,14 @@ class SagaAnnotationRegistrar {
     }
 
     // The runner refuses such a store too, but names only SagaRunnerConfig.disableQuarantine(), which an application on
-    // the starter does not call
-    private static void rejectStoreWithoutSkippedInputs(String id, SagaRunnerConfig config, SagaStateStore<?> stateStore) {
-        if (config.quarantineAfter().isEmpty() || stateStore instanceof SagaStateStoreSkippedInputs) {
+    // the starter does not call. The atomic transitions are asked here too, since a push saga under manual mode runs
+    // the runner only when the application starts it, long after the context has started
+    private static void rejectStoreThatCannotQuarantine(String id, SagaRunnerConfig config, SagaStateStore<?> stateStore) {
+        if (config.quarantineAfter().isEmpty()) {
+            return;
+        }
+        if (stateStore instanceof SagaStateStoreSkippedInputs skippedInputs) {
+            skippedInputs.requireAtomicTransitions();
             return;
         }
         throw new IllegalStateException("@Saga '%s' quarantines an instance that keeps failing, and its state store %s does not implement SagaStateStoreSkippedInputs, so a quarantined instance could neither record the inputs it skips nor be released. Implement SagaStateStoreSkippedInputs on the store, as the in-memory and MongoDB stores do, or turn quarantine off with occurrent.saga.quarantine-enabled=false.".formatted(id, stateStore.getClass().getName()));

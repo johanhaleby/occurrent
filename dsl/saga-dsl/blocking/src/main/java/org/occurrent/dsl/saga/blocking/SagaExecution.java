@@ -848,7 +848,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 if (failureRecord.quarantined()) {
                     // The record stays, so the next release replays it first
                     log.error("Saga '{}' instance '{}' is QUARANTINED again, stopped on the event '{}' while it was releasing, which has been failing for {}, past its budget of {}. The inputs after it stay recorded, and a later release replays this event first.",
-                            subscriptionId, sagaId, meta.redeliveryKey(), Duration.between(Objects.requireNonNull(failureRecord.envelope().failure()).firstFailedAt(), now), quarantineAfter, failure);
+                            subscriptionId, sagaId, record.key(), Duration.between(Objects.requireNonNull(failureRecord.envelope().failure()).firstFailedAt(), now), quarantineAfter, failure);
                     return SagaSubscription.ReleaseResult.QUARANTINED_AGAIN;
                 }
                 break;

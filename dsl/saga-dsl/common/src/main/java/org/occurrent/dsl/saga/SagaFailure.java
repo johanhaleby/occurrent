@@ -54,15 +54,18 @@ import static java.util.Objects.requireNonNull;
  * {@code null} here. Read {@code input} when you want the identity and {@code position} when you have a feed that
  * numbers its events and you want the number.
  * <p>
- * A release that quarantines the instance again because a replayed event fails names that event by its stream id and
- * stream version, since an event without them cannot quarantine an instance, see {@link SkippedInput}.
+ * A release that quarantines the instance again because a replayed event fails names that event by the key it was
+ * recorded under. The key can be a CloudEvent key of the form
+ * {@code cloudevent:<length of id>:<id>:<source>@cloudevent} rather than a stream id with a stream version, see
+ * {@link SkippedInput}.
  * <p>
  * A record that 0.31.0 to 0.34.0 wrote for an event carrying only a position holds {@code position:N} as its
  * {@code input}. The executor treats such a record as no record, so a new failure starts a fresh budget and the
  * instance's next successful delivery clears it.
  *
- * @param input          the failing input's redelivery key, which is its stream id with its stream version. The same
- *                       string the executor compares against to tell one failing input from the next
+ * @param input          the failing input's redelivery key, which is its stream id with its stream version, or the
+ *                       CloudEvent key a release names an event with no stream by. The same string the executor
+ *                       compares against to tell one failing input from the next
  * @param position       the global subscription position of the failing event, or {@code null} when the event carries
  *                       none
  * @param firstFailedAt  when {@code input} first failed, which is when its quarantine budget started running.

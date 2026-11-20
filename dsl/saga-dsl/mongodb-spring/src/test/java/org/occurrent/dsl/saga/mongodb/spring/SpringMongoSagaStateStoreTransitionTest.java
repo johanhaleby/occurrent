@@ -269,6 +269,46 @@ class SpringMongoSagaStateStoreTransitionTest {
     }
 
     @Nested
+    class AReplayOfARecordThatIsNotThereAnymore {
+
+        @Test
+        void because_another_release_deleted_it_writes_nothing_and_returns_false() {
+            SpringMongoSagaStateStore<Payment> store = store(RetryStrategy.none());
+            aQuarantinedInstanceWithTheRecordOfA(store, "order-1");
+            assertThat(skip(store, "order-1", new SkippedInput(2, "b@2", heldEvent("b@2")))).isTrue();
+            assertThat(replayed(store, "order-1", new SkippedInput(1, "a@1", heldEvent("a@1")))).isTrue();
+            StoredSaga instanceBefore = store.find("order-1").orElseThrow();
+            State before = stateOf(store, "order-1");
+
+            boolean applied = replayed(store, "order-1", new SkippedInput(1, "a@1", heldEvent("a@1")));
+
+            assertAll(
+                    () -> assertThat(applied).as("a replay of a record another release deleted already").isFalse(),
+                    () -> assertThat(store.find("order-1")).as("the instance, fields").contains(instanceBefore),
+                    () -> assertThat(stateOf(store, "order-1")).isEqualTo(before),
+                    () -> assertThat(before.records()).containsExactly(new SkippedInput(2, "b@2", heldEvent("b@2")))
+            );
+        }
+
+        @Test
+        void because_the_key_has_a_record_of_another_seq_writes_nothing_and_returns_false() {
+            SpringMongoSagaStateStore<Payment> store = store(RetryStrategy.none());
+            aQuarantinedInstanceWithTheRecordOfA(store, "order-2");
+            StoredSaga instanceBefore = store.find("order-2").orElseThrow();
+            State before = stateOf(store, "order-2");
+
+            boolean applied = replayed(store, "order-2", new SkippedInput(5, "a@1", heldEvent("a@1")));
+
+            assertAll(
+                    () -> assertThat(applied).as("a replay of a record whose key now has another seq").isFalse(),
+                    () -> assertThat(store.find("order-2")).as("the instance, fields").contains(instanceBefore),
+                    () -> assertThat(stateOf(store, "order-2")).isEqualTo(before),
+                    () -> assertThat(before.records()).containsExactly(new SkippedInput(1, "a@1", heldEvent("a@1")))
+            );
+        }
+    }
+
+    @Nested
     class AQuarantineEndedByAnInstanceThatIsNotCompleted {
 
         @Test
@@ -380,7 +420,7 @@ class SpringMongoSagaStateStoreTransitionTest {
             aQuarantinedInstanceWithTheRecordOfA(store, "order-1");
             List<Runnable> writes = List.of(
                     () -> skip(store, "order-1", new SkippedInput(2, "b@2", heldEvent("b@2"))),
-                    () -> replayed(store, "order-1", new SkippedInput(0, "a@1", heldEvent("a@1"))),
+                    () -> replayed(store, "order-1", new SkippedInput(1, "a@1", heldEvent("a@1"))),
                     () -> endedByCompletion(store, "order-1"));
 
             for (int i = 0; i < writes.size(); i++) {

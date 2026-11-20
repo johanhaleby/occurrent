@@ -825,6 +825,36 @@ class InMemorySagaStateStoreTest {
         }
 
         @Test
+        void a_replay_of_a_record_that_is_gone_writes_nothing_and_returns_false() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            skip("s1", "q1", new SkippedInput(1, "b@2", heldEvent("b@2")));
+            replayed("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            StoredSaga before = store.find("s1").orElseThrow();
+
+            boolean saved = replayed("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+
+            assertAll(
+                    () -> assertThat(saved).as("a replay of a record another release deleted already").isFalse(),
+                    () -> assertThat(store.find("s1")).as("the instance, version and fields").contains(before),
+                    () -> recordsOf("s1", new SkippedInput(1, "b@2", heldEvent("b@2"))));
+        }
+
+        @Test
+        void a_replay_of_a_record_with_another_seq_writes_nothing_and_returns_false() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+            StoredSaga before = store.find("s1").orElseThrow();
+
+            boolean saved = replayed("s1", "q1", new SkippedInput(3, "a@1", heldEvent("a@1")));
+
+            assertAll(
+                    () -> assertThat(saved).as("a replay of a record whose key now has another seq").isFalse(),
+                    () -> assertThat(store.find("s1")).as("the instance, version and fields").contains(before),
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1", heldEvent("a@1"))));
+        }
+
+        @Test
         void a_skip_that_fails_writing_the_instance_records_no_input() {
             instance("s1");
 

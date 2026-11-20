@@ -99,14 +99,18 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         requireNonNull(saga, "saga cannot be null");
         requireNonNull(quarantineId, "quarantineId cannot be null");
         requireNonNull(replayed, "replayed cannot be null");
-        return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga), quarantineId, records -> {
-            if (!replayed.equals(records.get(replayed.key()))) {
-                return records;
-            }
+        return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga), quarantineId,
+                records -> isStillRecorded(records, replayed), records -> {
             Map<String, SkippedInput> remaining = new HashMap<>(records);
             remaining.remove(replayed.key());
             return Map.copyOf(remaining);
         });
+    }
+
+    // Another seq for the key means the input was recorded again after a release applied the record it read
+    private static boolean isStillRecorded(Map<String, SkippedInput> records, SkippedInput replayed) {
+        SkippedInput recorded = records.get(replayed.key());
+        return recorded != null && recorded.seq() == replayed.seq();
     }
 
     @Override

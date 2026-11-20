@@ -579,14 +579,15 @@ public final class SagaExecutionSupport {
      * {@link SagaFailure#releasedAt()} is cleared, and the record stays, so a later release replays the input first and
      * then the records after it.
      * <p>
-     * {@code null} also when {@code meta} has no stream id and stream version, as for {@link #onFailure}. A failure on
-     * such an event does not quarantine the instance again, so the release stops and goes on with the event on its next
-     * poll.
+     * An event with no stream id and stream version, which a quarantined instance records only under
+     * {@link org.occurrent.dsl.saga.RedeliveryDetection#BEST_EFFORT}, is counted under its record's key, built from its
+     * CloudEvent id and source. The stream marks cannot hold it, so its clock is the failure record's alone, and the
+     * stream marks stay as they are. Its budget runs out like any other input's.
      */
     public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseFailure(SagaEnvelope<S> current, EventMeta meta,
                                                                                            Throwable failure, Instant now,
                                                                                            Duration quarantineAfter, int reorderWindow) {
-        String input = meta.redeliveryKey();
+        String input = meta.skipKey();
         if (input == null) {
             return null;
         }
@@ -594,20 +595,24 @@ public final class SagaExecutionSupport {
         if (!current.isReleasing() || existing == null) {
             return null;
         }
+        boolean streamKeyed = meta.redeliveryKey() != null;
         // As replay(..) reads the marks, since an input behind the window was never applied and its failure counts
-        if (classify(current, meta, NO_REORDER_WINDOW) == Delivery.REDELIVERY) {
+        if (streamKeyed && classify(current, meta, NO_REORDER_WINDOW) == Delivery.REDELIVERY) {
             // Another writer applied it in between, so there is no failure left to record
             return null;
         }
         Instant failingSince = failingSince(current, meta, now);
         boolean budgetUsedUp = Duration.between(failingSince, now).compareTo(quarantineAfter) >= 0;
-        if (!budgetUsedUp && existing.input().equals(input) && isPending(current.streamMarks().get(meta.streamId()), meta)) {
+        // An input with no stream has its clock on the record alone, so the record naming it is enough
+        if (!budgetUsedUp && existing.input().equals(input) && (!streamKeyed || isPending(current.streamMarks().get(meta.streamId()), meta))) {
             return null;
         }
         // The record named an input the release has applied by now, since a release applies its records in order. So
         // unlike onFailure nothing of the replaced record is kept on the stream marks, which would make an applied input
         // outstanding again
-        Map<String, StreamMarks> streamMarks = withPending(current.streamMarks(), current.streamWatermarks(), meta, reorderWindow, failingSince);
+        Map<String, StreamMarks> streamMarks = streamKeyed
+                ? withPending(current.streamMarks(), current.streamWatermarks(), meta, reorderWindow, failingSince)
+                : current.streamMarks();
         if (budgetUsedUp) {
             SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()),
                     null, existing.quarantineId());
@@ -775,7 +780,7 @@ public final class SagaExecutionSupport {
             return pendingSince;
         }
         SagaFailure existing = currentFailure(current);
-        return existing != null && existing.input().equals(meta.redeliveryKey()) ? existing.firstFailedAt() : now;
+        return existing != null && existing.input().equals(meta.skipKey()) ? existing.firstFailedAt() : now;
     }
 
     // Only the input the record names clears it. Letting any successful input clear it lets a saga that re-arms a timer

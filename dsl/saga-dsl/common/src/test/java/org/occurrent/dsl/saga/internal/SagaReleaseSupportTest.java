@@ -823,10 +823,68 @@ class SagaReleaseSupportTest {
         }
 
         @Test
-        void writes_nothing_when_the_event_has_no_stream_id_and_version_since_such_a_failure_does_not_quarantine_again() {
+        void writes_nothing_when_the_event_has_no_stream_and_no_cloud_event_id_and_source_since_it_has_no_key() {
             SagaEnvelope<OrderState> releasing = quarantined(releasingOn(9), 3L);
 
             assertThat(failOn(releasing, new EventMeta(null, null, 40L))).isNull();
+        }
+
+        private static final String STREAMLESS_KEY = SkippedInputKey.cloudEventKey("e-40", "urn:test");
+
+        private static EventMeta streamless() {
+            return new EventMeta(null, null, 40L, null, "e-40", "urn:test");
+        }
+
+        private static SagaFailure releasingOnStreamless(Instant firstFailedAt) {
+            return new SagaFailure(STREAMLESS_KEY, 40L, firstFailedAt, IllegalStateException.class.getName(), "boom",
+                    NOW, QUARANTINE_ID);
+        }
+
+        private static SagaEnvelope<OrderState> holding(SagaFailure failure) {
+            SagaEnvelope<OrderState> base = quarantined(failure, 3L);
+            return new SagaEnvelope<>(base.sagaId(), base.state(), base.status(), base.version(), base.timers(),
+                    base.streamWatermarks(), base.positionWatermark(), base.createdAt(), base.updatedAt(),
+                    base.completedAt(), base.currentStep(), base.started(), base.failure(),
+                    Map.of("o1", new StreamMarks(6, Map.of())), base.quarantineSkipCount());
+        }
+
+        @Test
+        void records_the_failure_of_an_event_with_no_stream_under_its_cloud_event_key_and_leaves_the_stream_marks() {
+            SagaEnvelope<OrderState> releasing = holding(releasingOn(9));
+
+            FailureRecord<OrderState> record = failOn(releasing, streamless());
+
+            assertAll(
+                    () -> assertThat(record).as("record").isNotNull(),
+                    () -> assertThat(record.quarantined()).as("quarantined").isFalse(),
+                    () -> assertThat(record.envelope().failure().input()).as("input").isEqualTo(STREAMLESS_KEY),
+                    () -> assertThat(record.envelope().failure().firstFailedAt()).as("firstFailedAt").isEqualTo(NOW),
+                    () -> assertThat(record.envelope().failure().releasedAt()).as("releasedAt").isEqualTo(NOW),
+                    () -> assertThat(record.envelope().streamMarks()).as("marks").isEqualTo(releasing.streamMarks())
+            );
+        }
+
+        @Test
+        void writes_nothing_when_an_event_with_no_stream_fails_again_within_its_budget() {
+            SagaEnvelope<OrderState> releasing = holding(releasingOnStreamless(NOW.minusSeconds(1)));
+
+            assertThat(failOn(releasing, streamless())).isNull();
+        }
+
+        @Test
+        void quarantines_again_on_an_event_with_no_stream_when_its_budget_has_run_out() {
+            SagaEnvelope<OrderState> releasing = holding(releasingOnStreamless(NOW.minus(BUDGET).minusSeconds(1)));
+
+            FailureRecord<OrderState> record = failOn(releasing, streamless());
+
+            assertAll(
+                    () -> assertThat(record).as("record").isNotNull(),
+                    () -> assertThat(record.quarantined()).as("quarantined").isTrue(),
+                    () -> assertThat(record.envelope().status()).as("status").isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(record.envelope().failure().releasedAt()).as("releasedAt").isNull(),
+                    () -> assertThat(record.envelope().failure().quarantineId()).as("id").isEqualTo(QUARANTINE_ID),
+                    () -> assertThat(record.envelope().failure().input()).as("input").isEqualTo(STREAMLESS_KEY)
+            );
         }
     }
 

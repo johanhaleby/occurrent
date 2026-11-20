@@ -53,7 +53,7 @@ a compare-and-set on the instance's version that writes the instance and its rec
 | Transition | Instance | Records under the quarantine id |
 | --- | --- | --- |
 | `compareAndSaveSkipped` | raises the skip counter, or quarantines the instance, state left alone | records the input with its event, keeps a record of the same key that is there already |
-| `compareAndSaveReplayed` | the whole instance after the replayed input, or one version up when the input was applied already | deletes the replayed record, only while its sequence number is the one the release read |
+| `compareAndSaveReplayed` | the whole instance after the replayed input, or one version up when the input was applied already | deletes the replayed record, and writes neither unless that record is still there with the sequence number the release read |
 | `compareAndSaveQuarantineEnded` | the whole instance, `ACTIVE` after the last record or `COMPLETED` by a replayed input | deletes every record |
 
 The write that quarantines an instance is a `compareAndSaveSkipped` that records the input it was quarantined on, and

@@ -675,7 +675,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             Objects.requireNonNull(replayed, "replayed cannot be null");
             Document document = toDocument(saga);
             Document filter = skippedInputFilter(saga.sagaId(), quarantineId, replayed.key()).append(SKIPPED_SEQ, replayed.seq());
-            return transition(database -> instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
+            // A record already gone was applied by another release, so applying it again here would apply it twice. A
+            // release that deletes it meanwhile writes the instance too, so the replaceOne then conflicts and the
+            // transaction runs again
+            return transition(database -> skippedInputs(database).find(filter).first() != null
+                                          && instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
                     database -> skippedInputs(database).deleteOne(filter));
         });
     }

@@ -145,9 +145,11 @@ takes a new number. A redelivered input whose key a skip recorded takes a number
 the record already there. When two skips of one key race, the first write keeps its record and the other's number goes
 unused in the same way.
 
-Release deletes a record it replayed in the write that applies its input, `compareAndSaveReplayed`, which deletes the
-record of that key only when its sequence number is the one release read. So a release never removes another record
-written under the same key in the meantime. No write moves a record. A release starts in a write to the instance alone,
+Release deletes a record it replayed in the write that applies its input, `compareAndSaveReplayed`, which writes
+only while the record of that key still has the sequence number release read. So a release never removes another record
+written under the same key in the meantime. Two releases that read the same record apply it once, since the second
+finds it gone and writes nothing, and then reads the instance again. Without that check an event with no stream id and
+version would be applied twice, because nothing on the instance says it was applied. No write moves a record. A release starts in a write to the instance alone,
 see point 3 step 1.
 
 `SagaStateStore.delete(sagaId)` deletes the instance and the records under the quarantine id it had in one atomic
@@ -212,8 +214,9 @@ one its failure record names.
    the instance again and applies its input, which was never acknowledged, to the `ACTIVE` instance like any live
    input.
 
-Release applies a held event by that event's stream id and version, with the same budget and stream marks as any
-other input. A failure while releasing replaces the failure record differently from a live one, see point 5.
+Release counts a held event's failure under the key the event was recorded under, with the same budget as any other
+input, and on the stream marks when the event has a stream id and version. A failure while releasing replaces the
+failure record differently from a live one, see point 5.
 
 An input that arrives live while the instance is releasing reaches the quarantined skip and is recorded. The skip's
 write changes the instance's version together with the record, so a release that read the records before the record
@@ -245,8 +248,8 @@ Release returns a `ReleaseResult` that says what it did:
 
 - `RELEASED`: every record was replayed and the instance is `ACTIVE`, or `COMPLETED` when a replayed input completed
   it.
-- `STILL_RELEASING`: an input failed again inside its budget, with quarantine off, or without a stream id and version,
-  and the instance stays releasing.
+- `STILL_RELEASING`: an input failed again inside its budget, or with quarantine off, and the instance stays
+  releasing.
 - `QUARANTINED_AGAIN`: an input's budget ran out.
 - `NOT_QUARANTINED`: the instance isn't quarantined.
 - `NOT_FOUND`: no instance has that id.
@@ -280,10 +283,12 @@ replaced record named on the stream marks as one that failed, so a redelivery of
 releasing keeps nothing of the replaced record on the marks, since the release has applied that input by then, and
 keeping it would make an applied input count as not applied and apply it twice.
 
-A held input without a stream id and version has no redelivery key, so its failure isn't recorded and can't quarantine
-the instance again. The release stops on it, returns `STILL_RELEASING` and logs a `WARN`, and the instance stays
-releasing with nothing written. The poller tries the input again on every poll, with no budget to run out, until it
-succeeds or the instance is deleted. A live failure of such an input doesn't quarantine an instance either.
+A held input without a stream id and version, which only `RedeliveryDetection.BEST_EFFORT` records, has its failure
+counted under its record's CloudEvent key. Every retry replays the same record, so that key matches from one failure
+to the next. The stream marks can't hold such an input, so the failure record alone holds its clock, and the marks
+stay as they are. A failure inside the budget writes nothing once the failure record names the input, and when the
+budget runs out the instance is quarantined again on it. A live failure of such an input doesn't quarantine an
+instance.
 
 The timer poller also asks for releasing instances on every poll and continues their replay. With a
 competing-consumer strategy only the node holding the saga's timer lease polls, which is the Spring Boot starter's
@@ -353,8 +358,8 @@ failed input first and then those records.
 
 The instance keeps the record of the input that failed, since the write for a used-up budget doesn't delete it. Release
 applies the records in order, so the input that failed has the first record left, and the next release replays it
-first without moving anything. Only an input with a stream id and version can use up a budget, and its record is under
-that stream key, the same key the failure record names.
+first without moving anything. The failure record names the input by the key its record is under, a stream key or a
+CloudEvent key.
 
 When a read of the store fails, the release throws and the instance stays releasing. On a store that answers the
 poller's query, the poller tries again on its next poll.
@@ -570,9 +575,9 @@ The upgrade guide has the procedure for operators, in
 - An event erased from the event store while an instance holds it, for a GDPR request for example, stays in its record
   until a release replays it or the instance is deleted. Erasing an event means releasing or deleting the quarantined
   instances that hold it as well.
-- A held input without a stream id and version that fails during a release can't quarantine the instance again, since
-  it has no redelivery key. The release stays incomplete and the poller tries the input again on every poll, until it
-  succeeds or the instance is deleted, see point 5.
+- A record of an input without a stream id and version, taken under `RedeliveryDetection.BEST_EFFORT`, is still
+  replayed after a switch to `REQUIRED`, since `REQUIRED` refuses such an event only when it's delivered live. The
+  release applies the record once, because the write that applies it takes place only while the record is there.
 - Every 0.34.0 node that runs sagas stops before any 0.35.0 node starts, so the service that hosts the sagas is down
   for the deploy.
 - A 0.34.0 node that runs next to a 0.35.0 node anyway, or after a downgrade, fails on every event for an instance

@@ -18,6 +18,7 @@ package org.occurrent.dsl.saga.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -246,6 +247,56 @@ class SagaReleaseConcurrentCallersTest {
         );
     }
 
+    @Test
+    void a_release_call_replaying_a_record_another_call_applied_after_it_read_it_does_not_apply_it_again()
+            throws Exception {
+        CloudEvent streamless = withoutStream(append(new ItemAdded("streamless", ORDER, "a")));
+        StaleRecordStore store = new StaleRecordStore(streamless.getId());
+        SagaExecution<OrderEvent, Order, Object> execution = execution(store);
+        execution.onCloudEvent(append(new OrderPlaced(nextEventId(), ORDER)));
+        poisonFails = true;
+        quarantineOn(execution, append(new ItemAdded(nextEventId(), ORDER, "poison")));
+        poisonFails = false;
+        execution.onCloudEvent(streamless);
+        execution.onCloudEvent(append(new ItemAdded(nextEventId(), ORDER, "b")));
+        String quarantineId = instance().quarantineId();
+        assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE))
+                .as("poison, the input with no stream and b").hasSize(3);
+
+        CompletableFuture<ReleaseResult> a = CompletableFuture.supplyAsync(() -> {
+            store.a = Thread.currentThread();
+            try {
+                return execution.release(ORDER);
+            } finally {
+                store.aFinished.countDown();
+            }
+        });
+        await(store.aHasReadTheRecordWithNoStream);
+        ReleaseResult bResult = execution.release(ORDER);
+        ReleaseResult aResult = a.get(10, TimeUnit.SECONDS);
+
+        SagaEnvelope<Order> after = instance();
+        String evidence = "A returned " + aResult + ", B returned " + bResult + ", status " + after.status()
+                          + ", items " + after.state().items() + ", dispatched " + dispatched
+                          + ", records left under the quarantine id: " + recordsLeft(quarantineId);
+        assertAll(
+                () -> assertThat(after.state().items())
+                        .as("the input with no stream is applied once, by B. " + evidence)
+                        .containsExactly("poison", "a", "b"),
+                () -> assertThat(store.staleReplayWon)
+                        .as("A's write of the record B applied already. " + evidence).isFalse(),
+                () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE))
+                        .as("no record is left. " + evidence).isEmpty()
+        );
+    }
+
+    private static CloudEvent withoutStream(CloudEvent event) {
+        return CloudEventBuilder.v1(event)
+                .withoutExtension(OccurrentCloudEventExtension.STREAM_ID)
+                .withoutExtension(OccurrentCloudEventExtension.STREAM_VERSION)
+                .build();
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             if (!latch.await(10, TimeUnit.SECONDS)) {
@@ -458,6 +509,52 @@ class SagaReleaseConcurrentCallersTest {
             }
             if (isP() && replayed.seq() > 0) {
                 pDeletedItsRecord.countDown();
+            }
+            return saved;
+        }
+    }
+
+    // Call order: A replays the first record, reads the one with no stream and pauses, B applies that record and pauses
+    // with a record left, A reads the instance B wrote and replays the record it read against it, and the two finish
+    private final class StaleRecordStore extends DelegatingStore {
+        volatile @Nullable Thread a;
+        final CountDownLatch aHasReadTheRecordWithNoStream = new CountDownLatch(1);
+        final CountDownLatch bAppliedThatRecord = new CountDownLatch(1);
+        final CountDownLatch aFinished = new CountDownLatch(1);
+        final AtomicBoolean staleReplayWon = new AtomicBoolean(false);
+        private final String staleEventId;
+        private final AtomicInteger aRecordReads = new AtomicInteger();
+        private final AtomicInteger bReplays = new AtomicInteger();
+
+        StaleRecordStore(String staleEventId) {
+            this.staleEventId = staleEventId;
+        }
+
+        private boolean isA() {
+            return Thread.currentThread() == a;
+        }
+
+        @Override
+        public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
+            List<SkippedInput> found = super.findSkippedInputs(sagaId, quarantineId, limit);
+            if (isA() && aRecordReads.incrementAndGet() == 2) {
+                aHasReadTheRecordWithNoStream.countDown();
+                await(bAppliedThatRecord);
+            }
+            return found;
+        }
+
+        @Override
+        public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId,
+                                              SkippedInput replayed) {
+            boolean saved = super.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
+            if (isA()) {
+                if (replayed.event().getId().equals(staleEventId) && saved) {
+                    staleReplayWon.set(true);
+                }
+            } else if (bReplays.incrementAndGet() == 1) {
+                bAppliedThatRecord.countDown();
+                await(aFinished);
             }
             return saved;
         }

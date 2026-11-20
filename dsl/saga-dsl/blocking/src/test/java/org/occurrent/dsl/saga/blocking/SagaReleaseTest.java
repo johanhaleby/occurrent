@@ -1594,36 +1594,65 @@ class SagaReleaseTest {
         }
 
         /**
-         * With no stream key there is no redelivery key to name the failure by, so a quarantine on it cannot be recorded,
-         * as for the same event arriving live.
+         * With no stream key the failure is named by the CloudEvent key of the record, so it has a budget too.
          */
         @Test
-        void an_input_held_without_a_stream_key_that_keeps_failing_leaves_the_instance_releasing_and_is_applied_once_it_stops() {
+        void a_streamless_input_that_keeps_failing_is_quarantined_again_past_its_budget_and_applied_once_it_stops() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoSkipped();
             Instant releasedAt = start.plus(Duration.ofHours(1));
             now.set(releasedAt);
             failing.clear();
             failing.add("a");
-            ReleaseResult beforeTheBudget = execution.release(ORDER);
+            ReleaseResult first = execution.release(ORDER);
+            SagaEnvelope<Order> afterTheFirstFailure = instance();
+            now.set(releasedAt.plus(BUDGET.dividedBy(3)));
+            ReleaseResult insideTheBudget = execution.release(ORDER);
+            SagaEnvelope<Order> afterTheRetry = instance();
             now.set(releasedAt.plus(BUDGET));
             ReleaseResult pastTheBudget = execution.release(ORDER);
-            SagaEnvelope<Order> stillReleasing = instance();
+            SagaEnvelope<Order> requarantined = instance();
             List<String> recordsLeft = recordedKeys();
-            String quarantineId = stillReleasing.quarantineId();
+            String quarantineId = requarantined.quarantineId();
             failing.clear();
 
             ReleaseResult last = execution.release(ORDER);
 
             assertAll(
-                    () -> assertThat(beforeTheBudget).isEqualTo(ReleaseResult.STILL_RELEASING),
-                    () -> assertThat(pastTheBudget).isEqualTo(ReleaseResult.STILL_RELEASING),
-                    () -> assertThat(stillReleasing.isReleasing()).isTrue(),
-                    () -> assertThat(stillReleasing.failure().input()).isEqualTo(streamKey(quarantined.k())),
-                    () -> assertThat(recordsLeft).containsExactly(cloudEventKey(quarantined.a()), streamKey(quarantined.b())),
-                    () -> assertThat(last).isEqualTo(ReleaseResult.RELEASED),
-                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
-                    () -> assertThat(items()).containsExactly("poison", "a", "b"),
-                    () -> assertThat(recordedKeysOf(quarantineId)).isEmpty()
+                    () -> assertThat(first).as("first failure").isEqualTo(ReleaseResult.STILL_RELEASING),
+                    () -> assertThat(afterTheFirstFailure.failure().input()).as("input named by the first failure")
+                            .isEqualTo(cloudEventKey(quarantined.a())),
+                    () -> assertThat(insideTheBudget).as("inside the budget").isEqualTo(ReleaseResult.STILL_RELEASING),
+                    () -> assertThat(afterTheRetry.version()).as("version").isEqualTo(afterTheFirstFailure.version()),
+                    () -> assertThat(pastTheBudget).as("past the budget").isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
+                    () -> assertThat(requarantined.status()).as("status").isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(requarantined.isReleasing()).as("releasing").isFalse(),
+                    () -> assertThat(requarantined.failure().input()).as("input")
+                            .isEqualTo(cloudEventKey(quarantined.a())),
+                    () -> assertThat(requarantined.failure().releasedAt()).as("releasedAt").isNull(),
+                    () -> assertThat(recordsLeft).as("records held")
+                            .containsExactly(cloudEventKey(quarantined.a()), streamKey(quarantined.b())),
+                    () -> assertThat(last).as("release once it stops failing").isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(instance().status()).as("status after the release").isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(items()).as("items").containsExactly("poison", "a", "b"),
+                    () -> assertThat(packed()).extracting(Pack::item).as("packed").containsExactly("poison", "a", "b"),
+                    () -> assertThat(recordedKeysOf(quarantineId)).as("records left").isEmpty()
+            );
+        }
+
+        @Test
+        void a_streamless_input_held_under_best_effort_is_applied_once_by_a_release_from_a_required_runner() {
+            quarantinedOnPoisonWithTwoSkipped();
+            failing.clear();
+            now.set(start.plus(Duration.ofHours(1)));
+            SagaExecution<OrderEvent, Order, OrderCommand> required =
+                    execution(CONFIG.withRedeliveryDetection(RedeliveryDetection.REQUIRED));
+
+            ReleaseResult result = required.release(ORDER);
+
+            assertAll(
+                    () -> assertThat(result).as("result").isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(items()).as("items").containsExactly("poison", "a", "b"),
+                    () -> assertThat(packed()).extracting(Pack::item).as("packed").containsExactly("poison", "a", "b")
             );
         }
     }

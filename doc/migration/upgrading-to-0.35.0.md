@@ -1004,7 +1004,8 @@ A store that implements it keeps the skipped inputs, each with its event, and re
 `findSkippedInputs` with the same data, extensions and time it was given. Apart from `delete(sagaId)`, it changes the records only in three
 compare-and-sets on the instance, `compareAndSaveSkipped`, `compareAndSaveReplayed` and
 `compareAndSaveQuarantineEnded`. Each writes the instance and its records in one atomic write, and on a version
-conflict returns `false` and writes neither. The write that quarantines an instance is a `compareAndSaveSkipped` too,
+conflict returns `false` and writes neither. `compareAndSaveReplayed` also returns `false` and writes neither when
+the record it replays is gone or has another `seq`, since another release applied that input already. The write that quarantines an instance is a `compareAndSaveSkipped` too,
 and with an expected version of 0 it inserts an instance the store doesn't hold yet. In `delete(sagaId)` it deletes the records under
 the quarantine id of the instance it removes, in the same atomic write as the instance. A call that returns normally
 has to have made its write survive a failover, since the runner acknowledges the input right after it. It implements
@@ -1376,11 +1377,13 @@ transaction at once, whatever the strategy retries, and that includes a strategy
 
 The store asks the server for its deployment once, with `hello`, when it is constructed. On a standalone server,
 `SagaRunner.run` throws an `IllegalStateException` when quarantine is on, before the saga gets its first input, and a
-`@Saga` with quarantine on refuses to start the same way. The message says to run MongoDB as a replica set, which can
+`@Saga` with quarantine on fails the same way while the application context starts, a push saga under
+`occurrent.subscription.mode=manual` included. The message says to run MongoDB as a replica set, which can
 have a single member, or as a sharded cluster, or to turn quarantine off with `occurrent.saga.quarantine-enabled=false`
-on Spring Boot or `SagaRunnerConfig.disableQuarantine()` on a `SagaRunner`. With quarantine off every other call works
-on a standalone server, except the `delete` of an instance 0.35.0 quarantined while the database ran as a replica set.
-The server refuses that transaction, and the store throws an `IllegalStateException` that says it needs a replica set.
+on Spring Boot or `SagaRunnerConfig.disableQuarantine()` on a `SagaRunner`. With quarantine off a saga runs on a
+standalone server, since the runner then makes none of the three transactional writes. A release or a `delete` of an
+instance 0.35.0 quarantined while the database ran as a replica set still writes in a transaction. The server refuses
+it, and the store throws an `IllegalStateException` that says it needs a replica set.
 
 Inside a MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your transaction
 instead of starting their own. In such a transaction the store sends each read and write once, whatever `RetryStrategy`
