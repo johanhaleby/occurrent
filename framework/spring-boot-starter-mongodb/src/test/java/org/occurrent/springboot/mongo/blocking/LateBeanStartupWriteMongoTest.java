@@ -79,7 +79,7 @@ import static org.awaitility.Awaitility.await;
  * the first {@code getBean} after {@code SpringApplication.run} returns builds it. Each test first proves that, by
  * checking that the bean did not exist when the context refreshed and that its constructor ran after the run returned.
  * The exceptions are a {@code FactoryBean} built as the context starts, whose product is still built after the run
- * returned, and a prototype, of which every {@code getBean} builds a new instance.
+ * returned and starts at the context's boundary, and a prototype, of which every {@code getBean} builds a new instance.
  */
 @DisplayName("A bean built after the context has refreshed, with a start-up write of its own")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -148,7 +148,7 @@ class LateBeanStartupWriteMongoTest {
     }
 
     @Test
-    void the_product_of_a_factory_bean_built_at_startup_misses_what_its_get_object_method_wrote_and_gets_what_is_written_once_it_exists() {
+    void the_product_of_a_factory_bean_built_at_startup_gets_what_its_get_object_method_wrote_and_what_is_written_once_it_exists() {
         try (ConfigurableApplicationContext context = boot(EagerFactoryApplication.class, "eager-factory-get-object")) {
             EagerProductFactory factory = context.getBean("&eagerProductFactory", EagerProductFactory.class);
             assertThat(factory.builtAfterRunReturned).as("factory was built after SpringApplication.run returned").isFalse();
@@ -159,13 +159,13 @@ class LateBeanStartupWriteMongoTest {
             assertThat(product.builtAfterRunReturned).as("product was built after SpringApplication.run returned").isTrue();
             writeEvent(context, "written-once-the-product-exists");
 
-            awaitDelivery(product.received, 1);
-            assertThat(product.received).extracting(TestEvent::name).containsExactly("written-once-the-product-exists");
+            awaitDeliveryOf(product.received, "written-once-the-product-exists");
+            assertThat(product.received).extracting(TestEvent::name).containsExactly("written-by-get-object", "written-once-the-product-exists");
         }
     }
 
     @Test
-    void the_product_of_a_factory_bean_built_at_startup_misses_what_was_written_before_it_was_built_and_gets_what_is_written_once_it_exists() {
+    void the_product_of_a_factory_bean_built_at_startup_gets_what_was_written_before_it_was_built_and_what_is_written_once_it_exists() {
         try (ConfigurableApplicationContext context = boot(EagerFactoryApplication.class, "eager-factory-write-before")) {
             EagerProductFactory factory = context.getBean("&eagerProductFactory", EagerProductFactory.class);
             assertThat(factory.builtAfterRunReturned).as("factory was built after SpringApplication.run returned").isFalse();
@@ -175,8 +175,8 @@ class LateBeanStartupWriteMongoTest {
             assertThat(product.builtAfterRunReturned).as("product was built after SpringApplication.run returned").isTrue();
             writeEvent(context, "written-once-the-product-exists");
 
-            awaitDelivery(product.received, 1);
-            assertThat(product.received).extracting(TestEvent::name).containsExactly("written-once-the-product-exists");
+            awaitDeliveryOf(product.received, "written-once-the-product-exists");
+            assertThat(product.received).extracting(TestEvent::name).containsExactly("written-before-the-product-is-built", "written-once-the-product-exists");
         }
     }
 
@@ -235,6 +235,16 @@ class LateBeanStartupWriteMongoTest {
                 "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE);
         RUN_RETURNED.set(true);
         return context;
+    }
+
+    // Waits for the last event written, which arrives whichever earlier events the subscription started with, so the
+    // assertion that follows fails on the list it received and not on the wait.
+    private static void awaitDeliveryOf(List<TestEvent> received, String eventName) {
+        try {
+            await().atMost(ofSeconds(15)).pollInterval(ofMillis(100)).until(() -> received.stream().anyMatch(event -> event.name().equals(eventName)));
+        } catch (ConditionTimeoutException ignored) {
+            // reported by the assertion that follows
+        }
     }
 
     // The wait only gives a delivery the time to arrive. What was delivered is asserted by the caller, so a
