@@ -129,13 +129,22 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         // Before anything is read, so a refused write reads nothing, see beforeWrite()
         SynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? SynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
         // Closed once the write and its dispatch are done, so a pause or a stop meanwhile waits for them
+        Written<WriteResult, E> written;
         try (writeCheck) {
-            return executeAdmitted(streamId, executeOptions, functionThatCallsDomainModel, sideEffect, filter, writeCheck);
+            written = executeAdmitted(streamId, executeOptions, functionThatCallsDomainModel, filter, writeCheck);
         }
+        // After the write check closed, so a side effect that waits for a pause or a stop never waits for this write
+        if (sideEffect != null) {
+            sideEffect.accept(written.newDomainEvents());
+        }
+        return written.result();
     }
 
-    private WriteResult executeAdmitted(String streamId, ExecuteOptions<E> executeOptions, Function<List<E>, List<E>> functionThatCallsDomainModel,
-                                        @Nullable Consumer<List<E>> sideEffect, @Nullable StreamReadFilter filter, SynchronousEventDispatcher.WriteCheck writeCheck) {
+    private record Written<R, E>(R result, List<E> newDomainEvents) {
+    }
+
+    private Written<WriteResult, E> executeAdmitted(String streamId, ExecuteOptions<E> executeOptions, Function<List<E>, List<E>> functionThatCallsDomainModel,
+                                                    @Nullable StreamReadFilter filter, SynchronousEventDispatcher.WriteCheck writeCheck) {
         // @formatter:off
               record Attempt<T1 extends @Nullable Object, T2>(T1 v1, T2 v2) {}
               // @formatter:on
@@ -199,10 +208,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
 
         failureAfterWrite.rethrowIfHeld();
 
-        if (sideEffect != null) {
-            sideEffect.accept(result.v2);
-        }
-        return result.v1;
+        return new Written<>(Objects.requireNonNull(result.v1), result.v2);
     }
 
     private @Nullable StreamReadFilter resolveFilter(ExecuteOptions<E> executeOptions) {

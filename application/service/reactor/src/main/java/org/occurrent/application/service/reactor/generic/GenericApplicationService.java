@@ -126,7 +126,9 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         // Asked per subscription and before anything is read, see beforeWrite(), so a Mono built before a stop or before
         // the first synchronous handler registered answers for the moment it runs. Closed before the result or the
         // error reaches the subscriber, and when building the rest throws, so a pause or a stop that the subscriber
-        // makes once the write is done doesn't wait for it
+        // makes once the write is done doesn't wait for it.
+        // The side effect runs after the write check closed, so one that pauses or stops a subscription model, or
+        // waits for something that does, never waits for this write
         return Mono.using(() -> synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite(), writeCheck -> {
             boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
             FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
@@ -170,14 +172,14 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                     .retryWhen(retry)
                     // An executor can swallow the stand-in and return a value, which says nothing about the failure
                     .filter(result -> !failureAfterWrite.isHeld())
-                    .switchIfEmpty(Mono.defer(() -> failureAfterWrite.isHeld() ? Mono.error(failureAfterWrite.failure()) : Mono.empty()))
-                    .flatMap(result -> {
-                        if (sideEffect == null) {
-                            return Mono.just(result.writeResult());
-                        }
-                        return sideEffect.apply(result.newDomainEvents()).thenReturn(result.writeResult());
-                    });
-        }, ReactiveSynchronousEventDispatcher.WriteCheck::close, true);
+                    .switchIfEmpty(Mono.defer(() -> failureAfterWrite.isHeld() ? Mono.error(failureAfterWrite.failure()) : Mono.empty()));
+        }, ReactiveSynchronousEventDispatcher.WriteCheck::close, true)
+                .flatMap(result -> {
+                    if (sideEffect == null) {
+                        return Mono.just(result.writeResult());
+                    }
+                    return sideEffect.apply(result.newDomainEvents()).thenReturn(result.writeResult());
+                });
     }
 
     private Mono<Boolean> reportsTransaction(boolean dispatchSynchronously) {
