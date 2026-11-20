@@ -366,6 +366,50 @@ class LateFactoryBeanProductLiveStartTest {
         });
     }
 
+    /**
+     * The product is a FactoryBean too, so it reaches the post-processor the way its factory did.
+     */
+    @Test
+    void a_product_that_is_a_FactoryBean_of_a_singleton_factory_created_by_an_earlier_call_registers_from_the_boundary_its_factory_read() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+
+            BOUNDARY.set(2);
+            context.getBean("&factoryProductSingletonFactory");
+            BOUNDARY.set(3);
+            context.getBean("factoryProductSingletonFactory");
+
+            assertThat(ConcurrentLateFactoryBeanLiveStartTest.startOfLateRegistration(context, "factory-product-singleton-handler")).isEqualTo(GlobalCheckpoint.of(2));
+        });
+    }
+
+    @Test
+    void a_product_that_is_a_FactoryBean_of_a_prototype_factory_registers_from_the_boundary_its_factory_read() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+
+            BOUNDARY.set(2);
+            context.getBean("factoryProductPrototypeFactory");
+
+            assertThat(ConcurrentLateFactoryBeanLiveStartTest.startOfLateRegistration(context, "factory-product-prototype-handler")).isEqualTo(GlobalCheckpoint.of(2));
+        });
+    }
+
+    @Test
+    void a_prototype_factory_whose_product_is_a_FactoryBean_leaves_no_claim_for_the_next_factory_of_its_name_on_the_thread() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+            NOT_BEFORE.clear();
+
+            BOUNDARY.set(2);
+            context.getBean("factoryProductPrototypeFactory");
+            BOUNDARY.set(3);
+            context.getBean("&factoryProductPrototypeFactory");
+
+            assertThat(NOT_BEFORE).containsExactly(null, null);
+        });
+    }
+
     private static <T> T onNewThread(Callable<T> work) throws Exception {
         FutureTask<T> task = new FutureTask<>(work);
         new Thread(task, "late-factory-test").start();
@@ -454,6 +498,39 @@ class LateFactoryBeanProductLiveStartTest {
     static class StaleThirdHandler implements LateMarker {
         @Subscription(id = "stale-third-handler", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
         void onStaleThird(LateBeanAnnotationRegistrationTest.TestEvent event) {
+        }
+    }
+
+    // A product that implements FactoryBean itself and carries a handler
+    static class SingletonFactoryProduct implements LateMarker, FactoryBean<Object> {
+        @Subscription(id = "factory-product-singleton-handler", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        void onFactoryProduct(LateBeanAnnotationRegistrationTest.TestEvent event) {
+        }
+
+        @Override
+        public Object getObject() {
+            return new Object();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return Object.class;
+        }
+    }
+
+    static class PrototypeFactoryProduct implements LateMarker, FactoryBean<Object> {
+        @Subscription(id = "factory-product-prototype-handler", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        void onFactoryProduct(LateBeanAnnotationRegistrationTest.TestEvent event) {
+        }
+
+        @Override
+        public Object getObject() {
+            return new Object();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return Object.class;
         }
     }
 
@@ -708,6 +785,18 @@ class LateFactoryBeanProductLiveStartTest {
         @Scope("prototype")
         SimpleFactory unclaimedFactory() {
             return new SimpleFactory(new PlainProduct(), false);
+        }
+
+        @Bean
+        @Lazy
+        SimpleFactory factoryProductSingletonFactory() {
+            return new SimpleFactory(new SingletonFactoryProduct(), true);
+        }
+
+        @Bean
+        @Scope("prototype")
+        SimpleFactory factoryProductPrototypeFactory() {
+            return new SimpleFactory(new PrototypeFactoryProduct(), false);
         }
 
         @Bean

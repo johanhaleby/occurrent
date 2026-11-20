@@ -26,6 +26,7 @@ import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.HandlerScan;
+import org.occurrent.springboot.common.internal.FactoriesInInitialization;
 import org.occurrent.springboot.common.internal.LateFactoryLiveStarts;
 import org.occurrent.springboot.common.internal.LateLiveStarts;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
@@ -155,6 +156,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     private final LateLiveStarts lateLiveStarts = new LateLiveStarts();
     // The boundaries FactoryBeans built after startup read for their products
     private final LateFactoryLiveStarts lateFactoryLiveStarts = new LateFactoryLiveStarts();
+    // Tells a FactoryBean the container built from a product that implements FactoryBean too
+    private final FactoriesInInitialization factoriesInInitialization = new FactoriesInInitialization();
     private StartPositionSupport startPositionSupport;
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
     private ProjectionAnnotationRegistrar projectionRegistrar;
@@ -191,6 +194,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     @Override
     public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
         if (bean instanceof FactoryBean<?>) {
+            factoriesInInitialization.initializationStarts(bean);
             ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
             boolean prototype = beanFactory.containsBeanDefinition(beanName) && beanFactory.getMergedBeanDefinition(beanName).isPrototype();
             if (startupScanComplete) {
@@ -268,7 +272,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // it asked for.
     @Override
     public Object postProcessAfterInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
-        if (bean instanceof FactoryBean<?>) {
+        // The factory the callback above saw, and not its product, which arrives here under the same name and can
+        // implement FactoryBean too
+        if (factoriesInInitialization.initializationEnds(bean)) {
             return bean;
         }
         // Every event store bean passes through here as it is created, before anything can write through it
