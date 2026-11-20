@@ -367,7 +367,7 @@ class StreamCatchupStartStopOrderTest {
             releaseTheAction.countDown();
         }
         calls.forEach(Call::awaitEnded);
-        model.awaitTheHandedCalls();
+        model.awaitTheHandedCalls("test");
 
         assertThat(wrapped.stops.get() - stopsBefore).as("the calls the handed stop made to the wrapped model's stop after the shutdown").isZero();
     }

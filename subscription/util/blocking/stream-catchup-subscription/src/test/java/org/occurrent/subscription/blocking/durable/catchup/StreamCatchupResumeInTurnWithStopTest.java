@@ -133,7 +133,7 @@ class StreamCatchupResumeInTurnWithStopTest {
         goOn.countDown();
         stop.get(30, TimeUnit.SECONDS);
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of the replay of x returned").isTrue();
-        model.awaitTheHandedCalls();
+        model.awaitTheHandedCalls("test");
         assertThat(thrownByTheAction.get()).as("what resumeSubscription(y) threw in the action").isNull();
         assertThat(handleOfTheResume.get()).as("the handle resumeSubscription(y) returned to the action").isNotNull();
 

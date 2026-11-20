@@ -2952,8 +2952,7 @@ the catch-up is not affected.
   `CatchupListener` doesn't wait, since the call it would wait for can be waiting for the replay that runs the
   listener. It takes effect before that call, and when the model was stopped by then and the subscription is paused,
   it throws `IllegalStateException` and changes nothing, as `start(..)` does there.
-* A `resumeSubscription(id)` from any other thread waits, with no deadline, for a `start(..)`, `stop()` or
-  `shutdown()` under way, and one of them made while the resume runs waits for it. So none of them takes effect
+* A `resumeSubscription(id)` from any other thread waits for a `start(..)`, `stop()` or `shutdown()` under way, and one of them made while the resume runs waits for it. So none of them takes effect
   between the moment the resume finds the model stopped or running and the moment it starts the model or the wrapped
   model resumes the subscription. A `stop()` from another thread made while a resume waits for a cancelled replay, up
   to ten seconds, waits that long too.
@@ -2961,7 +2960,7 @@ the catch-up is not affected.
   replay's thread outside the action, such as in a `CatchupListener`, or on a thread on which the model is in the
   middle of a call for one of its subscriptions.
 * The public `stopReplay()` and `resumeReplay()` of `StreamCatchupSubscriptionModel` throw in the same places as
-  `stop()`, and take effect after an action as `stop()` does. From any other thread they now wait, with no deadline,
+  `stop()`, and take effect after an action as `stop()` does. From any other thread they now wait
   for a `start(..)`, `stop()` or `shutdown()` under way. In 0.34.0 `resumeReplay()` only cleared the replay's stopped
   state.
 * `shutdown()` doesn't throw. From an action, or from a thread on which the model is in the middle of a call for one of
@@ -2975,11 +2974,17 @@ the catch-up is not affected.
   wait for, calls the wrapped model's
   `start(..)`, as in 0.34.0, and the next `shutdown()` calls its `shutdown()` again. In 0.34.0 every `shutdown()` called
   the wrapped model's `shutdown()`.
-* Elsewhere, each of `start(..)`, `stop()` and `shutdown()` waits, with no deadline, until one already under way on
-  the model has returned. The one exception is a `shutdown()` from outside an action while a `start(..)` is inside the
+* Elsewhere, each of `start(..)`, `stop()` and `shutdown()` waits until one already under way on the model has
+  returned. The one exception is a `shutdown()` from outside an action while a `start(..)` is inside the
   wrapped model's `start(..)`. It calls the wrapped model's `shutdown()` without waiting for that start, since a wrapped
   model can hold its start until it's shut down, as a MongoDB subscription model retrying its start through an outage
   does, and then calls it once more after the start has returned.
+* Code the caller supplied, a `StartAt.dynamic(..)` function or a `CatchupListener`, can run under the model's lock.
+  Two examples are the function of a subscribe handed over from an action, and a listener that a
+  `resumeSubscription(id)` calls when it relaunches a parked replay. While such code runs there, each of the waits
+  above on another thread ends once that code and the wait have both run for 10 seconds. A `start(..)`, `stop()`,
+  `stopReplay()`, `resumeReplay()` or `resumeSubscription(..)` then throws `IllegalStateException` with "Nothing was
+  changed." in its message, and a `shutdown()` shuts the wrapped model down without the lock and logs a `WARN`.
 
 ### What to do
 
@@ -2987,6 +2992,10 @@ From an action, the call can stay where it is, but code after it in the action r
 don't rely on the model being stopped or started, or on the subscription being resumed, there. Don't wait in the action for a call you asked another thread to
 make after it, since that call waits for the action to return. An action that never returns keeps the call it made,
 and every call made after it, from taking effect.
+
+Don't wait in a `StartAt.dynamic(..)` function or a `CatchupListener` for a `start(..)`, `stop()` or resume you
+asked another thread to make, since that call waits for the function or the listener to return and throws after 10
+seconds.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 

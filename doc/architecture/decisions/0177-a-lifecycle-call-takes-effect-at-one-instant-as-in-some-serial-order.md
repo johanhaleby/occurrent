@@ -206,6 +206,20 @@ The exclusive wait has no deadline. It ends once every per-id call in flight has
 shared lock while it waits for the handover lock, the wrapped model and the checkpoint storage, and none of those waits
 has a deadline, so a wrapped model or a checkpoint storage that never returns holds up `start(..)` and `stop()` too.
 
+The one bound on the exclusive wait, and on a resume's wait behind the handed calls, comes from code the caller
+supplied. The lifecycle thread asks the `StartAt.dynamic(..)` function of a subscribe handed over from an action under
+the model lock, and a resume that relaunches a parked replay calls a `CatchupListener` under it. Such code can wait for
+a `start(..)` or `stop()` made on another thread, and that call waits for the lock the code holds. The catch-up marks
+the code while it runs under the model lock. A `start(..)`, `stop()`, `stopReplay()`, `resumeReplay()` or
+`resumeSubscription(..)` from another thread gives up once the marked code and its own wait have both run for 10
+seconds, and throws (`NOTHING_CHANGED`). A `shutdown()` that gives up shuts the wrapped model down without the lock
+and logs a `WARN`.
+
+A call waiting behind the handed calls gives up only while the lifecycle thread hasn't begun it, and then the lifecycle
+thread skips it, so the calls that do run keep their order. The cost is that code the caller supplied that runs longer
+than 10 seconds for other reasons makes these calls throw where they would have waited. A per-id call already has the
+same 10 second bound on its claim and on the model lock.
+
 A `start(..)`, `stop()`, `stopReplay()` or `resumeReplay()` called on a replay thread outside the subscriber's action,
 such as in a `CatchupListener`, or from a thread that holds a claim, throws at once, because it would wait for a per-id
 call that can only finish on that thread.
