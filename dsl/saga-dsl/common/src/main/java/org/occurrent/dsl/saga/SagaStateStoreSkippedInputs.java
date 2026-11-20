@@ -29,8 +29,10 @@ import java.util.List;
  * Call {@code SagaRunnerConfig.disableQuarantine()} to run a saga on such a store.
  * <p>
  * A store persists the {@link SkippedInput#event() event} of a record with it and returns it from
- * {@link #findSkippedInputs(String, String, int)}, with the same data, extensions and time it was given. The saga keeps
- * no other copy of a skipped event.
+ * {@link #findSkippedInputs(String, String, int)}, for a release to replay. An extension can come back with another
+ * type than it was given. {@code SpringMongoSagaStateStore} stores the event as CloudEvents JSON, which reads a number that
+ * is not an {@code Integer}, such as a {@code Long}, and a URI, a timestamp or a binary extension back as a
+ * {@code String}. The saga keeps no other copy of a skipped event.
  * <p>
  * Every write of a record is one of the three {@code compareAndSave} methods here, and each writes the instance and its
  * records together, in one atomic write. The instance is saved only when its stored version is the expected one, and
@@ -71,9 +73,10 @@ public interface SagaStateStoreSkippedInputs {
 
     /**
      * Throws when the store cannot write the three {@code compareAndSave} methods below atomically in the database it is
-     * connected to. The runner calls it once, when it starts a saga with quarantine on and before the saga receives its
-     * first input, so a store that cannot write them fails at startup rather than when an instance is first quarantined.
-     * A store that can does nothing.
+     * connected to. The runner calls it when it starts a saga, before the saga receives its first input. With quarantine
+     * on a throw refuses the saga, so a store that cannot write them fails at startup rather than when an instance is
+     * first quarantined. With quarantine off the saga starts anyway, and an instance quarantined earlier skips its inputs
+     * without recording them. A store that can does nothing.
      *
      * @throws IllegalStateException when the store cannot write a transition atomically, with a message that says how
      *                               to run the saga anyway

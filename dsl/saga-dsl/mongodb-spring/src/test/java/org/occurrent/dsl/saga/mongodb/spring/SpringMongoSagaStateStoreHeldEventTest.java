@@ -37,6 +37,7 @@ import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
+import org.occurrent.dsl.saga.blocking.SagaSubscription.ReleaseResult;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
@@ -54,6 +55,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -179,6 +181,38 @@ class SpringMongoSagaStateStoreHeldEventTest {
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE));
         assertThat(dispatched).as("the release applied the events as they were read back").containsExactly(new Pack("book", 2), new Pack("pen", 5));
+    }
+
+    @Test
+    void a_release_that_quarantines_the_instance_again_on_a_held_event_can_be_followed_by_a_release_that_applies_it() {
+        subscription = SagaRunner.<OrderEvent, Pack>agnostic(subscriptionModel, converter)
+                .run("orders", saga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofHours(1)).withQuarantineAfter(Duration.ofMillis(300)));
+        write(new OrderPlaced(ORDER));
+        failing.add("book");
+        write(new ItemAdded(ORDER, "book", 2));
+        await().dontCatchUncaughtExceptions().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED));
+        write(new ItemAdded(ORDER, "pen", 5));
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(held()).hasSize(2));
+
+        // Stays releasing until the budget of the held event is used up, which a release after that sees
+        AtomicReference<ReleaseResult> whileFailing = new AtomicReference<>();
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            whileFailing.set(subscription.release(ORDER));
+            assertThat(whileFailing.get()).as("the held event kept failing past its budget").isEqualTo(ReleaseResult.QUARANTINED_AGAIN);
+        });
+        SagaEnvelope<String> again = instance();
+        List<SkippedInput> heldAgain = held();
+        failing.clear();
+        ReleaseResult afterItWasFixed = subscription.release(ORDER);
+
+        assertAll(
+                                () -> assertThat(again.isReleasing()).as("quarantined again is not releasing").isFalse(),
+                () -> assertThat(heldAgain).as("the held event it stopped on first, and the one after").extracting(input -> input.event().getExtension(OccurrentCloudEventExtension.STREAM_VERSION).toString())
+                        .containsExactly(String.valueOf(stored().get(1).getExtension(OccurrentCloudEventExtension.STREAM_VERSION)), String.valueOf(stored().get(2).getExtension(OccurrentCloudEventExtension.STREAM_VERSION))),
+                () -> assertThat(afterItWasFixed).as("the second release goes through the held event as it was read back from MongoDB").isEqualTo(ReleaseResult.RELEASED),
+                () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
+                () -> assertThat(dispatched).as("each held event is applied once, in order").containsExactly(new Pack("book", 2), new Pack("pen", 5))
+        );
     }
 
     private List<SkippedInput> held() {

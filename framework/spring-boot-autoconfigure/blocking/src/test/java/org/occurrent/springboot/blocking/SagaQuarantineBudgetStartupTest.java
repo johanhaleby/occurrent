@@ -77,8 +77,8 @@ class SagaQuarantineBudgetStartupTest {
     }
 
     @Test
-    void keeps_quarantine_off_when_it_is_disabled() {
-        contextRunner().withPropertyValues("occurrent.saga.quarantine-enabled=false", "occurrent.saga.quarantine-after=5m").run(context -> {
+    void starts_with_a_budget_that_would_be_refused_when_quarantine_is_disabled_since_it_has_no_budget_to_keep() {
+        contextRunner().withPropertyValues("occurrent.saga.quarantine-enabled=false", "occurrent.saga.quarantine-after=0s").run(context -> {
             assertThat(context).hasNotFailed();
         });
     }

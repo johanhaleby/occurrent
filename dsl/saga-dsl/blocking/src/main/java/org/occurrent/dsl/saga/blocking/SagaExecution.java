@@ -147,6 +147,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // The state store's skip records, or null when it does not implement SagaStateStoreSkippedInputs. The runner refuses
     // quarantine on without it, so with null the poller has nothing to continue and release refuses
     private final @Nullable SagaStateStoreSkippedInputs skippedInputs;
+    // True when the store has skip records but cannot write a skip and its record in one atomic write, as
+    // SpringMongoSagaStateStore on a standalone server. The runner refuses quarantine on there, yet an instance quarantined
+    // earlier can still be in its data, such as data restored from a replica set. Such an instance skips its inputs
+    // without recording them, since the write the server refuses every time would hold up the subscription for good
+    private final boolean skipsUnrecorded;
     // The last id the previous release poll listed, null when that poll reached the end
     private final AtomicReference<@Nullable String> releasingCursor = new AtomicReference<>();
 
@@ -170,6 +175,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         // A flow saga's received events are written through the runner's converter. Any other saga has none to write
         this.envelopes = SagaEnvelopes.of(stateStore, initialState instanceof FlowState<?> ? converter : null);
         this.skippedInputs = stateStore instanceof SagaStateStoreSkippedInputs records ? records : null;
+        this.skipsUnrecorded = skippedInputs != null && !writesAtomically(skippedInputs);
         this.dispatcher = dispatcher;
         this.converter = converter;
         this.config = config;
@@ -600,6 +606,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 // Released already, by another call or another node, so this one goes on with it
                 return continueReleaseToTheEnd(sagaId, records);
             }
+            if (!holdsTheStoppedOnInput(sagaId, records, current, attempt == config.maxCasAttempts())) {
+                continue;
+            }
             // No record is written, since the input the instance was quarantined on has the first record already
             if (!envelopes.compareAndSaveWithoutState(sagaId, releasing, current.version())) {
                 continue;
@@ -610,6 +619,32 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return continueReleaseToTheEnd(sagaId, records);
         }
         throw new SagaConcurrencyException("Failed to start the release of saga '" + sagaId + "' after " + config.maxCasAttempts() + " attempts due to concurrent modification");
+    }
+
+    // The quarantining write records the input the instance stopped on as its first record, and so does a release that
+    // quarantines it again. A first record under another key, or none, means the records were lost outside the saga,
+    // such as an instance restored without them, and releasing would make it ACTIVE without that input ever applied. A
+    // read right after a failover can miss records that are there, so false has the caller read the instance and the
+    // records again, and only the last attempt throws. Every write that changes a record raises the instance's version,
+    // so when the version changed since current was read, the records read may belong to an older instance, and the
+    // last attempt then ends like a lost compare-and-set, in SagaConcurrencyException
+    private boolean holdsTheStoppedOnInput(String sagaId, SagaStateStoreSkippedInputs records, SagaEnvelope<S> current, boolean lastAttempt) {
+        String stoppedOn = Objects.requireNonNull(current.failure()).input();
+        List<SkippedInput> first = records.findSkippedInputs(sagaId, Objects.requireNonNull(current.quarantineId()), 1);
+        if (!first.isEmpty() && first.get(0).key().equals(stoppedOn)) {
+            return true;
+        }
+        if (!lastAttempt) {
+            return false;
+        }
+        SagaEnvelope<S> reread = envelopes.findWithoutState(sagaId).orElse(null);
+        if (reread == null || reread.version() != current.version()) {
+            return false;
+        }
+        throw SagaExecutionSupport.cannotRelease(current, "the state store returned no record of the input '" + stoppedOn
+                + "' it was quarantined on in " + config.maxCasAttempts() + " reads, so a release would make it ACTIVE without ever applying that input. "
+                + "The records are lost when the instance is restored without the records of its quarantine, and restoring them from the same backup lets it be released. "
+                + "A state store whose reads keep missing records that are there gives the same answer");
     }
 
     // A read that fails while the instance reads fine without its state failed on decoding the state, and is refused with
@@ -1036,11 +1071,26 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // The skip of an input by the quarantined instance current, in one write that leaves the state alone. It raises the
     // skip count, which takes toRecord's seq for it alone, and records toRecord under the quarantine id. A key recorded
     // already keeps its first record, so its new seq goes unused. False when the write lost, and the caller decides
-    // again on what it reads
+    // again on what it reads. True without a write when the store skips unrecorded
     private boolean recordedSkip(SagaEnvelope<S> current, SkippedInput toRecord) {
+        if (skipsUnrecorded) {
+            log.warn("Saga '{}' instance '{}' is quarantined and skipped the input '{}' without recording it, because its state store cannot write a skip and its record in one atomic write. A release does not replay it, so apply it by hand if the instance needs it.",
+                    subscriptionId, current.sagaId(), toRecord.key());
+            return true;
+        }
         SagaStateStoreSkippedInputs records = skippedInputs(current.sagaId());
         String quarantineId = Objects.requireNonNull(current.quarantineId());
         return envelopes.compareAndSaveSkipped(records, SagaExecutionSupport.withSkipCounted(current), current.version(), quarantineId, toRecord);
+    }
+
+    // The store's answer to requireAtomicTransitions, whose contract is to throw IllegalStateException when it cannot
+    private static boolean writesAtomically(SagaStateStoreSkippedInputs records) {
+        try {
+            records.requireAtomicTransitions();
+            return true;
+        } catch (IllegalStateException cannot) {
+            return false;
+        }
     }
 
     // A skipped stream event further behind than the reorder window cannot be told from a redelivery, and a late arrival

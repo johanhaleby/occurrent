@@ -484,7 +484,8 @@ class SagaReleaseConcurrentCallersTest {
 
         @Override
         public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
-            if (!isB() && aRecordReads.incrementAndGet() == 1) {
+            // The first read is the check that the instance holds its stopped-on input, before the release starts. The second is the replay's, after A has started it
+            if (!isB() && aRecordReads.incrementAndGet() == 2) {
                 aIsAboutToReadTheRecords.countDown();
                 await(bTriedToStart);
             }
@@ -543,7 +544,8 @@ class SagaReleaseConcurrentCallersTest {
                 pHasReadTheInstance.countDown();
                 await(rDeletedTheStartRecord);
             }
-            if (isR() && rRecordReads.incrementAndGet() == 2) {
+            // R's reads are the check before it starts the release, the replay of the start record, and the read after it
+            if (isR() && rRecordReads.incrementAndGet() == 3) {
                 await(pDeletedItsRecord);
             }
             return super.findSkippedInputs(sagaId, quarantineId, limit);
@@ -586,7 +588,8 @@ class SagaReleaseConcurrentCallersTest {
         @Override
         public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
             List<SkippedInput> found = super.findSkippedInputs(sagaId, quarantineId, limit);
-            if (isA() && aRecordReads.incrementAndGet() == 2) {
+            // A's reads are the check before it starts the release, the replay of the first record, and the read that finds the record with no stream
+            if (isA() && aRecordReads.incrementAndGet() == 3) {
                 aHasReadTheRecordWithNoStream.countDown();
                 await(bAppliedThatRecord);
             }

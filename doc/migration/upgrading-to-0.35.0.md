@@ -1001,7 +1001,9 @@ quarantine on whose `SagaStateStore` bean doesn't implement it fails at startup 
 interface and `occurrent.saga.quarantine-enabled=false`.
 
 A store that implements it keeps the skipped inputs, each with its event, and returns the event from
-`findSkippedInputs` with the same data, extensions and time it was given. Apart from `delete(sagaId)`, it changes the records only in three
+`findSkippedInputs`. An extension can come back with another type than it was given, and `SpringMongoSagaStateStore`,
+which stores the event as CloudEvents JSON, returns a number that isn't an `Integer`, such as a `Long`, and a URI, a timestamp or a binary
+extension as a `String`. Apart from `delete(sagaId)`, it changes the records only in three
 compare-and-sets on the instance, `compareAndSaveSkipped`, `compareAndSaveReplayed` and
 `compareAndSaveQuarantineEnded`. Each writes the instance and its records in one atomic write, and on a version
 conflict returns `false` and writes neither. `compareAndSaveReplayed` also returns `false` and writes neither when
@@ -1139,7 +1141,13 @@ No step deletes an instance. 0.34.0 reads an instance that step 6 updated as one
 and the input it stopped on. It skips every input addressed to the instance and fires none of its timers, and the
 instance stays quarantined until you delete it, as in 0.34.0. After a later upgrade to 0.35.0, `release` refuses it,
 because 0.34.0 skipped inputs without recording them. The records of the inputs it skipped on 0.35.0 stay in
-`<sagaCollection>_skipped_inputs`, where nothing reads them. They take up storage and nothing else.
+`<sagaCollection>_skipped_inputs`. Each one holds a full copy of the event it stands for, personal data included when
+the event holds any, and 0.34.0 never reads or deletes them. Step 6 removed the quarantine ids they are filed under,
+so no release can replay them either, also after a later upgrade to 0.35.0. Delete them once step 6 has run:
+
+```javascript
+db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({})
+```
 
 ## A saga timer that keeps failing waits behind the timers already due
 
@@ -1335,7 +1343,8 @@ template's concerns. A saga acknowledges its input as soon as the write returns,
 loses the input.
 
 A quarantined instance and the inputs it skips now change together, in one MongoDB transaction, so quarantine on
-MongoDB needs a replica set or a sharded cluster. A saga with quarantine off still works on a standalone server.
+MongoDB needs a replica set or a sharded cluster. With quarantine off a saga runs on a standalone server that journals
+its writes.
 
 ### Who is affected
 
@@ -1346,6 +1355,8 @@ MongoDB needs a replica set or a sharded cluster. A saga with quarantine off sti
 - An application that runs sagas with quarantine on, the default in 0.35.0, against a standalone MongoDB server. The
   saga refuses to start, before it gets its first input, since the server refuses the transactions a quarantine
   writes.
+- A MongoDB server that runs without journaling. Every saga write asks for `j: true`, and MongoDB answers such a write
+  with an error on a server without journaling, so every saga write fails there, with quarantine off too.
 - Code that builds a `SpringMongoSagaStateStore` with a `MongoOperations` that isn't a `MongoTemplate`, such as a
   wrapper or a mock.
 - An application of the Spring Boot starter with a `MongoOperations` bean of its own that isn't a `MongoTemplate`,
@@ -1383,9 +1394,11 @@ The store asks the server for its deployment once, with `hello`, when it is cons
 `occurrent.subscription.mode=manual` included. The message says to run MongoDB as a replica set, which can
 have a single member, or as a sharded cluster, or to turn quarantine off with `occurrent.saga.quarantine-enabled=false`
 on Spring Boot or `SagaRunnerConfig.disableQuarantine()` on a `SagaRunner`. With quarantine off a saga runs on a
-standalone server, since the runner then makes none of the three transactional writes. A release or a `delete` of an
-instance 0.35.0 quarantined while the database ran as a replica set still writes in a transaction. The server refuses
-it, and the store throws an `IllegalStateException` that says it needs a replica set.
+standalone server that journals its writes, since the runner then makes none of the three transactional writes. An
+instance 0.35.0 quarantined while the data was on a replica set, such as data restored from one onto the standalone
+server, skips the inputs addressed to it without recording them, and logs a warning that names each one, since a
+release could not replay them there anyway. A release or a `delete` of such an instance still writes in a transaction.
+The server refuses it, and the store throws an `IllegalStateException` that says it needs a replica set.
 
 Inside a MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your transaction
 instead of starting their own. In such a transaction the store sends each read and write once, whatever `RetryStrategy`
@@ -3726,13 +3739,20 @@ describes, so the runner no longer asks. `SpringMongoSubscriptionModel`, `Native
 ### Who is affected
 
 Code that implements `HistoryRetainingSubscriptions`, overrides `retains(CloudEvent)` or `retainsEveryEvent()`, names
-the type, or calls `HistoryRetainingSubscriptions.findIn(..)`. That code stops compiling.
+the type, or calls `HistoryRetainingSubscriptions.findIn(..)`. That code stops compiling. A jar compiled against
+0.34.0 that implements the type fails with a `NoClassDefFoundError` when the JVM loads its class, and one that only
+calls `findIn(..)` fails with it no later than when the call runs.
 
 ### What to do
 
 Delete the `implements HistoryRetainingSubscriptions` clause and the `retains` and `retainsEveryEvent` overrides from a
 subscription model of your own. Remove every other reference. Nothing replaces them, and a saga on your model
 quarantines without them.
+
+### Why there is no recipe
+
+The fix is to delete code, and what the code around a `findIn(..)` call or a `retains` answer did with the result is
+yours to decide. A recipe that removed the call would have to guess what to put in place of its answer.
 
 ## A blocking cancel no longer promises a rebuild
 

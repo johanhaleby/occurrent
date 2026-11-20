@@ -112,9 +112,9 @@ Each recorded input is a record of its own in the state store, holding the saga 
 the key and the event. A quarantine can record any number of inputs without growing the instance's document toward
 MongoDB's 16 MB limit, so there is no limit on how many it records.
 
-A store keeps a record's event with the same data, extensions and time it was given, and returns it from
-`findSkippedInputs`. The saga keeps no other copy of a skipped event. `SpringMongoSagaStateStore` writes it as a
-CloudEvents JSON string in the record's `event` field.
+A store keeps a record's event and returns it from `findSkippedInputs`. The saga keeps no other copy of a skipped
+event. `SpringMongoSagaStateStore` writes it as a CloudEvents JSON string in the record's `event` field, so a number
+that isn't an `Integer`, such as a `Long`, and a URI, a timestamp or a binary extension come back as a `String`.
 
 The methods that read and write the records are on an interface of their own, `SagaStateStoreSkippedInputs`, which a
 store implements next to `SagaStateStore`, the way it implements `SagaStateStoreQueries`. It has no state type
@@ -207,7 +207,12 @@ one its failure record names.
    and version, which only `RedeliveryDetection.BEST_EFFORT` takes (ADR 109), is recorded without being checked against
    the marks, so when the instance applied the same event before the quarantine, the release applies it again. A
    redelivery of it that arrives after a release applied and deleted its record is recorded and applied again too.
-   That is what `BEST_EFFORT` already does with any redelivery.
+   That is what `BEST_EFFORT` already does with any redelivery. Two releases that overlap on such a record, two
+   `release` calls or a call and the timer poller, can each apply it as well. The second one reads the records before
+   the first one's write and the instance after it, and the marks don't list the input, so it replays the record onto
+   a state that took it already and dispatches the commands computed from that state. Its write then finds the record
+   gone and writes nothing, so the stored state takes the input once. Dispatch stays before the write, as ADR 63 has
+   it, and reading the record again before the replay would only make the gap between the two reads smaller.
 3. The instance becomes `ACTIVE`, with the failure record and the skip counter cleared, only in a compare-and-set that
    expects the version release read before it found no records left. Release reads the instance first and the records
    after it, so a skip that records an input between the two reads has changed the version, and the write loses. The
@@ -576,7 +581,9 @@ The upgrade guide has the procedure for operators, in
   can be the only copy there is.
 - An event erased from the event store while an instance holds it, for a GDPR request for example, stays in its record
   until a release replays it or the instance is deleted. Erasing an event means releasing or deleting the quarantined
-  instances that hold it as well.
+  instances that hold it as well. The same goes for an event redacted in place with `EventStoreOperations.updateEvent`.
+  The record keeps the event as it was when the instance skipped it, and a release replays that copy, not the redacted
+  one.
 - A record of an input without a stream id and version, taken under `RedeliveryDetection.BEST_EFFORT`, is still
   replayed after a switch to `REQUIRED`, since `REQUIRED` refuses such an event only when it's delivered live. The
   release applies the record once, because the write that applies it takes place only while the record is there.

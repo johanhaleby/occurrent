@@ -19,6 +19,7 @@ package org.occurrent.dsl.saga.mongodb.spring;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
+import org.bson.Document;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,6 +32,7 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
+import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
@@ -48,6 +50,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -106,13 +109,15 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
     private final CloudEventConverter<OrderEvent> converter = new JacksonCloudEventConverter.Builder<OrderEvent>(new ObjectMapper(), URI.create("urn:test")).build();
     private final List<OrderCommand> dispatched = new CopyOnWriteArrayList<>();
     private final AtomicInteger handled = new AtomicInteger();
+    private MongoTemplate mongoTemplate;
     private SpringMongoSagaStateStore<String> stateStore;
     private @Nullable SagaSubscription subscription;
 
     @BeforeEach
     void createTheStore() {
         ConnectionString connectionString = new ConnectionString("mongodb://" + standaloneMongo.getHost() + ":" + standaloneMongo.getMappedPort(27017) + "/saga-standalone-" + UUID.randomUUID());
-        stateStore = new SpringMongoSagaStateStore<>(new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase())), COLLECTION, String.class);
+        mongoTemplate = new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase()));
+        stateStore = new SpringMongoSagaStateStore<>(mongoTemplate, COLLECTION, String.class);
     }
 
     @AfterEach
@@ -153,7 +158,11 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
     }
 
     private void write(OrderEvent event) {
-        eventStore.write(ORDER, converter.toCloudEvents(List.of(event)));
+        write(ORDER, event);
+    }
+
+    private void write(String streamId, OrderEvent event) {
+        eventStore.write(streamId, converter.toCloudEvents(List.of(event)));
     }
 
     private SagaEnvelopes<String> envelopes() {
@@ -213,5 +222,34 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
                 () -> assertThat(dispatched).as("no command is issued").isEmpty(),
                 () -> assertThat(envelopes().find(ORDER)).as("no instance is stored").isEmpty()
         ));
+    }
+
+    @Test
+    void a_quarantined_instance_restored_from_a_replica_set_skips_its_inputs_without_holding_up_the_subscription_when_quarantine_is_off() {
+        Instant now = Instant.parse("2026-03-04T05:06:07Z");
+        SagaFailure failure = new SagaFailure(ORDER + "@1", 1L, now.minusSeconds(300), IllegalStateException.class.getName(), "boom", null, "quarantine-restored");
+        // What 0.35.0 wrote on a replica set, which the standalone server now holds as restored data
+        assertThat(envelopes().compareAndSave(ORDER, new SagaEnvelope<>(ORDER, "placed", SagaStatus.QUARANTINED, 3L, List.of(), Map.of(), null,
+                now.minusSeconds(600), now, null, null, true, failure, Map.of(), 1L), 0)).as("control: the instance is written").isTrue();
+        Document restored = requireNonNull(mongoTemplate.findById(ORDER, Document.class, COLLECTION));
+        assertThat(restored.getString("status")).as("control: stored as a quarantine that records skipped inputs").isEqualTo("QUARANTINED_RECORDING");
+        runWithQuarantineOff().waitUntilStarted();
+
+        write(ORDER, new ItemAdded(ORDER, "book"));
+        write("order-2", new OrderPlaced("order-2"));
+
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(envelopes().find("order-2").map(SagaEnvelope::state))
+                .as("the input after the skipped one is processed, so the skipped one did not hold up the subscription")
+                .contains("placed"));
+        SagaEnvelope<String> after = envelopes().find(ORDER).orElseThrow();
+        assertAll(
+                () -> assertThat(after.version()).as("the quarantined instance's version").isEqualTo(3L),
+                () -> assertThat(after.quarantineSkipCount()).as("the quarantined instance's skip count").isEqualTo(1L),
+                () -> assertThat(after.status()).as("still quarantined").isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(after.state()).as("its state is untouched").isEqualTo("placed"),
+                () -> assertThat(mongoTemplate.findById(ORDER, Document.class, COLLECTION)).as("the stored document is untouched").isEqualTo(restored),
+                () -> assertThat(mongoTemplate.getCollection(COLLECTION + "_skipped_inputs").countDocuments()).as("no record of the skipped input").isZero(),
+                () -> assertThat(dispatched).as("the skipped input issued no Pack").doesNotContain(new Pack("book"))
+        );
     }
 }

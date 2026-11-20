@@ -147,7 +147,9 @@ public final class SagaSubscription implements AutoCloseable {
      *                               thrown when the state store does not implement {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs}, and
      *                               when the store gives back an instance stored as {@code QUARANTINED_RECORDING}
      *                               without its failure input, quarantine id or skip count. The message names the
-     *                               missing field
+     *                               missing field. Also thrown when the store holds no record of the input the
+     *                               instance was quarantined on, as for an instance restored without its records,
+     *                               since a release would make it {@code ACTIVE} without ever applying that input
      * @throws SagaConcurrencyException when the release loses its compare-and-set {@code maxCasAttempts} times in a row,
      *                                  to start the release or to write a replayed input
      */

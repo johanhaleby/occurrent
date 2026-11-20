@@ -153,7 +153,10 @@ class SagaReleaseStaleRecordsReadTest {
         SagaEnvelope<Order> after = envelopes.find(ORDER).orElseThrow();
         String evidence = "thrown " + thrown + ", status " + after.status() + ", dispatched " + dispatched;
         assertAll(
-                () -> assertThat(thrown).as("a release that keeps reading no record gives up on its attempts. " + evidence).isInstanceOf(SagaConcurrencyException.class),
+                () -> assertThat(thrown).as("a release that keeps reading no record gives up on its attempts, naming the input and the reads. " + evidence)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("'o1@2'")
+                        .hasMessageContaining("in " + CONFIG.maxCasAttempts() + " reads"),
                 () -> assertThat(after.status()).as("the instance is not turned active. " + evidence).isEqualTo(SagaStatus.QUARANTINED),
                 () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, 10)).as("no record is deleted, and the release has put the input it replays first back as a record").containsAll(recordsBefore),
                 () -> assertThat(dispatched).as("nothing is dispatched. " + evidence).isEmpty()

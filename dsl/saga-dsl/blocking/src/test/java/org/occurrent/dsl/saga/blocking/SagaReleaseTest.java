@@ -516,9 +516,10 @@ class SagaReleaseTest {
     class WhenTheRecordsToReplayCannotBeRead {
 
         @Test
-        void a_read_of_the_records_that_throws_makes_the_release_throw_and_leaves_the_instance_releasing_for_the_poller() {
+        void a_read_of_the_records_that_throws_makes_the_release_throw_before_it_starts_and_a_second_release_goes_through() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoSkipped();
             failing.clear();
+            List<String> recordsBefore = recordedKeys();
             IllegalStateException storeDown = new IllegalStateException("state store is down");
             store.findSkippedInputsFailure = storeDown;
 
@@ -526,12 +527,15 @@ class SagaReleaseTest {
             SagaEnvelope<Order> afterTheFailedRead = instance();
             List<String> recordsAfterTheFailedRead = recordedKeys();
             store.findSkippedInputsFailure = null;
-            pollAfterTheInterval();
+            ReleaseResult second = execution.release(ORDER);
 
             assertAll(
                     () -> assertThat(thrown).isSameAs(storeDown),
-                    () -> assertThat(afterTheFailedRead.isReleasing()).isTrue(),
+                    () -> assertThat(afterTheFailedRead.status()).as("the instance is still quarantined").isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(afterTheFailedRead.isReleasing()).as("the release did not start, so the poller has nothing to go on with").isFalse(),
+                    () -> assertThat(recordsAfterTheFailedRead).as("no record is touched").isEqualTo(recordsBefore),
                     () -> assertThat(recordsAfterTheFailedRead).first().isEqualTo(streamKey(quarantined.k())),
+                    () -> assertThat(second).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(items()).containsExactly("poison", "a", "b")
             );
@@ -556,6 +560,93 @@ class SagaReleaseTest {
                             .hasMessageNotContaining("restart"),
                     () -> assertThat(instance().isReleasing()).isFalse()
             );
+        }
+
+        @Test
+        void an_instance_quarantined_by_0_35_0_whose_records_are_gone_is_refused_naming_the_input_it_stopped_on_and_is_left_as_it_was() {
+            CloudEvent stopped = quarantinedWithoutItsRecords();
+            SagaEnvelope<Order> before = instance();
+            int writesBefore = store.writesWithoutState.get();
+
+            Throwable thrown = catchThrowable(() -> execution.release(ORDER));
+
+            SagaEnvelope<Order> after = instance();
+            assertAll(
+                    () -> assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("'" + streamKey(stopped) + "'")
+                            .hasMessageContaining("returned no record of the input")
+                            .hasMessageContaining("in " + CONFIG.maxCasAttempts() + " reads"),
+                    () -> assertThat(after.status()).as("still quarantined").isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(after.isReleasing()).as("the release did not start").isFalse(),
+                    () -> assertThat(after.version()).as("nothing was written").isEqualTo(before.version()),
+                    () -> assertThat(store.writesWithoutState.get()).as("no write that starts a release was attempted").isEqualTo(writesBefore),
+                    () -> assertThat(packed()).as("nothing is applied").isEmpty()
+            );
+        }
+
+        @Test
+        void an_instance_quarantined_by_0_35_0_whose_first_record_is_of_another_input_is_refused_naming_the_input_it_stopped_on() {
+            CloudEvent stopped = quarantinedWithoutItsRecords();
+            recordUnder(ORDER, instance().quarantineId(), new SkippedInput(0, "o1@99", added("other")));
+            SagaEnvelope<Order> before = instance();
+
+            Throwable thrown = catchThrowable(() -> execution.release(ORDER));
+
+            SagaEnvelope<Order> after = instance();
+            assertAll(
+                    () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + streamKey(stopped) + "'"),
+                    () -> assertThat(after.isReleasing()).as("the release did not start").isFalse(),
+                    () -> assertThat(after.version()).as("nothing was written").isEqualTo(before.version()),
+                    () -> assertThat(recordedKeys()).as("the record is left").containsExactly("o1@99")
+            );
+        }
+
+        @Test
+        void an_instance_whose_record_of_the_input_it_stopped_on_is_written_after_a_read_that_missed_it_is_released_by_the_next_attempt_and_applies_it_once() {
+            CloudEvent stopped = quarantinedWithoutItsRecords();
+            failing.clear();
+            store.afterNextEmptyRead(() -> recordUnder(ORDER, instance().quarantineId(), new SkippedInput(0, streamKey(stopped), stopped)));
+
+            AtomicReference<@Nullable ReleaseResult> result = new AtomicReference<>();
+            Throwable thrown = catchThrowable(() -> result.set(execution.release(ORDER)));
+
+            assertAll(
+                    () -> assertThat(thrown).as("the release is not refused, since the next read finds the record").isNull(),
+                    () -> assertThat(result.get()).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(items()).as("the input it stopped on is applied").containsExactly("poison"),
+                    () -> assertThat(packed()).as("once").containsExactly(new Pack(ORDER, "poison"))
+            );
+        }
+
+        @Test
+        void a_record_written_after_the_only_attempt_read_none_ends_in_a_concurrency_exception_and_not_in_a_refusal() {
+            CloudEvent stopped = quarantinedWithoutItsRecords();
+            failing.clear();
+            store.afterNextEmptyRead(() -> recordUnder(ORDER, instance().quarantineId(), new SkippedInput(0, streamKey(stopped), stopped)));
+            SagaExecution<OrderEvent, Order, OrderCommand> oneAttempt = execution(new SagaRunnerConfig(CONFIG.timerPollInterval(), CONFIG.timerBatchLimit(), 1,
+                    CONFIG.redeliveryDetection(), CONFIG.quarantineAfter(), CONFIG.reorderWindow()));
+
+            Throwable thrown = catchThrowable(() -> oneAttempt.release(ORDER));
+
+            assertAll(
+                    () -> assertThat(thrown).as("the instance changed after the records were read, so the records read may be old").isInstanceOf(SagaConcurrencyException.class),
+                    () -> assertThat(instance().isReleasing()).isFalse()
+            );
+        }
+
+        // As an instance restored from a backup that has the instance and not the records of its quarantine. Returns the event it stopped on
+        private CloudEvent quarantinedWithoutItsRecords() {
+            deliver(placed());
+            failing.add("poison");
+            CloudEvent stopped = added("poison");
+            quarantineOn(stopped);
+            SagaEnvelope<Order> quarantined = instance();
+            SkippedInput first = records().getFirst();
+            assertThat(store.envelopes.compareAndSaveReplayed(store.delegate, SagaExecutionSupport.oneVersionUp(quarantined), quarantined.version(), quarantined.quarantineId(), first))
+                    .as("control: the record is removed").isTrue();
+            assertThat(records()).as("control: it has no record").isEmpty();
+            return stopped;
         }
     }
 
@@ -2671,6 +2762,7 @@ class SagaReleaseTest {
         private final AtomicReference<@Nullable Runnable> beforeNextDeleteOfARecord = new AtomicReference<>();
         private final AtomicReference<@Nullable Runnable> afterNextEmptyRead = new AtomicReference<>();
         private final AtomicReference<@Nullable Runnable> afterNextNonEmptyRead = new AtomicReference<>();
+        private final AtomicInteger nonEmptyReadsToLetPass = new AtomicInteger();
         final List<String> deletedRecords = new CopyOnWriteArrayList<>();
         private final AtomicReference<@Nullable Runnable> beforeNextActiveWrite = new AtomicReference<>();
         volatile boolean refusesToDecode;
@@ -2700,7 +2792,10 @@ class SagaReleaseTest {
             afterNextEmptyRead.set(hook);
         }
 
+        // The hook runs after the first non-empty read that the replay makes. The read before it, which a release makes to
+        // check that the instance holds the input it was quarantined on before it starts, is let pass
         void afterNextNonEmptyRead(Runnable hook) {
+            nonEmptyReadsToLetPass.set(1);
             afterNextNonEmptyRead.set(hook);
         }
 
@@ -2876,6 +2971,8 @@ class SagaReleaseTest {
             List<SkippedInput> found = delegate.findSkippedInputs(sagaId, quarantineId, limit);
             if (found.isEmpty()) {
                 run(afterNextEmptyRead);
+            } else if (nonEmptyReadsToLetPass.get() > 0 && afterNextNonEmptyRead.get() != null) {
+                nonEmptyReadsToLetPass.decrementAndGet();
             } else {
                 run(afterNextNonEmptyRead);
             }

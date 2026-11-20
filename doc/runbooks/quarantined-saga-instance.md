@@ -356,12 +356,16 @@ release for the input the instance stopped on, the instance is quarantined again
   throws for it even when the store doesn't hold the saga id, instead of returning `NOT_FOUND`.
 - The instance is stored as `QUARANTINED_RECORDING` without its failure input, quarantine id or skip count, which a
   state store of your own does when it doesn't persist every field it is given. The message names the missing field.
+- The state store holds no record of the input the instance was quarantined on, as for an instance restored from a
+  backup without its records in `<sagaCollection>_skipped_inputs`. Releasing it would make it `ACTIVE` without ever
+  applying that input. The message names the input.
 
 The first can't be released at all. Its message names `SagaStateStore.delete(sagaId)`, and step 6 is what is left.
 For the second, fix how the state decodes, as in step 4, and release the instance again, or delete it in step 6.
 For the last, fix the store so it persists every field. An instance it already wrote stays without the field, so set
 the field on it by hand or delete it in step 6. Until then every delivery to the instance throws the same refusal, and
-so does a `findByStatus` page that holds it.
+so does a `findByStatus` page that holds it. For a missing record, restore the records from the same backup as the
+instance and release it again, or delete it in step 6.
 
 An instance whose state stops decoding while it is releasing stays releasing. On a store that can list the releasing
 instances, each poll logs the failure at `WARN` and tries again, so the release goes on once the state decodes.
@@ -391,7 +395,9 @@ A key is `<streamId>@<streamVersion>` for an event from a stream.
 
 These records are the only copy of the skipped events that the saga keeps, and erasing an event from the event store
 doesn't erase its copy here. Release or delete the quarantined instances before you erase an event from the event
-store, or a later release applies the event you erased.
+store, or a later release applies the event you erased. The same goes for an event you redact in place with
+`EventStoreOperations.updateEvent`. The record keeps the event as it was when the instance skipped it, and a release
+applies that copy, not the redacted one.
 
 **What a release logs.** All from the same logger as the quarantine `ERROR`:
 
@@ -597,11 +603,18 @@ No step deletes an instance. 0.34.0 reads an instance that step 6 updated as one
 and the input it stopped on. It skips every input addressed to the instance and fires none of its timers, and the
 instance stays quarantined until you delete it, as in 0.34.0. After a later upgrade to 0.35.0, `release` refuses it,
 because 0.34.0 skipped inputs without recording them. The records of the inputs it skipped on 0.35.0 stay in
-`<sagaCollection>_skipped_inputs`, where nothing reads them. They take up storage and hold a copy of each event they
-stand for. The
+`<sagaCollection>_skipped_inputs`. Each one holds a full copy of the event it stands for, personal data included when
+the event holds any, and 0.34.0 never reads or deletes them. Step 6 removed the quarantine ids they are filed under,
+so no release can replay them either, also after a later upgrade to 0.35.0. Delete them once step 6 has run:
+
+```javascript
+db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({})
+```
+
+The
 [0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#upgrading-from-0340-and-rolling-back-to-it) also
 covers the upgrade from 0.34.0.
 
 Deleting an instance is not reversible from inside Occurrent. Take a backup first if you want one, of both the saga
-collection and `<sagaCollection>_skipped_inputs`. The delete removes the instance's skipped-input records too, and an
-instance restored without them releases as if it skipped nothing, so the inputs it recorded stay unapplied.
+collection and `<sagaCollection>_skipped_inputs`. The delete removes the instance's skipped-input records too, and
+`release` refuses an instance restored without them, since it has no record of the input it was quarantined on.
