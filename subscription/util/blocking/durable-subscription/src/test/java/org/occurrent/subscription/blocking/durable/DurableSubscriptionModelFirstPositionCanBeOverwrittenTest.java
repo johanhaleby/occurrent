@@ -49,6 +49,7 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * A first position is recorded for a subscription started from the model default with nothing stored. A storage that
@@ -132,6 +133,25 @@ class DurableSubscriptionModelFirstPositionCanBeOverwrittenTest {
         assertThat(storage.saves).as("the saves the storage saw").isEmpty();
         assertThat(storage.exists(SUBSCRIPTION_ID)).isFalse();
         assertThat(wrapped.subscriptions).as("the subscriptions the wrapped model holds").isEmpty();
+    }
+
+    @Test
+    void a_default_start_is_refused_on_subscribe_when_the_wrapped_model_has_no_position_yet_and_starting_without_one_is_allowed() {
+        PositionAvailableLater wrapped = new PositionAvailableLater("position-available-later");
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage(Set.of(SUBSCRIPTION_ID));
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage,
+                new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true));
+
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+        wrapped.hasAPosition = true;
+
+        assertThat(thrown)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(WRITE_ONLY_UNCONDITIONALLY)
+                .hasMessageContaining(SUBSCRIPTION_ID);
+        assertThat(storage.saves).as("the saves the storage saw").isEmpty();
+        assertThat(storage.exists(SUBSCRIPTION_ID)).isFalse();
     }
 
     @Test
@@ -339,6 +359,23 @@ class DurableSubscriptionModelFirstPositionCanBeOverwrittenTest {
                     return true;
                 }
             };
+        }
+    }
+
+    /**
+     * Has no global checkpoint until it is told it has one, as a model that has not yet seen anything in its feed
+     * when the subscription is registered.
+     */
+    private static final class PositionAvailableLater extends HoldingFeed {
+        volatile boolean hasAPosition = false;
+
+        PositionAvailableLater(String globalCheckpoint) {
+            super(globalCheckpoint);
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            return hasAPosition ? super.globalCheckpoint() : null;
         }
     }
 

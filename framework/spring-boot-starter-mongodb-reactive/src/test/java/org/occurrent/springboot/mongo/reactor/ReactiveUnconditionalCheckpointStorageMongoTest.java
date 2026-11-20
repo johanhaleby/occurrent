@@ -133,6 +133,29 @@ class ReactiveUnconditionalCheckpointStorageMongoTest {
         }
     }
 
+    @Test
+    void the_durable_model_the_starter_builds_refuses_a_first_position_written_unconditionally_when_the_property_is_unset() {
+        ConfigurableApplicationContext[] started = new ConfigurableApplicationContext[1];
+        Throwable startupFailure = catchThrowable(() -> started[0] = SpringApplication.run(new Class<?>[]{UnconditionalStorageConfiguration.class, ApplicationWithoutDefaultSubscription.class}, new String[]{
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("reactive-unconditional-checkpoint-storage-refused"),
+                "--spring.main.web-application-type=none",
+                "--occurrent.event-store.capabilities=stream",
+                "--occurrent.subscription.competing-consumer.fence-checkpoints=false",
+                "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE}));
+        assertThat(startupFailure).as("what starting the application threw").isNull();
+
+        try (ConfigurableApplicationContext context = started[0]) {
+            UnconditionalCheckpointStorage storage = context.getBean(UnconditionalCheckpointStorage.class);
+            ReactorDurableSubscriptionModel model = context.getBean(ReactorDurableSubscriptionModel.class);
+
+            Throwable thrown = catchThrowable(() -> model.subscribe("subscribedDirectly", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty())
+                    .waitUntilStarted().block(ofSeconds(15)));
+
+            assertThat(thrown).as("what subscribing a default start with nothing stored threw").isInstanceOf(IllegalStateException.class);
+            assertThat(storage.checkpoints).as("checkpoints stored").isEmpty();
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static ApplicationService<TestEvent> applicationServiceOf(ConfigurableApplicationContext context) {
         return context.getBean(ApplicationService.class);
@@ -217,6 +240,27 @@ class ReactiveUnconditionalCheckpointStorageMongoTest {
         @Bean
         DefaultReceiver defaultReceiver() {
             return new DefaultReceiver();
+        }
+    }
+
+    // The same application, without a subscription at DEFAULT that would be refused at startup
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrentReactive
+    static class ApplicationWithoutDefaultSubscription {
+
+        @Bean
+        CloudEventTypeMapper<TestEvent> testEventCloudEventTypeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter(CloudEventTypeMapper<TestEvent> typeMapper) {
+            return new JacksonCloudEventConverter.Builder<TestEvent>(new ObjectMapper(), SOURCE)
+                    .typeMapper(typeMapper)
+                    .idMapper(TestEvent::eventId)
+                    .timeMapper(event -> event.timestamp().toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
+                    .build();
         }
     }
 
