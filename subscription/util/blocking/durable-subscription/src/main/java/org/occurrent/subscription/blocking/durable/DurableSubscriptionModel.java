@@ -96,7 +96,8 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * same moment, only one write is stored. With a {@code CheckpointWriteVersionSource} that answers a version, a first
  * position this node wrote is then saved again with {@link CheckpointWriteCondition#notOlderThan(long)}, since an
  * {@code ifAbsent()} write stores no version, and a node whose lease has moved on could otherwise overwrite the first
- * position until the next checkpoint is written. A position adopted from another node isn't saved again. When that
+ * position until the next checkpoint is written. That covers a lost race that resolves to this node's own position as
+ * well, and a position adopted from another node isn't saved again. When that
  * second save is refused because a node with a newer lease has written since, the refusal is logged and the
  * subscription starts from the position it recorded. A {@link CheckpointStorage} that answers {@code false} from
  * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} could only write it unconditionally, and then the two
@@ -829,10 +830,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         try {
             pinned = storage.save(subscriptionId, globalCheckpoint, CheckpointWriteCondition.ifAbsent());
         } catch (CheckpointWriteConditionNotFulfilledException e) {
-            return storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint)
-                          .orElseGet(() -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, globalCheckpoint));
+            pinned = storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint)
+                            .orElseGet(() -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, globalCheckpoint));
         }
-        stampWriteVersion(subscriptionId, pinned, stamp);
+        // A lost race that resolves to this node's own position wrote it without a version too. A position another node
+        // recorded is that node's to save again
+        if (pinned.asString().equals(globalCheckpoint.asString())) {
+            stampWriteVersion(subscriptionId, pinned, stamp);
+        }
         return pinned;
     }
 
@@ -849,8 +854,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     // An ifAbsent() write stores no version, and notOlderThan(v) accepts any write while none is stored, so without this
-    // a node whose lease moved on could overwrite the first position. A write that gets in between the two calls is of
-    // an event that node processed, so writing the first position over it only delivers events again
+    // a node whose lease moved on could overwrite the first position. Every node that writes a first position saves it
+    // again with its own version, so once the node with the newest lease has, no older lease can write over it
     private void stampWriteVersion(String subscriptionId, Checkpoint pinned, CheckpointWriteCondition stamp) {
         if (!(stamp instanceof CheckpointWriteCondition.NotOlderThan)) {
             return;
