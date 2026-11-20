@@ -2968,6 +2968,13 @@ Bean 'accountReadModel' declares the synchronous handler com.example.AccountRead
 
 A prototype bean, or the target of a scoped proxy, whose handler registered at startup is created as before.
 
+An object that implements `FactoryBean` and declares a synchronous handler that isn't registered yet now fails its
+creation with a `BeanCreationException` wherever the starter handles it as a factory. That is every `FactoryBean`
+bean. It is also the product of a `FactoryBean` when that product implements `FactoryBean` too and its factory is
+registered with `registerSingleton`, is an inner bean, or asks for the product while it initializes itself. In 0.34.0
+the starter didn't register such a handler when the object was created. Move the handler to a class that doesn't
+implement `FactoryBean`.
+
 ### What to do
 
 Do one of these:
