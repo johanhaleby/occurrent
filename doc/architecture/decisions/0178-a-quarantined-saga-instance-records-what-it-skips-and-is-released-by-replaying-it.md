@@ -138,7 +138,8 @@ Every write that changes a record, and every other compare-and-set on the instan
 acknowledges its input once the record is written, so a record written with `w: 1` that a failover rolled back would
 leave an input that no release replays. With `j: true` a majority has the record in its on-disk journal before it
 acknowledges, whatever `writeConcernMajorityJournalDefault` says. A server that runs without journaling refuses
-`j: true`, and the write then fails with an `IllegalStateException` that says the store needs journaling.
+`j: true`, and the write then fails after one attempt, whatever the store's `RetryStrategy` retries, with an
+`IllegalStateException` that says the store needs journaling.
 
 ### 3. Release replays the input the instance stopped on, then the records
 
@@ -158,14 +159,20 @@ acknowledges, whatever `writeConcernMajorityJournalDefault` says. A server that 
    says nothing about whether the input it names was applied, and the stream marks alone decide whether a record's
    input was applied. K is applied once, as its record. A record whose input the stream marks show as applied already
    is deleted without being applied again, in a write that raises only the instance's version, also when it is K's or
-   the failure record names its input. Release reads and writes the stream marks with no reorder window, so every
-   version it applies stays among the `applied` ones. With a window of 1, a record of version 3 replayed after a record
-   of version 5 of the same type would read as behind the window and be deleted without being applied. A record is
-   written only while its input is new, so a record that isn't new to the marks read this way names an input the
-   instance applied. The write that makes the instance `ACTIVE` trims the marks back to the window, and so does the
-   write of a replayed input that completes the instance. An instance quarantined again during the release keeps
-   every version, because the records after the failing one stay. Trimmed marks would put such a record behind the
-   window, and the next release would delete it without applying it.
+   the failure record names its input. Release reads and writes the stream marks with no
+   reorder window, so every version it applies stays among the `applied` ones until the release ends, also one at or
+   below the horizon of its type. With a window of 1, a record of version 3 replayed after a record of version 5 of the
+   same type would read as behind the window and be skipped without being applied. A record of an input with a stream
+   id and version is written only while its input is new, so a record whose input the marks read this way list as
+   applied names an input the instance applied.
+   Every write that ends the release trims the marks back to the window: the one that makes the instance `ACTIVE`, the
+   write of a replayed input that completes the instance, and the write that quarantines it again. The instance is
+   quarantined again only on the first record left, and release applies the records in order, so every record that
+   stays names an input no release applied. When the trim puts such a record behind the window, the next release
+   applies it all the same, since release skips only an input the marks list as applied. An input without a stream id
+   and version, which only `RedeliveryDetection.BEST_EFFORT` takes (ADR 109), is recorded without being checked against
+   the marks, so when the instance applied the same event before the quarantine, the release applies it again. That
+   is what `BEST_EFFORT` already does with any redelivery.
 3. The instance becomes `ACTIVE`, with the failure record and the skip counter cleared, only in a compare-and-set that
    expects the version release read before it found no records left. Release reads the instance first and the records
    after it, so a skip that records an input between the two reads has changed the version, and the write loses. The
@@ -535,9 +542,8 @@ The upgrade guide has the procedure for operators, in
   the store runs waits without limit. That slows a skip, the start of a release and every record a release replays by
   the time a majority takes, and a replica set without a majority available fails them where `w: 1` would have
   succeeded.
-- A release keeps every stream version it applies in the instance's stream marks until the write that makes the
-  instance `ACTIVE` or completes it, see point 2, so the instance's document grows by one number per replayed input
-  until then, and an instance quarantined again keeps them until a later release gets that far. A release whose
+- A release keeps every stream version it applies in the instance's stream marks until the write that ends it, see
+  point 2, so the instance's document grows by one number per replayed input during one release. A release whose
   backlog takes the document past MongoDB's 16 MB limit fails on every write from that record on. The instance stays
   releasing, the failure is never recorded, so its budget never runs out, and every poll applies that record again
   and dispatches its commands again before the write fails. Deleting the instance is the only way out.

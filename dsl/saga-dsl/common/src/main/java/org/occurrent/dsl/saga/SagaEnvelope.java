@@ -161,7 +161,9 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      *                not in here and not too far behind it was never applied, so it is applied when it arrives
      * @param horizon the highest version this mark has stopped remembering, under the reorder window in force when it was
      *                recorded. A version at or below it is skipped even if a larger window is configured later, since
-     *                the versions between the two windows are no longer in {@code applied}
+     *                the versions between the two windows are no longer in {@code applied}. A release applies a
+     *                recorded input at or below it all the same, since a record is kept only for an input no release
+     *                has applied
      */
     public record TypeMark(long mark, List<Long> applied, long horizon) {
         public TypeMark {

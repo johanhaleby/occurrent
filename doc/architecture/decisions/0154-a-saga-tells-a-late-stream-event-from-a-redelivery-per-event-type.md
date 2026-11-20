@@ -51,10 +51,10 @@ mark per stream with a window would not be enough, because two types of one stre
 
 **The reorder window is a `SagaRunnerConfig` field, 256 by default.** An instance records at most that many applied
 versions below the highest one, per stream and event type. A release that replays the inputs a quarantine recorded is
-the exception (ADR 178). It keeps every version it applies until the write that makes the instance `ACTIVE` or
-completes it, so the document grows by one number per replayed input until then. An instance quarantined again during
-a release keeps those versions until a later release gets that far. Every other instance never holds more than
-streams times types times 256 numbers in its stored state, whatever the length of the stream.
+the exception (ADR 178). It keeps every version it applies until the write that ends the release, which makes the
+instance `ACTIVE`, completes it or quarantines it again, so the document grows by one number per replayed input until
+then. That write trims the marks back to the window. Every instance that isn't releasing holds at most streams times
+types times 256 numbers in its stored state, whatever the length of the stream.
 `SagaRunnerConfig.withReorderWindow(int)` changes the window for a feed that reorders further.
 
 The saga does not remember every applied version. A saga that listens to some of a stream's types sees permanent gaps
@@ -146,6 +146,7 @@ failed in the saga.** That is the precondition, and these are the cases that fal
 | An event arrives before the event that starts its instance | The saga skips it and the source acknowledges it. This is how it behaved before 0.35.0 | No |
 | The instance is completed or quarantined | Inert by design | Quarantine logs |
 | A version that did not fail arrives more than the window behind, without a restart replaying it | Skipped as a redelivery | One warning per stream |
+| An event without `streamid` and `streamversion`, which only `RedeliveryDetection.BEST_EFFORT` takes (ADR 109) | A redelivery runs the reactions again. So does a release that replays such an event the instance applied before it was quarantined (ADR 178) | The warning `BEST_EFFORT` logs the first time |
 
 The fifth row is the one this design cannot close. A restart from an old checkpoint delivers a long run of behind-window
 versions that are all correct skips, and a reordered version looks the same. Throwing on each would block the replay, and

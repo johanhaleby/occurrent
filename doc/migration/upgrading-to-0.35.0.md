@@ -346,7 +346,8 @@ read. 0.34.0 treated an unreadable value as absent.
 | Has a `streamid` or `streamversion` that cannot be read | Refused with `SagaRedeliveryDetectionException` | Refused with `SagaRedeliveryDetectionException` |
 
 An event the saga applies without a key can no longer be quarantined, since quarantine identifies the event it stopped
-on by its key.
+on by its key. Releasing a quarantined instance can apply such an event again, when the instance applied the same event
+before it was quarantined.
 
 ### What to do
 
@@ -700,8 +701,8 @@ stopped remembering, and a `pending` list of event types with the `versions` of 
 failures described above, and a document without it reads as an empty list. `pending` is a list rather than a map because
 stream ids and event types can contain dots. An instance holds at most 256 `applied` versions per stream and event
 type, so a document grows by some kilobytes for an instance that listens to a few streams, and every save rewrites them.
-A release of a quarantined instance also keeps every version it applies, and the write that makes the instance `ACTIVE`
-trims them back to the reorder window.
+A release of a quarantined instance also keeps every version it applies, and the write that ends the release, which
+makes the instance `ACTIVE`, completes it or quarantines it again, trims them back to the reorder window.
 
 A document saved by 0.31.0 to 0.34.0, or by an earlier 0.35.0 build, has no `streamMarks`. It reads as a floor equal to
 each stream's watermark, so everything the instance has already seen stays skipped, and a version above the watermark

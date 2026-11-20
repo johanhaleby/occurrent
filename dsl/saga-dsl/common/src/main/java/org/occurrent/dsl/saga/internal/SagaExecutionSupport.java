@@ -430,15 +430,21 @@ public final class SagaExecutionSupport {
      * that applies it. An input that completes the instance ends the release with it.
      * <p>
      * The release reads and writes the marks with no reorder window, so every version it applies stays in them until the
-     * instance is released, see {@link #withReleased}. An input that completes the instance trims them to
-     * {@code reorderWindow} in the same write, since a completed instance replays nothing more. An instance quarantined
-     * again during the release keeps them all, because the records after the failing one stay, and the next release
-     * reads those records against the same marks. With the configured reorder window, an earlier record that raised the mark of its type
-     * would put a later record of that type behind the window, and the release would delete it without applying it. A
-     * record is written only while its input is new, so without a window a record that is not new names an input the
-     * instance applied, through another record of the same input or through a replay whose delete a crash prevented.
+     * release ends, also one at or below the horizon of its type. With the configured window, an earlier record that
+     * raised the mark of its type would put a later record of that type behind the window, and the release would skip it.
+     * Every write that ends a release trims the marks to {@code reorderWindow}: the one that releases the instance, see
+     * {@link #withReleased}, an input that completes it, and a quarantine again, see {@link #onReleaseFailure},
+     * {@link #withMissingInputQuarantined} and {@link #withInputWithoutStreamKeyQuarantined}.
      * <p>
-     * Such a record, and a record that is not a start event of an instance that never started, which the instance would
+     * A record is written only while its input is new, and the write that applies a record's input is a compare-and-set
+     * on the version the release read the instance at. So a record whose input the marks show as applied names an input
+     * the instance applied, through another record of the same input, through a replay whose delete a crash prevented, or
+     * through another release of the same instance. A record behind the window names an input no release applied, since
+     * only the write that ends a release trims the marks, and a release that ended on a record had applied and deleted
+     * every record before it. So such a record is applied, and the version stays among the applied ones until the
+     * release ends.
+     * <p>
+     * A record whose input the marks show as applied, and a record that is not a start event of an instance that never started, which the instance would
      * skip outside a release too, comes back as an outcome that is not {@link Outcome#processed()} and has no envelope,
      * and the executor deletes the record in a write of {@link #oneVersionUp}.
      *
@@ -456,7 +462,7 @@ public final class SagaExecutionSupport {
         }
         boolean hasStarted = current.started();
         @Nullable E startEvent = startEventOrNull(saga, hasStarted, input);
-        if (!hasStarted && startEvent == null || classify(current, meta, NO_REORDER_WINDOW) != Delivery.NEW) {
+        if (!hasStarted && startEvent == null || classify(current, meta, NO_REORDER_WINDOW) == Delivery.REDELIVERY) {
             return Outcome.skip();
         }
         Outcome<S, C> applied = apply(saga, sagaId, current, input, meta, now, NO_REORDER_WINDOW, hasStarted, startEvent);
@@ -494,7 +500,7 @@ public final class SagaExecutionSupport {
     }
 
     // The marks with no more applied versions than reorderWindow keeps, the way a live write trims them. A release
-    // keeps every version it applies, see replay(..)
+    // keeps every version it applies until it ends, see replay(..)
     private static Map<String, StreamMarks> withinWindow(Map<String, StreamMarks> streamMarks, int reorderWindow) {
         Map<String, StreamMarks> trimmed = new LinkedHashMap<>();
         streamMarks.forEach((streamId, marks) -> {
@@ -570,9 +576,8 @@ public final class SagaExecutionSupport {
         if (!current.isReleasing() || existing == null) {
             return null;
         }
-        // With no window, as replay(..) reads the marks, since with one an input an earlier record put behind it would
-        // read as applied and its failure would never be recorded
-        if (classify(current, meta, NO_REORDER_WINDOW) != Delivery.NEW) {
+        // As replay(..) reads the marks, since an input behind the window was never applied and its failure counts
+        if (classify(current, meta, NO_REORDER_WINDOW) == Delivery.REDELIVERY) {
             // Another writer applied it in between, so there is no failure left to record
             return null;
         }
@@ -588,7 +593,7 @@ public final class SagaExecutionSupport {
         if (budgetUsedUp) {
             SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()),
                     null, existing.quarantineId());
-            return new FailureRecord<>(requarantined(current, now, record, streamMarks), current.version(), true);
+            return new FailureRecord<>(requarantined(current, now, record, streamMarks, reorderWindow), current.version(), true);
         }
         SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()),
                 existing.releasedAt(), existing.quarantineId());
@@ -610,8 +615,9 @@ public final class SagaExecutionSupport {
      *
      * @throws IllegalStateException when the instance is not releasing
      */
-    public static <S extends @Nullable Object> SagaEnvelope<S> withMissingInputQuarantined(SagaEnvelope<S> current, String key, Instant now) {
-        return withUnreplayableInputQuarantined(current, key, now, MISSING_EVENT_FAILURE_TYPE, "The event '" + key + MISSING_INPUT_MESSAGE_END);
+    public static <S extends @Nullable Object> SagaEnvelope<S> withMissingInputQuarantined(SagaEnvelope<S> current, String key, Instant now,
+                                                                                          int reorderWindow) {
+        return withUnreplayableInputQuarantined(current, key, now, MISSING_EVENT_FAILURE_TYPE, "The event '" + key + MISSING_INPUT_MESSAGE_END, reorderWindow);
     }
 
     /**
@@ -624,30 +630,33 @@ public final class SagaExecutionSupport {
      *
      * @throws IllegalStateException when the instance is not releasing
      */
-    public static <S extends @Nullable Object> SagaEnvelope<S> withInputWithoutStreamKeyQuarantined(SagaEnvelope<S> current, String key, Instant now) {
+    public static <S extends @Nullable Object> SagaEnvelope<S> withInputWithoutStreamKeyQuarantined(SagaEnvelope<S> current, String key, Instant now,
+                                                                                                    int reorderWindow) {
         return withUnreplayableInputQuarantined(current, key, now, EVENT_WITHOUT_STREAM_KEY_FAILURE_TYPE,
-                "The event '" + key + "' has no stream id and stream version, so the release could not replay it");
+                "The event '" + key + "' has no stream id and stream version, so the release could not replay it", reorderWindow);
     }
 
     private static <S extends @Nullable Object> SagaEnvelope<S> withUnreplayableInputQuarantined(SagaEnvelope<S> current, String key, Instant now,
-                                                                                                String failureType, String failureMessage) {
+                                                                                                String failureType, String failureMessage,
+                                                                                                int reorderWindow) {
         SagaFailure releasing = current.failure();
         if (!current.isReleasing() || releasing == null) {
             throw new IllegalStateException("Saga instance '" + current.sagaId() + "' is not releasing, so it cannot be quarantined again on '" + key + "'.");
         }
         Long position = key.equals(releasing.input()) ? releasing.position() : null;
         SagaFailure record = new SagaFailure(key, position, now, failureType, failureMessage, null, releasing.quarantineId());
-        return requarantined(current, now, record, current.streamMarks());
+        return requarantined(current, now, record, current.streamMarks(), reorderWindow);
     }
 
     // Quarantined again during a release, under the same quarantine id. The skip count stays, since the records after
     // the failing one stay. SagaCodec refuses to read a releasing instance without one, so 0 is only ever taken for
-    // an envelope built in code. The marks keep every version the release applied, since trimming them to the window
-    // would put a record that stays behind it, and the next release would delete that record without applying it
+    // an envelope built in code. The marks are trimmed to the window, as the write that releases the instance trims
+    // them. A record that stays names an input no release applied, and the next release applies one behind the
+    // window, see replay(..)
     private static <S extends @Nullable Object> SagaEnvelope<S> requarantined(SagaEnvelope<S> current, Instant now, SagaFailure record,
-                                                                             Map<String, StreamMarks> streamMarks) {
+                                                                             Map<String, StreamMarks> streamMarks, int reorderWindow) {
         Long count = current.quarantineSkipCount();
-        return withBookkeeping(current, SagaStatus.QUARANTINED, now, record, streamMarks, count == null ? 0L : count);
+        return withBookkeeping(current, SagaStatus.QUARANTINED, now, record, withinWindow(streamMarks, reorderWindow), count == null ? 0L : count);
     }
 
     /** The {@link SagaFailure#failureType()} of an instance quarantined again because an event it replays is missing from the store. */
@@ -1175,9 +1184,12 @@ public final class SagaExecutionSupport {
             applied.add(version);
             mark = previous.mark();
         }
-        // Past the window a version is skipped, so remembering it would only grow the state.
+        // Past the window a version is skipped, so remembering it would only grow the state. A release, which records with
+        // no window, keeps a version it applies behind the horizon until it ends, so that the record is not applied twice
         long horizon = horizon(previous == null ? Long.MIN_VALUE : previous.horizon(), mark, reorderWindow);
-        applied.removeIf(earlier -> earlier <= horizon);
+        if (reorderWindow.isPresent()) {
+            applied.removeIf(earlier -> earlier <= horizon);
+        }
         byType.put(typeKey(meta), new TypeMark(mark, List.copyOf(applied), horizon));
         // Applying a version settles it, so it stops being outstanding.
         Map<String, List<Long>> pending = marks == null ? new LinkedHashMap<>() : new LinkedHashMap<>(marks.pending());
