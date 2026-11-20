@@ -172,11 +172,11 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         action.apply(eventAt(1)).block(TIMEOUT);
         Function<Checkpoint, Mono<Void>> offeredAfterTheDeclinedEvent = wrapped.beforeReading(SUBSCRIPTION_ID);
         action.apply(eventAt(2)).block(TIMEOUT);
-        Function<Checkpoint, Mono<Void>> offeredAfterTheStoredEvent = wrapped.beforeReading(SUBSCRIPTION_ID);
 
         // Then
         assertThat(offeredAfterTheDeclinedEvent).as("save offered while the latest event is one the predicate declined").isNull();
-        assertThat(offeredAfterTheStoredEvent).as("save offered once the latest event is stored").isNotNull();
+        // The delivery is marked ended in a doFinally, which can run after the Mono has completed for the caller
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(wrapped.beforeReading(SUBSCRIPTION_ID)).as("save offered once the latest event is stored").isNotNull());
     }
 
     @Test
@@ -195,11 +195,11 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         Function<Checkpoint, Mono<Void>> offeredWhileTheFirstIsUnderWay = wrapped.beforeReading(SUBSCRIPTION_ID);
         finishFirst.tryEmitEmpty();
         first.join();
-        Function<Checkpoint, Mono<Void>> offeredOnceTheFirstIsStored = wrapped.beforeReading(SUBSCRIPTION_ID);
 
         // Then
         assertThat(offeredWhileTheFirstIsUnderWay).as("save offered while a delivery is under way").isNull();
-        assertThat(offeredOnceTheFirstIsStored).as("save offered once every delivery has ended and the latest was stored").isNotNull();
+        // The delivery is marked ended in a doFinally, which can run after the future has completed for the caller
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(wrapped.beforeReading(SUBSCRIPTION_ID)).as("save offered once every delivery has ended and the latest was stored").isNotNull());
     }
 
     @Test
