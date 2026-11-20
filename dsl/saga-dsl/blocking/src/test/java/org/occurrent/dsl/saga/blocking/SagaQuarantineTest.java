@@ -39,7 +39,6 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -329,9 +328,9 @@ class SagaQuarantineTest {
         }
 
         @Test
-        void are_isolated_from_it_on_a_feed_that_declares_it_retains_nothing() {
+        void are_isolated_from_it_on_a_feed_that_can_only_subscribe() {
             ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(new RetainsNothing(feed), CONFIG);
+            SagaSubscription subscription = run(new SubscribeOnly(feed), CONFIG);
             feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
             feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
             feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
@@ -1765,10 +1764,10 @@ class SagaQuarantineTest {
     }
 
     /**
-     * Delivers and re-offers exactly as {@link ReplayableSubscriptionModel} does and keeps nothing, which is what a
+     * Delivers and re-offers exactly as {@link ReplayableSubscriptionModel} does and offers nothing else, which is what a
      * push feed is.
      */
-    private record RetainsNothing(ReplayableSubscriptionModel delegate) implements Subscribable {
+    private record SubscribeOnly(ReplayableSubscriptionModel delegate) implements Subscribable {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -1841,23 +1840,12 @@ class SagaQuarantineTest {
     private final java.util.concurrent.atomic.AtomicLong position = new java.util.concurrent.atomic.AtomicLong();
 
     /**
-     * A subscription model that keeps every event it is handed, which is what the runner requires before it turns
-     * quarantine on and which {@link InMemorySubscriptionModel} does not do. Deliberately minimal, meaning one
+     * A subscription model that keeps every event it is handed, so a test can replay them, which
+     * {@link InMemorySubscriptionModel} does not do. Deliberately minimal, meaning one
      * subscription, one delivery thread, and a retry loop that keeps re-offering an event whose handler threw, which is
      * what makes a time budget reachable at all.
      */
-    private final class ReplayableSubscriptionModel implements SubscriptionModel, RepositionableSubscriptions, HistoryRetainingSubscriptions {
-
-        @Override
-        public boolean retains(CloudEvent event) {
-            return true;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
-        }
-
+    private final class ReplayableSubscriptionModel implements SubscriptionModel, RepositionableSubscriptions {
         // What the handler last threw back at the feed, which is what the transport sees and decides on.
         private volatile @Nullable Throwable lastDeliveryFailure;
 

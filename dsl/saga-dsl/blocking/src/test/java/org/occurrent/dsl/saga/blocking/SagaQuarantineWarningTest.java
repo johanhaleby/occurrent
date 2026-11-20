@@ -27,12 +27,9 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.saga.Saga;
@@ -44,7 +41,6 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.slf4j.LoggerFactory;
@@ -56,7 +52,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -107,40 +102,40 @@ class SagaQuarantineWarningTest {
     }
 
 
-    @ParameterizedTest
-    @MethodSource("everyKindOfModel")
-    @DisplayName("starts with quarantine on and warns about nothing, whatever the model holds")
-    void starts_with_quarantine_on_and_warns_about_nothing_whatever_the_model_holds(Subscribable model) {
+    @Test
+    void starts_with_quarantine_on_and_warns_about_nothing() {
+        RecordingModel model = new RecordingModel();
+
         SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
                 .run("orders", saga(), SagaStateStore.inMemory(), c -> {
                 }, null, SagaRunnerConfig.defaults())
                 .close();
 
         assertAll(
-                () -> assertThat(subscribed(model)).isEqualTo(1),
+                () -> assertThat(model.subscribed).isEqualTo(1),
                 () -> assertThat(warnings()).isEmpty()
         );
     }
 
-    @ParameterizedTest
-    @MethodSource("everyKindOfModel")
-    @DisplayName("starts with quarantine switched off and warns about nothing, whatever the model holds")
-    void starts_with_quarantine_switched_off_and_warns_about_nothing_whatever_the_model_holds(Subscribable model) {
+    @Test
+    void starts_with_quarantine_switched_off_and_warns_about_nothing() {
+        RecordingModel model = new RecordingModel();
+
         SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
                 .run("orders", saga(), SagaStateStore.inMemory(), c -> {
                 }, null, SagaRunnerConfig.defaults().disableQuarantine())
                 .close();
 
         assertAll(
-                () -> assertThat(subscribed(model)).isEqualTo(1),
+                () -> assertThat(model.subscribed).isEqualTo(1),
                 () -> assertThat(warnings()).isEmpty()
         );
     }
 
-    @ParameterizedTest
-    @MethodSource("everyKindOfModel")
-    @DisplayName("refuses to start when quarantine is on and the store cannot record skipped inputs, whatever the model holds")
-    void refuses_to_start_when_quarantine_is_on_and_the_store_cannot_record_skipped_inputs_whatever_the_model_holds(Subscribable model) {
+    @Test
+    void refuses_to_start_when_quarantine_is_on_and_the_store_cannot_record_skipped_inputs() {
+        RecordingModel model = new RecordingModel();
+
         Throwable thrown = catchThrowable(() -> SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
                 .run("orders", saga(), new StoreWithoutSkippedInputs<>(), c -> {
                 }, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5))));
@@ -149,13 +144,13 @@ class SagaQuarantineWarningTest {
                 () -> assertThat(thrown).isInstanceOf(IllegalStateException.class),
                 () -> assertThat(thrown).hasMessageContaining("SagaStateStoreSkippedInputs"),
                 () -> assertThat(thrown).hasMessageContaining("SagaRunnerConfig.disableQuarantine()"),
-                () -> assertThat(subscribed(model)).isZero()
+                () -> assertThat(model.subscribed).isZero()
         );
     }
 
     @Test
     void starts_with_a_store_that_cannot_record_skipped_inputs_when_quarantine_is_switched_off() {
-        RetainsNothing model = new RetainsNothing();
+        RecordingModel model = new RecordingModel();
 
         SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
                 .run("orders", saga(), new StoreWithoutSkippedInputs<>(), c -> {
@@ -170,7 +165,7 @@ class SagaQuarantineWarningTest {
 
     @Test
     void refuses_to_start_when_quarantine_is_on_and_the_store_cannot_write_atomically() {
-        RetainsNothing model = new RetainsNothing();
+        RecordingModel model = new RecordingModel();
 
         Throwable thrown = catchThrowable(() -> SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
                 .run("orders", saga(), new StoreWithoutAtomicTransitions<>(), c -> {
@@ -184,7 +179,7 @@ class SagaQuarantineWarningTest {
 
     @Test
     void does_not_ask_the_store_for_atomic_transitions_when_quarantine_is_switched_off() {
-        RetainsNothing model = new RetainsNothing();
+        RecordingModel model = new RecordingModel();
 
         SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
                 .run("orders", saga(), new StoreWithoutAtomicTransitions<>(), c -> {
@@ -192,14 +187,6 @@ class SagaQuarantineWarningTest {
                 .close();
 
         assertThat(model.subscribed).isEqualTo(1);
-    }
-
-    private static int subscribed(Subscribable model) {
-        return ((RetainsNothing) model).subscribed;
-    }
-
-    private static Stream<Subscribable> everyKindOfModel() {
-        return Stream.of(new RetainsNothing(), new RetainsSomeEvents(), new Retains());
     }
 
     // Cannot write atomically, and has no use for the rest of the skipped input methods, since the runner refuses it at start
@@ -291,34 +278,13 @@ class SagaQuarantineWarningTest {
         }
     }
 
-    private static class RetainsNothing implements Subscribable {
+    private static class RecordingModel implements Subscribable {
         int subscribed;
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             subscribed++;
             return new NoopSubscription(subscriptionId);
-        }
-    }
-
-    private static final class Retains extends RetainsNothing implements HistoryRetainingSubscriptions {
-        @Override
-        public boolean retains(CloudEvent event) {
-            return true;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
-        }
-    }
-
-    // Can answer for an event and cannot promise to hold everything, which is what earns the startup line. Its
-    // per-event answer is never asked, because the missing promise switches quarantine off before that.
-    private static final class RetainsSomeEvents extends RetainsNothing implements HistoryRetainingSubscriptions {
-        @Override
-        public boolean retains(CloudEvent event) {
-            return false;
         }
     }
 

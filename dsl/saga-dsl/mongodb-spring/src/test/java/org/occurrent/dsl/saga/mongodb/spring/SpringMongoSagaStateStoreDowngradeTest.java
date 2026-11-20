@@ -19,7 +19,6 @@ package org.occurrent.dsl.saga.mongodb.spring;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
-import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -41,11 +40,6 @@ import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
-import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
-import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -63,7 +57,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -206,27 +199,8 @@ class SpringMongoSagaStateStoreDowngradeTest {
                 .build();
     }
 
-    // InMemorySubscriptionModel cannot say whether it retains an event, and quarantine is switched off for a model that cannot
-    private record RetainsEverything(InMemorySubscriptionModel delegate) implements Subscribable, HistoryRetainingSubscriptions {
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            return delegate.subscribe(subscriptionId, filter, startAt, action);
-        }
-
-        @Override
-        public boolean retains(CloudEvent event) {
-            return true;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
-        }
-    }
-
     private SagaSubscription run() {
-        subscription = SagaRunner.<OrderEvent, Pack>agnostic(new RetainsEverything(subscriptionModel), converter)
+        subscription = SagaRunner.<OrderEvent, Pack>agnostic(subscriptionModel, converter)
                 .run(STREAM, saga(), stateStore, dispatched::add, null,
                         SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofHours(1)).withQuarantineAfter(Duration.ofMillis(300)));
         return subscription;

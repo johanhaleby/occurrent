@@ -24,7 +24,6 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.model.Aggregates;
 import com.mongodb.client.model.Filters;
-import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -45,11 +44,6 @@ import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
-import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -61,7 +55,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -154,35 +147,11 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
                 .build();
     }
 
-    /**
-     * {@link InMemorySubscriptionModel} does not implement {@link HistoryRetainingSubscriptions}, and
-     * {@code SagaRunner} switches quarantine off entirely for a subscription model it cannot ask, regardless of
-     * {@link SagaRunnerConfig#quarantineAfter()}. Wrapping it with an always-retains answer is what makes the
-     * quarantine budget (and so the failure record these tests read) reachable at all.
-     */
-    private record RetainsEverything(InMemorySubscriptionModel delegate) implements Subscribable, HistoryRetainingSubscriptions {
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            return delegate.subscribe(subscriptionId, filter, startAt, action);
-        }
-
-        @Override
-        public boolean retains(CloudEvent event) {
-            return true;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
-        }
-    }
-
     @Test
     void a_transient_store_failure_does_not_start_the_instance_s_quarantine_budget() {
         SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(template("none", 0), COLLECTION, String.class);
         FailPoint failedFind = aFailedFind();
-        subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(new RetainsEverything(subscriptionModel), converter)
+        subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(subscriptionModel, converter)
                 .run(STREAM, shippingSaga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)));
 
         eventStore.write("order-1", converter.toCloudEvents(List.of(new OrderPlaced("order-1"))));
@@ -213,7 +182,7 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
     void a_genuine_store_failure_does_start_the_instance_s_quarantine_budget() {
         SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(template("none", 0), COLLECTION, String.class, null, RetryStrategy.none());
         FailPoint failedFind = aFailedFind();
-        subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(new RetainsEverything(subscriptionModel), converter)
+        subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(subscriptionModel, converter)
                 .run(STREAM, shippingSaga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)));
 
         eventStore.write("order-2", converter.toCloudEvents(List.of(new OrderPlaced("order-2"))));
