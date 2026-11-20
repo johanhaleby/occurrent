@@ -1,0 +1,42 @@
+{
+  "_id": "saga-releasing",
+  "status": "QUARANTINED_RECORDING",
+  "version": {
+    "$numberLong": "9"
+  },
+  "timers": [],
+  "streamWatermarks": {
+    "stream-a": {
+      "$numberLong": "20"
+    }
+  },
+  "createdAt": {
+    "$numberLong": "1772600767123"
+  },
+  "updatedAt": {
+    "$numberLong": "1772601377456"
+  },
+  "failureInput": "input-77",
+  "failureFirstFailedAt": {
+    "$numberLong": "1772601000250"
+  },
+  "failureType": "java.lang.IllegalStateException",
+  "failurePosition": {
+    "$numberLong": "77"
+  },
+  "failureMessage": "order is already shipped",
+  "failureReleasedAt": {
+    "$numberLong": "1772601600500"
+  },
+  "failureQuarantineId": "quarantine-1",
+  "quarantineSkipCount": {
+    "$numberLong": "3"
+  },
+  "state": {
+    "orderId": "order-3",
+    "customer": "carol",
+    "quantity": {
+      "$numberInt": "2"
+    }
+  }
+}

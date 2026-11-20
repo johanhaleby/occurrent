@@ -56,9 +56,9 @@ import static java.util.Objects.requireNonNull;
  *                          for it, which does not mean it is not failing (see {@link SagaInstance#failure()}). Once
  *                          written it outlives a single attempt, and {@code status} says whether the instance was
  *                          quarantined for it
- * @param currentStep       the step a flow saga is waiting in, derived from {@code state} whenever it is present. A
- *                          store may pass this directly, but only when it passes a {@code null} state: that is how a
- *                          store answers {@link SagaInstance#currentStep()} from a projected read without loading the
+ * @param currentStep       the step a flow saga is waiting in, derived from {@code state} whenever it is present. The
+ *                          codec passes the stored value directly, but only with a {@code null} state: that is how
+ *                          {@link SagaInstance#currentStep()} is answered from a projected read without loading the
  *                          state at all. Whenever {@code state} is present the constructor re-derives this and ignores
  *                          what was passed, so the two can never disagree.
  * @param streamMarks       what the executor knows about the versions it has applied per stream and event type, beyond the
@@ -100,45 +100,6 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
             // state to derive from, which is exactly the projected-read case a store needs it for.
             currentStep = state instanceof FlowState<?> flowState ? flowState.currentStep() : null;
         }
-    }
-
-    /**
-     * An envelope with no skip count, which is an instance that is not quarantined and one quarantined before 0.35.0.
-     */
-    public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
-                        Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
-                        @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep,
-                        boolean started, @Nullable SagaFailure failure, Map<String, StreamMarks> streamMarks) {
-        this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
-                completedAt, currentStep, started, failure, streamMarks, null);
-    }
-
-    /**
-     * An envelope with no stream marks, which is every instance stored before 0.35.0. It reads as every event type of a
-     * stream being applied up to that stream's watermark.
-     */
-    public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
-                        Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
-                        @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep,
-                        boolean started, @Nullable SagaFailure failure) {
-        this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
-                completedAt, currentStep, started, failure, Map.of());
-    }
-
-    /**
-     * An envelope for an instance that has started and has no failure recorded, which is every instance built before
-     * quarantine existed.
-     *
-     * @deprecated since 0.34.0. Use the canonical constructor and pass {@code started} and {@code failure} explicitly.
-     * This overload keeps a call site written against 0.33.0 compiling, and it can only ever answer {@code true} and
-     * {@code null} for the two it does not take, so an envelope that really is quarantined cannot be built through it.
-     */
-    @Deprecated(since = "0.34.0")
-    public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
-                        Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
-                        @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep) {
-        this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
-                completedAt, currentStep, true, null);
     }
 
     /**

@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -35,6 +36,9 @@ import org.occurrent.command.CommandDispatchers;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.decider.DeciderApplicationService;
 import org.occurrent.dsl.saga.*;
+import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.flow.*;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
@@ -223,7 +227,7 @@ class SagaRunnerTest {
             write(orderId, new PaymentReserved(UUID.randomUUID().toString(), orderId));
 
             await().untilAsserted(() -> assertThat(issued).containsExactly(new ShipOrder(orderId)));
-            SagaEnvelope<OrderState> envelope = stateStore.find(orderId).orElseThrow();
+            SagaEnvelope<OrderState> envelope = SagaEnvelopes.of(stateStore, null).find(orderId).orElseThrow();
             assertAll(
                     () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(envelope.timers()).isEmpty()
@@ -303,12 +307,27 @@ class SagaRunnerTest {
             }
 
             @Override
-            public Optional<SagaEnvelope<OrderState>> find(@NonNull String sagaId) {
+            public SagaStateCodec<OrderState> stateCodec() {
+                return SagaStateCodec.identity();
+            }
+
+            @Override
+            public Optional<StoredSaga> find(@NonNull String sagaId) {
                 return Optional.empty();
             }
 
             @Override
-            public boolean compareAndSave(@NonNull String sagaId, @NonNull SagaEnvelope<OrderState> envelope, long expectedVersion) {
+            public Optional<StoredSaga> findWithoutState(@NonNull String sagaId) {
+                return Optional.empty();
+            }
+
+            @Override
+            public boolean compareAndSave(@NonNull StoredSaga saga, long expectedVersion) {
+                // The record that lists an input as pending is an insert here, since find() is always empty, and the
+                // executor writes an insert in full. It is still counted as the pending save it stands for.
+                if (listsAPendingInput(saga)) {
+                    return compareAndSaveWithoutState(saga, expectedVersion);
+                }
                 saveAttempts++;
                 if (failWith != null) {
                     throw failWith;
@@ -316,8 +335,12 @@ class SagaRunnerTest {
                 return savedOnAttempt.test(saveAttempts);
             }
 
+            private boolean listsAPendingInput(StoredSaga saga) {
+                return SagaCodec.of(stateCodec(), null).decode(saga).streamMarks().values().stream().anyMatch(marks -> !marks.pending().isEmpty());
+            }
+
             @Override
-            public boolean compareAndSaveWithoutState(@NonNull String sagaId, @NonNull SagaEnvelope<OrderState> envelope, long expectedVersion) {
+            public boolean compareAndSaveWithoutState(@NonNull StoredSaga saga, long expectedVersion) {
                 pendingSaveAttempts++;
                 if (failWith != null) {
                     throw failWith;
@@ -326,7 +349,7 @@ class SagaRunnerTest {
             }
 
             @Override
-            public List<SagaEnvelope<OrderState>> findWithDueTimers(@NonNull Instant now, int limit) {
+            public List<StoredSaga> findWithDueTimers(@NonNull Instant now, int limit) {
                 return List.of();
             }
 
@@ -445,7 +468,7 @@ class SagaRunnerTest {
             write(orderId, new OrderPlaced(UUID.randomUUID().toString(), orderId));
 
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> assertThat(issued).containsExactly(new CancelOrder(orderId)));
-            SagaEnvelope<OrderState> envelope = stateStore.find(orderId).orElseThrow();
+            SagaEnvelope<OrderState> envelope = SagaEnvelopes.of(stateStore, null).find(orderId).orElseThrow();
             assertAll(
                     () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(envelope.state()).isEqualTo(new Cancelled(orderId)),
@@ -494,7 +517,7 @@ class SagaRunnerTest {
             write(goodOrderId, new PaymentReserved(UUID.randomUUID().toString(), goodOrderId));
 
             await().untilAsserted(() -> assertThat(issued).containsExactly(new ShipOrder(goodOrderId)));
-            assertThat(stateStore.find("")).isEmpty();
+            assertThat(SagaEnvelopes.of(stateStore, null).find("")).isEmpty();
         }
 
         /**
@@ -519,7 +542,7 @@ class SagaRunnerTest {
             assertAll(
                     () -> assertThat(refusal).isNull(),
                     () -> assertThat(issued).isEmpty(),
-                    () -> assertThat(stateStore.find("")).isEmpty()
+                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find("")).isEmpty()
             );
         }
     }
@@ -697,7 +720,7 @@ class SagaRunnerTest {
             write(orderId, new PaymentReserved(UUID.randomUUID().toString(), orderId));
 
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> assertThat(issued).containsExactly(new ShipOrder(orderId)));
-            SagaEnvelope<OrderState> envelope = stateStore.find(orderId).orElseThrow();
+            SagaEnvelope<OrderState> envelope = SagaEnvelopes.of(stateStore, null).find(orderId).orElseThrow();
             assertAll(
                     () -> assertThat(shipAttempts.get()).isGreaterThanOrEqualTo(2),
                     () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
@@ -821,17 +844,32 @@ class SagaRunnerTest {
             private final AtomicInteger dueTimerQueries = new AtomicInteger();
 
             @Override
-            public Optional<SagaEnvelope<OrderState>> find(@NonNull String sagaId) {
+            public SagaStateCodec<OrderState> stateCodec() {
+                return delegate.stateCodec();
+            }
+
+            @Override
+            public Optional<StoredSaga> find(@NonNull String sagaId) {
                 return delegate.find(sagaId);
             }
 
             @Override
-            public boolean compareAndSave(@NonNull String sagaId, @NonNull SagaEnvelope<OrderState> envelope, long expectedVersion) {
-                return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+            public Optional<StoredSaga> findWithoutState(@NonNull String sagaId) {
+                return delegate.findWithoutState(sagaId);
             }
 
             @Override
-            public List<SagaEnvelope<OrderState>> findWithDueTimers(@NonNull Instant now, int limit) {
+            public boolean compareAndSave(@NonNull StoredSaga saga, long expectedVersion) {
+                return delegate.compareAndSave(saga, expectedVersion);
+            }
+
+            @Override
+            public boolean compareAndSaveWithoutState(@NonNull StoredSaga saga, long expectedVersion) {
+                return delegate.compareAndSaveWithoutState(saga, expectedVersion);
+            }
+
+            @Override
+            public List<StoredSaga> findWithDueTimers(@NonNull Instant now, int limit) {
                 dueTimerQueries.incrementAndGet();
                 return delegate.findWithDueTimers(now, limit);
             }
@@ -1028,7 +1066,7 @@ class SagaRunnerTest {
             eventStore.write(reviewId, reviewConverter.toCloudEvents(List.of(new Escalated(UUID.randomUUID().toString(), reviewId))));
 
             await().untilAsserted(() -> assertThat(issued).containsExactly(new Publish(reviewId)));
-            SagaEnvelope<FlowState<ReviewEvent>> envelope = stateStore.find(reviewId).orElseThrow();
+            SagaEnvelope<FlowState<ReviewEvent>> envelope = SagaEnvelopes.of(stateStore, reviewConverter).find(reviewId).orElseThrow();
             assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED);
         }
     }

@@ -22,21 +22,29 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.mongodb.spring.SpringMongoSagaStateStore;
-import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.MongoDatabaseFactory;
+import org.springframework.data.mongodb.core.MongoTemplate;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Docker-free unit checks for {@link SpringMongoSagaStateStore}'s constructor guards. The guard runs before any MongoDB
- * access, so a mock {@link MongoOperations} that is never touched is enough.
+ * access, so a mock {@link MongoTemplate} that only hands out a mock factory is enough.
  */
 @DisplayName("SpringMongoSagaStateStore construction")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SpringMongoSagaStateStoreTest {
 
-    private final MongoOperations mongoOperations = mock(MongoOperations.class);
+    private final MongoTemplate mongoOperations = mongoTemplateOverAnUntouchedFactory();
+
+    private static MongoTemplate mongoTemplateOverAnUntouchedFactory() {
+        MongoTemplate mongoTemplate = mock(MongoTemplate.class);
+        when(mongoTemplate.getMongoDatabaseFactory()).thenReturn(mock(MongoDatabaseFactory.class));
+        return mongoTemplate;
+    }
 
     @Test
     void the_three_argument_constructor_rejects_a_FlowState_store_because_it_has_no_CloudEventConverter() {

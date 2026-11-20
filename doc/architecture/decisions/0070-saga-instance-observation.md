@@ -11,6 +11,11 @@ Refines [ADR 63](0063-saga-dsl.md).
 [ADR 173](0173-a-failing-saga-timer-is-tried-again-after-the-timers-already-due.md) makes `findWithDueTimers`
 return the earliest due instance first, so the claim below that it may return instances in any order no longer holds.
 
+[ADR 180](0180-occurrent-owns-the-stored-form-of-a-saga-instance.md) makes `StoredSaga` the `SagaStateStore` type, for
+[#1259](https://github.com/johanhaleby/occurrent/issues/1259). `SagaCodec` encodes and decodes the envelope, so the
+claims below that `SagaEnvelope` remains the `SagaStateStore` type and cannot move because the SPI both returns and
+accepts it are no longer true.
+
 ## Context
 
 ADR 63 put a saga's timers in its own state envelope rather than in JobRunr, and accepted a named cost for it: "no

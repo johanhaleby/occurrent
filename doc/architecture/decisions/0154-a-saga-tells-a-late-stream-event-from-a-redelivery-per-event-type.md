@@ -14,6 +14,10 @@ Amended in place on 2026-11-04, before 0.35.0 shipped. A pending version is no l
 the instant it first failed, for [#1318](https://github.com/johanhaleby/occurrent/issues/1318), as
 [ADR 157](0157-a-sagas-quarantine-budget-runs-per-input.md) decides.
 
+Amended in place again on 2026-11-16, before 0.35.0 shipped, by
+[ADR 180](0180-occurrent-owns-the-stored-form-of-a-saga-instance.md). The defaulting `SagaEnvelope` constructors are
+removed, so a call to one of them stops compiling.
+
 ## Context
 
 A saga recognises a redelivered event by its `streamid` with its `streamversion`. Up to this decision it kept one
@@ -184,10 +188,14 @@ every save rewrites them.
 `@Saga` sagas use the default window. There is no property or annotation attribute for it, and one can be added when
 someone needs a different value.
 
-`EventMeta`, `SagaEnvelope` and `SagaRunnerConfig` each gain a component. The previous constructors stay, so a call
-site compiles unchanged, but a record pattern over `SagaEnvelope` or `SagaRunnerConfig` has to name the new component and
-stops compiling. That is a break of the build for shipped types, and the upgrade guide lists it under the changes that
-can break the build with the before and after patterns. There is no rewrite recipe for it. The 0.34.0 change to the same
-two records got none either, and one could be added by extending `MigrateAppendResultRecordPattern`.
+`EventMeta`, `SagaEnvelope` and `SagaRunnerConfig` each gain a component. The previous `EventMeta` and
+`SagaRunnerConfig` constructors stay, so a call to one of them compiles unchanged. `SagaEnvelope` keeps only its
+canonical constructor, since [ADR 180](0180-occurrent-owns-the-stored-form-of-a-saga-instance.md) removes the ones with
+14, 13 and 11 arguments, and the `SagaFailure` ones with 6 and 5 arguments. A call to one of them stops compiling, and
+the upgrade guide shows the call to the canonical constructor. A record pattern over `SagaEnvelope` or
+`SagaRunnerConfig` has to name the new component and stops compiling too. That is a break of the build for shipped
+types, and the upgrade guide lists it under the changes that can break the build with the before and after patterns.
+There is no rewrite recipe for it. The 0.34.0 change to the same two records got none either, and one could be added
+by extending `MigrateAppendResultRecordPattern`.
 
 ADR 109 gets a pointer in its Status section.

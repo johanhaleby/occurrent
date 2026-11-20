@@ -15,8 +15,13 @@
  */
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClients;
+import com.mongodb.event.CommandListener;
+import com.mongodb.event.CommandStartedEvent;
+import org.bson.BsonDocument;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -32,14 +37,10 @@ import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Query;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -54,7 +55,8 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * Docker-based. Since 0.35.0 a timer records the instant of its last failed fire, and {@code nextTimerFiresAt} is the
  * earliest of the timers' effective due times, so {@code findWithDueTimers} can order by what it filters on and a
  * failing instance does not hold up the ones behind it (#1003). The timer subdocument stays readable by 0.34.0 and a
- * 0.34.0 document stays readable here, because a rolling deploy runs both versions against one collection.
+ * 0.34.0 document stays readable here, because 0.35.0 reads the documents 0.34.0 wrote after an upgrade, and 0.34.0
+ * reads them again after a rollback.
  */
 @Testcontainers
 @DisplayName("SpringMongoSagaStateStore timer fairness")
@@ -71,11 +73,19 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
 
     private MongoOperations mongoOperations;
     private SagaStateStore<String> stateStore;
+    private final AtomicReference<BsonDocument> sortedFind = new AtomicReference<>();
 
     @BeforeEach
     void createInstances() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-fair-" + UUID.randomUUID()));
-        mongoOperations = new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase()));
+        mongoOperations = new MongoTemplate(MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).addCommandListener(new CommandListener() {
+            @Override
+            public void commandStarted(CommandStartedEvent event) {
+                if (event.getCommandName().equals("find") && event.getCommand().getString("find").getValue().equals(COLLECTION) && event.getCommand().containsKey("sort")) {
+                    sortedFind.set(event.getCommand().clone());
+                }
+            }
+        }).build()), requireNonNull(connectionString.getDatabase()));
         stateStore = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, String.class);
     }
 
@@ -84,7 +94,7 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
     }
 
     private static SagaEnvelope<String> instanceWith(String sagaId, List<TimerEntry> timers, long version) {
-        return new SagaEnvelope<>(sagaId, "awaiting-payment", SagaStatus.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null, null);
+        return new SagaEnvelope<>(sagaId, "awaiting-payment", SagaStatus.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null, null, true, null, Map.of(), null);
     }
 
     private Document rawDocument(String sagaId) {
@@ -97,38 +107,38 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
 
     @Test
     void a_failed_attempt_marker_round_trips_on_the_timer_that_carries_it_and_not_on_the_others() {
-        stateStore.compareAndSave("s1", instanceWith("s1", List.of(
+        SagaEnvelopes.of(stateStore, null).compareAndSave("s1", instanceWith("s1", List.of(
                 new TimerEntry("marked", BASE - 5_000, BASE - 1_000), new TimerEntry("unmarked", BASE - 4_000))), 0);
 
-        SagaEnvelope<String> read = stateStore.find("s1").orElseThrow();
+        SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find("s1").orElseThrow();
 
         assertThat(read.timers()).containsExactly(new TimerEntry("marked", BASE - 5_000, BASE - 1_000L), new TimerEntry("unmarked", BASE - 4_000));
     }
 
     @Test
     void a_marker_written_without_the_state_round_trips_too() {
-        stateStore.compareAndSave("s1", instanceWith("s1", List.of(new TimerEntry("t", BASE - 5_000))), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("s1", instanceWith("s1", List.of(new TimerEntry("t", BASE - 5_000))), 0);
         SagaEnvelope<String> marked = instanceWith("s1", List.of(new TimerEntry("t", BASE - 5_000, BASE - 1_000)), 2);
 
-        boolean saved = stateStore.compareAndSaveWithoutState("s1", marked, 1);
+        boolean saved = SagaEnvelopes.of(stateStore, null).compareAndSaveWithoutState("s1", marked, 1);
 
         assertAll(
                 () -> assertThat(saved).isTrue(),
-                () -> assertThat(stateStore.find("s1").orElseThrow().timers()).containsExactly(new TimerEntry("t", BASE - 5_000, BASE - 1_000L)),
-                () -> assertThat(stateStore.find("s1").orElseThrow().state()).as("the state is left as it was").isEqualTo("awaiting-payment")
+                () -> assertThat(SagaEnvelopes.of(stateStore, null).find("s1").orElseThrow().timers()).containsExactly(new TimerEntry("t", BASE - 5_000, BASE - 1_000L)),
+                () -> assertThat(SagaEnvelopes.of(stateStore, null).find("s1").orElseThrow().state()).as("the state is left as it was").isEqualTo("awaiting-payment")
         );
     }
 
     @Test
     void the_stored_timer_subdocument_has_no_marker_field_when_the_marker_is_null() {
-        stateStore.compareAndSave("s1", instanceWith("s1", List.of(new TimerEntry("t", BASE - 5_000))), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("s1", instanceWith("s1", List.of(new TimerEntry("t", BASE - 5_000))), 0);
 
         assertThat(rawTimers("s1")).singleElement().satisfies(timer -> assertThat(timer.keySet()).containsExactlyInAnyOrder("name", "firesAtEpochMilli"));
     }
 
     @Test
     void the_stored_timer_subdocument_carries_the_marker_as_a_long_when_there_is_one() {
-        stateStore.compareAndSave("s1", instanceWith("s1", List.of(new TimerEntry("t", BASE - 5_000, BASE - 1_000))), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("s1", instanceWith("s1", List.of(new TimerEntry("t", BASE - 5_000, BASE - 1_000))), 0);
 
         assertThat(rawTimers("s1")).singleElement().satisfies(timer -> assertAll(
                 () -> assertThat(timer.keySet()).containsExactlyInAnyOrder("name", "firesAtEpochMilli", "nextAttemptAtEpochMilli"),
@@ -138,7 +148,7 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
 
     @Test
     void nextTimerFiresAt_is_the_smallest_effective_due_time_across_timers_with_and_without_markers() {
-        stateStore.compareAndSave("s1", instanceWith("s1", List.of(
+        SagaEnvelopes.of(stateStore, null).compareAndSave("s1", instanceWith("s1", List.of(
                 new TimerEntry("marked-past-the-others", BASE - 9_000, BASE - 100),
                 new TimerEntry("unmarked", BASE - 4_000),
                 new TimerEntry("marked-before-its-firing-time", BASE - 3_000, BASE - 8_000))), 0);
@@ -148,7 +158,7 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
 
     @Test
     void nextTimerFiresAt_follows_the_marker_when_the_only_timer_has_one() {
-        stateStore.compareAndSave("s1", instanceWith("s1", List.of(new TimerEntry("t", BASE - 9_000, BASE - 100))), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("s1", instanceWith("s1", List.of(new TimerEntry("t", BASE - 9_000, BASE - 100))), 0);
 
         assertThat(rawDocument("s1").get("nextTimerFiresAt")).isEqualTo(BASE - 100);
     }
@@ -157,70 +167,57 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
     void nextTimerAt_stays_at_the_firing_time_while_nextTimerFiresAt_holds_the_marked_due_time_after_several_failed_fires() {
         long firesAt = BASE - 9_000;
         TimerEntry timer = new TimerEntry("t", firesAt);
-        stateStore.compareAndSave("s1", instanceWith("s1", List.of(timer)), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("s1", instanceWith("s1", List.of(timer)), 0);
         for (int failedPoll = 1; failedPoll <= 3; failedPoll++) {
-            SagaEnvelope<String> current = stateStore.findWithoutState("s1").orElseThrow();
+            SagaEnvelope<String> current = SagaEnvelopes.of(stateStore, null).findWithoutState("s1").orElseThrow();
             SagaEnvelope<String> marked = requireNonNull(SagaExecutionSupport.withFailedTimerAttempt(current, timer, Instant.ofEpochMilli(BASE - 1_000 + failedPoll)));
-            assertThat(stateStore.compareAndSaveWithoutState("s1", marked, current.version())).isTrue();
+            assertThat(SagaEnvelopes.of(stateStore, null).compareAndSaveWithoutState("s1", marked, current.version())).isTrue();
         }
 
         assertAll(
-                () -> assertThat(stateStore.findWithoutState("s1").orElseThrow().nextTimerAt()).as("without state").isEqualTo(Instant.ofEpochMilli(firesAt)),
-                () -> assertThat(stateStore.find("s1").orElseThrow().nextTimerAt()).as("with state").isEqualTo(Instant.ofEpochMilli(firesAt)),
+                () -> assertThat(SagaEnvelopes.of(stateStore, null).findWithoutState("s1").orElseThrow().nextTimerAt()).as("without state").isEqualTo(Instant.ofEpochMilli(firesAt)),
+                () -> assertThat(SagaEnvelopes.of(stateStore, null).find("s1").orElseThrow().nextTimerAt()).as("with state").isEqualTo(Instant.ofEpochMilli(firesAt)),
                 () -> assertThat(rawDocument("s1").get("nextTimerFiresAt")).as("raw nextTimerFiresAt").isEqualTo(BASE - 1_000 + 3),
-                () -> assertThat(stateStore.find("s1").orElseThrow().timers()).containsExactly(new TimerEntry("t", firesAt, BASE - 1_000 + 3))
+                () -> assertThat(SagaEnvelopes.of(stateStore, null).find("s1").orElseThrow().timers()).containsExactly(new TimerEntry("t", firesAt, BASE - 1_000 + 3))
         );
     }
 
     @Test
     void findWithDueTimers_returns_instances_in_ascending_order_of_their_effective_due_time_and_respects_the_limit() {
-        stateStore.compareAndSave("fired-latest", instanceWith("fired-latest", List.of(new TimerEntry("t", BASE - 500))), 0);
-        stateStore.compareAndSave("marked-late", instanceWith("marked-late", List.of(new TimerEntry("t", BASE - 9_000, BASE - 100))), 0);
-        stateStore.compareAndSave("fired-earliest", instanceWith("fired-earliest", List.of(new TimerEntry("t", BASE - 7_000))), 0);
-        stateStore.compareAndSave("marked-mid", instanceWith("marked-mid", List.of(new TimerEntry("t", BASE - 8_000, BASE - 3_000))), 0);
-        stateStore.compareAndSave("not-due", instanceWith("not-due", List.of(new TimerEntry("t", BASE + 5_000))), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("fired-latest", instanceWith("fired-latest", List.of(new TimerEntry("t", BASE - 500))), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("marked-late", instanceWith("marked-late", List.of(new TimerEntry("t", BASE - 9_000, BASE - 100))), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("fired-earliest", instanceWith("fired-earliest", List.of(new TimerEntry("t", BASE - 7_000))), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("marked-mid", instanceWith("marked-mid", List.of(new TimerEntry("t", BASE - 8_000, BASE - 3_000))), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("not-due", instanceWith("not-due", List.of(new TimerEntry("t", BASE + 5_000))), 0);
 
         assertAll(
-                () -> assertThat(stateStore.findWithDueTimers(NOW, 10)).extracting(SagaEnvelope::sagaId)
+                () -> assertThat(SagaEnvelopes.of(stateStore, null).findWithDueTimers(NOW, 10)).extracting(SagaEnvelope::sagaId)
                         .containsExactly("fired-earliest", "marked-mid", "fired-latest", "marked-late"),
-                () -> assertThat(stateStore.findWithDueTimers(NOW, 2)).extracting(SagaEnvelope::sagaId)
+                () -> assertThat(SagaEnvelopes.of(stateStore, null).findWithDueTimers(NOW, 2)).extracting(SagaEnvelope::sagaId)
                         .containsExactly("fired-earliest", "marked-mid")
         );
     }
 
     @Test
     void findWithDueTimers_does_not_return_an_instance_whose_marker_is_still_in_the_future() {
-        stateStore.compareAndSave("backed-off", instanceWith("backed-off", List.of(new TimerEntry("t", BASE - 9_000, BASE + 1_000))), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("backed-off", instanceWith("backed-off", List.of(new TimerEntry("t", BASE - 9_000, BASE + 1_000))), 0);
 
-        assertThat(stateStore.findWithDueTimers(NOW, 10)).isEmpty();
+        assertThat(SagaEnvelopes.of(stateStore, null).findWithDueTimers(NOW, 10)).isEmpty();
     }
 
     @Test
     void the_sorted_due_query_the_store_runs_is_served_in_order_by_the_status_and_nextTimerFiresAt_index_without_an_in_memory_sort() {
-        AtomicReference<Query> dueQuery = new AtomicReference<>();
-        InvocationHandler recordTheDueQuery = (proxy, method, args) -> {
-            if (method.getName().equals("find") && args.length == 3 && args[0] instanceof Query query) {
-                dueQuery.set(query);
-            }
-            try {
-                return method.invoke(mongoOperations, args);
-            } catch (InvocationTargetException e) {
-                throw e.getCause();
-            }
-        };
-        MongoOperations recording = (MongoOperations) Proxy.newProxyInstance(MongoOperations.class.getClassLoader(),
-                new Class<?>[]{MongoOperations.class}, recordTheDueQuery);
-        SagaStateStore<String> recordingStore = new SpringMongoSagaStateStore<>(recording, COLLECTION, String.class);
+        SagaStateStore<String> recordingStore = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, String.class);
         for (int i = 0; i < 5; i++) {
-            recordingStore.compareAndSave("s" + i, instanceWith("s" + i, List.of(new TimerEntry("t", BASE - 5_000 + i))), 0);
-            recordingStore.compareAndSave("m" + i, new SagaEnvelope<>("m" + i, "awaiting-payment", SagaStatus.ACTIVE, 1,
+            SagaEnvelopes.of(recordingStore, null).compareAndSave("s" + i, instanceWith("s" + i, List.of(new TimerEntry("t", BASE - 5_000 + i))), 0);
+            SagaEnvelopes.of(recordingStore, null).compareAndSave("m" + i, new SagaEnvelope<>("m" + i, "awaiting-payment", SagaStatus.ACTIVE, 1,
                     List.of(new TimerEntry("t", BASE - 5_000 + i)), Map.of(), null, NOW, NOW, null, null, true, null,
-                    Map.of("order", new SagaEnvelope.StreamMarks(1, Map.of()))), 0);
+                    Map.of("order", new SagaEnvelope.StreamMarks(1, Map.of())), null), 0);
         }
-        recordingStore.findWithDueTimers(NOW, 3);
-        Query query = requireNonNull(dueQuery.get(), "findWithDueTimers ran no find");
+        SagaEnvelopes.of(recordingStore, null).findWithDueTimers(NOW, 3);
+        BsonDocument find = requireNonNull(sortedFind.get(), "findWithDueTimers sent no sorted find");
 
-        Document explain = mongoOperations.getCollection(COLLECTION).find(query.getQueryObject()).sort(query.getSortObject()).limit(query.getLimit()).explain();
+        Document explain = mongoOperations.getCollection(COLLECTION).find(find.getDocument("filter")).sort(find.getDocument("sort")).limit(find.get("limit").asNumber().intValue()).explain();
 
         String plan = explain.get("queryPlanner", Document.class).get("winningPlan", Document.class).toJson();
         assertAll(
@@ -243,13 +240,13 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
                 .append("nextTimerFiresAt", BASE - 6_000)
                 .append("streamWatermarks", new Document()));
 
-        List<SagaEnvelope<String>> due = stateStore.findWithDueTimers(NOW, 10);
+        List<SagaEnvelope<String>> due = SagaEnvelopes.of(stateStore, null).findWithDueTimers(NOW, 10);
 
         assertAll(
                 () -> assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("legacy"),
                 () -> assertThat(due.get(0).timers()).containsExactly(new TimerEntry("second", BASE - 1_000, null), new TimerEntry("first", BASE - 6_000, null)),
                 () -> assertThat(due.get(0).timers()).extracting(TimerEntry::nextAttemptAtEpochMilli).containsOnlyNulls(),
-                () -> assertThat(stateStore.find("legacy").orElseThrow().timers()).extracting(TimerEntry::nextAttemptAtEpochMilli).containsOnlyNulls()
+                () -> assertThat(SagaEnvelopes.of(stateStore, null).find("legacy").orElseThrow().timers()).extracting(TimerEntry::nextAttemptAtEpochMilli).containsOnlyNulls()
         );
     }
 
@@ -257,7 +254,7 @@ class SpringMongoSagaStateStoreTimerFairnessTest {
     void a_timer_written_with_a_marker_still_has_the_name_and_firesAtEpochMilli_fields_with_the_types_0_34_0_reads() {
         // The 0.34.0 decoder reads timer.getString("name") and timer.getLong("firesAtEpochMilli") and nothing else of a timer,
         // so an instance written here must keep exactly those two fields, as a string and a long, for a node still on 0.34.0
-        stateStore.compareAndSave("s1", instanceWith("s1", List.of(new TimerEntry("t", BASE - 5_000, BASE - 1_000))), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave("s1", instanceWith("s1", List.of(new TimerEntry("t", BASE - 5_000, BASE - 1_000))), 0);
 
         Document timer = rawTimers("s1").get(0);
 

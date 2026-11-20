@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -167,7 +168,7 @@ class SagaExecutionRedeliveryKeyTest {
                     () -> assertThat(thrown).isInstanceOf(SagaRedeliveryDetectionException.class).hasMessageContaining("BEST_EFFORT"),
                     () -> assertThat(reactionsRun).hasValue(0),
                     () -> assertThat(dispatched).isEmpty(),
-                    () -> assertThat(stateStore.find(ORDER).orElseThrow().state()).isEqualTo(new AwaitingPayment(ORDER))
+                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow().state()).isEqualTo(new AwaitingPayment(ORDER))
             );
         }
 
@@ -182,7 +183,7 @@ class SagaExecutionRedeliveryKeyTest {
             // Then
             assertAll(
                     () -> assertThat(thrown).isInstanceOf(SagaRedeliveryDetectionException.class),
-                    () -> assertThat(stateStore.find(ORDER)).isEmpty()
+                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find(ORDER)).isEmpty()
             );
         }
 
@@ -198,7 +199,7 @@ class SagaExecutionRedeliveryKeyTest {
             assertAll(
                     () -> assertThat(reactionsRun).hasValue(1),
                     () -> assertThat(dispatched).containsExactly(new ShipOrder(ORDER)),
-                    () -> assertThat(stateStore.find(ORDER).orElseThrow().state()).isEqualTo(new Shipped(ORDER))
+                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow().state()).isEqualTo(new Shipped(ORDER))
             );
         }
 
@@ -257,7 +258,7 @@ class SagaExecutionRedeliveryKeyTest {
             execution.onCloudEvent(positionOnly(42, new PaymentReserved("paid", ORDER)));
 
             // Then the instance holds its stream watermark and nothing for the position
-            SagaEnvelope<OrderState> instance = stateStore.find(ORDER).orElseThrow();
+            SagaEnvelope<OrderState> instance = SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow();
             assertAll(
                     () -> assertThat(instance.positionWatermark()).isNull(),
                     () -> assertThat(instance.streamWatermarks()).isEqualTo(Map.of(ORDER, 1L))
@@ -328,7 +329,7 @@ class SagaExecutionRedeliveryKeyTest {
             assertAll(
                     () -> assertThat(reactionsRun).hasValue(0),
                     () -> assertThat(dispatched).isEmpty(),
-                    () -> assertThat(stateStore.find(ORDER).orElseThrow().state()).isEqualTo(new AwaitingPayment(ORDER))
+                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow().state()).isEqualTo(new AwaitingPayment(ORDER))
             );
         }
 
@@ -378,7 +379,7 @@ class SagaExecutionRedeliveryKeyTest {
             }
 
             // Then
-            SagaEnvelope<OrderState> instance = stateStore.find(ORDER).orElseThrow();
+            SagaEnvelope<OrderState> instance = SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow();
             assertAll(
                     () -> assertThat(thrown).allSatisfy(failure -> assertThat(failure).isInstanceOf(SagaRedeliveryDetectionException.class)),
                     () -> assertThat(instance.status()).isEqualTo(SagaStatus.ACTIVE),
@@ -457,7 +458,7 @@ class SagaExecutionRedeliveryKeyTest {
             }
 
             // Then
-            SagaEnvelope<OrderState> instance = stateStore.find(ORDER).orElseThrow();
+            SagaEnvelope<OrderState> instance = SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow();
             assertAll(
                     () -> assertThat(instance.status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(instance.failure()).isNull()
@@ -519,7 +520,7 @@ class SagaExecutionRedeliveryKeyTest {
             }
 
             // Then
-            SagaEnvelope<OrderState> instance = stateStore.find(ORDER).orElseThrow();
+            SagaEnvelope<OrderState> instance = SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow();
             assertAll(
                     () -> assertThat(instance.status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(instance.failure()).isNull(),
@@ -556,7 +557,7 @@ class SagaExecutionRedeliveryKeyTest {
             Throwable secondDelivery = catchThrowable(() -> execution.onCloudEvent(poison));
 
             // Then it is quarantined and the delivery returns normally
-            SagaEnvelope<OrderState> instance = stateStore.find(ORDER).orElseThrow();
+            SagaEnvelope<OrderState> instance = SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow();
             assertAll(
                     () -> assertThat(secondDelivery).isNull(),
                     () -> assertThat(instance.status()).isEqualTo(SagaStatus.QUARANTINED),
@@ -573,9 +574,9 @@ class SagaExecutionRedeliveryKeyTest {
 
         @BeforeEach
         void storeTheLegacyRecord() {
-            SagaFailure legacy = new SagaFailure("position:7", 7L, failingSince, IllegalStateException.class.getName(), "boom");
-            boolean stored = stateStore.compareAndSave(ORDER, new SagaEnvelope<>(ORDER, new AwaitingPayment(ORDER), SagaStatus.ACTIVE, 1,
-                    List.of(), Map.of(ORDER, 1L), 7L, failingSince, failingSince, null, null, true, legacy), 0);
+            SagaFailure legacy = new SagaFailure("position:7", 7L, failingSince, IllegalStateException.class.getName(), "boom", null, null);
+            boolean stored = SagaEnvelopes.of(stateStore, null).compareAndSave(ORDER, new SagaEnvelope<>(ORDER, new AwaitingPayment(ORDER), SagaStatus.ACTIVE, 1,
+                    List.of(), Map.of(ORDER, 1L), 7L, failingSince, failingSince, null, null, true, legacy, Map.of(), null), 0);
             assertThat(stored).isTrue();
         }
 
@@ -589,7 +590,7 @@ class SagaExecutionRedeliveryKeyTest {
             Throwable thrown = catchThrowable(() -> execution.onCloudEvent(streamKeyed(ORDER, 2, new PaymentReserved("paid", ORDER))));
 
             // Then
-            SagaEnvelope<OrderState> instance = stateStore.find(ORDER).orElseThrow();
+            SagaEnvelope<OrderState> instance = SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow();
             assertAll(
                     () -> assertThat(thrown).isInstanceOf(IllegalStateException.class),
                     () -> assertThat(instance.status()).isEqualTo(SagaStatus.ACTIVE),
@@ -607,7 +608,7 @@ class SagaExecutionRedeliveryKeyTest {
             execution.onCloudEvent(streamKeyed(ORDER, 2, new PaymentReserved("paid", ORDER)));
 
             // Then
-            SagaEnvelope<OrderState> instance = stateStore.find(ORDER).orElseThrow();
+            SagaEnvelope<OrderState> instance = SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow();
             assertAll(
                     () -> assertThat(instance.failure()).isNull(),
                     () -> assertThat(instance.status()).isEqualTo(SagaStatus.ACTIVE),

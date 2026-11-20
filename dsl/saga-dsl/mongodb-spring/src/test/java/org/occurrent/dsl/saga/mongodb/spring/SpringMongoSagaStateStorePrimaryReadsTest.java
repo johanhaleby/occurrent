@@ -34,6 +34,7 @@ import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
@@ -81,6 +82,8 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
 
     private SpringMongoSagaStateStore<Payment> writer;
     private SpringMongoSagaStateStore<Payment> secondaryOnly;
+    private SagaEnvelopes<Payment> writerEnvelopes;
+    private SagaEnvelopes<Payment> secondaryOnlyEnvelopes;
     private MongoTemplate secondaryOnlyTemplate;
     private MongoTemplate primaryTemplate;
     // The read preference each find command was sent with, as the server was told
@@ -105,11 +108,17 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
         secondaryOnlyTemplate = new MongoTemplate(MongoClients.create(settings), database);
         secondaryOnlyTemplate.setReadPreference(ReadPreference.secondary());
         secondaryOnly = new SpringMongoSagaStateStore<>(secondaryOnlyTemplate, COLLECTION, Payment.class);
+        writerEnvelopes = SagaEnvelopes.of(writer, null);
+        secondaryOnlyEnvelopes = SagaEnvelopes.of(secondaryOnly, null);
     }
 
     private static SagaEnvelope<Payment> envelope(String sagaId, SagaStatus status, List<TimerEntry> timers, SagaFailure failure) {
         return new SagaEnvelope<>(sagaId, new Payment(12L), status, 1, timers, Map.of("order-1", 6L), null,
                 NOW.minusSeconds(600), NOW, null, null, true, failure, Map.of(), 0L);
+    }
+
+    private static SagaEnvelope<Payment> atVersion(SagaEnvelope<Payment> e, long version) {
+        return new SagaEnvelope<>(e.sagaId(), e.state(), e.status(), version, e.timers(), e.streamWatermarks(), null, e.createdAt(), e.updatedAt(), e.completedAt(), e.currentStep(), e.started(), e.failure(), e.streamMarks(), e.quarantineSkipCount());
     }
 
     private static SagaFailure releasingFailure() {
@@ -134,7 +143,7 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
 
     @Test
     void the_template_used_here_sends_a_secondary_read_preference_so_the_tests_below_prove_something() {
-        writer.compareAndSave("control", envelope("control", SagaStatus.ACTIVE, List.of(), null), 0);
+        writerEnvelopes.compareAndSave("control", envelope("control", SagaStatus.ACTIVE, List.of(), null), 0);
 
         List<String> sent = readPreferencesSentBy(() -> secondaryOnlyTemplate.findOne(Query.query(where("_id").is("control")), Document.class, COLLECTION));
 
@@ -143,11 +152,11 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
 
     @Test
     void find_reads_from_the_primary_whatever_the_read_preference_of_the_template() {
-        writer.compareAndSave("order-1", envelope("order-1", SagaStatus.ACTIVE, List.of(), null), 0);
+        writerEnvelopes.compareAndSave("order-1", envelope("order-1", SagaStatus.ACTIVE, List.of(), null), 0);
 
         AtomicReference<Optional<SagaEnvelope<Payment>>> read = new AtomicReference<>();
 
-        List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnly.find("order-1")));
+        List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnlyEnvelopes.find("order-1")));
 
         assertAll(
                 () -> assertThat(sent).as("read preference of each find").isNotEmpty().containsOnly(primaryOnTheWire()),
@@ -157,11 +166,11 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
 
     @Test
     void find_without_state_reads_from_the_primary_whatever_the_read_preference_of_the_template() {
-        writer.compareAndSave("order-1", envelope("order-1", SagaStatus.ACTIVE, List.of(), null), 0);
+        writerEnvelopes.compareAndSave("order-1", envelope("order-1", SagaStatus.ACTIVE, List.of(), null), 0);
 
         AtomicReference<Optional<SagaEnvelope<Payment>>> read = new AtomicReference<>();
 
-        List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnly.findWithoutState("order-1")));
+        List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnlyEnvelopes.findWithoutState("order-1")));
 
         assertAll(
                 () -> assertThat(sent).as("read preference of each find").isNotEmpty().containsOnly(primaryOnTheWire()),
@@ -171,11 +180,11 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
 
     @Test
     void find_with_due_timers_reads_from_the_primary_whatever_the_read_preference_of_the_template() {
-        writer.compareAndSave("order-1", envelope("order-1", SagaStatus.ACTIVE, List.of(new TimerEntry("payment", NOW.toEpochMilli())), null), 0);
+        writerEnvelopes.compareAndSave("order-1", envelope("order-1", SagaStatus.ACTIVE, List.of(new TimerEntry("payment", NOW.toEpochMilli())), null), 0);
 
         AtomicReference<List<SagaEnvelope<Payment>>> read = new AtomicReference<>();
 
-        List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnly.findWithDueTimers(NOW.plusSeconds(1), 10)));
+        List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnlyEnvelopes.findWithDueTimers(NOW.plusSeconds(1), 10)));
 
         assertAll(
                 () -> assertThat(sent).as("read preference of each find").isNotEmpty().containsOnly(primaryOnTheWire()),
@@ -185,11 +194,11 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
 
     @Test
     void find_by_status_reads_from_the_primary_whatever_the_read_preference_of_the_template() {
-        writer.compareAndSave("order-1", envelope("order-1", SagaStatus.QUARANTINED, List.of(), releasingFailure()), 0);
+        writerEnvelopes.compareAndSave("order-1", envelope("order-1", SagaStatus.QUARANTINED, List.of(), releasingFailure()), 0);
 
         AtomicReference<List<SagaEnvelope<Payment>>> read = new AtomicReference<>();
 
-        List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnly.findByStatus(SagaStatus.QUARANTINED, NOW.plusSeconds(1), 10)));
+        List<String> sent = readPreferencesSentBy(() -> read.set(secondaryOnlyEnvelopes.findByStatus(SagaStatus.QUARANTINED, NOW.plusSeconds(1), 10)));
 
         assertAll(
                 () -> assertThat(sent).as("read preference of each find").isNotEmpty().containsOnly(primaryOnTheWire()),
@@ -199,7 +208,7 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
 
     @Test
     void find_releasing_saga_ids_reads_from_the_primary_whatever_the_read_preference_of_the_template() {
-        writer.compareAndSave("order-1", envelope("order-1", SagaStatus.QUARANTINED, List.of(), releasingFailure()), 0);
+        writerEnvelopes.compareAndSave("order-1", envelope("order-1", SagaStatus.QUARANTINED, List.of(), releasingFailure()), 0);
 
         AtomicReference<List<String>> read = new AtomicReference<>();
 
@@ -213,7 +222,8 @@ class SpringMongoSagaStateStorePrimaryReadsTest {
 
     @Test
     void find_skipped_inputs_reads_from_the_primary_whatever_the_read_preference_of_the_template() {
-        writer.recordSkippedInput("order-1", QUARANTINE_ID, new SkippedInput(0, "order-1@8"));
+        writerEnvelopes.compareAndSave("order-1", envelope("order-1", SagaStatus.QUARANTINED, List.of(), releasingFailure()), 0);
+        writerEnvelopes.compareAndSaveSkipped(writer, atVersion(envelope("order-1", SagaStatus.QUARANTINED, List.of(), releasingFailure()), 2), 1, QUARANTINE_ID, new SkippedInput(0, "order-1@8"));
 
         AtomicReference<List<SkippedInput>> read = new AtomicReference<>();
 

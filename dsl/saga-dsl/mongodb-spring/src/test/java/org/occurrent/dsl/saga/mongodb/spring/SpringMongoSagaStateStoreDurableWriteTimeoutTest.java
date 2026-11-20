@@ -18,22 +18,28 @@ package org.occurrent.dsl.saga.mongodb.spring;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
+import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.event.CommandListener;
 import com.mongodb.event.CommandStartedEvent;
 import org.bson.BsonDocument;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.occurrent.dsl.saga.SkippedInput;
+import org.occurrent.dsl.saga.SagaEnvelope;
+import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -42,27 +48,33 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Docker-based. A client {@code timeoutMS} of 0 means no timeout, so a skipped-input write that waits for a majority
- * that is gone would wait forever and hold the subscription thread. The store puts a bound of at most 10 seconds back,
- * which the driver sends as {@code maxTimeMS} on the {@code update} command, and a command listener reads it off the
+ * Docker-based. A client {@code timeoutMS} of 0 means no timeout, so a write outside a transaction that waits for a
+ * majority that is gone would wait forever and hold the subscription thread. The store puts a bound of at most 10
+ * seconds back, which the driver sends as {@code maxTimeMS} on the command, and a command listener reads it off the
  * wire.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(60)
-class SpringMongoSagaStateStoreSkippedInputWriteTimeoutTest {
+class SpringMongoSagaStateStoreDurableWriteTimeoutTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
-    private static final String COLLECTION = "saga-skipped-input-write-timeout";
-    private static final String SKIPPED_INPUTS_COLLECTION = COLLECTION + "_skipped_inputs";
+    private static final String COLLECTION = "saga-durable-write-timeout";
+    private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
 
     record Payment(long amount) {
     }
 
-    // The command document of each update sent to the skipped-inputs collection
-    private final List<BsonDocument> skippedInputUpdates = new CopyOnWriteArrayList<>();
+    // The command document of each insert sent to the instance collection
+    private final List<BsonDocument> inserts = new CopyOnWriteArrayList<>();
+    private MongoClient client;
+
+    @AfterEach
+    void close() {
+        client.close();
+    }
 
     private SpringMongoSagaStateStore<Payment> storeOnAClientWithATimeoutOf(long timeoutMillis) {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-timeout-" + UUID.randomUUID().toString().substring(0, 8)));
@@ -72,23 +84,25 @@ class SpringMongoSagaStateStoreSkippedInputWriteTimeoutTest {
                     @Override
                     public void commandStarted(CommandStartedEvent event) {
                         BsonDocument command = event.getCommand();
-                        if (event.getCommandName().equals("update") && SKIPPED_INPUTS_COLLECTION.equals(command.getString("update").getValue())) {
-                            skippedInputUpdates.add(command);
+                        if (event.getCommandName().equals("insert") && COLLECTION.equals(command.getString("insert").getValue())) {
+                            inserts.add(command);
                         }
                     }
                 }).build();
-        return new SpringMongoSagaStateStore<>(new MongoTemplate(MongoClients.create(settings), requireNonNull(connectionString.getDatabase())), COLLECTION, Payment.class);
+        client = MongoClients.create(settings);
+        return new SpringMongoSagaStateStore<>(new MongoTemplate(client, requireNonNull(connectionString.getDatabase())), COLLECTION, Payment.class);
     }
 
     @Test
-    void a_client_timeout_of_zero_still_sends_the_skipped_input_write_with_a_max_time_of_at_most_ten_seconds() {
+    void a_client_timeout_of_zero_still_sends_the_insert_of_an_instance_with_a_max_time_of_at_most_ten_seconds() {
         SpringMongoSagaStateStore<Payment> store = storeOnAClientWithATimeoutOf(0);
+        SagaEnvelope<Payment> envelope = new SagaEnvelope<>("order-1", new Payment(12L), SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, NOW.minusSeconds(600), NOW, null, null, true, null, Map.of(), null);
 
-        store.recordSkippedInput("order-1", "q-1", new SkippedInput(0, "order-1@7"));
+        assertThat(SagaEnvelopes.of(store, null).compareAndSave("order-1", envelope, 0)).isTrue();
 
-        assertThat(skippedInputUpdates).singleElement().satisfies(update -> {
-            assertThat(update.containsKey("maxTimeMS")).as("the update carries maxTimeMS").isTrue();
-            assertThat(update.get("maxTimeMS").asNumber().longValue()).as("maxTimeMS").isGreaterThan(0).isLessThanOrEqualTo(10_000);
+        assertThat(inserts).singleElement().satisfies(insert -> {
+            assertThat(insert.containsKey("maxTimeMS")).as("the insert carries maxTimeMS").isTrue();
+            assertThat(insert.get("maxTimeMS").asNumber().longValue()).as("maxTimeMS").isGreaterThan(0).isLessThanOrEqualTo(10_000);
         });
     }
 }

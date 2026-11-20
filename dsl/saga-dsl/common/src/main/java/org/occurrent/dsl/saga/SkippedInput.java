@@ -22,8 +22,8 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * One input a quarantined saga instance skipped and recorded, see
- * {@link SagaStateStoreSkippedInputs#recordSkippedInput(String, String, SkippedInput)}. A release replays the records of the
- * instance's current quarantine in {@link #ORDER}.
+ * {@link SagaStateStoreSkippedInputs#compareAndSaveSkipped(org.occurrent.dsl.saga.codec.StoredSaga, long, String, SkippedInput)}.
+ * A release replays the records of the instance's current quarantine in {@link #ORDER}.
  * <p>
  * A key is the input's redelivery key, {@code streamId@streamVersion}, when the event has a stream id and a stream
  * version, the same string {@link SagaFailure#input()} holds. Otherwise it is

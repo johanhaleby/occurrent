@@ -16,6 +16,11 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
+import org.occurrent.dsl.saga.codec.EncodedSaga;
+import org.occurrent.dsl.saga.codec.StoredSaga;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
+import org.occurrent.dsl.saga.codec.SagaCodec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -49,6 +54,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -720,7 +726,7 @@ class SagaQuarantineTest {
             execution.onCloudEvent(version(2));
             execution.onCloudEvent(version(3));
 
-            SagaEnvelope<String> instance = store.find("order").orElseThrow();
+            SagaEnvelope<String> instance = SagaEnvelopes.of(store, null).find("order").orElseThrow();
             assertAll(
                     () -> assertThat(instance.state()).isEqualTo("opened|added|finished"),
                     () -> assertThat(instance.streamWatermarks()).containsEntry("order", 3L),
@@ -1241,12 +1247,12 @@ class SagaQuarantineTest {
             assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
             now.set(start.plus(Duration.ofMinutes(5)).minusMillis(1));
             assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
-            assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE);
 
             now.set(start.plus(Duration.ofMinutes(5)));
             catchThrowable(() -> execution.onCloudEvent(poisonEvent));
 
-            assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED);
         }
     }
 
@@ -1275,7 +1281,7 @@ class SagaQuarantineTest {
                         .hasMessage("this instance can never handle its payment");
             }
 
-            SagaEnvelope<OrderState> instance = stateStore.find(POISON).orElseThrow();
+            SagaEnvelope<OrderState> instance = SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow();
             assertAll(
                     () -> assertThat(instance.status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(instance.failure()).isNull(),
@@ -1296,8 +1302,8 @@ class SagaQuarantineTest {
 
             execution.onCloudEvent(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
 
-            SagaEnvelope<OrderState> healthy = stateStore.find(HEALTHY).orElseThrow();
-            SagaEnvelope<OrderState> poison = stateStore.find(POISON).orElseThrow();
+            SagaEnvelope<OrderState> healthy = SagaEnvelopes.of(stateStore, null).find(HEALTHY).orElseThrow();
+            SagaEnvelope<OrderState> poison = SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow();
             assertAll(
                     () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)),
                     () -> assertThat(healthy.status()).isEqualTo(SagaStatus.COMPLETED),
@@ -1334,7 +1340,7 @@ class SagaQuarantineTest {
             }
 
             assertThat(store.competingWritesThatLanded()).isNotEmpty().doesNotContain(false);
-            assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED);
         }
 
         @Test
@@ -1357,7 +1363,7 @@ class SagaQuarantineTest {
                 executionLog.detachAppender(appender);
                 appender.stop();
             }
-            SagaEnvelope<OrderState> afterTheLostWrites = stateStore.find(POISON).orElseThrow();
+            SagaEnvelope<OrderState> afterTheLostWrites = SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow();
             SagaEnvelope.StreamMarks marks = afterTheLostWrites.streamMarks().get(POISON);
             List<Long> pendingVersions = marks == null ? List.of() : marks.pending().values().stream().flatMap(List::stream).toList();
             Map<Long, Instant> pendingSince = marks == null ? Map.of() : marks.pendingSince();
@@ -1378,7 +1384,7 @@ class SagaQuarantineTest {
                         assertThat(logged.getLevel()).isEqualTo(Level.WARN);
                         assertThat(logged.getFormattedMessage()).contains("could not record the failure");
                     }),
-                    () -> assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED)
+                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED)
             );
         }
 
@@ -1393,7 +1399,7 @@ class SagaQuarantineTest {
 
             Throwable rethrown = catchThrowable(() -> execution.onCloudEvent(cloudEvent(POISON, 2, new PaymentReserved("2", POISON))));
 
-            SagaEnvelope<OrderState> after = stateStore.find(POISON).orElseThrow();
+            SagaEnvelope<OrderState> after = SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow();
             assertAll(
                     () -> assertThat(store.competingWritesThatLanded()).containsExactly(true),
                     () -> assertThat(rethrown).isInstanceOf(IllegalStateException.class).hasMessage("this instance can never handle its payment"),
@@ -1414,7 +1420,7 @@ class SagaQuarantineTest {
 
             Throwable rethrown = catchThrowable(() -> execution.onCloudEvent(cloudEvent(POISON, 2, new PaymentReserved("2", POISON))));
 
-            SagaEnvelope<OrderState> after = stateStore.find(POISON).orElseThrow();
+            SagaEnvelope<OrderState> after = SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow();
             assertAll(
                     () -> assertThat(store.competingWritesThatLanded()).containsExactly(true),
                     () -> assertThat(rethrown).isInstanceOf(IllegalStateException.class).hasMessage("this instance can never handle its payment"),
@@ -1443,7 +1449,7 @@ class SagaQuarantineTest {
                     () -> assertThat(store.competingWritesThatLanded()).isNotEmpty().doesNotContain(false),
                     () -> assertThat(rethrown).isNull(),
                     () -> assertThat(store.failureWriteAttempts()).isEqualTo(3),
-                    () -> assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED)
+                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED)
             );
         }
 
@@ -1461,7 +1467,7 @@ class SagaQuarantineTest {
                     () -> assertThat(store.competingWritesThatLanded()).isNotEmpty().doesNotContain(false),
                     () -> assertThat(rethrown).isInstanceOf(IllegalStateException.class).hasMessage("this instance can never handle its payment"),
                     () -> assertThat(store.failureWriteAttempts()).isEqualTo(3),
-                    () -> assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE)
+                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE)
             );
         }
 
@@ -1481,7 +1487,7 @@ class SagaQuarantineTest {
 
             assertAll(
                     () -> assertThat(store.competingWritesThatLanded()).isNotEmpty().doesNotContain(false),
-                    () -> assertThat(stateStore.find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
                     () -> assertThat(asked).hasValue(1)
             );
         }
@@ -1756,6 +1762,7 @@ class SagaQuarantineTest {
     private static final class LosesItsFirstFailureWriteToAnotherWrite implements SagaStateStore<OrderState> {
 
         private final SagaStateStore<OrderState> delegate = SagaStateStore.inMemory();
+        private final SagaCodec<OrderState> codec = SagaCodec.of(delegate.stateCodec(), null);
         private final AtomicInteger writesStillToLose = new AtomicInteger();
         private final AtomicBoolean losesEveryFailureWrite = new AtomicBoolean();
         private final AtomicInteger failureWriteAttempts = new AtomicInteger();
@@ -1764,7 +1771,7 @@ class SagaQuarantineTest {
 
         /** The record a competing write leaves on an instance it quarantines. */
         static final SagaFailure COMPETING_FAILURE = new SagaFailure("another-input", 7L, Instant.parse("2026-01-01T00:00:00Z"),
-                IllegalArgumentException.class.getName(), "stopped by another writer");
+                IllegalArgumentException.class.getName(), "stopped by another writer", null, null);
 
         void nextFailureWriteLosesToAnotherWrite() {
             writesStillToLose.set(1);
@@ -1810,35 +1817,45 @@ class SagaQuarantineTest {
         }
 
         @Override
-        public Optional<SagaEnvelope<OrderState>> find(String sagaId) {
+        public SagaStateCodec<OrderState> stateCodec() {
+            return delegate.stateCodec();
+        }
+
+        @Override
+        public Optional<StoredSaga> find(String sagaId) {
             return delegate.find(sagaId);
         }
 
         @Override
-        public boolean compareAndSave(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
-            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        public Optional<StoredSaga> findWithoutState(String sagaId) {
+            return delegate.findWithoutState(sagaId);
         }
 
         @Override
-        public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
-            if (envelope.failure() != null) {
+        public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+            return delegate.compareAndSave(saga, expectedVersion);
+        }
+
+        @Override
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            if (codec.decodeWithoutState(saga).failure() != null) {
                 failureWriteAttempts.incrementAndGet();
             }
-            if (writesStillToLose.getAndUpdate(left -> Math.max(0, left - 1)) > 0 || (losesEveryFailureWrite.get() && envelope.failure() != null)) {
-                SagaEnvelope<OrderState> current = delegate.find(sagaId).orElseThrow();
+            if (writesStillToLose.getAndUpdate(left -> Math.max(0, left - 1)) > 0 || (losesEveryFailureWrite.get() && codec.decodeWithoutState(saga).failure() != null)) {
+                SagaEnvelope<OrderState> current = codec.decode(delegate.find(saga.sagaId()).orElseThrow());
                 SagaStatus status = statusTheCompetingWriteLeaves.get();
                 SagaFailure failure = status == SagaStatus.QUARANTINED ? COMPETING_FAILURE : current.failure();
                 Instant completedAt = status == SagaStatus.COMPLETED ? current.updatedAt() : current.completedAt();
                 SagaEnvelope<OrderState> bumped = new SagaEnvelope<>(current.sagaId(), current.state(), status, current.version() + 1,
                         current.timers(), current.streamWatermarks(), current.positionWatermark(), current.createdAt(), current.updatedAt(),
-                        completedAt, current.currentStep(), current.started(), failure, current.streamMarks());
-                competingWritesThatLanded.add(delegate.compareAndSave(sagaId, bumped, current.version()));
+                        completedAt, current.currentStep(), current.started(), failure, current.streamMarks(), null);
+                competingWritesThatLanded.add(delegate.compareAndSave(codec.encode(bumped), current.version()));
             }
-            return delegate.compareAndSaveWithoutState(sagaId, envelope, expectedVersion);
+            return delegate.compareAndSaveWithoutState(saga, expectedVersion);
         }
 
         @Override
-        public List<SagaEnvelope<OrderState>> findWithDueTimers(Instant now, int limit) {
+        public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
             return delegate.findWithDueTimers(now, limit);
         }
 
@@ -1858,6 +1875,7 @@ class SagaQuarantineTest {
     private static final class RefusesToDecodeOneInstance implements SagaStateStore<OrderState>, SagaStateStoreQueries<OrderState>, SagaStateStoreSkippedInputs {
 
         private final InMemorySagaStateStore<OrderState> delegate = new InMemorySagaStateStore<>();
+        private final SagaCodec<OrderState> codec = SagaCodec.of(delegate.stateCodec(), null);
         private final Set<String> undecodable = ConcurrentHashMap.newKeySet();
 
         private volatile Supplier<? extends Throwable> loadFailure = () -> new IllegalStateException("the state can no longer be decoded");
@@ -1871,12 +1889,17 @@ class SagaQuarantineTest {
         }
 
         @Nullable OrderState theStoredStateOf(String sagaId) {
-            return delegate.find(sagaId).map(SagaEnvelope::state).orElse(null);
+            return delegate.find(sagaId).map(codec::decode).map(SagaEnvelope::state).orElse(null);
         }
 
         @Override
-        public Optional<SagaEnvelope<OrderState>> find(String sagaId) {
-            Optional<SagaEnvelope<OrderState>> found = delegate.find(sagaId);
+        public SagaStateCodec<OrderState> stateCodec() {
+            return delegate.stateCodec();
+        }
+
+        @Override
+        public Optional<StoredSaga> find(String sagaId) {
+            Optional<StoredSaga> found = delegate.find(sagaId);
             if (found.isPresent() && undecodable.contains(sagaId)) {
                 throw raise(loadFailure.get());
             }
@@ -1884,27 +1907,31 @@ class SagaQuarantineTest {
         }
 
         @Override
-        public Optional<SagaEnvelope<OrderState>> findWithoutState(String sagaId) {
-            return delegate.find(sagaId).map(envelope -> withState(envelope, null));
+        public Optional<StoredSaga> findWithoutState(String sagaId) {
+            return delegate.find(sagaId).map(saga -> {
+                Map<String, Object> fields = new LinkedHashMap<>(saga.encoded().fields());
+                fields.remove(SagaCodec.STATE);
+                return new StoredSaga(saga.sagaId(), saga.version(), new EncodedSaga(fields), saga.index());
+            });
         }
 
         @Override
-        public boolean compareAndSave(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
-            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+            return delegate.compareAndSave(saga, expectedVersion);
         }
 
         @Override
-        public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
-            return delegate.compareAndSave(sagaId, withState(envelope, theStoredStateOf(sagaId)), expectedVersion);
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            return delegate.compareAndSaveWithoutState(saga, expectedVersion);
         }
 
         @Override
-        public List<SagaEnvelope<OrderState>> findWithDueTimers(Instant now, int limit) {
+        public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
             return delegate.findWithDueTimers(now, limit);
         }
 
         @Override
-        public List<SagaEnvelope<OrderState>> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
+        public List<StoredSaga> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
             return ((SagaStateStoreQueries<OrderState>) delegate).findByStatus(status, updatedBefore, limit);
         }
 
@@ -1919,8 +1946,23 @@ class SagaQuarantineTest {
         }
 
         @Override
-        public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-            delegate.recordSkippedInput(sagaId, quarantineId, input);
+        public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
+            return delegate.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input);
+        }
+
+        @Override
+        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
+            return delegate.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
+        }
+
+        @Override
+        public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+            return delegate.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
+        }
+
+        @Override
+        public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+            return delegate.compareAndSaveQuarantineEnded(saga, expectedVersion, quarantineId);
         }
 
         @Override
@@ -1928,27 +1970,6 @@ class SagaQuarantineTest {
             return delegate.findSkippedInputs(sagaId, quarantineId, limit);
         }
 
-        @Override
-        public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
-            delegate.recordSkippedInputAtHead(sagaId, quarantineId, head);
-        }
-
-        @Override
-        public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-            delegate.deleteSkippedInput(sagaId, quarantineId, input);
-        }
-
-        @Override
-        public void deleteSkippedInputs(String sagaId, String quarantineId) {
-            delegate.deleteSkippedInputs(sagaId, quarantineId);
-        }
-
-        private static SagaEnvelope<OrderState> withState(SagaEnvelope<OrderState> envelope, @Nullable OrderState state) {
-            return new SagaEnvelope<>(envelope.sagaId(), state, envelope.status(), envelope.version(), envelope.timers(),
-                    envelope.streamWatermarks(), envelope.positionWatermark(), envelope.createdAt(), envelope.updatedAt(),
-                    envelope.completedAt(), envelope.currentStep(), envelope.started(), envelope.failure(),
-                    envelope.streamMarks(), envelope.quarantineSkipCount());
-        }
     }
 
     /**

@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
@@ -113,10 +114,10 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
         FlowStateImpl<ReviewEvent> original = new FlowStateImpl<>(
                 "awaiting-decision", received, 1, 1, false, null, ActionKind.NONE, -1);
         SagaEnvelope<FlowState<ReviewEvent>> envelope = new SagaEnvelope<>(
-                "review-1", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null);
+                "review-1", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null, true, null, Map.of(), null);
 
-        boolean inserted = store.compareAndSave("review-1", envelope, 0);
-        SagaEnvelope<FlowState<ReviewEvent>> roundTripped = store.find("review-1").orElseThrow();
+        boolean inserted = SagaEnvelopes.of(store, converter()).compareAndSave("review-1", envelope, 0);
+        SagaEnvelope<FlowState<ReviewEvent>> roundTripped = SagaEnvelopes.of(store, converter()).find("review-1").orElseThrow();
 
         assertAll(
                 () -> assertThat(inserted).isTrue(),
@@ -141,10 +142,10 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
         FlowStateImpl<ReviewEvent> original = new FlowStateImpl<>(
                 "next", received, 1, 2, false, "awaiting-decision", 1, ActionKind.BRANCH, 0, null);
         SagaEnvelope<FlowState<ReviewEvent>> envelope = new SagaEnvelope<>(
-                "review-2", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null);
+                "review-2", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null, true, null, Map.of(), null);
 
-        store.compareAndSave("review-2", envelope, 0);
-        SagaEnvelope<FlowState<ReviewEvent>> roundTripped = store.find("review-2").orElseThrow();
+        SagaEnvelopes.of(store, converter()).compareAndSave("review-2", envelope, 0);
+        SagaEnvelope<FlowState<ReviewEvent>> roundTripped = SagaEnvelopes.of(store, converter()).find("review-2").orElseThrow();
 
         assertAll(
                 () -> assertThat(roundTripped.state()).isEqualTo(original),
@@ -181,7 +182,7 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
                 .append("createdAt", 1_000L)
                 .append("updatedAt", 1_000L), "saga-review");
 
-        FlowStateImpl<ReviewEvent> loaded = (FlowStateImpl<ReviewEvent>) store.find("already-waiting").orElseThrow().state();
+        FlowStateImpl<ReviewEvent> loaded = (FlowStateImpl<ReviewEvent>) SagaEnvelopes.of(store, converter()).find("already-waiting").orElseThrow().state();
 
         assertAll(
                 () -> assertThat(loaded.received()).as("the received log decodes unchanged").containsExactlyElementsOf(received),
@@ -227,7 +228,7 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
                 .append("createdAt", 1_000L)
                 .append("updatedAt", 1_000L), "saga-review");
 
-        FlowState<ReviewEvent> loaded = store.find("backlog").orElseThrow().state();
+        FlowState<ReviewEvent> loaded = SagaEnvelopes.of(store, converter()).find("backlog").orElseThrow().state();
         Saga<ReviewEvent, FlowState<ReviewEvent>, Object> saga = FlowSaga.<ReviewEvent, Object>builder()
                 .stepWindow(2)
                 .startsOn(ReviewRequested.class)
@@ -236,9 +237,9 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
                 .build();
 
         FlowState<ReviewEvent> afterDelivery = saga.evolve(loaded, SagaInput.event(new Approved("e6", "backlog", 50)));
-        boolean saved = store.compareAndSave("backlog",
-                new SagaEnvelope<>("backlog", afterDelivery, SagaStatus.ACTIVE, 2, List.of(), Map.of(), null, null, null, null, null), 1);
-        FlowState<ReviewEvent> roundTripped = store.find("backlog").orElseThrow().state();
+        boolean saved = SagaEnvelopes.of(store, converter()).compareAndSave("backlog",
+                new SagaEnvelope<>("backlog", afterDelivery, SagaStatus.ACTIVE, 2, List.of(), Map.of(), null, null, null, null, null, true, null, Map.of(), null), 1);
+        FlowState<ReviewEvent> roundTripped = SagaEnvelopes.of(store, converter()).find("backlog").orElseThrow().state();
 
         assertAll(
                 () -> assertThat(saga.isTerminal(afterDelivery))
@@ -265,10 +266,10 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
         FlowStateImpl<ReviewEvent> original = new FlowStateImpl<>(
                 "awaiting-decision", received, 7, 2, false, "awaiting-decision", -1, ActionKind.NONE, -1, progress);
         SagaEnvelope<FlowState<ReviewEvent>> envelope = new SagaEnvelope<>(
-                "review-3", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null);
+                "review-3", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null, true, null, Map.of(), null);
 
-        store.compareAndSave("review-3", envelope, 0);
-        FlowStateImpl<ReviewEvent> roundTripped = (FlowStateImpl<ReviewEvent>) store.find("review-3").orElseThrow().state();
+        SagaEnvelopes.of(store, converter()).compareAndSave("review-3", envelope, 0);
+        FlowStateImpl<ReviewEvent> roundTripped = (FlowStateImpl<ReviewEvent>) SagaEnvelopes.of(store, converter()).find("review-3").orElseThrow().state();
 
         assertAll(
                 () -> assertThat(roundTripped).isEqualTo(original),
@@ -308,7 +309,7 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
                 .append("createdAt", 1_000L)
                 .append("updatedAt", 1_000L), "saga-review");
 
-        FlowStateImpl<ReviewEvent> loaded = (FlowStateImpl<ReviewEvent>) store.find("mid-condition").orElseThrow().state();
+        FlowStateImpl<ReviewEvent> loaded = (FlowStateImpl<ReviewEvent>) SagaEnvelopes.of(store, converter()).find("mid-condition").orElseThrow().state();
 
         assertAll(
                 () -> assertThat(loaded.received()).as("the received log decodes unchanged").containsExactlyElementsOf(received),
@@ -334,8 +335,8 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
         mongoOperations.insert(seededFlowDocument("no-fingerprint", converter, received.subList(1, 2),
                 new Document("matchCounts", List.of(3))), "saga-review");
 
-        FlowStateImpl<ReviewEvent> mangled = (FlowStateImpl<ReviewEvent>) store.find("mangled").orElseThrow().state();
-        FlowStateImpl<ReviewEvent> withoutFingerprint = (FlowStateImpl<ReviewEvent>) store.find("no-fingerprint").orElseThrow().state();
+        FlowStateImpl<ReviewEvent> mangled = (FlowStateImpl<ReviewEvent>) SagaEnvelopes.of(store, converter()).find("mangled").orElseThrow().state();
+        FlowStateImpl<ReviewEvent> withoutFingerprint = (FlowStateImpl<ReviewEvent>) SagaEnvelopes.of(store, converter()).find("no-fingerprint").orElseThrow().state();
 
         assertAll(
                 () -> assertThat(requireNonNull(mangled.stepConditionProgress()).matchCounts())

@@ -16,6 +16,11 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
+import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -58,6 +63,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -220,7 +226,13 @@ class SagaReleaseTest {
     }
 
     private SagaEnvelope<Order> instance() {
-        return store.delegate.find(ORDER).orElseThrow();
+        return store.envelopes.find(ORDER).orElseThrow();
+    }
+
+    // Records an input under a quarantine id in a write that moves the instance one version on, the only way a store takes a record
+    private void recordUnder(String sagaId, String quarantineId, SkippedInput input) {
+        SagaEnvelope<Order> current = instance();
+        assertThat(store.envelopes.compareAndSaveSkipped(store.delegate, SagaExecutionSupport.withSkipCounted(current), current.version(), quarantineId, input)).isTrue();
     }
 
     private List<String> items() {
@@ -499,7 +511,7 @@ class SagaReleaseTest {
                     () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(otherResult.get()).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(items()).containsExactly("poison", "a", "b"),
-                    () -> assertThat(appliedStates).containsExactly(List.of("poison"), List.of("poison", "a"), List.of("poison", "a", "b"))
+                    () -> assertThat(appliedStates).as("one write per entry, then the write that ends the quarantine with the state as it is").containsExactly(List.of("poison"), List.of("poison", "a"), List.of("poison", "a", "b"), List.of("poison", "a", "b"))
             );
         }
     }
@@ -602,9 +614,9 @@ class SagaReleaseTest {
 
         @Test
         void an_instance_quarantined_by_0_34_0_with_no_quarantine_id_is_refused_naming_delete_as_the_only_way_out() {
-            SagaFailure failure = new SagaFailure("o1@2", 7L, start, IllegalStateException.class.getName(), "boom");
-            store.delegate.compareAndSave(ORDER, new SagaEnvelope<>(ORDER, new Order(ORDER, List.of()), SagaStatus.QUARANTINED, 1, List.of(),
-                    Map.of(ORDER, 1L), null, start, start, null, null, true, failure), 0);
+            SagaFailure failure = new SagaFailure("o1@2", 7L, start, IllegalStateException.class.getName(), "boom", null, null);
+            store.envelopes.compareAndSave(ORDER, new SagaEnvelope<>(ORDER, new Order(ORDER, List.of()), SagaStatus.QUARANTINED, 1, List.of(),
+                    Map.of(ORDER, 1L), null, start, start, null, null, true, failure, Map.of(), null), 0);
 
             Throwable thrown = catchThrowable(() -> execution.release(ORDER));
 
@@ -708,9 +720,9 @@ class SagaReleaseTest {
             assertAll(
                     () -> assertThat(warnings()).anyMatch(m -> m.contains("could not go on with the release of instance 'o1'")),
                     () -> assertThat(warnings()).noneMatch(m -> m.contains("could not list the instances it is releasing")),
-                    () -> assertThat(store.delegate.find("o1").orElseThrow().state().items()).isEmpty(),
-                    () -> assertThat(store.delegate.find("o2").orElseThrow().state().items()).containsExactly("poison", "b1"),
-                    () -> assertThat(store.delegate.find("o2").orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE)
+                    () -> assertThat(store.envelopes.find("o1").orElseThrow().state().items()).isEmpty(),
+                    () -> assertThat(store.envelopes.find("o2").orElseThrow().state().items()).containsExactly("poison", "b1"),
+                    () -> assertThat(store.envelopes.find("o2").orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE)
             );
         }
 
@@ -725,8 +737,8 @@ class SagaReleaseTest {
 
             assertAll(
                     () -> assertThat(warnings()).anyMatch(m -> m.contains("could not go on with the release of instance 'o1'")),
-                    () -> assertThat(store.delegate.find("o2").orElseThrow().isReleasing()).isTrue(),
-                    () -> assertThat(store.delegate.find("o2").orElseThrow().state().items()).isEmpty()
+                    () -> assertThat(store.envelopes.find("o2").orElseThrow().isReleasing()).isTrue(),
+                    () -> assertThat(store.envelopes.find("o2").orElseThrow().state().items()).isEmpty()
             );
         }
 
@@ -861,30 +873,6 @@ class SagaReleaseTest {
                     () -> assertThat(instance().isReleasing()).isFalse()
             );
         }
-
-        @Test
-        void a_store_that_forgets_the_release_time_it_was_given_is_still_refused_naming_what_it_did_not_persist() {
-            quarantinedOnPoisonWithTwoStreamKeyedSkipped();
-            now.set(start.plus(Duration.ofHours(1)));
-            store.dropsTheReleaseTime = true;
-
-            assertThatThrownBy(() -> execution.release(ORDER))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("did not persist SagaFailure.releasedAt");
-        }
-
-        @Test
-        void a_store_that_forgets_the_skip_count_but_keeps_the_quarantine_id_is_refused_naming_the_store() {
-            quarantinedOnPoisonWithTwoStreamKeyedSkipped();
-            now.set(start.plus(Duration.ofHours(1)));
-            store.dropsTheSkipCount = true;
-
-            assertThatThrownBy(() -> execution.release(ORDER))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("did not persist")
-                    .hasMessageContaining("SagaEnvelope.quarantineSkipCount")
-                    .hasMessageContaining(store.getClass().getName());
-        }
     }
 
     @Nested
@@ -896,30 +884,30 @@ class SagaReleaseTest {
             placed();
             CloudEvent poison = added("poison");
             added("next");
-            SagaFailure legacyFailure = new SagaFailure(streamKey(poison), 2L, start, IllegalStateException.class.getName(), "cannot pack poison");
+            SagaFailure legacyFailure = new SagaFailure(streamKey(poison), 2L, start, IllegalStateException.class.getName(), "cannot pack poison", null, null);
             SagaEnvelope<Order> legacy = new SagaEnvelope<>(ORDER, new Order(ORDER, List.of("next")), SagaStatus.ACTIVE, 1, List.of(),
-                    Map.of(ORDER, 3L), null, start, start, null, null, true, legacyFailure);
-            assertThat(store.delegate.compareAndSave(ORDER, legacy, 0)).isTrue();
+                    Map.of(ORDER, 3L), null, start, start, null, null, true, legacyFailure, Map.of(), null);
+            assertThat(store.envelopes.compareAndSave(ORDER, legacy, 0)).isTrue();
             return poison;
         }
 
         @Test
-        void is_applied_once_on_the_input_it_failed_on_when_the_release_crashes_before_it_deletes_the_record_and_a_second_release_runs() {
+        void is_applied_once_on_the_input_it_failed_on_when_the_release_crashes_before_the_write_that_applies_it_and_a_second_release_runs() {
             CloudEvent poison = seedTheInstanceAs034LeftIt();
             failing.add("poison");
             quarantineOn(poison);
             failing.clear();
             store.beforeNextDeleteOfARecord(() -> {
-                throw new IllegalStateException("crash after the write and before the delete");
+                throw new OutOfMemoryError("crash before the write that applies the record");
             });
-            assertThat(catchThrowable(() -> execution.release(ORDER))).isInstanceOf(IllegalStateException.class).hasMessageContaining("crash after the write");
+            assertThat(catchThrowable(() -> execution.release(ORDER))).isInstanceOf(OutOfMemoryError.class).hasMessageContaining("crash before the write");
 
             ReleaseResult second = execution.release(ORDER);
 
             assertAll(
                     () -> assertThat(second).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(items()).as("the items of the instance").containsExactlyInAnyOrder("next", "poison"),
-                    () -> assertThat(packed()).as("the commands dispatched for the input it failed on").containsExactly(new Pack(ORDER, "poison"))
+                    () -> assertThat(packed()).as("commands are dispatched before the write, so the release that crashed before it dispatched them and the second release dispatches them again").containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "poison"))
             );
         }
     }
@@ -928,7 +916,7 @@ class SagaReleaseTest {
     class AnInputBehindTheReorderWindowOfItsTypeMark {
 
         @Test
-        void is_applied_once_when_the_release_that_applied_it_crashes_before_it_deletes_the_record_and_a_second_release_runs() {
+        void is_applied_once_when_the_release_crashes_before_the_write_that_applies_it_and_a_second_release_runs() {
             execution = execution(CONFIG.withReorderWindow(2));
             deliver(placed());
             failing.add("poison");
@@ -942,16 +930,16 @@ class SagaReleaseTest {
             assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED);
             failing.clear();
             store.beforeNextDeleteOfARecord(() -> {
-                throw new IllegalStateException("crash after the write and before the delete");
+                throw new OutOfMemoryError("crash before the write that applies the record");
             });
-            assertThat(catchThrowable(() -> execution.release(ORDER))).isInstanceOf(IllegalStateException.class).hasMessageContaining("crash after the write");
+            assertThat(catchThrowable(() -> execution.release(ORDER))).isInstanceOf(OutOfMemoryError.class).hasMessageContaining("crash before the write");
 
             ReleaseResult second = execution.release(ORDER);
 
             assertAll(
                     () -> assertThat(second).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(items()).as("the items of the instance").containsExactlyInAnyOrder("i3", "i4", "i5", "i6", "poison"),
-                    () -> assertThat(packed()).as("the commands dispatched for the input it failed on").extracting(Pack::item).filteredOn("poison"::equals).hasSize(1)
+                    () -> assertThat(packed()).as("the commands dispatched for the input it failed on").as("commands are dispatched before the write, so the release that crashed before it dispatched the input and the second release dispatches it again").extracting(Pack::item).filteredOn("poison"::equals).hasSize(2)
             );
         }
 
@@ -1266,13 +1254,13 @@ class SagaReleaseTest {
         }
 
         @Test
-        void does_not_apply_a_record_behind_the_window_again_when_the_release_that_applied_it_crashed_before_deleting_it() {
+        void applies_a_record_behind_the_window_once_when_the_release_crashes_before_the_write_that_applies_it() {
             quarantinedOnPoisonThenSkippingHighVersionsFirst();
             quarantinedAgainOnI5Missing();
             assertRecordsLeftBehindTheWindow();
             queries.restore(event("i5"));
             store.beforeNextDeleteOfARecord(() -> store.beforeNextDeleteOfARecord(() -> {
-                throw new IllegalStateException("crash after the write of i3 and before its delete");
+                throw new OutOfMemoryError("crash before the write that applies i3");
             }));
             Throwable crash = catchThrowable(() -> execution.release(ORDER));
             List<String> itemsAfterTheCrash = items();
@@ -1281,10 +1269,14 @@ class SagaReleaseTest {
             ReleaseResult result = execution.release(ORDER);
 
             assertAll(
-                    () -> assertThat(crash).hasMessageContaining("crash after the write of i3"),
-                    () -> assertThat(itemsAfterTheCrash).as("the items written before the crash").contains("i3"),
+                    () -> assertThat(crash).hasMessageContaining("crash before the write that applies i3"),
+                    () -> assertThat(itemsAfterTheCrash).as("the items written before the crash").doesNotContain("i3"),
                     () -> assertThat(recordsAfterTheCrash).as("the records left by the crash").contains(streamKey(event("i3"))),
-                    () -> assertEveryItemIsAppliedOnceAndTheInstanceIsReleasedWithinTheWindow(result)
+                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(items()).as("the items of the instance").containsExactlyInAnyOrder("poison", "i3", "i4", "i5", "i6", "i7"),
+                    () -> assertThat(packed()).as("commands are dispatched before the write, so the release that crashed before it dispatched i3 and the second release dispatches it again").extracting(Pack::item).containsExactlyInAnyOrder("poison", "i3", "i3", "i4", "i5", "i6", "i7"),
+                    () -> assertThat(beyondTheWindow(instance())).as("the type marks beyond the window").isEmpty()
             );
         }
     }
@@ -1432,7 +1424,7 @@ class SagaReleaseTest {
             SagaEnvelope<Order> next = new SagaEnvelope<>(stored.sagaId(), stored.state(), stored.status(), stored.version() + 1, stored.timers(),
                     stored.streamWatermarks(), stored.positionWatermark(), stored.createdAt(), stored.updatedAt(), stored.completedAt(),
                     stored.currentStep(), stored.started(), stored.failure(), stored.streamMarks(), stored.quarantineSkipCount());
-            assertThat(store.delegate.compareAndSave(ORDER, next, stored.version())).isTrue();
+            assertThat(store.envelopes.compareAndSave(ORDER, next, stored.version())).isTrue();
         }
 
         private void anotherWriteBeforeEachOfTheNextActiveWrites(int count) {
@@ -1533,11 +1525,18 @@ class SagaReleaseTest {
             failing.clear();
             failing.add("a");
             SagaExecution<OrderEvent, Order, OrderCommand> otherNode = execution(CONFIG);
-            // The other call applies "a" and crashes before it deletes the record, which is how the record is still there
+            // The other call applies "a" and crashes before it applies "b", so "b" is the record that is left
             beforeTheNextFailure.set(() -> {
                 failing.clear();
-                store.beforeNextDeleteOfARecord(() -> {
-                    throw new IllegalStateException("crash after the write and before the delete");
+                AtomicInteger replays = new AtomicInteger();
+                store.beforeNextDeleteOfARecord(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (replays.incrementAndGet() == 2) {
+                            throw new OutOfMemoryError("crash before the write that applies the record");
+                        }
+                        store.beforeNextDeleteOfARecord(this);
+                    }
                 });
                 catchThrowable(() -> otherNode.release(ORDER));
             });
@@ -1551,7 +1550,7 @@ class SagaReleaseTest {
                     () -> assertThat(after.state().items()).containsExactly("poison", "a"),
                     () -> assertThat(after.failure().input()).isEqualTo(streamKey(quarantined.k())),
                     () -> assertThat(after.failure().failureMessage()).isEqualTo("cannot pack poison"),
-                    () -> assertThat(recordedKeys()).containsExactly(streamKey(quarantined.a()), streamKey(quarantined.b()))
+                    () -> assertThat(recordedKeys()).containsExactly(streamKey(quarantined.b()))
             );
         }
 
@@ -1562,7 +1561,7 @@ class SagaReleaseTest {
             now.set(start.plus(Duration.ofHours(1)));
             SagaExecution<OrderEvent, Order, OrderCommand> otherNode = execution(CONFIG);
             AtomicReference<@Nullable ReleaseResult> otherResult = new AtomicReference<>();
-            store.beforeNextFindWithoutState(() -> {
+            store.afterNextWriteWithoutState(() -> {
                 queries.hide(quarantined.k());
                 otherResult.set(otherNode.release(ORDER));
             });
@@ -1626,7 +1625,7 @@ class SagaReleaseTest {
         void the_release_is_refused_naming_the_failure_and_delete_as_the_way_out_and_the_instance_is_left_as_it_was() {
             quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             failing.clear();
-            SagaEnvelope<Order> before = store.delegate.findWithoutState(ORDER).orElseThrow();
+            SagaEnvelope<Order> before = store.envelopes.findWithoutState(ORDER).orElseThrow();
             store.refusesToDecode = true;
 
             Throwable thrown = catchThrowable(() -> execution.release(ORDER));
@@ -1637,7 +1636,7 @@ class SagaReleaseTest {
                             .hasMessageContaining("reading its state failed with java.lang.IllegalStateException: the state can no longer be decoded")
                             .hasMessageContaining("SagaStateStore.delete(\"" + ORDER + "\")"),
                     () -> assertThat(thrown.getCause()).isInstanceOf(IllegalStateException.class).hasMessage("the state can no longer be decoded"),
-                    () -> assertThat(store.delegate.findWithoutState(ORDER).orElseThrow()).isEqualTo(before),
+                    () -> assertThat(store.envelopes.findWithoutState(ORDER).orElseThrow()).isEqualTo(before),
                     () -> assertThat(instance().isReleasing()).isFalse()
             );
         }
@@ -1867,7 +1866,7 @@ class SagaReleaseTest {
         }
 
         private SagaEnvelope<Order> instanceOf(String orderId) {
-            return store.delegate.find(orderId).orElseThrow();
+            return store.envelopes.find(orderId).orElseThrow();
         }
 
         private List<String> itemsOf(String orderId) {
@@ -2128,7 +2127,7 @@ class SagaReleaseTest {
         }
 
         @Test
-        void a_redelivered_skip_of_a_recorded_key_raises_the_count_keeps_the_first_record_and_its_number_and_changes_the_version_twice() {
+        void a_redelivered_skip_of_a_recorded_key_raises_the_count_keeps_the_first_record_and_its_number_and_changes_the_version_once() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             SagaEnvelope<Order> before = instance();
             List<SkippedInput> recordsBefore = records();
@@ -2138,7 +2137,7 @@ class SagaReleaseTest {
             assertAll(
                     () -> assertThat(records()).isEqualTo(recordsBefore),
                     () -> assertThat(instance().quarantineSkipCount()).isEqualTo(before.quarantineSkipCount() + 1),
-                    () -> assertThat(instance().version()).isEqualTo(before.version() + 2),
+                    () -> assertThat(instance().version()).isEqualTo(before.version() + 1),
                     () -> assertThat(instance().streamWatermarks()).isEqualTo(before.streamWatermarks())
             );
         }
@@ -2147,7 +2146,7 @@ class SagaReleaseTest {
         void a_record_left_under_an_earlier_quarantine_id_is_never_replayed() {
             quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             CloudEvent ghost = added("ghost");
-            store.delegate.recordSkippedInput(ORDER, "earlier", new SkippedInput(0, streamKey(ghost)));
+            recordUnder(ORDER, "earlier", new SkippedInput(0, streamKey(ghost)));
             failing.clear();
 
             ReleaseResult result = execution.release(ORDER);
@@ -2181,10 +2180,10 @@ class SagaReleaseTest {
 
         private SagaEnvelope<Order> quarantinedWithNoQuarantineId(@Nullable Long skipCount) {
             CloudEvent placed = placed();
-            SagaFailure failure = new SagaFailure(streamKey(placed), 1L, start, IllegalStateException.class.getName(), "boom");
+            SagaFailure failure = new SagaFailure(streamKey(placed), 1L, start, IllegalStateException.class.getName(), "boom", null, null);
             SagaEnvelope<Order> envelope = new SagaEnvelope<>(ORDER, new Order(ORDER, List.of()), SagaStatus.QUARANTINED, 1, List.of(),
                     Map.of(ORDER, 1L), null, start, start, null, null, true, failure, Map.of(), skipCount);
-            store.delegate.compareAndSave(ORDER, envelope, 0);
+            store.envelopes.compareAndSave(ORDER, envelope, 0);
             return envelope;
         }
 
@@ -2277,11 +2276,11 @@ class SagaReleaseTest {
     class TheInputTheInstanceWasQuarantinedOn {
 
         @Test
-        void is_recorded_before_the_release_starts_at_a_number_below_every_other_and_replaces_a_record_of_its_key_left_behind() {
+        void is_recorded_in_the_write_that_starts_the_release_at_a_number_below_every_other_and_replaces_a_record_of_its_key() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
-            store.delegate.recordSkippedInput(ORDER, instance().quarantineId(), new SkippedInput(5, streamKey(quarantined.k())));
+            recordUnder(ORDER, instance().quarantineId(), new SkippedInput(5, streamKey(quarantined.k())));
             AtomicReference<List<SkippedInput>> whenTheReleaseStarts = new AtomicReference<>();
-            store.beforeNextWriteWithoutState(() -> whenTheReleaseStarts.set(records()));
+            store.afterNextWriteWithoutState(() -> whenTheReleaseStarts.set(records()));
 
             execution.release(ORDER);
 
@@ -2293,25 +2292,25 @@ class SagaReleaseTest {
         }
 
         @Test
-        void is_applied_once_when_a_crash_between_its_write_and_its_delete_leaves_its_record_for_the_next_pass_to_delete() {
+        void is_applied_once_when_a_crash_before_the_write_that_applies_it_leaves_it_and_its_record_for_the_next_pass() {
             quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             assertThat(execution.release(ORDER)).isEqualTo(ReleaseResult.STILL_RELEASING);
             failing.clear();
             store.beforeNextDeleteOfARecord(() -> {
-                throw new IllegalStateException("crash after the write and before the delete");
+                throw new OutOfMemoryError("crash before the write that applies the record");
             });
-            assertThatThrownBy(() -> execution.release(ORDER)).hasMessage("crash after the write and before the delete");
+            assertThatThrownBy(() -> execution.release(ORDER)).hasMessage("crash before the write that applies the record");
             List<String> keysAfterTheCrash = recordedKeys();
             List<String> itemsAfterTheCrash = items();
 
             pollAfterTheInterval();
 
             assertAll(
-                    () -> assertThat(itemsAfterTheCrash).containsExactly("poison"),
+                    () -> assertThat(itemsAfterTheCrash).as("nothing was applied before the crash").isEmpty(),
                     () -> assertThat(keysAfterTheCrash).hasSize(3),
                     () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(items()).containsExactly("poison", "a", "b"),
-                    () -> assertThat(packed()).extracting(Pack::item).containsExactly("poison", "a", "b")
+                    () -> assertThat(packed()).as("commands are dispatched before the write, so the pass that crashed before it dispatched the first one and the next pass dispatches it again").extracting(Pack::item).containsExactly("poison", "poison", "a", "b")
             );
         }
     }
@@ -2460,7 +2459,7 @@ class SagaReleaseTest {
         @Test
         void the_records_still_left_are_deleted_under_its_quarantine_id_only() {
             String quarantineId = quarantinedWithDoneAndLateSkipped();
-            store.delegate.recordSkippedInput(ORDER, "later", new SkippedInput(0, "ghost@1"));
+            recordUnder(ORDER, "later", new SkippedInput(0, "ghost@1"));
 
             ReleaseResult result = execution.release(ORDER);
 
@@ -2510,284 +2509,6 @@ class SagaReleaseTest {
             assertThatThrownBy(() -> withoutRecords.release(ORDER))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("SagaStateStoreSkippedInputs");
-        }
-    }
-
-    @Nested
-    class WhenTheStoreDoesNotPersistTheQuarantineId {
-
-        @Test
-        void the_delivery_that_quarantines_the_instance_is_not_acknowledged() {
-            deliver(placed());
-            failing.add("poison");
-            CloudEvent poison = added("poison");
-            assertThatThrownBy(() -> deliver(poison)).isInstanceOf(IllegalStateException.class);
-            store.dropsTheQuarantineId = true;
-            now.set(now.get().plus(BUDGET));
-
-            assertThatThrownBy(() -> deliver(poison))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessage("cannot pack poison");
-        }
-
-        @Test
-        void every_redelivery_of_the_event_fails_and_the_instance_stays_out_of_quarantine() {
-            deliver(placed());
-            failing.add("poison");
-            CloudEvent poison = added("poison");
-            assertThatThrownBy(() -> deliver(poison)).isInstanceOf(IllegalStateException.class);
-            store.dropsTheQuarantineId = true;
-            now.set(now.get().plus(BUDGET));
-            assertThatThrownBy(() -> deliver(poison))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessage("cannot pack poison");
-
-            Throwable redelivery = catchThrowable(() -> deliver(poison));
-
-            assertAll(
-                    () -> assertThat(redelivery)
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessage("cannot pack poison"),
-                    () -> assertThat(instance().status()).isNotEqualTo(SagaStatus.QUARANTINED)
-            );
-        }
-
-        @Test
-        void the_quarantine_is_undone_when_another_write_lands_before_the_undo() {
-            deliver(placed());
-            failing.add("poison");
-            CloudEvent poison = added("poison");
-            assertThatThrownBy(() -> deliver(poison)).isInstanceOf(IllegalStateException.class);
-            store.dropsTheQuarantineId = true;
-            now.set(now.get().plus(BUDGET));
-            // The first write quarantines the instance. The write after it is the undo, which loses to a write from outside
-            // the saga that leaves the instance quarantined without an id at the next version.
-            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(this::anotherWriteLeavesTheInstanceQuarantinedWithoutAnId));
-
-            Throwable deliveryThatHitTheBudget = catchThrowable(() -> deliver(poison));
-            Throwable redelivery = catchThrowable(() -> deliver(poison));
-
-            assertAll(
-                    () -> assertThat(deliveryThatHitTheBudget)
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessage("cannot pack poison"),
-                    () -> assertThat(redelivery)
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessage("cannot pack poison"),
-                    () -> assertThat(instance().status()).isNotEqualTo(SagaStatus.QUARANTINED)
-            );
-        }
-
-        @Test
-        void the_undo_gives_up_when_every_attempt_loses_to_a_write_from_outside_the_saga() {
-            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheQuarantineId();
-            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(() -> anotherWriteBeforeEachOfTheNext(CONFIG.maxCasAttempts())));
-
-            Throwable delivery = catchThrowable(() -> deliver(poison));
-
-            assertAll(
-                    () -> assertThat(delivery)
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessage("cannot pack poison"),
-                    () -> assertThat(delivery.getSuppressed()).isEmpty(),
-                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(instance().quarantineId()).isNull(),
-                    () -> assertThat(errors()).anyMatch(m -> m.contains("could not be undone because the instance was written by something else on each of "
-                                                                         + CONFIG.maxCasAttempts() + " attempts")),
-                    () -> assertThat(errors()).noneMatch(m -> m.contains("so the quarantine was undone"))
-            );
-        }
-
-        @Test
-        void the_undo_stops_and_recreates_nothing_when_the_instance_is_gone_after_a_lost_write() {
-            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheQuarantineId();
-            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(() -> {
-                anotherWriteLeavesTheInstanceQuarantinedWithoutAnId();
-                store.delegate.delete(ORDER);
-            }));
-
-            Throwable delivery = catchThrowable(() -> deliver(poison));
-
-            assertAll(
-                    () -> assertThat(delivery)
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessage("cannot pack poison"),
-                    () -> assertThat(delivery.getSuppressed()).isEmpty(),
-                    () -> assertThat(store.delegate.find(ORDER)).isEmpty(),
-                    () -> assertThat(errors()).noneMatch(m -> m.contains("could not be undone"))
-            );
-        }
-
-        @Test
-        void the_undo_leaves_the_instance_as_it_is_when_a_lost_write_took_it_out_of_quarantine() {
-            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheQuarantineId();
-            AtomicReference<SagaEnvelope<Order>> leftByTheOtherWrite = new AtomicReference<>();
-            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(() -> {
-                anotherWriteLeaves(SagaStatus.ACTIVE, null, null);
-                leftByTheOtherWrite.set(instance());
-            }));
-
-            Throwable delivery = catchThrowable(() -> deliver(poison));
-
-            assertAll(
-                    () -> assertThat(delivery)
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessage("cannot pack poison"),
-                    () -> assertThat(delivery.getSuppressed()).isEmpty(),
-                    () -> assertThat(leftByTheOtherWrite.get().status()).isEqualTo(SagaStatus.ACTIVE),
-                    () -> assertThat(instance().status()).isEqualTo(leftByTheOtherWrite.get().status()),
-                    () -> assertThat(instance().version()).isEqualTo(leftByTheOtherWrite.get().version()),
-                    () -> assertThat(errors()).noneMatch(m -> m.contains("could not be undone"))
-            );
-        }
-
-        @Test
-        void the_undo_does_not_overwrite_a_quarantine_that_a_lost_write_left_with_both_its_id_and_its_skip_count() {
-            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheQuarantineId();
-            AtomicReference<SagaEnvelope<Order>> leftByTheOtherWrite = new AtomicReference<>();
-            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(() -> {
-                SagaFailure failure = instance().failure();
-                SagaFailure withId = new SagaFailure(failure.input(), failure.position(), failure.firstFailedAt(), failure.failureType(),
-                        failure.failureMessage(), failure.releasedAt(), "another-quarantine");
-                anotherWriteLeaves(SagaStatus.QUARANTINED, withId, 7L);
-                leftByTheOtherWrite.set(instance());
-            }));
-
-            Throwable delivery = catchThrowable(() -> deliver(poison));
-
-            assertAll(
-                    () -> assertThat(delivery)
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessage("cannot pack poison"),
-                    () -> assertThat(delivery.getSuppressed()).isEmpty(),
-                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(instance().quarantineId()).isEqualTo("another-quarantine"),
-                    () -> assertThat(instance().quarantineSkipCount()).isEqualTo(7L),
-                    () -> assertThat(instance().version()).isEqualTo(leftByTheOtherWrite.get().version()),
-                    () -> assertThat(errors()).noneMatch(m -> m.contains("could not be undone"))
-            );
-        }
-
-        @Test
-        void the_delivery_fails_with_the_original_failure_and_the_store_failure_suppressed_when_the_store_throws_inside_the_undo() {
-            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheQuarantineId();
-            RuntimeException storeFailure = new IllegalStateException("the store went away");
-            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(() -> {
-                throw storeFailure;
-            }));
-
-            Throwable delivery = catchThrowable(() -> deliver(poison));
-
-            assertAll(
-                    () -> assertThat(delivery)
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessage("cannot pack poison"),
-                    () -> assertThat(delivery.getSuppressed()).containsExactly(storeFailure),
-                    () -> assertThat(errors()).anyMatch(m -> m.contains("undoing the quarantine failed because the state store failed")),
-                    () -> assertThat(errors()).noneMatch(m -> m.contains("could not list it as pending"))
-            );
-        }
-
-        @Test
-        void the_quarantine_is_undone_when_the_store_keeps_the_id_but_drops_the_skip_count() {
-            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheSkipCount();
-
-            Throwable delivery = catchThrowable(() -> deliver(poison));
-
-            assertAll(
-                    () -> assertThat(delivery)
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessage("cannot pack poison"),
-                    () -> assertThat(instance().status()).isNotEqualTo(SagaStatus.QUARANTINED)
-            );
-        }
-
-        @Test
-        void the_undo_goes_on_when_a_lost_write_left_the_instance_quarantined_with_an_id_and_no_skip_count() {
-            CloudEvent poison = pendingPoisonOnAStoreThatDropsTheSkipCount();
-            // The first write quarantines the instance, and the write after it is the undo, which loses to a write from
-            // outside the saga that leaves the instance quarantined with the id and no skip count
-            store.beforeNextWriteWithoutState(() -> store.beforeNextWriteWithoutState(this::anotherWriteLeavesTheInstanceQuarantinedWithoutAnId));
-
-            Throwable delivery = catchThrowable(() -> deliver(poison));
-
-            assertAll(
-                    () -> assertThat(delivery)
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessage("cannot pack poison"),
-                    () -> assertThat(instance().status()).isNotEqualTo(SagaStatus.QUARANTINED)
-            );
-        }
-
-        // As pendingPoisonOnAStoreThatDropsTheQuarantineId, for a store that keeps the id
-        private CloudEvent pendingPoisonOnAStoreThatDropsTheSkipCount() {
-            deliver(placed());
-            failing.add("poison");
-            CloudEvent poison = added("poison");
-            assertThatThrownBy(() -> deliver(poison)).isInstanceOf(IllegalStateException.class);
-            store.dropsTheSkipCount = true;
-            now.set(now.get().plus(BUDGET));
-            return poison;
-        }
-
-        // The failing event is pending, and the next delivery of it is past its budget, which quarantines the instance.
-        private CloudEvent pendingPoisonOnAStoreThatDropsTheQuarantineId() {
-            deliver(placed());
-            failing.add("poison");
-            CloudEvent poison = added("poison");
-            assertThatThrownBy(() -> deliver(poison)).isInstanceOf(IllegalStateException.class);
-            store.dropsTheQuarantineId = true;
-            now.set(now.get().plus(BUDGET));
-            return poison;
-        }
-
-        // Runs just before a write, makes another write succeed first, and does the same before each of the next count - 1 writes
-        private void anotherWriteBeforeEachOfTheNext(int count) {
-            anotherWriteLeavesTheInstanceQuarantinedWithoutAnId();
-            if (count > 1) {
-                store.beforeNextWriteWithoutState(() -> anotherWriteBeforeEachOfTheNext(count - 1));
-            }
-        }
-
-        private List<String> errors() {
-            return appender.list.stream()
-                    .filter(e -> e.getLevel() == Level.ERROR)
-                    .map(ILoggingEvent::getFormattedMessage)
-                    .toList();
-        }
-
-        private ListAppender<ILoggingEvent> appender;
-        private Logger executionLog;
-        private @Nullable Level originalLevel;
-
-        @BeforeEach
-        void startCapturing() {
-            appender = new ListAppender<>();
-            appender.start();
-            executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
-            executionLog.addAppender(appender);
-            originalLevel = executionLog.getLevel();
-            executionLog.setLevel(Level.ERROR);
-        }
-
-        @AfterEach
-        void stopCapturing() {
-            executionLog.setLevel(originalLevel);
-            executionLog.detachAppender(appender);
-            appender.stop();
-        }
-
-        private void anotherWriteLeavesTheInstanceQuarantinedWithoutAnId() {
-            SagaEnvelope<Order> stored = instance();
-            anotherWriteLeaves(stored.status(), stored.failure(), stored.quarantineSkipCount());
-        }
-
-        private void anotherWriteLeaves(SagaStatus status, @Nullable SagaFailure failure, @Nullable Long quarantineSkipCount) {
-            SagaEnvelope<Order> stored = instance();
-            SagaEnvelope<Order> next = new SagaEnvelope<>(stored.sagaId(), stored.state(), status, stored.version() + 1, stored.timers(),
-                    stored.streamWatermarks(), stored.positionWatermark(), stored.createdAt(), stored.updatedAt(), stored.completedAt(),
-                    stored.currentStep(), stored.started(), failure, stored.streamMarks(), quarantineSkipCount);
-            assertThat(store.delegate.compareAndSave(ORDER, next, stored.version())).isTrue();
         }
     }
 
@@ -2907,7 +2628,7 @@ class SagaReleaseTest {
             SagaEnvelope<Order> stored = new SagaEnvelope<>(quarantined.sagaId(), quarantined.state(), quarantined.status(), quarantined.version() + 1, quarantined.timers(),
                     quarantined.streamWatermarks(), quarantined.positionWatermark(), quarantined.createdAt(), quarantined.updatedAt(), quarantined.completedAt(),
                     quarantined.currentStep(), quarantined.started(), releasingWithoutId, quarantined.streamMarks(), quarantined.quarantineSkipCount());
-            assertThat(store.delegate.compareAndSave(ORDER, stored, quarantined.version())).isTrue();
+            assertThat(store.envelopes.compareAndSave(ORDER, stored, quarantined.version())).isTrue();
 
             pollAfterTheInterval();
 
@@ -3018,10 +2739,10 @@ class SagaReleaseTest {
         void an_instance_quarantined_by_034_with_no_quarantine_id_does_not_warn() {
             CloudEvent late = quarantinedWithAnEventBehindTheWindow();
             SagaEnvelope<Order> quarantined = instance();
-            SagaFailure failure034 = new SagaFailure(quarantined.failure().input(), 1L, start, IllegalStateException.class.getName(), "boom");
+            SagaFailure failure034 = new SagaFailure(quarantined.failure().input(), 1L, start, IllegalStateException.class.getName(), "boom", null, null);
             SagaEnvelope<Order> by034 = new SagaEnvelope<>(ORDER, quarantined.state(), SagaStatus.QUARANTINED, quarantined.version() + 1, List.of(),
                     quarantined.streamWatermarks(), null, start, start, null, null, true, failure034, quarantined.streamMarks(), null);
-            store.delegate.compareAndSave(ORDER, by034, quarantined.version());
+            store.envelopes.compareAndSave(ORDER, by034, quarantined.version());
 
             deliver(late);
 
@@ -3160,17 +2881,32 @@ class SagaReleaseTest {
         private final SagaStateStore<Order> delegate = SagaStateStore.inMemory();
 
         @Override
-        public Optional<SagaEnvelope<Order>> find(String sagaId) {
+        public SagaStateCodec<Order> stateCodec() {
+            return delegate.stateCodec();
+        }
+
+        @Override
+        public Optional<StoredSaga> find(String sagaId) {
             return delegate.find(sagaId);
         }
 
         @Override
-        public boolean compareAndSave(String sagaId, SagaEnvelope<Order> envelope, long expectedVersion) {
-            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        public Optional<StoredSaga> findWithoutState(String sagaId) {
+            return delegate.findWithoutState(sagaId);
         }
 
         @Override
-        public List<SagaEnvelope<Order>> findWithDueTimers(Instant now, int limit) {
+        public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+            return delegate.compareAndSave(saga, expectedVersion);
+        }
+
+        @Override
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            return delegate.compareAndSaveWithoutState(saga, expectedVersion);
+        }
+
+        @Override
+        public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
             return delegate.findWithDueTimers(now, limit);
         }
 
@@ -3186,9 +2922,12 @@ class SagaReleaseTest {
      */
     private static final class InterceptingStore implements SagaStateStore<Order>, SagaStateStoreSkippedInputs {
         final InMemorySagaStateStore<Order> delegate = new InMemorySagaStateStore<>();
+        private final SagaCodec<Order> codec = SagaCodec.of(delegate.stateCodec(), null);
+        final SagaEnvelopes<Order> envelopes = SagaEnvelopes.of(delegate, null);
         final List<SagaEnvelope<Order>> accepted = new CopyOnWriteArrayList<>();
         private final AtomicReference<@Nullable Runnable> beforeNextStateWrite = new AtomicReference<>();
         private final AtomicReference<@Nullable Runnable> beforeNextWriteWithoutState = new AtomicReference<>();
+        private final AtomicReference<@Nullable Runnable> afterNextWriteWithoutState = new AtomicReference<>();
         final AtomicInteger writesWithoutState = new AtomicInteger();
         private static final int MAX_RECORD_READS = 500;
         private final AtomicInteger recordReads = new AtomicInteger();
@@ -3205,9 +2944,6 @@ class SagaReleaseTest {
         volatile @Nullable RuntimeException listFailure;
         volatile @Nullable String findFailsFor;
         volatile @Nullable String findRunsOutOfMemoryFor;
-        volatile boolean dropsTheReleaseTime;
-        volatile boolean dropsTheQuarantineId;
-        volatile boolean dropsTheSkipCount;
         volatile @Nullable RuntimeException findSkippedInputsFailure;
         volatile @Nullable RuntimeException compareAndSaveWithoutStateFailure;
         private final AtomicReference<@Nullable Runnable> beforeNextFindWithoutState = new AtomicReference<>();
@@ -3256,8 +2992,17 @@ class SagaReleaseTest {
             beforeNextWriteWithoutState.set(hook);
         }
 
+        void afterNextWriteWithoutState(Runnable hook) {
+            afterNextWriteWithoutState.set(hook);
+        }
+
         @Override
-        public Optional<SagaEnvelope<Order>> find(String sagaId) {
+        public SagaStateCodec<Order> stateCodec() {
+            return delegate.stateCodec();
+        }
+
+        @Override
+        public Optional<StoredSaga> find(String sagaId) {
             RuntimeException failure = findFailure;
             if (failure != null) {
                 throw failure;
@@ -3275,7 +3020,7 @@ class SagaReleaseTest {
         }
 
         @Override
-        public Optional<SagaEnvelope<Order>> findWithoutState(String sagaId) {
+        public Optional<StoredSaga> findWithoutState(String sagaId) {
             RuntimeException failure = findWithoutStateFailure;
             if (failure != null) {
                 throw failure;
@@ -3285,21 +3030,22 @@ class SagaReleaseTest {
         }
 
         @Override
-        public boolean compareAndSave(String sagaId, SagaEnvelope<Order> envelope, long expectedVersion) {
+        public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
             Runnable hook = beforeNextStateWrite.getAndSet(null);
             if (hook != null) {
                 hook.run();
             }
-            boolean saved = delegate.compareAndSave(sagaId, envelope, expectedVersion);
+            boolean saved = delegate.compareAndSave(saga, expectedVersion);
             if (saved) {
-                accepted.add(envelope);
+                accepted.add(codec.decode(saga));
             }
             return saved;
         }
 
         @Override
-        public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<Order> envelope, long expectedVersion) {
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
             writesWithoutState.incrementAndGet();
+            SagaEnvelope<Order> envelope = codec.decodeWithoutState(saga);
             if (envelope.status() == SagaStatus.ACTIVE) {
                 run(beforeNextActiveWrite);
             }
@@ -3308,49 +3054,16 @@ class SagaReleaseTest {
             if (failure != null) {
                 throw failure;
             }
-            SagaEnvelope<Order> toSave = dropsTheReleaseTime && envelope.isReleasing() ? withoutTheReleaseTime(envelope) : envelope;
-            if (dropsTheQuarantineId && envelope.isQuarantined()) {
-                toSave = withoutTheQuarantineId(toSave);
-            }
-            if (dropsTheSkipCount && envelope.isQuarantined()) {
-                toSave = withoutTheSkipCount(toSave);
-            }
-            boolean saved = delegate.compareAndSaveWithoutState(sagaId, toSave, expectedVersion);
+            boolean saved = delegate.compareAndSaveWithoutState(saga, expectedVersion);
             if (saved) {
-                accepted.add(new SagaEnvelope<>(envelope.sagaId(), null, envelope.status(), envelope.version(), envelope.timers(),
-                        envelope.streamWatermarks(), envelope.positionWatermark(), envelope.createdAt(), envelope.updatedAt(), envelope.completedAt(),
-                        envelope.currentStep(), envelope.started(), envelope.failure(), envelope.streamMarks(), envelope.quarantineSkipCount()));
+                accepted.add(envelope);
+                run(afterNextWriteWithoutState);
             }
             return saved;
         }
 
-        // What a store that forgets SagaFailure.quarantineId and SagaEnvelope.quarantineSkipCount persists
-        private static SagaEnvelope<Order> withoutTheQuarantineId(SagaEnvelope<Order> envelope) {
-            SagaFailure failure = envelope.failure();
-            SagaFailure forgotten = new SagaFailure(failure.input(), failure.position(), failure.firstFailedAt(), failure.failureType(), failure.failureMessage(), failure.releasedAt(), null);
-            return new SagaEnvelope<>(envelope.sagaId(), envelope.state(), envelope.status(), envelope.version(), envelope.timers(),
-                    envelope.streamWatermarks(), envelope.positionWatermark(), envelope.createdAt(), envelope.updatedAt(), envelope.completedAt(),
-                    envelope.currentStep(), envelope.started(), forgotten, envelope.streamMarks(), null);
-        }
-
-        // What a store that forgets SagaEnvelope.quarantineSkipCount but keeps SagaFailure.quarantineId persists
-        private static SagaEnvelope<Order> withoutTheSkipCount(SagaEnvelope<Order> envelope) {
-            return new SagaEnvelope<>(envelope.sagaId(), envelope.state(), envelope.status(), envelope.version(), envelope.timers(),
-                    envelope.streamWatermarks(), envelope.positionWatermark(), envelope.createdAt(), envelope.updatedAt(), envelope.completedAt(),
-                    envelope.currentStep(), envelope.started(), envelope.failure(), envelope.streamMarks(), null);
-        }
-
-        // What a store that forgets SagaFailure.releasedAt persists
-        private static SagaEnvelope<Order> withoutTheReleaseTime(SagaEnvelope<Order> envelope) {
-            SagaFailure failure = envelope.failure();
-            SagaFailure forgotten = new SagaFailure(failure.input(), failure.position(), failure.firstFailedAt(), failure.failureType(), failure.failureMessage(), null, failure.quarantineId());
-            return new SagaEnvelope<>(envelope.sagaId(), envelope.state(), envelope.status(), envelope.version(), envelope.timers(),
-                    envelope.streamWatermarks(), envelope.positionWatermark(), envelope.createdAt(), envelope.updatedAt(), envelope.completedAt(),
-                    envelope.currentStep(), envelope.started(), forgotten, envelope.streamMarks(), envelope.quarantineSkipCount());
-        }
-
         @Override
-        public List<SagaEnvelope<Order>> findWithDueTimers(Instant now, int limit) {
+        public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
             return delegate.findWithDueTimers(now, limit);
         }
 
@@ -3363,11 +3076,56 @@ class SagaReleaseTest {
             return delegate.findReleasingSagaIds(after, listsEveryReleasingInstanceWhateverTheLimit ? Integer.MAX_VALUE : limit);
         }
 
-        @Override
-        public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
+        private boolean skipWrite(StoredSaga saga, Supplier<Boolean> write) {
+            writesWithoutState.incrementAndGet();
+            SagaEnvelope<Order> envelope = codec.decodeWithoutState(saga);
+            if (envelope.status() == SagaStatus.ACTIVE) {
+                run(beforeNextActiveWrite);
+            }
             run(beforeNextRecord);
-            delegate.recordSkippedInput(sagaId, quarantineId, input);
-            run(afterNextRecord);
+            run(beforeNextWriteWithoutState);
+            boolean saved = write.get();
+            if (saved) {
+                accepted.add(envelope);
+                run(afterNextRecord);
+                run(afterNextWriteWithoutState);
+            }
+            return saved;
+        }
+
+        @Override
+        public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
+            return skipWrite(saga, () -> delegate.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input));
+        }
+
+        @Override
+        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
+            return skipWrite(saga, () -> delegate.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head));
+        }
+
+        @Override
+        public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+            run(beforeNextStateWrite);
+            run(beforeNextDeleteOfARecord);
+            boolean saved = delegate.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
+            if (saved) {
+                accepted.add(codec.decode(saga));
+                deletedRecords.add(quarantineId + "/" + replayed.key());
+            }
+            return saved;
+        }
+
+        @Override
+        public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+            if (codec.decodeWithoutState(saga).status() == SagaStatus.ACTIVE) {
+                run(beforeNextActiveWrite);
+            }
+            run(beforeNextStateWrite);
+            boolean saved = delegate.compareAndSaveQuarantineEnded(saga, expectedVersion, quarantineId);
+            if (saved) {
+                accepted.add(codec.decode(saga));
+            }
+            return saved;
         }
 
         @Override
@@ -3387,25 +3145,6 @@ class SagaReleaseTest {
                 run(afterNextNonEmptyRead);
             }
             return found;
-        }
-
-        @Override
-        public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
-            run(beforeNextRecord);
-            delegate.recordSkippedInputAtHead(sagaId, quarantineId, head);
-            run(afterNextRecord);
-        }
-
-        @Override
-        public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-            run(beforeNextDeleteOfARecord);
-            deletedRecords.add(quarantineId + "/" + input.key());
-            delegate.deleteSkippedInput(sagaId, quarantineId, input);
-        }
-
-        @Override
-        public void deleteSkippedInputs(String sagaId, String quarantineId) {
-            delegate.deleteSkippedInputs(sagaId, quarantineId);
         }
 
         @Override

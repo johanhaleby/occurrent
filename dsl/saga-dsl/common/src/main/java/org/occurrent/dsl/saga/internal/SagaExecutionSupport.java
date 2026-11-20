@@ -302,7 +302,8 @@ public final class SagaExecutionSupport {
                 null,
                 true,
                 failureAfter(current, meta, terminal),
-                streamMarks);
+                streamMarks,
+                null);
         return Outcome.processed(next, commands, expectedVersion);
     }
 
@@ -315,15 +316,12 @@ public final class SagaExecutionSupport {
      * The record the quarantined instance {@code current} writes for the input {@code meta} describes, which it skips,
      * or {@code null} when it records nothing. Its {@code seq} is {@link SagaEnvelope#quarantineSkipCount()}.
      * <p>
-     * The executor makes three writes, in order. It saves {@link #withSkipCounted(SagaEnvelope)} with
-     * {@code compareAndSaveWithoutState(..., current.version())}, which takes the {@code seq} for this record and no
-     * other. It records this under {@link SagaEnvelope#quarantineId()}, where a record of the key already there stays and
-     * the new {@code seq} goes unused. Then it saves {@link #withSkipFinished(SagaEnvelope)} of what it saved first. A
-     * lost write reads the instance again and decides again, so an instance that turned active in between
-     * applies the input instead. A release turns the instance active only in a write that expects the version it read
-     * before it found no records. A release that read the instance before the first write therefore loses that write.
-     * One that read the instance after the first write, and the records before this record, can turn the instance active
-     * past the record. The last write then loses, and the executor applies the input to the active instance.
+     * The executor saves {@link #withSkipCounted(SagaEnvelope)} and this record under
+     * {@link SagaEnvelope#quarantineId()} in one write, with
+     * {@code SagaStateStoreSkippedInputs.compareAndSaveSkipped(..., current.version(), ...)}. Raising the count takes the
+     * {@code seq} for this record and no other. A record of the key that is there already stays, and the new {@code seq}
+     * goes unused. A lost write reads the instance again and decides again, so an instance that turned active in between
+     * applies the input instead.
      * <p>
      * Nothing is recorded when the instance is not quarantined, was quarantined by 0.34.0 and has no quarantine id or
      * no count, when the input is a timer or an event with no key, when the instance counts the input as applied
@@ -354,21 +352,12 @@ public final class SagaExecutionSupport {
     }
 
     /**
-     * The quarantined instance {@code current} one version up and nothing else changed, the write that ends a skip after
-     * its record.
+     * The releasing instance {@code current} one version up and nothing else changed, which a release saves when it drops
+     * a record that {@link #replay} would not apply, so the record goes in a write that expects the version the release
+     * read.
      */
-    public static <S extends @Nullable Object> SagaEnvelope<S> withSkipFinished(SagaEnvelope<S> current) {
+    public static <S extends @Nullable Object> SagaEnvelope<S> oneVersionUp(SagaEnvelope<S> current) {
         return withBookkeeping(current, current.status(), current.updatedAt(), current.failure(), current.streamMarks(), current.quarantineSkipCount());
-    }
-
-    /**
-     * The instance {@code stored}, which a store kept quarantined without its {@link SagaFailure#quarantineId()} or its
-     * {@link SagaEnvelope#quarantineSkipCount()}, one version up with {@code status} and no skip count. Its failure
-     * record stays, so the input it failed on keeps the time it first failed and quarantines it again on its next
-     * failure.
-     */
-    public static <S extends @Nullable Object> SagaEnvelope<S> withQuarantineUndone(SagaEnvelope<S> stored, SagaStatus status) {
-        return withBookkeeping(stored, status, stored.updatedAt(), stored.failure(), stored.streamMarks(), null);
     }
 
     /** The {@link SkippedInput#seq()} a release records the input the instance was quarantined on under, before every skip. */
@@ -376,9 +365,9 @@ public final class SagaExecutionSupport {
 
     /**
      * The record a release of {@code current} writes for the input the instance was quarantined on, at
-     * {@link #RELEASE_HEAD_SEQ}, so it is replayed first. The executor records it at the head with
-     * {@code SagaStateStoreSkippedInputs.recordSkippedInputAtHead}, in one write, before the write of {@link #startRelease}.
-     * The record an earlier release kept when it was quarantined again on this input would otherwise keep its place.
+     * {@link #RELEASE_HEAD_SEQ}, so it is replayed first. The executor records it at the head in the write of
+     * {@link #startRelease}, with {@code SagaStateStoreSkippedInputs.compareAndSaveReleaseStarted}. The record an earlier
+     * release kept when it was quarantined again on this input would otherwise keep its place.
      */
     public static <S extends @Nullable Object> SkippedInput releaseHead(SagaEnvelope<S> current) {
         return new SkippedInput(RELEASE_HEAD_SEQ, Objects.requireNonNull(current.failure(), "failure").input());
@@ -386,8 +375,8 @@ public final class SagaExecutionSupport {
 
     /**
      * The quarantined instance {@code current} with a release started, or {@code null} when a release of it is running
-     * already, which the caller then goes on with. Save it with
-     * {@code compareAndSaveWithoutState(..., current.version())}, after the record of {@link #releaseHead}.
+     * already, which the caller then goes on with. Save it together with the record of {@link #releaseHead}, with
+     * {@code SagaStateStoreSkippedInputs.compareAndSaveReleaseStarted(..., current.version(), ...)}.
      * <p>
      * The write sets {@link SagaFailure#releasedAt()} to {@code now}. It restarts the
      * quarantine budget of the input the instance was quarantined on at {@code now}, on the failure record and on that
@@ -433,12 +422,12 @@ public final class SagaExecutionSupport {
      * Apply {@code record}, the first record of a releasing instance, with the quarantined skip bypassed for that one
      * input. {@code input} and {@code meta} are the event read back from the event store by the record's key, and
      * {@code meta} carries that event's own stream id and stream version, whatever kind of key the record has. So the
-     * input is deduplicated by its stream marks like any other, and a record the instance applied already, which a crash
-     * between the write that applies it and its delete leaves, or a release racing this one, is recognised.
+     * input is deduplicated by its stream marks like any other, and a record of an input the instance applied already
+     * is recognised.
      * <p>
      * It applies the input through the same steps as {@link #process}. The instance stays {@link SagaStatus#QUARANTINED}
-     * and keeps its failure record, with {@link SagaFailure#releasedAt()}. The executor deletes the record once the write
-     * has landed. An input that completes the instance ends the release with it.
+     * and keeps its failure record, with {@link SagaFailure#releasedAt()}. The executor deletes the record in the write
+     * that applies it. An input that completes the instance ends the release with it.
      * <p>
      * The release reads and writes the marks with no reorder window, so every version it applies stays in them until the
      * release ends, also one at or below the horizon of its type. With the configured window, an earlier record that
@@ -457,7 +446,7 @@ public final class SagaExecutionSupport {
      * <p>
      * A record whose input the marks show as applied, and a record that is not a start event of an instance that never started, which the instance would
      * skip outside a release too, comes back as an outcome that is not {@link Outcome#processed()} and has no envelope,
-     * and the executor deletes the record without writing the instance.
+     * and the executor deletes the record in a write of {@link #oneVersionUp}.
      *
      * @throws IllegalStateException when the instance is not releasing, or {@code meta} has no stream id and stream
      *                               version
@@ -492,14 +481,11 @@ public final class SagaExecutionSupport {
 
     /**
      * The releasing instance {@code current} released, {@link SagaStatus#ACTIVE} with no failure record, no quarantine
-     * id and no skip count. Save it with {@code compareAndSaveWithoutState(..., current.version())},
-     * and only when {@code current} was read before a read of its records that found none. A skip writes its record
-     * between two writes that each raise the version. When the first came after {@code current} was read, this write
-     * loses and the release reads the records again. When it came before, this write can win, and the skip's second
-     * write then loses. The skip reads the instance again and deletes its record when the instance is no longer
-     * quarantined under its quarantine id, and its input is applied to the active instance. A skip whose read came before
-     * this write keeps its record, and nothing reads it after that, but its input is applied to the active instance all
-     * the same.
+     * id and no skip count. Save it with
+     * {@code SagaStateStoreSkippedInputs.compareAndSaveQuarantineEnded(..., current.version(), ...)}, and only when
+     * {@code current} was read before a read of its records that found none. A skip records its input in a write that
+     * raises the version, so a skip recorded after {@code current} was read makes this write lose, and the release reads
+     * the records again.
      * <p>
      * The released instance keeps no more applied versions per stream and event type than {@code reorderWindow}, as
      * after a live write, since the release kept every version it applied.
@@ -554,7 +540,7 @@ public final class SagaExecutionSupport {
     /**
      * {@code computed}, which a release computed from an instance that has since only recorded skipped inputs, moved on
      * top of {@code after}. One version above it, and with its skip count while the instance stays quarantined. Save it
-     * with {@code compareAndSave(..., after.version())}.
+     * the way {@code computed} was saved, expecting {@code after.version()}.
      */
     public static <S extends @Nullable Object> SagaEnvelope<S> rebased(SagaEnvelope<S> computed, SagaEnvelope<S> after) {
         return new SagaEnvelope<>(computed.sagaId(), computed.state(), computed.status(), after.version() + 1, computed.timers(),
@@ -663,9 +649,10 @@ public final class SagaExecutionSupport {
     }
 
     // Quarantined again during a release, under the same quarantine id. The skip count stays, since the records after
-    // the failing one stay, and is 0 only when a store lost it. The marks are trimmed to the window, as the write that
-    // releases the instance trims them. A record that stays names an input no release applied, and the next release
-    // applies one behind the window, see replay(..)
+    // the failing one stay. SagaCodec refuses to read a releasing instance without one, so 0 is only ever taken for
+    // an envelope built in code. The marks are trimmed to the window, as the write that releases the instance trims
+    // them. A record that stays names an input no release applied, and the next release applies one behind the
+    // window, see replay(..)
     private static <S extends @Nullable Object> SagaEnvelope<S> requarantined(SagaEnvelope<S> current, Instant now, SagaFailure record,
                                                                              Map<String, StreamMarks> streamMarks, int reorderWindow) {
         Long count = current.quarantineSkipCount();
@@ -802,7 +789,7 @@ public final class SagaExecutionSupport {
         SagaFailure existing = currentFailure(current);
         Instant failingSince = failingSince(current, meta, now);
         if (existing == null) {
-            SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()));
+            SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()), null, null);
             boolean budgetUsedUp = Duration.between(failingSince, now).compareTo(quarantineAfter) >= 0;
             return failureRecord(saga, sagaId, current, record, budgetUsedUp ? SagaStatus.QUARANTINED : SagaStatus.ACTIVE, now, budgetUsedUp, meta, null, reorderWindow);
         }
@@ -821,7 +808,7 @@ public final class SagaExecutionSupport {
         // Name the input failing now, with the instant it first failed and what it is failing with. An input that fails
         // one way and then another is still the same input failing, and the later exception is the more useful one to
         // read.
-        SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()));
+        SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()), null, null);
         return failureRecord(saga, sagaId, current, record, budgetUsedUp ? SagaStatus.QUARANTINED : SagaStatus.ACTIVE, now, budgetUsedUp, meta, existing, reorderWindow);
     }
 

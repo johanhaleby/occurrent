@@ -87,8 +87,8 @@ I rejected three other designs.
   event saves, and the timers it writes are the ones it read, so the record is gone and the timer is due at its
   `firesAt` again until it fails once more. Every other write the executor makes raises the version, so a record can
   only replace another record made at the same version, never another write. The version is no longer a count of every
-  write, and nothing in Occurrent reads it as one. A `SagaStateStore` of your own has to store the version in the
-  envelope even when it equals `expectedVersion`. One that refuses that save refuses every record, the poller logs a
+  write, and nothing in Occurrent reads it as one. A `SagaStateStore` of your own has to store the version of the
+  `StoredSaga` it is given, even when it equals `expectedVersion`. One that refuses that save refuses every record, the poller logs a
   `WARN` for each failed fire, and that store keeps the order of 0.34.0.
 - **Two pollers can replace each other's records.** Without a `CompetingConsumerStrategy` every node polls, and a
   lease handover can overlap two pollers too. When both record failures on one instance at the same version, both

@@ -137,9 +137,10 @@ public final class SagaSubscription implements AutoCloseable {
      * whole {@code timerPollInterval} old. A running release writes the instance for every input it applies, so the
      * poller skips it, on this node or another, and goes on with one that failed on an input or was interrupted. The
      * poller and a release, or two polls, can still replay the same input and both dispatch its commands, in five
-     * cases: the release takes longer than {@code timerPollInterval} over one input, a poller's clock is that far ahead of the writer's, this call comes while the poller replays the
-     * instance, a release spends longer than that on inputs the stream marks show as applied, which it deletes without
-     * writing the instance, and two polls go on with the instance at the same time. Without a competing-consumer
+     * cases: the release takes longer than {@code timerPollInterval} over one input, a poller's clock is that far
+     * ahead of the writer's, this call comes while the poller replays the instance, a release spends longer than that
+     * on inputs the stream marks show as applied, which it deletes in writes that leave the instance's
+     * {@code updatedAt} as it is, and two polls go on with the instance at the same time. Without a competing-consumer
      * strategy every node polls, and with one, two nodes can poll at once while the timer lease moves from one to the
      * other. For inputs the stream marks show as applied neither dispatches anything, so only the first input that
      * isn't applied can be dispatched twice.
@@ -155,7 +156,9 @@ public final class SagaSubscription implements AutoCloseable {
      *                               thrown when the runner was built without an
      *                               {@link org.occurrent.eventstore.api.blocking.EventStoreQueries}, when the state store
      *                               does not implement {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs}, and
-     *                               when it does not persist what a release writes
+     *                               when the store gives back an instance stored as {@code QUARANTINED_RECORDING}
+     *                               without its failure input, quarantine id or skip count. The message names the
+     *                               missing field
      * @throws SagaConcurrencyException when the release loses its compare-and-set {@code maxCasAttempts} times in a row,
      *                                  to start the release or to write a replayed input
      */

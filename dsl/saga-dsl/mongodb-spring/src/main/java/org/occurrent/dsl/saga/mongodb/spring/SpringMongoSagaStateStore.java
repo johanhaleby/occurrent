@@ -16,12 +16,20 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import com.mongodb.MongoException;
 import com.mongodb.MongoServerException;
+import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
+import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
+import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.FindOneAndDeleteOptions;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.Updates;
 import io.cloudevents.CloudEvent;
@@ -29,78 +37,135 @@ import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.dsl.saga.SagaEnvelope;
-import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
-import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
-import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
-import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStateStoreQueries;
 import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
+import org.occurrent.dsl.saga.codec.EncodedSaga;
+import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
-import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
-import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
-import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.StepConditionProgress;
 import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.MongoDatabaseFactory;
+import org.springframework.data.mongodb.MongoDatabaseUtils;
+import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 
 /**
  * A {@link SagaStateStore} backed by MongoDB. Each saga instance is one document keyed by its {@code _id} (the saga id),
- * carrying the user {@code state}, the lifecycle {@code status}, the optimistic-lock {@code version}, the pending timers,
- * and the dedup watermarks. A top-level indexed {@code nextTimerFiresAt}, the earliest due time across the pending
- * timers, lets {@link #findWithDueTimers(Instant, int)} both find and order the due instances from the index.
+ * with one top-level field for each field of {@link SagaCodec}. A top-level indexed {@code nextTimerFiresAt}, the
+ * earliest due time across the pending timers, lets {@link #findWithDueTimers(Instant, int)} both find and order the
+ * due instances from the index.
  * <p>
- * State serialization: a core saga's state is written with the application's {@code MongoConverter}, like the
- * snapshot store. A flow saga's state ({@code FlowState}) is written field by field, with its received domain events
- * serialized as CloudEvents through the supplied {@link CloudEventConverter} so they round-trip by their stable
- * {@code CloudEventTypeMapper} type rather than a Java class name. A domain event can therefore move to a different
- * package without breaking in-flight flow-saga state. Pass the converter (via the four-argument constructor) for a flow
- * saga, leave it out for a core saga.
+ * State serialization: a core saga's state is written with the application's {@code MongoConverter}, like the snapshot
+ * store. A flow saga's state is written by {@link SagaCodec}, field by field, with its received events as CloudEvent JSON.
  * <p>
  * {@link #compareAndSave} is atomic: a new instance is inserted (a duplicate {@code _id} loses), and an update replaces
- * the document only when its stored {@code version} still equals the expected one, via a single {@code findAndReplace}.
+ * the document only when its stored {@code version} still equals the expected one, in a single {@code replaceOne}.
+ * {@link #compareAndSaveWithoutState} is an {@code updateOne} that sets or removes the fields of
+ * {@link SagaCodec#fieldsExceptState()} and does not touch the state, so an instance whose state no longer decodes can
+ * still be quarantined and still has that state afterwards. {@link #findWithoutState} is a projection that excludes the
+ * state.
  * <p>
- * {@link #findWithoutState} and {@link #compareAndSaveWithoutState} are both overridden here, because the quarantine
- * fields are top-level fields. Reading them is a projection that excludes the state, and writing them is a
- * {@code findAndModify} that does not touch it, so an instance whose state no longer decodes can still be quarantined
- * and still has that state afterwards.
+ * Every write waits until a majority of the replica set has it in its on-disk journal ({@code w: majority} and
+ * {@code j: true}), whatever write concern the {@code MongoTemplate} has, because the saga acknowledges its input as soon
+ * as the write returns. A replica set that cannot reach a majority, such as a primary, a secondary and an arbiter with
+ * the secondary down, makes each write, and the commit of each transaction the store runs, fail after 10 seconds. On a
+ * client with a {@code timeoutMS} above 0 that {@code timeoutMS} bounds them instead. On a client with a
+ * {@code timeoutMS} of 0 a single write still fails after 10 seconds, and a commit waits without limit. A server without
+ * journaling refuses {@code j: true}, and the store throws an {@link IllegalStateException}.
  * <p>
- * A release is stored the same way, in the top-level fields {@code failureReleasedAt}, {@code failureQuarantineId} and
- * {@code quarantineSkipCount}. A document written before 0.35.0 has none of them, and reads back as not releasing, with
- * no quarantine id and no count. {@link #findReleasingSagaIds(String, int)} finds the instances that have
- * {@code failureReleasedAt} set. The inputs a quarantined instance skips are stored one document each, in a collection
- * next to the instances named after it with {@code _skipped_inputs} appended. Each holds {@code sagaId},
- * {@code quarantineId}, {@code seq} and {@code key}, with a unique index on {@code sagaId}, {@code quarantineId} and
- * {@code key}, and an index on {@code sagaId}, {@code quarantineId} and {@code seq} for the order a release reads them
- * in. The constructor refuses a collection name that ends in {@code _skipped_inputs}, because a store on {@code orders}
- * keeps its skipped inputs in {@code orders_skipped_inputs}, and a store on that name would share the collection.
+ * Every read the saga acts on ({@link #find}, {@link #findWithoutState}, {@link #findWithDueTimers},
+ * {@link #findByStatus}, {@link #findReleasingSagaIds} and {@link #findSkippedInputs}) goes to the primary at read
+ * concern {@code majority}, so it returns only writes a majority of the replica set has. A write that reached the primary
+ * but not a majority reads as absent until it reaches a majority or a failover rolls it back, so the saga never
+ * acknowledges an input on the strength of it. Right after a failover, a majority read on the new primary can miss a
+ * write the old primary acknowledged, so {@link #find} and {@link #findWithoutState} read an instance they don't find
+ * again at read concern {@code linearizable}. MongoDB documents that a linearizable read on the primary returns every
+ * write a majority acknowledged before the read started, in
+ * <a href="https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/">read concern "linearizable"</a>.
+ * The transactions below read at read concern {@code snapshot}, everything the primary has when the transaction
+ * starts, and their commit at {@code majority} returns only once a majority has all of it. A release ends the
+ * quarantine of an instance only in such a transaction that finds no skipped input left.
+ * <p>
+ * The four writes of {@link SagaStateStoreSkippedInputs} and the {@link #delete(String)} of a quarantined instance write
+ * the instance and its skipped inputs in one MongoDB transaction, through a {@link MongoTransactionManager} on the
+ * template's {@link MongoDatabaseFactory}. So quarantine needs a replica set or a sharded cluster, and the store throws an
+ * {@link IllegalStateException} when the server refuses a transaction. Such a transaction that fails with the
+ * {@code TransientTransactionError} label is run again from the start with the store's {@link RetryStrategy}, and a
+ * commit that fails with the {@code UnknownTransactionCommitResult} label is committed again. Any other failure of such a
+ * transaction is thrown at once, and so is a server's refusal of a transaction or of journaling on any call, whatever
+ * the strategy retries, a {@code RetryStrategy} you implement yourself included.
+ * <p>
+ * Called inside a MongoDB transaction of the caller's on the same {@link MongoDatabaseFactory}, those writes join it.
+ * Inside such a transaction the store sends each read and write once, and a failure reaches the caller as MongoDB
+ * reported it, since MongoDB has aborted the transaction on the server and the same operation sent again in it would
+ * fail too. Only the caller can run the transaction again. That is a Spring transaction that synchronizes its resources, as a {@link MongoTransactionManager}
+ * does by default, a Spring transaction of another resource in which a template with
+ * {@code SessionSynchronization.ALWAYS} has started a MongoDB transaction, or a transaction on the session of a template
+ * from {@link MongoTemplate#withSession}. The commit of that transaction then decides whether they survive a failover,
+ * with the write concern it commits with. When a write fails inside it, abort the transaction, since a commit after the
+ * failure may keep what the store wrote before it. A {@code MongoTransactionManager} with
+ * {@code SYNCHRONIZATION_NEVER} binds its transaction with synchronization off, so a template hands out a database bound
+ * to no session. In such a transaction each call of the store takes part in it with the store's own transaction, which
+ * turns synchronization on for the call, so the call reads and writes in that transaction too. The single-document
+ * writes and the scans go through the template, so a template with {@code SessionSynchronization.NEVER} sends them
+ * outside a {@code MongoTransactionManager} transaction, and the store doesn't retry them there either, whatever a
+ * {@code RetryStrategy} you implement yourself retries.
+ * <p>
+ * Inside a transaction of the caller's, {@link #find} and {@link #findWithoutState} read at the transaction's snapshot,
+ * which misses an instance written after the snapshot began. When the read finds no instance, the store inserts a
+ * document that holds only the saga's id and deletes it again in the same transaction, and the server decides whether
+ * that insert conflicts. An instance another writer wrote after the snapshot began makes the insert fail with a
+ * {@code WriteConflict} that has the {@code TransientTransactionError} label, and a caller that runs its transaction
+ * again on that label reads the instance. An instance the transaction deleted itself reads as absent. The two writes
+ * leave no document behind when the transaction commits, and a change stream on the collection may see them. The
+ * collection must accept a document that holds only {@code _id}, so a validator that requires other fields makes such a
+ * read of an absent instance fail. In a Spring transaction of another resource where no MongoDB transaction has started,
+ * the two methods read as they do outside a transaction.
+ * <p>
+ * {@link #findReleasingSagaIds(String, int)} finds the instances that have {@code failureReleasedAt} set. The inputs a
+ * quarantined instance skips are stored one document each, in a collection next to the instances named after it with
+ * {@code _skipped_inputs} appended. Each holds {@code sagaId}, {@code quarantineId}, {@code seq} and {@code key}, with a
+ * unique index on {@code sagaId}, {@code quarantineId} and {@code key}, and an index on {@code sagaId},
+ * {@code quarantineId} and {@code seq} for the order a release reads them in. The constructor refuses a collection name
+ * that ends in {@code _skipped_inputs}, because a store on {@code orders} keeps its skipped inputs in
+ * {@code orders_skipped_inputs}, and a store on that name would share the collection.
  * <p>
  * An instance quarantined with a quarantine id is stored with the status {@value #QUARANTINED_RECORDING} rather than
- * {@code QUARANTINED}, and both read back as {@link SagaStatus#QUARANTINED}. See {@link #QUARANTINED_RECORDING} for why.
- * In the same way an active instance that holds stream marks is stored with the status {@value #ACTIVE_MARKED}, and
- * reads back as {@link SagaStatus#ACTIVE}. See {@link #ACTIVE_MARKED} for why.
+ * {@code QUARANTINED}, and both read back as {@link SagaStatus#QUARANTINED}. In the same way an active instance that holds
+ * stream marks is stored with the status {@value #ACTIVE_MARKED}, and reads back as {@link SagaStatus#ACTIVE}. A document
+ * written before 0.35.0 has none of the fields a release adds, and reads back as not releasing, with no quarantine id
+ * and no count.
  *
  * @param <S> the user state type
  */
@@ -110,170 +175,45 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
 
     private static final String SKIPPED_INPUTS_SUFFIX = "_skipped_inputs";
-    // How long each attempt of a skipped-input write waits for a journaled majority before it fails. A client timeoutMS
-    // above 0 bounds the attempt instead
-    private static final Duration SKIPPED_INPUT_WRITE_TIMEOUT = Duration.ofSeconds(10);
+    // How long each attempt of a write waits for a journaled majority before it fails. A client timeoutMS above 0 bounds
+    // the attempt instead
+    private static final Duration WRITE_TIMEOUT = Duration.ofSeconds(10);
     // With j: true a majority has the write in its on-disk journal before it acknowledges, whatever
     // writeConcernMajorityJournalDefault says
-    private static final WriteConcern SKIPPED_INPUT_WRITE_CONCERN = WriteConcern.MAJORITY.withJournal(true)
-            .withWTimeout(SKIPPED_INPUT_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    private static final WriteConcern DURABLE_WRITE_CONCERN = WriteConcern.MAJORITY.withJournal(true)
+            .withWTimeout(WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
     // The refusal of j: true by a WiredTiger server that runs without journaling (BadValue). Other refusals share the
     // code, so the message is matched too
     private static final int JOURNAL_NOT_SUPPORTED_ERROR_CODE = 2;
     private static final String JOURNAL_NOT_SUPPORTED_ERROR_MESSAGE = "cannot use 'j' option when a host does not have journaling enabled";
-    static final String JOURNALING_REQUIRED_MESSAGE = "SpringMongoSagaStateStore needs a MongoDB server with journaling to record the inputs a quarantined saga instance skips. "
-                                                      + "The server refused j: true because it runs without journaling, and a crash could then lose a recorded input that a release has to replay.";
+    static final String JOURNALING_REQUIRED_MESSAGE = "SpringMongoSagaStateStore needs a MongoDB server with journaling, since it writes every saga instance and every input a quarantined instance skips with j: true. "
+                                                      + "The server refused j: true because it runs without journaling, and a crash could then lose a write the saga has acknowledged its input on.";
+    // The refusal of a transaction by a standalone server (IllegalOperation), matched as the driver itself matches it in
+    // CommandOperationHelper.transformWriteException
+    private static final int TRANSACTIONS_NOT_SUPPORTED_ERROR_CODE = 20;
+    private static final String TRANSACTIONS_NOT_SUPPORTED_ERROR_MESSAGE = "Transaction numbers";
+    static final String REPLICA_SET_REQUIRED_MESSAGE = "SpringMongoSagaStateStore needs a MongoDB replica set or sharded cluster for quarantine, since it writes a quarantined saga instance and the inputs it skips in one transaction. "
+                                                       + "The server refused the transaction. Run MongoDB as a replica set, which can have a single member, or turn quarantine off for the saga.";
     private static final String ID = "_id";
-    private static final String STATE = "state";
-    private static final String STATUS = "status";
-    private static final String VERSION = "version";
-    private static final String TIMERS = "timers";
-    private static final String TIMER_NAME = "name";
-    private static final String TIMER_FIRES_AT = "firesAtEpochMilli";
-    // Written only when a fire of the timer has failed. A document stored before 0.35.0 has no such key, and 0.34.0 reads
-    // only the name and firesAtEpochMilli of a timer, so either version reads what the other wrote.
-    private static final String TIMER_NEXT_ATTEMPT_AT = "nextAttemptAtEpochMilli";
-    // Holds SagaEnvelope.earliestDueAtEpochMilli(), which is the earliest firesAtEpochMilli until a fire fails. The key
-    // keeps its 0.34.0 name so stored documents and the index on it need no migration
-    private static final String NEXT_TIMER_FIRES_AT = "nextTimerFiresAt";
-    private static final String CURRENT_STEP = "currentStep";
-    private static final String STREAM_WATERMARKS = "streamWatermarks";
-    private static final String POSITION_WATERMARK = "positionWatermark";
-    // The versions applied per stream and event type, as a list of sub-documents rather than a map keyed by stream id and
-    // event type. Both are free text that can hold dots, which a field name should not.
-    private static final String STREAM_MARKS = "streamMarks";
-    private static final String MARKS_STREAM_ID = "streamId";
-    private static final String MARKS_FLOOR = "floor";
-    private static final String MARKS_TYPES = "types";
-    private static final String MARKS_TYPE = "type";
-    private static final String MARKS_MARK = "mark";
-    private static final String MARKS_APPLIED = "applied";
-    private static final String MARKS_HORIZON = "horizon";
-    private static final String MARKS_PENDING = "pending";
-    private static final String MARKS_VERSIONS = "versions";
-    private static final String MARKS_LEGACY_FAILED = "legacyFailed";
-    private static final String MARKS_PENDING_SINCE = "pendingSince";
-    private static final String MARKS_VERSION = "version";
-    private static final String MARKS_SINCE = "since";
-    private static final String CREATED_AT = "createdAt";
-    private static final String UPDATED_AT = "updatedAt";
-    private static final String COMPLETED_AT = "completedAt";
-    private static final String STARTED = "started";
-    // The failure record is flattened into top-level fields rather than a sub-document, for the same reason currentStep
-    // is one, because both enumeration queries project the SagaInstance members and neither may decode the state, and a
-    // quarantined instance whose state no longer decodes is exactly the instance somebody is looking for.
-    private static final String FAILURE_INPUT = "failureInput";
-    private static final String FAILURE_POSITION = "failurePosition";
-    private static final String FAILURE_FIRST_FAILED_AT = "failureFirstFailedAt";
-    private static final String FAILURE_TYPE = "failureType";
-    private static final String FAILURE_MESSAGE = "failureMessage";
-    private static final String FAILURE_RELEASED_AT = "failureReleasedAt";
-    private static final String FAILURE_QUARANTINE_ID = "failureQuarantineId";
-    // Top-level like the failure fields, so a quarantine can be recorded without decoding any state
-    private static final String QUARANTINE_SKIP_COUNT = "quarantineSkipCount";
+    private static final String STATE = SagaCodec.STATE;
+    private static final String STATUS = SagaCodec.STATUS;
+    private static final String VERSION = SagaCodec.VERSION;
+    private static final String NEXT_TIMER_FIRES_AT = SagaCodec.NEXT_TIMER_FIRES_AT;
+    private static final String UPDATED_AT = SagaCodec.UPDATED_AT;
+    private static final String FAILURE_RELEASED_AT = SagaCodec.FAILURE_RELEASED_AT;
+    private static final String FAILURE_QUARANTINE_ID = SagaCodec.FAILURE_QUARANTINE_ID;
 
-    /**
-     * The status an instance is stored with when it is quarantined with a quarantine id, which is every instance 0.35.0
-     * or later quarantines. It reads back as {@link SagaStatus#QUARANTINED}. 0.34.0 decodes the status with
-     * {@code SagaStatus.valueOf} and throws on a string it does not know, so a 0.34.0 node that meets such an instance
-     * during a rolling upgrade fails on it instead of skipping its inputs without recording them, which would leave a
-     * release with inputs it never replays. The subscription, or the source's delivery failure policy, decides what then
-     * happens to the input.
-     */
-    public static final String QUARANTINED_RECORDING = "QUARANTINED_RECORDING";
-    private static final List<String> QUARANTINED_STATUSES = List.of(SagaStatus.QUARANTINED.name(), QUARANTINED_RECORDING);
+    /** The status of an instance quarantined with a quarantine id, see {@link SagaCodec#QUARANTINED_RECORDING}. */
+    public static final String QUARANTINED_RECORDING = SagaCodec.QUARANTINED_RECORDING;
 
-    /**
-     * The status an {@link SagaStatus#ACTIVE} instance is stored with while it holds stream marks, which every input
-     * with a stream version adds. It reads back as {@link SagaStatus#ACTIVE}. 0.34.0 knows nothing of the
-     * marks, and a 0.34.0 save that applies an input replaces the whole document and drops them, so 0.35.0 then skips a
-     * pending or late input as applied already. 0.34.0 throws on this string the same way it does on
-     * {@link #QUARANTINED_RECORDING}, so a 0.34.0 node that meets such an instance during a rolling upgrade fails on it
-     * instead of saving it. The subscription, or the source's delivery failure policy, decides what then happens to the
-     * input.
-     * A 0.34.0 node's timer poller matches only {@code ACTIVE}, so the timers of such an instance wait for a 0.35.0 node.
-     */
-    public static final String ACTIVE_MARKED = "ACTIVE_MARKED";
-    private static final List<String> ACTIVE_STATUSES = List.of(SagaStatus.ACTIVE.name(), ACTIVE_MARKED);
+    /** The status of an active instance that holds stream marks, see {@link SagaCodec#ACTIVE_MARKED}. */
+    public static final String ACTIVE_MARKED = SagaCodec.ACTIVE_MARKED;
 
     // Fields of a document in the skipped inputs collection
     private static final String SKIPPED_SAGA_ID = "sagaId";
     private static final String SKIPPED_QUARANTINE_ID = "quarantineId";
     private static final String SKIPPED_SEQ = "seq";
     private static final String SKIPPED_KEY = "key";
-
-    // Every field this store writes apart from the _id, the state, and currentStep, which is what
-    // compareAndSaveWithoutState sets and unsets so that a save leaves the stored state alone without leaving any other
-    // field behind either. currentStep is left out because it is denormalized out of the state, so writing it from an
-    // envelope whose state is being ignored would move the step away from the state it describes, and a later projected
-    // read would report a step the stored state was never in.
-    private static final List<String> EVERY_FIELD_EXCEPT_THE_STATE = List.of(STATUS, VERSION, TIMERS,
-            NEXT_TIMER_FIRES_AT, STREAM_WATERMARKS, POSITION_WATERMARK, STREAM_MARKS, CREATED_AT, UPDATED_AT,
-            COMPLETED_AT, STARTED, FAILURE_INPUT, FAILURE_POSITION, FAILURE_FIRST_FAILED_AT, FAILURE_TYPE,
-            FAILURE_MESSAGE, FAILURE_RELEASED_AT, FAILURE_QUARANTINE_ID, QUARANTINE_SKIP_COUNT);
-
-    // Field names inside a persisted FlowState document.
-    private static final String FLOW_CURRENT_STEP = "currentStep";
-    private static final String FLOW_WINDOW_START = "windowStart";
-    private static final String FLOW_STEP_ENTRY_INDEX = "stepEntryIndex";
-    private static final String FLOW_COMPLETED = "completed";
-    private static final String FLOW_PREVIOUS_STEP = "previousStep";
-    private static final String FLOW_PREVIOUS_STEP_ENTRY_INDEX = "previousStepEntryIndex";
-    private static final String FLOW_LAST_ACTION = "lastAction";
-    private static final String FLOW_MATCHED_BRANCH_INDEX = "matchedBranchIndex";
-    private static final String FLOW_RECEIVED = "received";
-    private static final String FLOW_STEP_CONDITION_PROGRESS = "stepConditionProgress";
-    private static final String FLOW_LEAF_FINGERPRINT = "leafFingerprint";
-    private static final String FLOW_MATCH_COUNTS = "matchCounts";
-
-    private static final EventFormat CLOUD_EVENT_JSON_FORMAT = Objects.requireNonNull(
-            EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE), "CloudEvents JSON format must be on the classpath");
-
-    // A flow saga's retained events sit inside the same document as the rest of its state, so an instance that keeps
-    // accumulating them (an unbounded stepWindow, a step that never transitions, or a stepWindow-capped step reached
-    // through a replacementFilter or CloudEventTypeMapper wider than the flow's own declared types, whose events
-    // stepWindow does not bound, see ADR 129) heads toward MongoDB's 16 MB document limit with no signal
-    // before the write itself starts failing. This is an early warning, not an enforced cap. The unbounded default
-    // stays, ADR 123 already gives the remedy for the common case (a stepWindow cap), and this only makes the growth
-    // visible, including the growth stepWindow cannot reach.
-    // A round number one to two orders of magnitude below the document limit for typical CloudEvent sizes (a few hundred
-    // bytes to a few KB each): high enough that a normal, short-lived flow never sees it, low enough to warn well before a
-    // runaway instance is anywhere near failing to save. Not made configurable: it is a diagnostic tripwire, not a
-    // behavioural limit, and the actual remedy (stepWindow) is already configurable per saga.
-    // Package-private rather than private: a test asserting the edge-triggering behaviour builds exactly this many events
-    // rather than hardcoding a duplicate of the number here.
-    static final int RETAINED_EVENT_WARNING_THRESHOLD = 1_000;
-
-    // Bounds the latch's total SIZE. An entry is removed when its instance drops below the threshold, or explicitly on
-    // delete(String), but SagaStateStore.delete's own javadoc says the recommended default is to let a completed
-    // instance expire via MongoDB TTL instead, which happens entirely inside the database with no call this store ever
-    // sees. So an instance that stays above the threshold and is retired that way keeps its entry until something else
-    // reclaims the slot. That reclaiming is the eviction the latch does on access order (see the field below): whichever
-    // saga id has gone the longest without being checked is what gets evicted when a new one arrives at capacity. That
-    // is a statement about recency of check, not about which instance is still active: a continuously active instance
-    // that is not saved again for RETAINED_EVENT_WARNING_LATCH_CAPACITY other distinct ids' worth of checks is evicted
-    // just like an abandoned one would be, and re-warns on its next save. Package-private for the same reason as the
-    // threshold above: a test exercising the capacity backstop builds exactly this many tracked instances instead of
-    // duplicating the number.
-    static final int RETAINED_EVENT_WARNING_LATCH_CAPACITY = 10_000;
-
-    // Edge-triggered, least-recently-checked latch, keyed by saga id: present and true means "already warned while at
-    // or above the threshold". An instance is removed the moment it drops back below the threshold (typically after a
-    // stepWindow trim) or is deleted, so a later re-crossing warns again. Access-ordered (see the constructor) and
-    // capped at RETAINED_EVENT_WARNING_LATCH_CAPACITY, protecting the RETAINED_EVENT_WARNING_LATCH_CAPACITY most
-    // recently checked saga ids from eviction, not every instance that will eventually be saved again. A saga id not
-    // checked again before that many OTHER distinct ids have been checked is evicted regardless of whether it is
-    // still active, and re-warns on its own next save. This is an accepted trade-off for keeping a hard memory bound
-    // rather than an unbounded, idle-expiry-only cache: the cost is a spurious re-warn under high churn, never a
-    // missed one. Not a ConcurrentHashMap: LinkedHashMap's access-order mode is what gives the LRU property, and every
-    // access to this field goes through the synchronized block in warnIfRetainedSizeCrossesThreshold or
-    // delete(String).
-    private final Map<String, Boolean> retainedEventWarningLatch = new LinkedHashMap<>(16, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
-            return size() > RETAINED_EVENT_WARNING_LATCH_CAPACITY;
-        }
-    };
 
     /**
      * How many times a read or a write calls MongoDB before it gives up, 10, the same number
@@ -284,36 +224,65 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      */
     static final int DEFAULT_MAX_ATTEMPTS = 10;
 
+    private static final EventFormat CLOUD_EVENT_JSON_FORMAT = Objects.requireNonNull(
+            EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE), "CloudEvents JSON format must be on the classpath");
     private final MongoOperations mongoOperations;
+    private final MongoDatabaseFactory databaseFactory;
+    private final TransactionTemplate transactions;
     private final String collectionName;
     private final String skippedInputsCollectionName;
     private final Class<S> stateType;
-    // Non-null only for a flow saga: used to serialize FlowState.received as CloudEvents (stable types, package-independent).
-    private final @Nullable CloudEventConverter<Object> cloudEventConverter;
+    private final boolean flowSaga;
     private final RetryStrategy retryStrategy;
+    private final SagaStateCodec<S> stateCodec = new SagaStateCodec<>() {
+        @Override
+        public Object encode(S state) {
+            // SagaCodec refuses a null here, with the saga id named
+            return mongoOperations.getConverter().convertToMongoType(state);
+        }
+
+        @SuppressWarnings("unchecked")
+        @Override
+        public S decode(Object encoded) {
+            MongoConverter converter = mongoOperations.getConverter();
+            if (encoded instanceof Document stateDocument) {
+                return converter.read(stateType, stateDocument);
+            }
+            return (S) converter.getConversionService().convert(encoded, stateType);
+        }
+    };
 
     /**
      * Creates a store for a core saga, whose state serializes with the application's {@code MongoConverter}.
      * A failing call to MongoDB is retried with exponential backoff from 100 ms up to 2 seconds, giving up after
-     * {@value #DEFAULT_MAX_ATTEMPTS} attempts.
+     * {@value #DEFAULT_MAX_ATTEMPTS} attempts. A call inside a MongoDB transaction isn't retried, as the class javadoc
+     * says.
      *
      * @param mongoOperations the {@link MongoOperations} used to read and write instance documents
      * @param collectionName  the collection the instances are stored in, which must not end in {@code _skipped_inputs}
      * @param stateType       the user state type, needed to read the stored state back into an object
+     * @throws IllegalArgumentException when {@code mongoOperations} is not a {@link MongoTemplate}, since the store writes a
+     *                                  quarantined instance and its skipped inputs in a transaction on the template's
+     *                                  {@link MongoDatabaseFactory}, or when {@code collectionName} ends in
+     *                                  {@code _skipped_inputs}. Pass the {@code MongoTemplate} bean.
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType) {
         this(mongoOperations, collectionName, stateType, null);
     }
 
     /**
-     * Creates a store that, when {@code cloudEventConverter} is supplied, serializes a flow saga's {@code FlowState}
-     * received events as CloudEvents so they round-trip by their stable CloudEvent type. Pass {@code null} for a
-     * core saga.
+     * Creates a store for a flow saga when {@code cloudEventConverter} is supplied, and for a core saga when it is
+     * {@code null}. The saga runner writes a flow saga's received events with its own converter, so the one passed here
+     * only marks the store as a flow saga's.
      *
      * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
      * @param collectionName      the collection the instances are stored in, which must not end in {@code _skipped_inputs}
      * @param stateType           the user state type, needed to read the stored state back into an object
-     * @param cloudEventConverter the converter used to (de)serialize a flow saga's received events, or {@code null}
+     * @param cloudEventConverter the converter of a flow saga's application, or {@code null} for a core saga
+     * @throws IllegalArgumentException when {@code mongoOperations} is not a {@link MongoTemplate}, since the store writes a
+     *                                  quarantined instance and its skipped inputs in a transaction on the template's
+     *                                  {@link MongoDatabaseFactory}, or when {@code collectionName} ends in
+     *                                  {@code _skipped_inputs}. Pass the {@code MongoTemplate} bean.
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter) {
         this(mongoOperations, collectionName, stateType, cloudEventConverter, defaultRetryStrategy());
@@ -321,18 +290,35 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     /**
      * Creates a store that retries a failing call to MongoDB with {@code retryStrategy} instead of the default.
-     * Pass {@link RetryStrategy#none()} to have every failure reach the caller on the first attempt.
+     * Pass {@link RetryStrategy#none()} to have every failure reach the caller on the first attempt. A call inside a
+     * MongoDB transaction isn't retried, as the class javadoc says.
      *
      * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
      * @param collectionName      the collection the instances are stored in, which must not end in {@code _skipped_inputs}
      * @param stateType           the user state type, needed to read the stored state back into an object
-     * @param cloudEventConverter the converter used to (de)serialize a flow saga's received events, or {@code null} for a core saga
+     * @param cloudEventConverter the converter of a flow saga's application, or {@code null} for a core saga
      * @param retryStrategy       the strategy used when a read or a write fails
+     * @throws IllegalArgumentException when {@code mongoOperations} is not a {@link MongoTemplate}, since the store writes a
+     *                                  quarantined instance and its skipped inputs in a transaction on the template's
+     *                                  {@link MongoDatabaseFactory}, or when {@code collectionName} ends in
+     *                                  {@code _skipped_inputs}. Pass the {@code MongoTemplate} bean.
      */
-    @SuppressWarnings("unchecked")
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter, RetryStrategy retryStrategy) {
         this.retryStrategy = Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
+        if (!(mongoOperations instanceof MongoTemplate mongoTemplate)) {
+            throw new IllegalArgumentException("SpringMongoSagaStateStore needs a MongoTemplate, and was given a " + mongoOperations.getClass().getName() + ". "
+                                               + "It writes a quarantined saga instance and the inputs it skips in one transaction, on the MongoDatabaseFactory of the template. Pass the MongoTemplate bean.");
+        }
+        this.databaseFactory = mongoTemplate.getMongoDatabaseFactory();
+        // A transaction reads a snapshot of what a majority has, which holds while it commits at majority
+        // A client timeoutMS makes the driver drop the wtimeout, so there the commit waits as long as timeoutMS allows,
+        // and with a timeoutMS of 0 without limit. MongoTransactionManager passes no transaction timeout to the driver,
+        // and the driver sends no maxCommitTime under a timeoutMS of 0
+        TransactionOptions transactionOptions = TransactionOptions.builder().writeConcern(DURABLE_WRITE_CONCERN).readConcern(ReadConcern.SNAPSHOT).readPreference(ReadPreference.primary()).build();
+        this.transactions = new TransactionTemplate(new CommitRetryingTransactionManager(databaseFactory, transactionOptions, retryStrategy));
+        // Joins a transaction the caller started on the same MongoDatabaseFactory
+        this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName cannot be null");
         if (collectionName.endsWith(SKIPPED_INPUTS_SUFFIX)) {
             String sharedWith = collectionName.substring(0, collectionName.length() - SKIPPED_INPUTS_SUFFIX.length());
@@ -341,15 +327,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         this.skippedInputsCollectionName = collectionName + SKIPPED_INPUTS_SUFFIX;
         this.stateType = Objects.requireNonNull(stateType, "stateType cannot be null");
+        this.flowSaga = cloudEventConverter != null;
         if (stateType == FlowState.class && cloudEventConverter == null) {
-            // A flow saga's FlowState holds domain events, and this store serializes them as CloudEvents through the
-            // converter so they round-trip by their stable CloudEvent type (package-independent). Without it, the field-by-
-            // field FlowState path cannot run. The annotation path always supplies the converter; a hand-built store that
-            // omits it would silently lose that package independence, so fail loud here instead.
+            // A hand-built store that omits the converter would have no way to tell the runner it holds a flow saga, so fail
+            // loud here instead.
             throw new IllegalArgumentException("a CloudEventConverter is required to store a flow saga's FlowState; use the four-argument constructor and pass the application's CloudEventConverter");
         }
-        // Safe: the converter only ever sees domain events read out of a FlowState, whose element type is erased anyway.
-        this.cloudEventConverter = (CloudEventConverter<Object>) cloudEventConverter;
         // Retried like every other call this store makes, so a MongoDB error that a second attempt would clear does not
         // fail the saga's registration while an application is starting. Only the unique index has an option, and no
         // setting changes it, so nothing a user configures can make MongoDB refuse one permanently. An index an operator
@@ -376,175 +359,262 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     @Override
-    public Optional<SagaEnvelope<S>> find(String sagaId) {
-        Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        // Decoding happens outside the retried supplier, so a stored state that no longer reads back throws once
-        // instead of being attempted ten times.
-        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(primary(Query.query(where(ID).is(sagaId))), Document.class, collectionName);
-        return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
+    public SagaStateCodec<S> stateCodec() {
+        return stateCodec;
     }
 
     @Override
-    public boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
-        Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        Objects.requireNonNull(envelope, "envelope cannot be null");
-        Document document = toDocument(sagaId, envelope);
-        if (expectedVersion == 0) {
-            // Caught inside the retried supplier, because another writer getting there first is an outcome and
-            // retrying it would lose the same race nine more times. A failure arriving after MongoDB already stored
-            // the document hits this catch on the next attempt and reports the save as lost, which the caller answers
-            // by re-reading and skipping an input its watermarks already cover. An input that has no redelivery key
-            // has no watermark, so it re-dispatches, which is the multiplicity a lost compare-and-set already has.
-            Supplier<Boolean> insert = () -> {
-                try {
-                    mongoOperations.insert(document, collectionName);
-                    return true;
-                } catch (DuplicateKeyException e) {
-                    return false;
-                }
-            };
-            return retryStrategy.execute(insert);
+    public Optional<StoredSaga> find(String sagaId) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(sagaId, "sagaId cannot be null");
+            // Decoding happens outside the retried supplier, and in the caller, so a stored state that no longer reads back
+            // throws once instead of being attempted ten times.
+            return Optional.ofNullable(findInstance(sagaId, () -> Query.query(where(ID).is(sagaId)))).map(this::toStoredSaga);
+        });
+    }
+
+    // An instance found at read concern majority is acted on through a compare-and-set on its version, which a stale
+    // version loses. An absence has no version to compare, and an input addressed to no instance is skipped without a
+    // write. Right after a failover the new primary's majority view can be older than a write the old primary
+    // acknowledged, so an absence is read again at read concern linearizable, on the primary, by _id and with a
+    // maxTimeMS. MongoDB documents that such a read returns every write a majority acknowledged before the read
+    // started, see
+    // https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/
+    private @Nullable Document findInstance(String sagaId, Supplier<Query> query) {
+        if (joinsCallersTransaction()) {
+            return findInCallersTransaction(sagaId, query.get());
         }
-        Query query = Query.query(where(ID).is(sagaId).and(VERSION).is(expectedVersion));
-        // A lost compare-and-set is a null document rather than an exception, so the retry never sees it and the
-        // answer is read outside the supplier.
-        Supplier<@Nullable Document> replace = () -> mongoOperations.findAndReplace(query, document, collectionName);
-        return retryStrategy.execute(replace) != null;
+        Document found = retried(() -> readInstance(query.get(), ReadConcern.MAJORITY));
+        return found != null ? found : retried(() -> readInstance(query.get(), ReadConcern.LINEARIZABLE));
     }
 
-    @Override
-    public Optional<SagaEnvelope<S>> findWithoutState(String sagaId) {
-        Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        Query query = Query.query(where(ID).is(sagaId));
-        projectEverySagaInstanceMember(query);
-        // The watermarks on top of that, which SagaInstance does not expose and the quarantine decision does need. It
-        // compares the failing input against them to recognise an input the instance has already handled, and the
-        // record it writes carries them over untouched, so projecting them away would quarantine the instance and
-        // drop them at the same time.
-        query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK).include(STREAM_MARKS);
-        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(primary(query), Document.class, collectionName);
-        return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
-    }
-
-    @Override
-    public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
-        Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        Objects.requireNonNull(envelope, "envelope cannot be null");
-        if (expectedVersion == 0) {
-            // There is no document yet, so there is no stored state to leave alone and the whole envelope is written.
-            return compareAndSave(sagaId, envelope, expectedVersion);
+    // From the primary, on the database MongoDatabaseUtils hands out, which is bound to no session here. A template with
+    // SessionSynchronization.ALWAYS would start a transaction for the read in a Spring transaction of another resource,
+    // and the read would see that transaction's snapshot. A linearizable read waits at most the write timeout, as MongoDB
+    // advises, since it can't complete without a majority
+    private @Nullable Document readInstance(Query query, ReadConcern readConcern) {
+        try {
+            FindIterable<Document> found = instances(MongoDatabaseUtils.getDatabase(databaseFactory)).withReadConcern(readConcern).withReadPreference(ReadPreference.primary())
+                    .find(query.getQueryObject()).projection(query.getFieldsObject());
+            return (readConcern == ReadConcern.LINEARIZABLE ? found.maxTime(WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS) : found).first();
+        } catch (RuntimeException e) {
+            throw translated(e);
         }
-        // Built without the state, rather than built whole and then having the state left out of the update. Serializing
-        // it converts every retained event of a flow saga and trips the retained-size warning, and this write stores none
-        // of it, so a caller handing over a full envelope would pay for a serialization the update discards and could
-        // fail on the very converter this method exists to work around.
-        Document document = toDocumentWithoutTheState(sagaId, envelope);
-        Update update = new Update();
-        for (String field : EVERY_FIELD_EXCEPT_THE_STATE) {
-            if (document.containsKey(field)) {
-                update.set(field, document.get(field));
-            } else {
-                // Unset rather than left alone, so a field the new envelope does not carry goes away instead of keeping
-                // whatever the previous write left there. An instance failing on an event from a store that assigns no
-                // global position replaces a record that had one, and that record's failurePosition has to go with it.
-                update.unset(field);
+    }
+
+    // Inside a transaction the caller started, a read sees the transaction's snapshot, and no read in the transaction
+    // sees a write made after the snapshot began. So the server decides an absence instead. The store inserts a document
+    // with the saga's _id and deletes it again, both in the caller's transaction, which together leave nothing behind
+    // when it commits. An instance another writer wrote after the snapshot began, committed or not, makes the insert
+    // fail with a WriteConflict that has the TransientTransactionError label, and the caller's next attempt reads it
+    // with a new snapshot. An absence the transaction made itself, by deleting the instance, lets the insert through.
+    // The read and both writes take the database from MongoDatabaseUtils, as inTransaction does, so they share one
+    // session whatever session synchronization the template has. Nothing is retried, since only the caller can run its
+    // transaction again
+    private @Nullable Document findInCallersTransaction(String sagaId, Query query) {
+        MongoCollection<Document> instances = instances(MongoDatabaseUtils.getDatabase(databaseFactory));
+        try {
+            Document found = instances.find(query.getQueryObject()).projection(query.getFieldsObject()).first();
+            if (found == null) {
+                instances.insertOne(new Document(ID, sagaId));
+                instances.deleteOne(Filters.eq(ID, sagaId));
             }
+            return found;
+        } catch (RuntimeException e) {
+            throw translated(e);
         }
-        Query query = Query.query(where(ID).is(sagaId).and(VERSION).is(expectedVersion));
-        Supplier<@Nullable Document> modify = () -> mongoOperations.findAndModify(query, update, Document.class, collectionName);
-        return retryStrategy.execute(modify) != null;
+    }
+
+    // True exactly when MongoDatabaseUtils hands out a database bound to a session with an active transaction. That holds
+    // for a factory bound to such a session, as MongoTemplate.withSession gives, and for a Spring transaction that
+    // synchronizes its resources, a MongoDB one or another that a template with SessionSynchronization.ALWAYS has
+    // already started a MongoDB transaction in
+    private boolean joinsCallersTransaction() {
+        return databaseFactory.isTransactionActive()
+               || TransactionSynchronizationManager.isSynchronizationActive() && MongoDatabaseUtils.isTransactionActive(databaseFactory);
+    }
+
+    // Outside a MongoDB transaction an operation that fails is sent again, with the store's RetryStrategy. Inside one,
+    // MongoDB aborts the transaction on the server when an operation in it fails, so the same operation sent again in it
+    // fails too, and the failure goes to the caller as it was thrown. The predicate reads inMongoTransaction()
+    // again after the failure, since a template with SessionSynchronization.ALWAYS starts the transaction on its first
+    // operation
+    private <T extends @Nullable Object> T retried(Supplier<T> operation) {
+        if (inMongoTransaction()) {
+            return operation.get();
+        }
+        // A server that refuses the durability the store needs refuses it on every attempt, so it fails at once. So does
+        // an operation that failed inside a MongoDB transaction, which the server has aborted
+        return retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer) && !inMongoTransaction(), operation);
+    }
+
+    // A transaction is bound to the factory, the caller's, the store's own or one a template with
+    // SessionSynchronization.ALWAYS started, or the factory is bound to a session with an active transaction, as
+    // MongoTemplate.withSession gives. A bound transaction counts after the server aborted it, since its owner still has
+    // to end it
+    private boolean inMongoTransaction() {
+        return databaseFactory.isTransactionActive() || TransactionSynchronizationManager.hasResource(databaseFactory);
+    }
+
+    // A MongoDB transaction bound to the factory while synchronization is off, as a MongoTransactionManager with
+    // SYNCHRONIZATION_NEVER runs it, hands out a database bound to no session, so an operation would read and write
+    // outside that transaction. The store's own transaction then takes part in the caller's and turns synchronization
+    // on for the operation, so every database it takes, the template's too, is bound to the caller's session, and a
+    // failure marks the caller's transaction rollback-only
+    private <T extends @Nullable Object> T joiningCallersTransaction(Supplier<T> operation) {
+        if (databaseFactory.isTransactionActive() || TransactionSynchronizationManager.isSynchronizationActive()
+            || !MongoDatabaseUtils.isTransactionActive(databaseFactory)) {
+            return operation.get();
+        }
+        return transactions.execute(status -> operation.get());
     }
 
     @Override
-    public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
-        Objects.requireNonNull(now, "now cannot be null");
-        // Sorted on the field it filters on, so the (status, nextTimerFiresAt) index serves the order as well as the match.
-        // ACTIVE is two strings, and Mongo merges the two index ranges in nextTimerFiresAt order.
-        Query query = Query.query(statusIs(SagaStatus.ACTIVE).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
-                .with(Sort.by(Sort.Direction.ASC, NEXT_TIMER_FIRES_AT))
-                .limit(limit);
-        // Project only the fields the poller needs to decide which timers are due. This deliberately excludes the state
-        // (a flow saga's received log can be large), so the poll never pays to decode it. The executor re-loads the full
-        // document with find(sagaId) before it processes a timer, which is the authoritative read the fire acts on.
-        // The timestamps and currentStep are included even though the poller ignores them: an envelope is also a
-        // SagaInstance, and every member of that view must be populated on any envelope a store hands back. They are
-        // three longs and a string, and decode no state, so the cost the exclusion above protects against is untouched.
-        projectEverySagaInstanceMember(query);
-        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, collectionName);
-        return retryStrategy.execute(read).stream().map(this::toEnvelope).toList();
+    public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Document document = toDocument(saga);
+            if (expectedVersion == 0) {
+                // Caught inside the retried supplier, because another writer getting there first is an outcome and
+                // retrying it would lose the same race nine more times. A failure arriving after MongoDB already stored
+                // the document hits this catch on the next attempt and reports the save as lost. The caller reads again,
+                // and find reads an absence again at read concern linearizable. MongoDB documents that such a read may wait
+                // for writes in progress to reach a majority before it returns, and the maxTimeMS bounds that wait. With
+                // the document read back, the caller skips an input its watermarks already cover. A failover that rolls the
+                // document back lets the next insert through. An input that has no redelivery key has no watermark, so it
+                // re-dispatches, which is the multiplicity a lost compare-and-set already has.
+                Supplier<Boolean> insert = () -> {
+                    try {
+                        writeDurably(collectionName, collection -> collection.insertOne(document));
+                        return true;
+                    } catch (DuplicateKeyException e) {
+                        return false;
+                    }
+                };
+                return retried(insert);
+            }
+            // A lost compare-and-set matches nothing rather than throwing, so the retry never sees it
+            return retried(() -> writeDurably(collectionName, collection -> collection.replaceOne(versionIs(saga.sagaId(), expectedVersion), document)).getMatchedCount() > 0);
+        });
     }
 
     @Override
-    public List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
-        Objects.requireNonNull(status, "status cannot be null");
-        Objects.requireNonNull(updatedBefore, "updatedBefore cannot be null");
-        if (limit < 1) {
-            // A Mongo limit of 0 means "no limit", so a caller passing 0 would get the whole collection instead of
-            // nothing. Reject it here rather than let that through as a surprise full scan.
-            throw new IllegalArgumentException("limit must be positive, was " + limit);
+    public Optional<StoredSaga> findWithoutState(String sagaId) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(sagaId, "sagaId cannot be null");
+            return Optional.ofNullable(findInstance(sagaId, () -> {
+                Query query = Query.query(where(ID).is(sagaId));
+                project(query, SagaCodec.fieldsWithoutState());
+                return query;
+            })).map(this::toStoredSaga);
+        });
+    }
+
+    @Override
+    public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            if (expectedVersion == 0) {
+                throw new IllegalArgumentException("compareAndSaveWithoutState cannot insert saga " + saga.sagaId() + ", since it holds no state. Insert it with compareAndSave.");
+            }
+            Bson update = withoutState(saga);
+            return retried(() -> writeDurably(collectionName, collection -> collection.updateOne(versionIs(saga.sagaId(), expectedVersion), update)).getMatchedCount() > 0);
+        });
+    }
+
+    private static Bson withoutState(StoredSaga saga) {
+        Document document = toDocument(saga);
+        List<Bson> updates = new ArrayList<>();
+        for (String field : SagaCodec.fieldsExceptState()) {
+            // Unset rather than left alone, so a field the new instance has no value for goes away instead of keeping
+            // whatever the previous write left there. An instance failing on an event from a store that assigns no
+            // global position replaces a record that had one, and that record's failurePosition has to go with it.
+            updates.add(document.containsKey(field) ? Updates.set(field, document.get(field)) : Updates.unset(field));
         }
-        Query query = Query.query(statusIs(status).and(UPDATED_AT).lt(updatedBefore.toEpochMilli()))
-                .with(Sort.by(Sort.Direction.ASC, UPDATED_AT))
-                .limit(limit);
-        // Projected exactly like the due-timer query: every SagaInstance member and no state. currentStep is a top-level
-        // field, so observing a flow saga never decodes its received log. That also means this query cannot fail on an
-        // instance whose state no longer decodes, because it never decodes any.
-        projectEverySagaInstanceMember(query);
-        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, collectionName);
-        return retryStrategy.execute(read).stream().map(this::toEnvelope).toList();
+        return Updates.combine(updates);
+    }
+
+    private static Bson versionIs(String sagaId, long expectedVersion) {
+        return Filters.and(Filters.eq(ID, sagaId), Filters.eq(VERSION, expectedVersion));
+    }
+
+    @Override
+    public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(now, "now cannot be null");
+            // Sorted on the field it filters on, so the (status, nextTimerFiresAt) index serves the order as well as the match.
+            // ACTIVE is two strings, and Mongo merges the two index ranges in nextTimerFiresAt order.
+            Query query = Query.query(statusIs(SagaStatus.ACTIVE).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
+                    .with(Sort.by(Sort.Direction.ASC, NEXT_TIMER_FIRES_AT))
+                    .limit(limit);
+            // Project only the fields every enumeration needs. This deliberately excludes the state (a flow saga's received
+            // log can be large), so the poll never pays to read it. The executor re-loads the full document with find(sagaId)
+            // before it processes a timer, which is the authoritative read the fire acts on.
+            project(query, SagaCodec.instanceFields());
+            Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
+            return retried(read).stream().map(this::toStoredSaga).toList();
+        });
+    }
+
+    @Override
+    public List<StoredSaga> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(status, "status cannot be null");
+            Objects.requireNonNull(updatedBefore, "updatedBefore cannot be null");
+            if (limit < 1) {
+                // A Mongo limit of 0 means "no limit", so a caller passing 0 would get the whole collection instead of
+                // nothing. Reject it here rather than let that through as a surprise full scan.
+                throw new IllegalArgumentException("limit must be positive, was " + limit);
+            }
+            Query query = Query.query(statusIs(status).and(UPDATED_AT).lt(updatedBefore.toEpochMilli()))
+                    .with(Sort.by(Sort.Direction.ASC, UPDATED_AT))
+                    .limit(limit);
+            // Projected like the due-timer query, so a page doesn't read the state of every instance it lists
+            project(query, SagaCodec.instanceFields());
+            Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
+            return retried(read).stream().map(this::toStoredSaga).toList();
+        });
     }
 
     @Override
     public List<String> findReleasingSagaIds(@Nullable String after, int limit) {
-        if (limit < 1) {
-            // A Mongo limit of 0 means no limit
-            throw new IllegalArgumentException("limit must be positive, was " + limit);
-        }
-        Criteria releasing = statusIs(SagaStatus.QUARANTINED).and(FAILURE_RELEASED_AT).exists(true);
-        if (after != null) {
-            releasing = releasing.and(ID).gt(after);
-        }
-        Query query = Query.query(releasing)
-                .with(Sort.by(Sort.Direction.ASC, ID))
-                .limit(limit);
-        query.fields().include(ID);
-        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, collectionName);
-        return retryStrategy.execute(read).stream().map(document -> document.getString(ID)).toList();
+        return joiningCallersTransaction(() -> {
+            if (limit < 1) {
+                // A Mongo limit of 0 means no limit
+                throw new IllegalArgumentException("limit must be positive, was " + limit);
+            }
+            Criteria releasing = statusIs(SagaStatus.QUARANTINED).and(FAILURE_RELEASED_AT).exists(true);
+            if (after != null) {
+                releasing = releasing.and(ID).gt(after);
+            }
+            Query query = Query.query(releasing)
+                    .with(Sort.by(Sort.Direction.ASC, ID))
+                    .limit(limit);
+            query.fields().include(ID);
+            Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, collectionName);
+            return retried(read).stream().map(document -> document.getString(ID)).toList();
+        });
     }
 
-    // ACTIVE and QUARANTINED are each stored as either of two strings, see ACTIVE_MARKED and QUARANTINED_RECORDING
+    // ACTIVE and QUARANTINED are each stored as either of two strings, see SagaCodec.storedStatuses
     private static Criteria statusIs(SagaStatus status) {
-        return switch (status) {
-            case ACTIVE -> where(STATUS).in(ACTIVE_STATUSES);
-            case QUARANTINED -> where(STATUS).in(QUARANTINED_STATUSES);
-            default -> where(STATUS).is(status.name());
-        };
-    }
-
-    @Override
-    public void recordSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-        Objects.requireNonNull(input, "input cannot be null");
-        Document filter = skippedInputFilter(sagaId, quarantineId, input.key());
-        // Two writers that upsert the same key race to insert it, and the server retries the loser's duplicate-key error
-        // itself, since the filter is an equality on exactly the fields of the unique index. The loser then finds the
-        // record the winner stored and keeps it, the outcome it wanted. This store opens no session or transaction of its
-        // own. Inside a transaction a caller opened, the server doesn't retry it, and the error ends that transaction, so
-        // catching it here couldn't save the write either.
-        writeSkippedInputs(collection -> collection.updateOne(filter, Updates.setOnInsert(SKIPPED_SEQ, input.seq()), new UpdateOptions().upsert(true)));
+        return where(STATUS).in(SagaCodec.storedStatuses(status));
     }
 
     @Override
     public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
-        if (limit < 1) {
-            // A Mongo limit of 0 means no limit
-            throw new IllegalArgumentException("limit must be positive, was " + limit);
-        }
-        Query query = Query.query(where(SKIPPED_SAGA_ID).is(Objects.requireNonNull(sagaId, "sagaId cannot be null"))
-                        .and(SKIPPED_QUARANTINE_ID).is(Objects.requireNonNull(quarantineId, "quarantineId cannot be null")))
-                .with(Sort.by(Sort.Direction.ASC, SKIPPED_SEQ, SKIPPED_KEY))
-                .limit(limit);
-        Supplier<List<Document>> read = () -> mongoOperations.find(primary(query), Document.class, skippedInputsCollectionName);
-        return retryStrategy.execute(read).stream().map(SpringMongoSagaStateStore::toSkippedInput).toList();
+        return joiningCallersTransaction(() -> {
+            if (limit < 1) {
+                // A Mongo limit of 0 means no limit
+                throw new IllegalArgumentException("limit must be positive, was " + limit);
+            }
+            Query query = Query.query(where(SKIPPED_SAGA_ID).is(Objects.requireNonNull(sagaId, "sagaId cannot be null"))
+                            .and(SKIPPED_QUARANTINE_ID).is(Objects.requireNonNull(quarantineId, "quarantineId cannot be null")))
+                    .with(Sort.by(Sort.Direction.ASC, SKIPPED_SEQ, SKIPPED_KEY))
+                    .limit(limit);
+            Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, skippedInputsCollectionName);
+            return retried(read).stream().map(SpringMongoSagaStateStore::toSkippedInput).toList();
+        });
     }
 
     private static SkippedInput toSkippedInput(Document document) {
@@ -552,453 +622,348 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     @Override
-    public void recordSkippedInputAtHead(String sagaId, String quarantineId, SkippedInput head) {
-        Objects.requireNonNull(head, "head cannot be null");
-        Document filter = skippedInputFilter(sagaId, quarantineId, head.key());
-        // A race to insert the same record is retried by the server, as recordSkippedInput says
-        writeSkippedInputs(collection -> collection.updateOne(filter, Updates.set(SKIPPED_SEQ, head.seq()), new UpdateOptions().upsert(true)));
+    public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Objects.requireNonNull(input, "input cannot be null");
+            Bson update = withoutStateUnlessInsert(saga, expectedVersion);
+            Document filter = skippedInputFilter(saga.sagaId(), quarantineId, input.key());
+            return transition(database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
+                    database -> skippedInputs(database).updateOne(filter, Updates.setOnInsert(SKIPPED_SEQ, input.seq()), new UpdateOptions().upsert(true)));
+        });
     }
 
     @Override
-    public void deleteSkippedInput(String sagaId, String quarantineId, SkippedInput input) {
-        Objects.requireNonNull(input, "input cannot be null");
-        Document filter = skippedInputFilter(sagaId, quarantineId, input.key()).append(SKIPPED_SEQ, input.seq());
-        writeSkippedInputs(collection -> collection.deleteOne(filter));
+    public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Objects.requireNonNull(head, "head cannot be null");
+            Bson update = withoutStateUnlessInsert(saga, expectedVersion);
+            Document filter = skippedInputFilter(saga.sagaId(), quarantineId, head.key());
+            return transition(database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
+                    database -> skippedInputs(database).updateOne(filter, Updates.set(SKIPPED_SEQ, head.seq()), new UpdateOptions().upsert(true)));
+        });
     }
 
     @Override
-    public void deleteSkippedInputs(String sagaId, String quarantineId) {
-        Document filter = new Document(SKIPPED_SAGA_ID, Objects.requireNonNull(sagaId, "sagaId cannot be null"))
-                .append(SKIPPED_QUARANTINE_ID, Objects.requireNonNull(quarantineId, "quarantineId cannot be null"));
-        writeSkippedInputs(collection -> collection.deleteMany(filter));
+    public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Objects.requireNonNull(replayed, "replayed cannot be null");
+            Document document = toDocument(saga);
+            Document filter = skippedInputFilter(saga.sagaId(), quarantineId, replayed.key()).append(SKIPPED_SEQ, replayed.seq());
+            return transition(database -> instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
+                    database -> skippedInputs(database).deleteOne(filter));
+        });
+    }
+
+    @Override
+    public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Document document = toDocument(saga);
+            Document filter = quarantineFilter(saga.sagaId(), quarantineId);
+            // A release ends the quarantine of an instance it does not complete once its read of the records found none. That
+            // read can miss a record right after a failover, so the transaction reads the records again. It reads everything
+            // the primary has, which includes every write a majority acknowledged. A record written after that read changes
+            // the instance too, so the replaceOne then conflicts and the transaction runs again
+            boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
+            return transition(database -> (completes || skippedInputs(database).find(filter).first() == null)
+                                          && instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
+                    database -> skippedInputs(database).deleteMany(filter));
+        });
+    }
+
+    private static Bson withoutStateUnlessInsert(StoredSaga saga, long expectedVersion) {
+        if (expectedVersion == 0) {
+            throw new IllegalArgumentException("A write without state cannot insert saga " + saga.sagaId() + ", since it holds no state. Insert it with compareAndSave.");
+        }
+        return withoutState(saga);
     }
 
     private static Document skippedInputFilter(String sagaId, String quarantineId, String key) {
-        return new Document(SKIPPED_SAGA_ID, Objects.requireNonNull(sagaId, "sagaId cannot be null"))
-                .append(SKIPPED_QUARANTINE_ID, Objects.requireNonNull(quarantineId, "quarantineId cannot be null"))
-                .append(SKIPPED_KEY, Objects.requireNonNull(key, "key cannot be null"));
+        return quarantineFilter(sagaId, quarantineId).append(SKIPPED_KEY, Objects.requireNonNull(key, "key cannot be null"));
     }
 
-    // Every write and delete of a skipped-input record waits for a journaled majority, whatever write concern the
-    // caller's MongoOperations or collection has. A skip is acknowledged once its record is written, so a record a
-    // failover rolled back would leave a skipped input that no release replays. execute(..) still translates exceptions
-    private void writeSkippedInputs(java.util.function.Function<MongoCollection<Document>, ?> write) {
-        // A server without journaling refuses every attempt, so the retried call returns the refusal instead of throwing
-        // it, and it is thrown once execute(..) has returned, where no strategy can retry it
-        Optional<IllegalStateException> refused = retryStrategy.execute(() -> {
-            try {
-                mongoOperations.execute(skippedInputsCollectionName, collection -> write.apply(skippedInputWrites(collection)));
-                return Optional.<IllegalStateException>empty();
-            } catch (RuntimeException e) {
-                if (isJournalNotSupported(e)) {
-                    return Optional.of(new IllegalStateException(JOURNALING_REQUIRED_MESSAGE, e));
-                }
-                throw e;
+    private static Document quarantineFilter(String sagaId, String quarantineId) {
+        return new Document(SKIPPED_SAGA_ID, Objects.requireNonNull(sagaId, "sagaId cannot be null"))
+                .append(SKIPPED_QUARANTINE_ID, Objects.requireNonNull(quarantineId, "quarantineId cannot be null"));
+    }
+
+    // The instance first, so a write that loses its compare-and-set has written nothing, and a second transition on the
+    // same instance conflicts with the first on that document before either touches a skipped input
+    private boolean transition(Function<MongoDatabase, Boolean> compareAndSet, Function<MongoDatabase, ?> writeSkippedInputs) {
+        return inTransaction(database -> {
+            if (!compareAndSet.apply(database)) {
+                return false;
             }
+            writeSkippedInputs.apply(database);
+            return true;
         });
-        if (refused.isPresent()) {
-            throw refused.get();
+    }
+
+    // Run again from the start when the failure has the TransientTransactionError label, which says the transaction did
+    // not commit, so the attempt left nothing behind. Inside a transaction the caller started, a failure is the caller's
+    // to retry, since this store cannot run the caller's earlier writes again. The database comes from
+    // MongoDatabaseUtils rather than the template, so it is bound to the transaction's session whatever session
+    // synchronization the template has
+    private boolean inTransaction(Function<MongoDatabase, Boolean> work) {
+        boolean joinsCallersTransaction = joinsCallersTransaction();
+        if (databaseFactory.isTransactionActive()) {
+            // The store's transaction manager would start a second transaction on a new session of the factory, so the
+            // work runs on the database of the session the factory is bound to. The store can't abort that transaction
+            // after a failure between the writes, so its owner has to
+            try {
+                return work.apply(databaseFactory.getMongoDatabase());
+            } catch (RuntimeException e) {
+                throw translated(e);
+            }
+        }
+        Supplier<Boolean> attempt = () -> {
+            try {
+                return Objects.requireNonNull(transactions.execute(status -> {
+                    boolean done = work.apply(MongoDatabaseUtils.getDatabase(databaseFactory));
+                    if (!done && status.isNewTransaction()) {
+                        status.setRollbackOnly();
+                    }
+                    return done;
+                }));
+            } catch (RuntimeException e) {
+                throw translated(e);
+            }
+        };
+        // A transaction is run again only when MongoDB labels its failure transient, as the class javadoc says
+        return joinsCallersTransaction ? attempt.get()
+                : retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer) && hasCause(failure, SpringMongoSagaStateStore::isTransientTransactionError), attempt);
+    }
+
+    private MongoCollection<Document> instances(MongoDatabase database) {
+        return database.getCollection(collectionName);
+    }
+
+    private MongoCollection<Document> skippedInputs(MongoDatabase database) {
+        return database.getCollection(skippedInputsCollectionName);
+    }
+
+    // A write outside a transaction at w: majority and j: true, see the class javadoc. Inside a transaction the caller
+    // started, the driver leaves the write concern out and the commit's write concern applies. execute(..) translates
+    // exceptions
+    private <T> T writeDurably(String collectionName, Function<MongoCollection<Document>, T> write) {
+        try {
+            return Objects.requireNonNull(mongoOperations.execute(collectionName, collection -> write.apply(durable(collection))));
+        } catch (RuntimeException e) {
+            throw translated(e);
         }
     }
 
-    private static MongoCollection<Document> skippedInputWrites(MongoCollection<Document> collection) {
-        MongoCollection<Document> majority = collection.withWriteConcern(SKIPPED_INPUT_WRITE_CONCERN);
+    private static MongoCollection<Document> durable(MongoCollection<Document> collection) {
+        MongoCollection<Document> majority = collection.withWriteConcern(DURABLE_WRITE_CONCERN);
         // A client timeoutMS makes the driver drop the wtimeout, and a timeoutMS of 0 waits forever
         Long timeoutMillis = majority.getTimeout(TimeUnit.MILLISECONDS);
-        return timeoutMillis != null && timeoutMillis == 0 ? majority.withTimeout(SKIPPED_INPUT_WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS) : majority;
+        return timeoutMillis != null && timeoutMillis == 0 ? majority.withTimeout(WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS) : majority;
     }
 
-    private static boolean isJournalNotSupported(Throwable throwable) {
+    // A server that cannot give the durability the store needs is named, and a driver exception that Spring can translate
+    // is translated, as the template does
+    private RuntimeException translated(RuntimeException e) {
+        if (hasCause(e, SpringMongoSagaStateStore::isJournalNotSupported)) {
+            return new RefusedByServer(JOURNALING_REQUIRED_MESSAGE, e);
+        }
+        if (hasCause(e, SpringMongoSagaStateStore::isTransactionNotSupported)) {
+            return new RefusedByServer(REPLICA_SET_REQUIRED_MESSAGE, e);
+        }
+        if (e instanceof MongoException mongoException) {
+            DataAccessException translated = databaseFactory.getExceptionTranslator().translateExceptionIfPossible(mongoException);
+            return translated == null ? e : translated;
+        }
+        return e;
+    }
+
+    // Runs operation with retryStrategy and retries only a failure that retryable accepts. Any other failure is returned
+    // out of the retried call instead of thrown, and is thrown once execute(..) has returned, so a strategy implemented
+    // elsewhere, which runs its own loop and retries what it retries, cannot send the operation again
+    private static <T extends @Nullable Object> T retryingOnly(RetryStrategy retryStrategy, Predicate<Throwable> retryable, Supplier<T> operation) {
+        Attempt<T> attempt = retryStrategy.execute(() -> {
+            try {
+                return new Attempt<T>(operation.get(), null);
+            } catch (RuntimeException e) {
+                if (retryable.test(e)) {
+                    throw e;
+                }
+                return new Attempt<T>(null, e);
+            }
+        });
+        RuntimeException failure = attempt.failure();
+        if (failure != null) {
+            throw failure;
+        }
+        return attempt.result();
+    }
+
+    // What one run of a retried operation gave, its result or the failure no attempt is to retry
+    private record Attempt<T extends @Nullable Object>(@Nullable T result, @Nullable RuntimeException failure) {
+    }
+
+    private static boolean isTransientTransactionError(Throwable cause) {
+        return cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+    }
+
+    // The server refuses what the store needs, and refuses it again on every attempt
+    private static final class RefusedByServer extends IllegalStateException {
+        private RefusedByServer(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    private static boolean hasCause(Throwable throwable, Predicate<Throwable> matches) {
         for (Throwable cause = throwable; cause != null; cause = cause.getCause()) {
-            if (cause instanceof MongoServerException serverException && serverException.getCode() == JOURNAL_NOT_SUPPORTED_ERROR_CODE
-                && serverException.getMessage() != null && serverException.getMessage().contains(JOURNAL_NOT_SUPPORTED_ERROR_MESSAGE)) {
+            if (matches.test(cause)) {
                 return true;
             }
         }
         return false;
     }
 
-    // The fields backing SagaInstance, which is the whole observable surface of an instance: enough for both enumeration
-    // queries and deliberately excluding the state, whose decode is the expensive and failure-prone part.
-    private static void projectEverySagaInstanceMember(Query query) {
-        query.fields().include(ID).include(STATUS).include(VERSION).include(TIMERS).include(NEXT_TIMER_FIRES_AT)
-                .include(CURRENT_STEP).include(CREATED_AT).include(UPDATED_AT).include(COMPLETED_AT).include(STARTED)
-                .include(FAILURE_INPUT).include(FAILURE_POSITION).include(FAILURE_FIRST_FAILED_AT).include(FAILURE_TYPE)
-                .include(FAILURE_MESSAGE).include(FAILURE_RELEASED_AT).include(FAILURE_QUARANTINE_ID)
-                .include(QUARANTINE_SKIP_COUNT);
+    private static boolean isTransactionNotSupported(Throwable cause) {
+        return cause instanceof MongoServerException serverException && serverException.getCode() == TRANSACTIONS_NOT_SUPPORTED_ERROR_CODE
+               && serverException.getMessage() != null && serverException.getMessage().contains(TRANSACTIONS_NOT_SUPPORTED_ERROR_MESSAGE);
+    }
+
+    private static boolean isJournalNotSupported(Throwable cause) {
+        return cause instanceof MongoServerException serverException && serverException.getCode() == JOURNAL_NOT_SUPPORTED_ERROR_CODE
+               && serverException.getMessage() != null && serverException.getMessage().contains(JOURNAL_NOT_SUPPORTED_ERROR_MESSAGE);
+    }
+
+    private static void project(Query query, List<String> fields) {
+        query.fields().include(ID);
+        fields.forEach(field -> query.fields().include(field));
     }
 
     @Override
     public void delete(String sagaId) {
-        Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        Query query = Query.query(where(ID).is(sagaId));
-        query.fields().include(FAILURE_QUARANTINE_ID);
-        Document removed = retryStrategy.execute(() -> mongoOperations.findAndRemove(query, Document.class, collectionName));
-        // After the instance, so a crash in between leaves records no instance reads rather than an instance whose
-        // records are gone. Only the records of the instance removed here, so a later instance with the same id, created
-        // and quarantined in between, keeps the ones it wrote under a quarantine id of its own. A retried remove that
-        // finds the instance gone already returns nothing, and its records stay, read by nothing
-        String quarantineId = removed == null ? null : removed.getString(FAILURE_QUARANTINE_ID);
-        if (quarantineId != null) {
-            deleteSkippedInputs(sagaId, quarantineId);
-        }
-        synchronized (retainedEventWarningLatch) {
-            retainedEventWarningLatch.remove(sagaId);
-        }
-    }
-
-    private Document toDocument(String sagaId, SagaEnvelope<S> envelope) {
-        Document document = toDocumentWithoutTheState(sagaId, envelope);
-        S state = envelope.state();
-        if (state != null) {
-            document.append(STATE, toStateValue(sagaId, state));
-        }
-        return document;
-    }
-
-    private Document toDocumentWithoutTheState(String sagaId, SagaEnvelope<S> envelope) {
-        Document document = new Document(ID, sagaId)
-                .append(STATUS, storedStatus(envelope))
-                .append(VERSION, envelope.version());
-        List<Document> timers = new ArrayList<>();
-        for (TimerEntry timer : envelope.timers()) {
-            Document timerDocument = new Document(TIMER_NAME, timer.name()).append(TIMER_FIRES_AT, timer.firesAtEpochMilli());
-            if (timer.nextAttemptAtEpochMilli() != null) {
-                timerDocument.append(TIMER_NEXT_ATTEMPT_AT, timer.nextAttemptAtEpochMilli());
+        joiningCallersTransaction(() -> {
+            Objects.requireNonNull(sagaId, "sagaId cannot be null");
+            // An instance without a quarantine id has no skipped inputs, so it goes in a write of its own, which needs no
+            // replica set. A retry after a timed out attempt that deleted the document on the primary deletes nothing, and
+            // MongoDB still waits for a majority to have everything the primary has before it returns, that deletion included
+            Bson withoutQuarantineId = Filters.and(Filters.eq(ID, sagaId), Filters.eq(FAILURE_QUARANTINE_ID, null));
+            if (retried(() -> writeDurably(collectionName, collection -> collection.deleteOne(withoutQuarantineId)).getDeletedCount()) > 0) {
+                return null;
             }
-            timers.add(timerDocument);
-        }
-        document.append(TIMERS, timers);
-        envelope.earliestDueAtEpochMilli().ifPresent(next -> document.append(NEXT_TIMER_FIRES_AT, next));
-        // Denormalized beside nextTimerFiresAt and for the same reason: it lets a query answer SagaInstance.currentStep()
-        // without decoding the state, which for a flow saga means not decoding its received log.
-        if (envelope.currentStep() != null) {
-            document.append(CURRENT_STEP, envelope.currentStep());
-        }
-        document.append(STREAM_WATERMARKS, new Document(new LinkedHashMap<>(envelope.streamWatermarks())));
-        if (envelope.positionWatermark() != null) {
-            document.append(POSITION_WATERMARK, envelope.positionWatermark());
-        }
-        if (!envelope.streamMarks().isEmpty()) {
-            document.append(STREAM_MARKS, toMarksDocuments(envelope.streamMarks()));
-        }
-        appendInstant(document, CREATED_AT, envelope.createdAt());
-        appendInstant(document, UPDATED_AT, envelope.updatedAt());
-        appendInstant(document, COMPLETED_AT, envelope.completedAt());
-        // Written only when false, which is the rare case: an instance that failed before it ever started. A document
-        // written before 0.34.0 has no such field, and a missing field reads back as true, which is what every one of
-        // them is.
-        if (!envelope.started()) {
-            document.append(STARTED, false);
-        }
-        SagaFailure failure = envelope.failure();
-        if (failure != null) {
-            document.append(FAILURE_INPUT, failure.input())
-                    .append(FAILURE_FIRST_FAILED_AT, failure.firstFailedAt().toEpochMilli())
-                    .append(FAILURE_TYPE, failure.failureType());
-            // Omitted rather than written as null when the event store assigns no global position. The input is what
-            // identifies the failing event, and the position is a convenience beside it.
-            if (failure.position() != null) {
-                document.append(FAILURE_POSITION, failure.position());
+            // Read at the local read concern, so an instance whose insert is on the primary alone is still deleted
+            Query exists = Query.query(where(ID).is(sagaId));
+            exists.fields().include(ID);
+            if (retried(() -> mongoOperations.findOne(primary(exists), Document.class, collectionName)) == null) {
+                return null;
             }
-            if (failure.failureMessage() != null) {
-                document.append(FAILURE_MESSAGE, failure.failureMessage());
-            }
-            if (failure.releasedAt() != null) {
-                document.append(FAILURE_RELEASED_AT, failure.releasedAt().toEpochMilli());
-            }
-            if (failure.quarantineId() != null) {
-                document.append(FAILURE_QUARANTINE_ID, failure.quarantineId());
-            }
-        }
-        if (envelope.quarantineSkipCount() != null) {
-            document.append(QUARANTINE_SKIP_COUNT, envelope.quarantineSkipCount());
-        }
-        return document;
-    }
-
-    private static String storedStatus(SagaEnvelope<?> envelope) {
-        if (envelope.quarantineId() != null) {
-            return QUARANTINED_RECORDING;
-        }
-        if (envelope.status() == SagaStatus.ACTIVE && !envelope.streamMarks().isEmpty()) {
-            return ACTIVE_MARKED;
-        }
-        return envelope.status().name();
-    }
-
-    private static SagaStatus readStatus(String stored) {
-        return switch (stored) {
-            case QUARANTINED_RECORDING -> SagaStatus.QUARANTINED;
-            case ACTIVE_MARKED -> SagaStatus.ACTIVE;
-            default -> SagaStatus.valueOf(stored);
-        };
-    }
-
-    // Serialize the state. A flow saga's FlowState is written field by field with its received events as CloudEvents (see
-    // flowStateToDocument), so events round-trip by their stable CloudEvent type. Any other state (a core saga's
-    // own model) goes through convertToMongoType, exactly like the snapshot store: a scalar stays a scalar and a
-    // POJO/record becomes a sub-document.
-    private Object toStateValue(String sagaId, S state) {
-        if (cloudEventConverter != null && state instanceof FlowStateImpl<?> flowState) {
-            return flowStateToDocument(sagaId, flowState);
-        }
-        if (cloudEventConverter != null && state instanceof FlowState<?>) {
-            // A flow saga's state is always the executor's FlowStateImpl, which the read path (readState) reconstructs field
-            // by field. A different FlowState implementation would serialize generically here yet still be read back as a
-            // flow document, corrupting the round-trip, so reject it rather than mis-serialize it silently.
-            throw new IllegalArgumentException("a flow saga store can only persist the flow executor's FlowState (FlowStateImpl), got "
-                    + state.getClass().getName());
-        }
-        return mongoOperations.getConverter().convertToMongoType(state);
-    }
-
-    private Document flowStateToDocument(String sagaId, FlowStateImpl<?> flowState) {
-        warnIfRetainedSizeCrossesThreshold(sagaId, flowState.received().size());
-        Document document = new Document();
-        if (flowState.currentStep() != null) {
-            document.append(FLOW_CURRENT_STEP, flowState.currentStep());
-        }
-        document.append(FLOW_WINDOW_START, flowState.windowStart());
-        document.append(FLOW_STEP_ENTRY_INDEX, flowState.stepEntryIndex());
-        document.append(FLOW_COMPLETED, flowState.completed());
-        if (flowState.previousStep() != null) {
-            document.append(FLOW_PREVIOUS_STEP, flowState.previousStep());
-        }
-        document.append(FLOW_PREVIOUS_STEP_ENTRY_INDEX, flowState.previousStepEntryIndex());
-        document.append(FLOW_LAST_ACTION, flowState.lastAction().name());
-        document.append(FLOW_MATCHED_BRANCH_INDEX, flowState.matchedBranchIndex());
-        StepConditionProgress progress = flowState.stepConditionProgress();
-        if (progress != null) {
-            document.append(FLOW_STEP_CONDITION_PROGRESS, new Document(FLOW_LEAF_FINGERPRINT, progress.leafFingerprint())
-                    .append(FLOW_MATCH_COUNTS, progress.matchCounts()));
-        }
-        List<String> received = new ArrayList<>();
-        for (Object event : flowState.received()) {
-            received.add(toCloudEventJson(requireConverter().toCloudEvent(event)));
-        }
-        document.append(FLOW_RECEIVED, received);
-        return document;
-    }
-
-    // Edge-triggered: warns once when an instance's retained-event count crosses the threshold from below, stays silent
-    // on every subsequent save while it remains at or above it, and warns again only after a later save has carried it
-    // back below the threshold (typically a stepWindow trim) and it crosses again. See the latch fields' comments for
-    // the memory-safety argument.
-    // Package-private so a test can exercise the latch's edge-triggering and capacity backstop directly, with plain
-    // counts, instead of building enough real retained events to cross the threshold thousands of times over.
-    void warnIfRetainedSizeCrossesThreshold(String sagaId, int retainedEventCount) {
-        boolean shouldWarn;
-        // LinkedHashMap is not thread-safe, and SagaStateStore supports concurrent saves, so the whole read-modify
-        // decision is locked rather than just the individual map calls. It costs a monitor per save, negligible next
-        // to the Mongo round trip compareAndSave already pays.
-        synchronized (retainedEventWarningLatch) {
-            if (retainedEventCount < RETAINED_EVENT_WARNING_THRESHOLD) {
-                retainedEventWarningLatch.remove(sagaId);
-                return;
-            }
-            // get(), not containsKey(): get() is what LinkedHashMap's access-order mode uses to mark this instance as
-            // recently used, so an already-tracked instance that keeps being saved is never the eviction target below.
-            if (retainedEventWarningLatch.get(sagaId) != null) {
-                shouldWarn = false;
-            } else {
-                // put() may evict the least-recently-used entry via removeEldestEntry if the latch is at capacity.
-                retainedEventWarningLatch.put(sagaId, Boolean.TRUE);
-                shouldWarn = true;
-            }
-        }
-        if (shouldWarn) {
-            log.warn("Flow saga instance '{}' has retained {} received events, at or above the warning threshold of {}. " +
-                            "Consider capping the flow's step with stepWindow(...) to trim what it retains, or the document " +
-                            "risks growing toward MongoDB's 16 MB document limit.",
-                    sagaId, retainedEventCount, RETAINED_EVENT_WARNING_THRESHOLD);
-        }
-    }
-
-    // Package-private so a test can assert the capacity backstop's actual guarantee, that the latch never grows past
-    // RETAINED_EVENT_WARNING_LATCH_CAPACITY. Synchronized like every other access to this LinkedHashMap.
-    int retainedEventWarningLatchSize() {
-        synchronized (retainedEventWarningLatch) {
-            return retainedEventWarningLatch.size();
-        }
-    }
-
-    private SagaEnvelope<S> toEnvelope(Document document) {
-        String sagaId = document.getString(ID);
-        S state = readState(document.get(STATE));
-        SagaStatus status = readStatus(document.getString(STATUS));
-        long version = document.getLong(VERSION);
-
-        List<TimerEntry> timers = new ArrayList<>();
-        List<Document> timerDocuments = document.getList(TIMERS, Document.class, List.of());
-        for (Document timer : timerDocuments) {
-            timers.add(new TimerEntry(timer.getString(TIMER_NAME), timer.getLong(TIMER_FIRES_AT), timer.getLong(TIMER_NEXT_ATTEMPT_AT)));
-        }
-
-        Map<String, Long> streamWatermarks = new LinkedHashMap<>();
-        Document watermarksDocument = document.get(STREAM_WATERMARKS, Document.class);
-        if (watermarksDocument != null) {
-            for (Map.Entry<String, Object> entry : watermarksDocument.entrySet()) {
-                streamWatermarks.put(entry.getKey(), ((Number) entry.getValue()).longValue());
-            }
-        }
-        Long positionWatermark = document.containsKey(POSITION_WATERMARK) ? document.getLong(POSITION_WATERMARK) : null;
-
-        // A document written before 0.34.0 has no started flag, and every instance in one had started, so a missing
-        // field means true rather than false.
-        boolean started = !document.containsKey(STARTED) || document.getBoolean(STARTED);
-
-        // currentStep is only honoured when the state was projected away; with a state present the envelope re-derives it.
-        return new SagaEnvelope<>(sagaId, state, status, version, timers, streamWatermarks, positionWatermark,
-                readInstant(document, CREATED_AT), readInstant(document, UPDATED_AT), readInstant(document, COMPLETED_AT),
-                document.getString(CURRENT_STEP), started, toFailure(document), toStreamMarks(document),
-                document.get(QUARANTINE_SKIP_COUNT) instanceof Number count ? count.longValue() : null);
-    }
-
-    private static List<Document> toMarksDocuments(Map<String, StreamMarks> streamMarks) {
-        List<Document> streams = new ArrayList<>();
-        streamMarks.forEach((streamId, marks) -> {
-            List<Document> types = new ArrayList<>();
-            marks.byType().forEach((type, typeMark) -> types.add(new Document(MARKS_TYPE, type)
-                    .append(MARKS_MARK, typeMark.mark())
-                    .append(MARKS_APPLIED, typeMark.applied())
-                    .append(MARKS_HORIZON, typeMark.horizon())));
-            List<Document> pending = new ArrayList<>();
-            marks.pending().forEach((type, versions) -> pending.add(new Document(MARKS_TYPE, type).append(MARKS_VERSIONS, versions)));
-            List<Document> pendingSince = new ArrayList<>();
-            marks.pendingSince().forEach((version, since) -> pendingSince.add(new Document(MARKS_VERSION, version).append(MARKS_SINCE, Date.from(since))));
-            streams.add(new Document(MARKS_STREAM_ID, streamId).append(MARKS_FLOOR, marks.floor()).append(MARKS_TYPES, types)
-                    .append(MARKS_PENDING, pending).append(MARKS_LEGACY_FAILED, marks.legacyFailed()).append(MARKS_PENDING_SINCE, pendingSince));
+            FindOneAndDeleteOptions quarantineIdOnly = new FindOneAndDeleteOptions().projection(Projections.include(FAILURE_QUARANTINE_ID));
+            inTransaction(database -> {
+                Document removed = instances(database).findOneAndDelete(Filters.eq(ID, sagaId), quarantineIdOnly);
+                String quarantineId = removed == null ? null : removed.getString(FAILURE_QUARANTINE_ID);
+                if (quarantineId != null) {
+                    skippedInputs(database).deleteMany(quarantineFilter(sagaId, quarantineId));
+                }
+                return true;
+            });
+            return null;
         });
-        return streams;
     }
 
-    // A document written before 0.35.0 has no marks, which reads as every event type of a stream being applied up to the
-    // stream's watermark.
-    private static Map<String, StreamMarks> toStreamMarks(Document document) {
-        Map<String, StreamMarks> streamMarks = new LinkedHashMap<>();
-        for (Document stream : document.getList(STREAM_MARKS, Document.class, List.of())) {
-            Map<String, TypeMark> byType = new LinkedHashMap<>();
-            for (Document type : stream.getList(MARKS_TYPES, Document.class, List.of())) {
-                List<Long> applied = new ArrayList<>();
-                for (Object version : type.getList(MARKS_APPLIED, Object.class, List.of())) {
-                    applied.add(((Number) version).longValue());
-                }
-                Object horizon = type.get(MARKS_HORIZON);
-                byType.put(type.getString(MARKS_TYPE), new TypeMark(((Number) type.get(MARKS_MARK)).longValue(), applied,
-                        horizon == null ? Long.MIN_VALUE : ((Number) horizon).longValue()));
+    private static Document toDocument(StoredSaga saga) {
+        Document document = new Document(ID, saga.sagaId());
+        saga.encoded().fields().forEach((field, value) -> document.append(field, STATE.equals(field) ? stateToBson(value) : toBson(value)));
+        return document;
+    }
+
+    private StoredSaga toStoredSaga(Document document) {
+        Map<String, Object> fields = new LinkedHashMap<>();
+        document.forEach((field, value) -> {
+            if (!ID.equals(field)) {
+                fields.put(field, STATE.equals(field) ? stateFromBson(value) : fromBson(value));
             }
-            // A stream stored before pending existed has no field, which reads as nothing outstanding.
-            Map<String, List<Long>> pending = new LinkedHashMap<>();
-            for (Document entry : stream.getList(MARKS_PENDING, Document.class, List.of())) {
-                List<Long> versions = new ArrayList<>();
-                for (Object version : entry.getList(MARKS_VERSIONS, Object.class, List.of())) {
-                    versions.add(((Number) version).longValue());
-                }
-                pending.put(entry.getString(MARKS_TYPE), versions);
-            }
-            // The same for a stream stored before failures of unknown type were kept.
-            List<Long> legacyFailed = new ArrayList<>();
-            for (Object version : stream.getList(MARKS_LEGACY_FAILED, Object.class, List.of())) {
-                legacyFailed.add(((Number) version).longValue());
-            }
-            // A stream stored before the instant was kept reads as no instant, and the budget then falls back to the
-            // failure record.
-            Map<Long, Instant> pendingSince = new LinkedHashMap<>();
-            for (Document entry : stream.getList(MARKS_PENDING_SINCE, Document.class, List.of())) {
-                pendingSince.put(((Number) entry.get(MARKS_VERSION)).longValue(), entry.getDate(MARKS_SINCE).toInstant());
-            }
-            streamMarks.put(stream.getString(MARKS_STREAM_ID), new StreamMarks(((Number) stream.get(MARKS_FLOOR)).longValue(), byType, pending, legacyFailed, pendingSince));
+        });
+        EncodedSaga encoded = new EncodedSaga(fields);
+        return new StoredSaga(document.getString(ID), ((Number) document.get(VERSION)).longValue(), encoded, SagaCodec.indexOf(encoded));
+    }
+
+    // What a state codec returned is kept as it is, apart from a plain map, which a flow saga's state is
+    private static @Nullable Object stateToBson(@Nullable Object state) {
+        return state instanceof Map<?, ?> && !(state instanceof Document) ? toBson(state) : state;
+    }
+
+    // A flow saga's received events are stored as CloudEvent JSON strings and read back as CloudEvent values. Only a flow
+    // saga's state has them, so the state of a core saga is never touched.
+    private @Nullable Object stateFromBson(@Nullable Object state) {
+        if (!flowSaga || !(state instanceof Map<?, ?> map) || !(map.get(SagaCodec.FLOW_RECEIVED) instanceof List<?> received)) {
+            return state;
         }
-        return streamMarks;
+        Map<String, Object> fields = new LinkedHashMap<>();
+        map.forEach((key, entry) -> fields.put((String) key, entry));
+        List<Object> events = new ArrayList<>();
+        received.forEach(json -> events.add(CLOUD_EVENT_JSON_FORMAT.deserialize(((String) json).getBytes(StandardCharsets.UTF_8))));
+        fields.put(SagaCodec.FLOW_RECEIVED, events);
+        return fields;
     }
 
-    private static @Nullable SagaFailure toFailure(Document document) {
-        String input = document.getString(FAILURE_INPUT);
-        if (input == null) {
-            return null;
+    // The tree has an Instant and a CloudEvent where this store has always written a Date and a JSON string, and no
+    // other value MongoDB lacks a type for
+    private static @Nullable Object toBson(@Nullable Object value) {
+        if (value instanceof Instant instant) {
+            return Date.from(instant);
         }
-        Object position = document.get(FAILURE_POSITION);
-        return new SagaFailure(input,
-                position == null ? null : ((Number) position).longValue(),
-                Objects.requireNonNull(readInstant(document, FAILURE_FIRST_FAILED_AT), "failureFirstFailedAt"),
-                Objects.requireNonNull(document.getString(FAILURE_TYPE), "failureType"),
-                document.getString(FAILURE_MESSAGE),
-                readInstant(document, FAILURE_RELEASED_AT),
-                document.getString(FAILURE_QUARANTINE_ID));
-    }
-
-    @SuppressWarnings("unchecked")
-    private @Nullable S readState(@Nullable Object stateField) {
-        if (stateField == null) {
-            return null;
+        if (value instanceof CloudEvent cloudEvent) {
+            return new String(CLOUD_EVENT_JSON_FORMAT.serialize(cloudEvent), StandardCharsets.UTF_8);
         }
-        if (cloudEventConverter != null && stateField instanceof Document flowDocument) {
-            return (S) flowStateFromDocument(flowDocument);
+        if (value instanceof Map<?, ?> map) {
+            Document document = new Document();
+            map.forEach((key, entry) -> document.append((String) key, toBson(entry)));
+            return document;
         }
-        MongoConverter converter = mongoOperations.getConverter();
-        if (stateField instanceof Document stateDocument) {
-            return converter.read(stateType, stateDocument);
+        if (value instanceof List<?> list) {
+            return list.stream().map(SpringMongoSagaStateStore::toBson).toList();
         }
-        return (S) converter.getConversionService().convert(stateField, stateType);
+        return value;
     }
 
-    private FlowStateImpl<Object> flowStateFromDocument(Document document) {
-        List<Object> received = new ArrayList<>();
-        for (String json : document.getList(FLOW_RECEIVED, String.class, List.of())) {
-            received.add(requireConverter().toDomainEvent(fromCloudEventJson(json)));
+    private static @Nullable Object fromBson(@Nullable Object value) {
+        if (value instanceof Date date) {
+            return date.toInstant();
         }
-        return new FlowStateImpl<>(
-                document.getString(FLOW_CURRENT_STEP),
-                received,
-                // A document written before this field existed never dropped anything, so its tail always started right
-                // after the pinned initiating event, position 1, not 0 (0 only holds for a never-started FlowStateImpl.initial()).
-                document.getInteger(FLOW_WINDOW_START, 1),
-                document.getInteger(FLOW_STEP_ENTRY_INDEX, 0),
-                document.getBoolean(FLOW_COMPLETED, false),
-                document.getString(FLOW_PREVIOUS_STEP),
-                // -1 is the record's own "not known" value, so a document written before this field existed reads back as an
-                // instance whose window-condition reaction falls back to the whole retained history, which is what such a
-                // reaction saw when that document was written.
-                document.getInteger(FLOW_PREVIOUS_STEP_ENTRY_INDEX, -1),
-                ActionKind.valueOf(document.getString(FLOW_LAST_ACTION)),
-                document.getInteger(FLOW_MATCHED_BRANCH_INDEX, -1),
-                readStepConditionProgress(document));
-    }
-
-    // Absent counts read back as null, the record's own "not known" value, so the flow lowering counts the step's window
-    // instead. That is what a document written before this field existed gets, and it is also why a sub-document missing its
-    // fingerprint is read as absent rather than thrown on, since the counts cannot be matched to a declaration without it.
-    private static @Nullable StepConditionProgress readStepConditionProgress(Document document) {
-        Document progress = document.get(FLOW_STEP_CONDITION_PROGRESS, Document.class);
-        if (progress == null) {
-            return null;
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> fields = new LinkedHashMap<>();
+            map.forEach((key, entry) -> fields.put((String) key, fromBson(entry)));
+            return fields;
         }
-        String fingerprint = progress.getString(FLOW_LEAF_FINGERPRINT);
-        return fingerprint == null ? null
-                : new StepConditionProgress(fingerprint, progress.getList(FLOW_MATCH_COUNTS, Integer.class, List.of()));
-    }
-
-    private CloudEventConverter<Object> requireConverter() {
-        return Objects.requireNonNull(cloudEventConverter, "cloudEventConverter is required to (de)serialize a flow saga's received events");
-    }
-
-    private static String toCloudEventJson(CloudEvent cloudEvent) {
-        return new String(CLOUD_EVENT_JSON_FORMAT.serialize(cloudEvent), StandardCharsets.UTF_8);
-    }
-
-    private static CloudEvent fromCloudEventJson(String json) {
-        return CLOUD_EVENT_JSON_FORMAT.deserialize(json.getBytes(StandardCharsets.UTF_8));
-    }
-
-    private static void appendInstant(Document document, String field, @Nullable Instant instant) {
-        if (instant != null) {
-            document.append(field, instant.toEpochMilli());
+        if (value instanceof List<?> list) {
+            List<Object> values = new ArrayList<>();
+            list.forEach(entry -> values.add(fromBson(entry)));
+            return values;
         }
+        return value;
     }
 
-    private static @Nullable Instant readInstant(Document document, String field) {
-        return document.containsKey(field) ? Instant.ofEpochMilli(document.getLong(field)) : null;
+    // Commits again when the driver cannot tell whether a commit took effect, as the javadoc of
+    // MongoTransactionManager.doCommit shows. MongoDB commits a transaction at most once, so a commit that took effect
+    // and is sent again changes nothing. Only a transaction this store started commits here
+    private static final class CommitRetryingTransactionManager extends MongoTransactionManager {
+        private final RetryStrategy retryStrategy;
+
+        private CommitRetryingTransactionManager(MongoDatabaseFactory databaseFactory, TransactionOptions options, RetryStrategy retryStrategy) {
+            super(databaseFactory, options);
+            this.retryStrategy = retryStrategy;
+        }
+
+        private static boolean hasUnknownCommitResult(Throwable cause) {
+            return cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL);
+        }
+
+        @Override
+        protected void doCommit(MongoTransactionObject transactionObject) {
+            retryingOnly(retryStrategy, failure -> hasCause(failure, CommitRetryingTransactionManager::hasUnknownCommitResult), () -> {
+                transactionObject.commitTransaction();
+                return null;
+            });
+        }
     }
 
     // Every read is from the primary, whatever read preference the MongoOperations has. A release turns an instance
@@ -1008,4 +973,14 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static Query primary(Query query) {
         return query.withReadPreference(ReadPreference.primary());
     }
+
+    // A read the executor acts on returns only what a majority has. A write whose majority acknowledgement failed is on
+    // the primary alone, and a failover can roll it back. Read at the local read concern, the executor would see that
+    // write, its own or another node's, and acknowledge an input a failover then loses. Read at majority the write is
+    // absent, so the executor writes again and loses its compare-and-set until the write is on a majority or rolled
+    // back. Inside a transaction the caller started, the driver sends that transaction's read concern instead
+    private static Query majorityRead(Query query) {
+        return primary(query).withReadConcern(ReadConcern.MAJORITY);
+    }
+
 }

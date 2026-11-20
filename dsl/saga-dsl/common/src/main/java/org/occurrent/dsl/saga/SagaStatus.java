@@ -23,8 +23,8 @@ package org.occurrent.dsl.saga;
  * stopped moving but it has not finished. That constant lists when it happens.
  * <p>
  * This is a top-level type rather than a member of {@link SagaEnvelope} because it is part of the user-facing
- * {@link SagaInstance} view as well as the {@link SagaStateStore} SPI, and a narrow observation interface should not
- * have to name the store's envelope type in its own signature.
+ * {@link SagaInstance} view as well as the {@link SagaStateStoreQueries} SPI, and a narrow observation interface should
+ * not have to name the runner's envelope type in its own signature.
  */
 public enum SagaStatus {
     /** The instance is running: it still folds events and can still fire timers. */
@@ -108,8 +108,8 @@ public enum SagaStatus {
      * Neither does a failing event the saga could not route to an instance, one on a saga whose budget is off, one
      * carrying no redelivery key, one that failed with an {@link OutOfMemoryError}, or one on an instance that already
      * counts the event as handled. A failure also records nothing when the store read the decision is made on or the
-     * record write throws, which includes a store that can only read an instance whole failing to decode its state, or
-     * when every attempt at that write loses its compare-and-set. A later failing event can try that write again.
+     * record write throws, which includes the codec failing to encode the saga's initial state when the record is the
+     * instance's first write, or when every attempt at that write loses its compare-and-set. A later failing event can try that write again.
      */
     QUARANTINED
 }

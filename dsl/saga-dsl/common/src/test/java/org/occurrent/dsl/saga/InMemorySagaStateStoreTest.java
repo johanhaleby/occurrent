@@ -22,17 +22,29 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.codec.EncodedSaga;
+import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -45,18 +57,35 @@ class InMemorySagaStateStoreTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
 
     private final InMemorySagaStateStore<String> store = new InMemorySagaStateStore<>();
+    private final SagaCodec<String> codec = SagaCodec.of(store.stateCodec(), null);
+
+    private boolean compareAndSave(String sagaId, SagaEnvelope<String> envelope, long expectedVersion) {
+        return store.compareAndSave(codec.encode(envelope), expectedVersion);
+    }
+
+    private Optional<SagaEnvelope<String>> find(String sagaId) {
+        return store.find(sagaId).map(codec::decode);
+    }
+
+    private List<SagaEnvelope<String>> findWithDueTimers(Instant now, int limit) {
+        return store.findWithDueTimers(now, limit).stream().map(codec::decode).toList();
+    }
+
+    private List<SagaEnvelope<String>> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
+        return store.findByStatus(status, updatedBefore, limit).stream().map(codec::decode).toList();
+    }
 
     private static SagaEnvelope<String> envelope(String sagaId, String state, long version, List<TimerEntry> timers) {
-        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null, null);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null, null, true, null, Map.of(), null);
     }
 
     private static SagaEnvelope<String> completedEnvelope(String sagaId, String state, long version, List<TimerEntry> timers) {
-        return new SagaEnvelope<>(sagaId, state, SagaStatus.COMPLETED, version, timers, Map.of(), null, NOW, NOW, NOW, null);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.COMPLETED, version, timers, Map.of(), null, NOW, NOW, NOW, null, true, null, Map.of(), null);
     }
 
     private static SagaEnvelope<String> quarantinedEnvelope(String sagaId, String state, long version, List<TimerEntry> timers) {
-        SagaFailure failure = new SagaFailure("s@7", 7L, NOW, IllegalStateException.class.getName(), "boom");
-        return new SagaEnvelope<>(sagaId, state, SagaStatus.QUARANTINED, version, timers, Map.of(), null, NOW, NOW, null, null, true, failure);
+        SagaFailure failure = new SagaFailure("s@7", 7L, NOW, IllegalStateException.class.getName(), "boom", null, null);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.QUARANTINED, version, timers, Map.of(), null, NOW, NOW, null, null, true, failure, Map.of(), null);
     }
 
     private static SagaEnvelope<String> releasingEnvelope(String sagaId) {
@@ -65,7 +94,37 @@ class InMemorySagaStateStoreTest {
     }
 
     private static SagaEnvelope<String> activeEnvelopeUpdatedAt(String sagaId, Instant updatedAt) {
-        return new SagaEnvelope<>(sagaId, "a", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null, null);
+        return new SagaEnvelope<>(sagaId, "a", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null, null, true, null, Map.of(), null);
+    }
+
+    private static SagaEnvelope<String> atVersion(SagaEnvelope<String> e, long version) {
+        return new SagaEnvelope<>(e.sagaId(), e.state(), e.status(), version, e.timers(), e.streamWatermarks(), e.positionWatermark(), e.createdAt(), e.updatedAt(), e.completedAt(), e.currentStep(), e.started(), e.failure(), e.streamMarks(), e.quarantineSkipCount());
+    }
+
+    private SagaEnvelope<String> next(String sagaId) {
+        StoredSaga current = store.find(sagaId).orElseThrow();
+        return atVersion(codec.decode(current), current.version() + 1);
+    }
+
+    private boolean skip(String sagaId, String quarantineId, SkippedInput input) {
+        return store.compareAndSaveSkipped(codec.encodeWithoutState(next(sagaId)), store.find(sagaId).orElseThrow().version(), quarantineId, input);
+    }
+
+    private boolean startRelease(String sagaId, String quarantineId, SkippedInput head) {
+        return store.compareAndSaveReleaseStarted(codec.encodeWithoutState(next(sagaId)), store.find(sagaId).orElseThrow().version(), quarantineId, head);
+    }
+
+    private boolean replayed(String sagaId, String quarantineId, SkippedInput replayed) {
+        return store.compareAndSaveReplayed(codec.encode(next(sagaId)), store.find(sagaId).orElseThrow().version(), quarantineId, replayed);
+    }
+
+    private boolean quarantineEnded(String sagaId, String quarantineId) {
+        return store.compareAndSaveQuarantineEnded(codec.encode(next(sagaId)), store.find(sagaId).orElseThrow().version(), quarantineId);
+    }
+
+    private boolean quarantineEndedByCompletion(String sagaId, String quarantineId) {
+        long version = store.find(sagaId).orElseThrow().version();
+        return store.compareAndSaveQuarantineEnded(codec.encode(completedEnvelope(sagaId, "a", version + 1, List.of())), version, quarantineId);
     }
 
     @Nested
@@ -73,42 +132,42 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void succeeds_inserting_a_new_instance_at_expected_version_0() {
-            boolean saved = store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            boolean saved = compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
 
             assertThat(saved).isTrue();
         }
 
         @Test
         void fails_a_second_insert_at_expected_version_0_once_an_instance_exists() {
-            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
 
-            boolean saved = store.compareAndSave("s1", envelope("s1", "b", 1, List.of()), 0);
+            boolean saved = compareAndSave("s1", envelope("s1", "b", 1, List.of()), 0);
 
             assertThat(saved).isFalse();
         }
 
         @Test
         void succeeds_updating_an_existing_instance_at_its_current_version() {
-            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
 
-            boolean saved = store.compareAndSave("s1", envelope("s1", "b", 2, List.of()), 1);
+            boolean saved = compareAndSave("s1", envelope("s1", "b", 2, List.of()), 1);
 
             assertAll(
                     () -> assertThat(saved).isTrue(),
-                    () -> assertThat(store.find("s1")).contains(envelope("s1", "b", 2, List.of()))
+                    () -> assertThat(find("s1")).contains(envelope("s1", "b", 2, List.of()))
             );
         }
 
         @Test
         void fails_when_expected_version_no_longer_matches_the_stored_version() {
-            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
-            store.compareAndSave("s1", envelope("s1", "b", 2, List.of()), 1);
+            compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            compareAndSave("s1", envelope("s1", "b", 2, List.of()), 1);
 
-            boolean saved = store.compareAndSave("s1", envelope("s1", "c", 2, List.of()), 1);
+            boolean saved = compareAndSave("s1", envelope("s1", "c", 2, List.of()), 1);
 
             assertAll(
                     () -> assertThat(saved).isFalse(),
-                    () -> assertThat(store.find("s1")).contains(envelope("s1", "b", 2, List.of()))
+                    () -> assertThat(find("s1")).contains(envelope("s1", "b", 2, List.of()))
             );
         }
     }
@@ -119,14 +178,14 @@ class InMemorySagaStateStoreTest {
         @Test
         void returns_the_stored_envelope() {
             SagaEnvelope<String> saved = envelope("s1", "a", 1, List.of());
-            store.compareAndSave("s1", saved, 0);
+            compareAndSave("s1", saved, 0);
 
-            assertThat(store.find("s1")).contains(saved);
+            assertThat(find("s1")).contains(saved);
         }
 
         @Test
         void returns_empty_for_an_unknown_id() {
-            assertThat(store.find("unknown")).isEmpty();
+            assertThat(find("unknown")).isEmpty();
         }
     }
 
@@ -136,12 +195,12 @@ class InMemorySagaStateStoreTest {
         @Test
         void returns_instances_in_ascending_order_of_their_effective_due_time() {
             long now = NOW.toEpochMilli();
-            store.compareAndSave("marked-late", envelope("marked-late", "a", 1, List.of(new TimerEntry("t", now - 5_000, now - 100))), 0);
-            store.compareAndSave("fired-latest", envelope("fired-latest", "a", 1, List.of(new TimerEntry("t", now - 500))), 0);
-            store.compareAndSave("fired-earliest", envelope("fired-earliest", "a", 1, List.of(new TimerEntry("t", now - 9_000))), 0);
-            store.compareAndSave("marked-mid", envelope("marked-mid", "a", 1, List.of(new TimerEntry("t", now - 8_000, now - 3_000))), 0);
+            compareAndSave("marked-late", envelope("marked-late", "a", 1, List.of(new TimerEntry("t", now - 5_000, now - 100))), 0);
+            compareAndSave("fired-latest", envelope("fired-latest", "a", 1, List.of(new TimerEntry("t", now - 500))), 0);
+            compareAndSave("fired-earliest", envelope("fired-earliest", "a", 1, List.of(new TimerEntry("t", now - 9_000))), 0);
+            compareAndSave("marked-mid", envelope("marked-mid", "a", 1, List.of(new TimerEntry("t", now - 8_000, now - 3_000))), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 10);
 
             assertThat(due).extracting(SagaEnvelope::sagaId)
                     .containsExactly("fired-earliest", "marked-mid", "fired-latest", "marked-late");
@@ -151,10 +210,10 @@ class InMemorySagaStateStoreTest {
         void breaks_ties_in_due_time_by_saga_id() {
             long now = NOW.toEpochMilli();
             for (String sagaId : List.of("c", "a", "d", "b")) {
-                store.compareAndSave(sagaId, envelope(sagaId, "a", 1, List.of(new TimerEntry("t", now - 1_000))), 0);
+                compareAndSave(sagaId, envelope(sagaId, "a", 1, List.of(new TimerEntry("t", now - 1_000))), 0);
             }
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 10);
 
             assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("a", "b", "c", "d");
         }
@@ -164,10 +223,10 @@ class InMemorySagaStateStoreTest {
             long now = NOW.toEpochMilli();
             for (int i = 0; i < 6; i++) {
                 String sagaId = "s" + i;
-                store.compareAndSave(sagaId, envelope(sagaId, "a", 1, List.of(new TimerEntry("t", now - 6_000 + i * 1_000L))), 0);
+                compareAndSave(sagaId, envelope(sagaId, "a", 1, List.of(new TimerEntry("t", now - 6_000 + i * 1_000L))), 0);
             }
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 3);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 3);
 
             assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("s0", "s1", "s2");
         }
@@ -175,10 +234,10 @@ class InMemorySagaStateStoreTest {
         @Test
         void an_instance_whose_timer_failed_ranks_behind_one_that_became_due_before_the_failure_was_marked() {
             long now = NOW.toEpochMilli();
-            store.compareAndSave("failed", envelope("failed", "a", 1, List.of(new TimerEntry("t", now - 9_000, now - 1_000))), 0);
-            store.compareAndSave("healthy", envelope("healthy", "a", 1, List.of(new TimerEntry("t", now - 4_000))), 0);
+            compareAndSave("failed", envelope("failed", "a", 1, List.of(new TimerEntry("t", now - 9_000, now - 1_000))), 0);
+            compareAndSave("healthy", envelope("healthy", "a", 1, List.of(new TimerEntry("t", now - 4_000))), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 1);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 1);
 
             assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("healthy");
         }
@@ -186,47 +245,47 @@ class InMemorySagaStateStoreTest {
         @Test
         void does_not_return_an_instance_whose_marker_is_still_in_the_future() {
             long now = NOW.toEpochMilli();
-            store.compareAndSave("backed-off", envelope("backed-off", "a", 1, List.of(new TimerEntry("t", now - 9_000, now + 1_000))), 0);
+            compareAndSave("backed-off", envelope("backed-off", "a", 1, List.of(new TimerEntry("t", now - 9_000, now + 1_000))), 0);
 
-            assertThat(store.findWithDueTimers(NOW, 10)).isEmpty();
+            assertThat(findWithDueTimers(NOW, 10)).isEmpty();
         }
 
         @Test
         void returns_active_instances_whose_earliest_timer_is_due() {
-            store.compareAndSave("due", envelope("due", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
-            store.compareAndSave("not-due", envelope("not-due", "a", 1, List.of(new TimerEntry("t", NOW.plusSeconds(60).toEpochMilli()))), 0);
-            store.compareAndSave("no-timer", envelope("no-timer", "a", 1, List.of()), 0);
+            compareAndSave("due", envelope("due", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("not-due", envelope("not-due", "a", 1, List.of(new TimerEntry("t", NOW.plusSeconds(60).toEpochMilli()))), 0);
+            compareAndSave("no-timer", envelope("no-timer", "a", 1, List.of()), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 10);
 
             assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("due");
         }
 
         @Test
         void excludes_completed_instances_even_when_a_timer_is_due() {
-            store.compareAndSave("completed", completedEnvelope("completed", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("completed", completedEnvelope("completed", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 10);
 
             assertThat(due).isEmpty();
         }
 
         @Test
         void excludes_quarantined_instances_even_when_a_timer_is_due() {
-            store.compareAndSave("quarantined", quarantinedEnvelope("quarantined", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("quarantined", quarantinedEnvelope("quarantined", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 10);
 
             assertThat(due).isEmpty();
         }
 
         @Test
         void respects_the_supplied_limit() {
-            store.compareAndSave("a", envelope("a", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
-            store.compareAndSave("b", envelope("b", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
-            store.compareAndSave("c", envelope("c", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("a", envelope("a", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("b", envelope("b", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+            compareAndSave("c", envelope("c", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
 
-            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 2);
+            List<SagaEnvelope<String>> due = findWithDueTimers(NOW, 2);
 
             assertThat(due).hasSize(2);
         }
@@ -236,10 +295,10 @@ class InMemorySagaStateStoreTest {
             Instant createdAt = NOW.minusSeconds(120);
             Instant updatedAt = NOW.minusSeconds(30);
             SagaEnvelope<String> saved = new SagaEnvelope<>("due", "a", SagaStatus.ACTIVE, 1,
-                    List.of(new TimerEntry("t", NOW.toEpochMilli())), Map.of(), null, createdAt, updatedAt, null, null);
-            store.compareAndSave("due", saved, 0);
+                    List.of(new TimerEntry("t", NOW.toEpochMilli())), Map.of(), null, createdAt, updatedAt, null, null, true, null, Map.of(), null);
+            compareAndSave("due", saved, 0);
 
-            SagaEnvelope<String> found = store.findWithDueTimers(NOW, 10).getFirst();
+            SagaEnvelope<String> found = findWithDueTimers(NOW, 10).getFirst();
 
             assertAll(
                     () -> assertThat(found.createdAt()).isEqualTo(createdAt),
@@ -260,10 +319,10 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void returns_instances_with_the_given_status() {
-            store.compareAndSave("active-1", envelope("active-1", "a", 1, List.of()), 0);
-            store.compareAndSave("completed-1", completedEnvelope("completed-1", "a", 1, List.of()), 0);
+            compareAndSave("active-1", envelope("active-1", "a", 1, List.of()), 0);
+            compareAndSave("completed-1", completedEnvelope("completed-1", "a", 1, List.of()), 0);
 
-            List<SagaEnvelope<String>> active = store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10);
+            List<SagaEnvelope<String>> active = findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10);
 
             assertThat(active).extracting(SagaEnvelope::sagaId).containsExactly("active-1");
         }
@@ -275,10 +334,10 @@ class InMemorySagaStateStoreTest {
          */
         @Test
         void selects_on_the_requested_status_rather_than_always_active() {
-            store.compareAndSave("active-1", envelope("active-1", "a", 1, List.of()), 0);
-            store.compareAndSave("completed-1", completedEnvelope("completed-1", "a", 1, List.of()), 0);
+            compareAndSave("active-1", envelope("active-1", "a", 1, List.of()), 0);
+            compareAndSave("completed-1", completedEnvelope("completed-1", "a", 1, List.of()), 0);
 
-            List<SagaEnvelope<String>> completed = store.findByStatus(SagaStatus.COMPLETED, NOW.plusSeconds(1), 10);
+            List<SagaEnvelope<String>> completed = findByStatus(SagaStatus.COMPLETED, NOW.plusSeconds(1), 10);
 
             assertThat(completed).extracting(SagaEnvelope::sagaId).containsExactly("completed-1");
         }
@@ -292,11 +351,11 @@ class InMemorySagaStateStoreTest {
         @Test
         void truncates_a_tie_group_at_limit_without_failing() {
             Instant sameMillisecond = NOW.minusSeconds(30);
-            store.compareAndSave("tie-a", activeEnvelopeUpdatedAt("tie-a", sameMillisecond), 0);
-            store.compareAndSave("tie-b", activeEnvelopeUpdatedAt("tie-b", sameMillisecond), 0);
-            store.compareAndSave("tie-c", activeEnvelopeUpdatedAt("tie-c", sameMillisecond), 0);
+            compareAndSave("tie-a", activeEnvelopeUpdatedAt("tie-a", sameMillisecond), 0);
+            compareAndSave("tie-b", activeEnvelopeUpdatedAt("tie-b", sameMillisecond), 0);
+            compareAndSave("tie-c", activeEnvelopeUpdatedAt("tie-c", sameMillisecond), 0);
 
-            List<SagaEnvelope<String>> found = store.findByStatus(SagaStatus.ACTIVE, NOW, 2);
+            List<SagaEnvelope<String>> found = findByStatus(SagaStatus.ACTIVE, NOW, 2);
 
             assertAll(
                     () -> assertThat(found).hasSize(2),
@@ -307,40 +366,40 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void updatedBefore_is_exclusive() {
-            store.compareAndSave("exact", activeEnvelopeUpdatedAt("exact", NOW), 0);
+            compareAndSave("exact", activeEnvelopeUpdatedAt("exact", NOW), 0);
 
             assertAll(
-                    () -> assertThat(store.findByStatus(SagaStatus.ACTIVE, NOW, 10)).isEmpty(),
-                    () -> assertThat(store.findByStatus(SagaStatus.ACTIVE, NOW.plusMillis(1), 10))
+                    () -> assertThat(findByStatus(SagaStatus.ACTIVE, NOW, 10)).isEmpty(),
+                    () -> assertThat(findByStatus(SagaStatus.ACTIVE, NOW.plusMillis(1), 10))
                             .extracting(SagaEnvelope::sagaId).containsExactly("exact")
             );
         }
 
         @Test
         void orders_ascending_by_updatedAt_so_the_stalest_instance_is_first() {
-            store.compareAndSave("newest", activeEnvelopeUpdatedAt("newest", NOW), 0);
-            store.compareAndSave("oldest", activeEnvelopeUpdatedAt("oldest", NOW.minusSeconds(10)), 0);
-            store.compareAndSave("middle", activeEnvelopeUpdatedAt("middle", NOW.minusSeconds(5)), 0);
+            compareAndSave("newest", activeEnvelopeUpdatedAt("newest", NOW), 0);
+            compareAndSave("oldest", activeEnvelopeUpdatedAt("oldest", NOW.minusSeconds(10)), 0);
+            compareAndSave("middle", activeEnvelopeUpdatedAt("middle", NOW.minusSeconds(5)), 0);
 
-            List<SagaEnvelope<String>> found = store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10);
+            List<SagaEnvelope<String>> found = findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10);
 
             assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("oldest", "middle", "newest");
         }
 
         @Test
         void limit_truncates_after_ordering_to_the_stalest_N_not_an_arbitrary_N() {
-            store.compareAndSave("oldest", activeEnvelopeUpdatedAt("oldest", NOW.minusSeconds(10)), 0);
-            store.compareAndSave("middle", activeEnvelopeUpdatedAt("middle", NOW.minusSeconds(5)), 0);
-            store.compareAndSave("newest", activeEnvelopeUpdatedAt("newest", NOW), 0);
+            compareAndSave("oldest", activeEnvelopeUpdatedAt("oldest", NOW.minusSeconds(10)), 0);
+            compareAndSave("middle", activeEnvelopeUpdatedAt("middle", NOW.minusSeconds(5)), 0);
+            compareAndSave("newest", activeEnvelopeUpdatedAt("newest", NOW), 0);
 
-            List<SagaEnvelope<String>> found = store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 2);
+            List<SagaEnvelope<String>> found = findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 2);
 
             assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("oldest", "middle");
         }
 
         @Test
         void rejects_a_limit_below_1() {
-            assertThatThrownBy(() -> store.findByStatus(SagaStatus.ACTIVE, NOW, 0))
+            assertThatThrownBy(() -> findByStatus(SagaStatus.ACTIVE, NOW, 0))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("limit must be positive");
         }
@@ -348,10 +407,10 @@ class InMemorySagaStateStoreTest {
         @Test
         void excludes_an_envelope_with_a_null_updatedAt() {
             SagaEnvelope<String> noUpdatedAt = new SagaEnvelope<>("no-updated-at", "a", SagaStatus.ACTIVE, 1,
-                    List.of(), Map.of(), null, NOW, null, null, null);
-            store.compareAndSave("no-updated-at", noUpdatedAt, 0);
+                    List.of(), Map.of(), null, NOW, null, null, null, true, null, Map.of(), null);
+            compareAndSave("no-updated-at", noUpdatedAt, 0);
 
-            assertThat(store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(60), 10)).isEmpty();
+            assertThat(findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(60), 10)).isEmpty();
         }
     }
 
@@ -364,10 +423,10 @@ class InMemorySagaStateStoreTest {
             Instant updatedAt = NOW.minusSeconds(30);
             Instant completedAt = NOW;
             SagaEnvelope<String> saved = new SagaEnvelope<>("s1", "a", SagaStatus.COMPLETED, 1, List.of(), Map.of(), null,
-                    createdAt, updatedAt, completedAt, null);
-            store.compareAndSave("s1", saved, 0);
+                    createdAt, updatedAt, completedAt, null, true, null, Map.of(), null);
+            compareAndSave("s1", saved, 0);
 
-            SagaEnvelope<String> found = store.find("s1").orElseThrow();
+            SagaEnvelope<String> found = find("s1").orElseThrow();
 
             assertAll(
                     () -> assertThat(found.createdAt()).isEqualTo(createdAt),
@@ -378,9 +437,9 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void an_active_instance_has_no_completedAt() {
-            store.compareAndSave("s2", envelope("s2", "a", 1, List.of()), 0);
+            compareAndSave("s2", envelope("s2", "a", 1, List.of()), 0);
 
-            assertThat(store.find("s2")).hasValueSatisfying(e -> assertThat(e.completedAt()).isNull());
+            assertThat(find("s2")).hasValueSatisfying(e -> assertThat(e.completedAt()).isNull());
         }
     }
 
@@ -389,18 +448,18 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void removes_the_instance() {
-            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
 
             store.delete("s1");
 
-            assertThat(store.find("s1")).isEmpty();
+            assertThat(find("s1")).isEmpty();
         }
 
         @Test
         void is_a_no_op_for_an_unknown_id() {
             store.delete("unknown");
 
-            assertThat(store.find("unknown")).isEmpty();
+            assertThat(find("unknown")).isEmpty();
         }
     }
 
@@ -409,12 +468,12 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void lists_the_releasing_instances_in_ascending_id_order_up_to_the_limit() {
-            store.compareAndSave("c", releasingEnvelope("c"), 0);
-            store.compareAndSave("a", releasingEnvelope("a"), 0);
-            store.compareAndSave("d", releasingEnvelope("d"), 0);
-            store.compareAndSave("b", releasingEnvelope("b"), 0);
-            store.compareAndSave("0", envelope("0", "x", 1, List.of()), 0);
-            store.compareAndSave("1", quarantinedEnvelope("1", "x", 1, List.of()), 0);
+            compareAndSave("c", releasingEnvelope("c"), 0);
+            compareAndSave("a", releasingEnvelope("a"), 0);
+            compareAndSave("d", releasingEnvelope("d"), 0);
+            compareAndSave("b", releasingEnvelope("b"), 0);
+            compareAndSave("0", envelope("0", "x", 1, List.of()), 0);
+            compareAndSave("1", quarantinedEnvelope("1", "x", 1, List.of()), 0);
 
             assertAll(
                     () -> assertThat(store.findReleasingSagaIds(null, 10)).containsExactly("a", "b", "c", "d"),
@@ -425,7 +484,7 @@ class InMemorySagaStateStoreTest {
         @Test
         void lists_only_the_ids_strictly_after_the_given_one_in_ascending_order_up_to_the_limit() {
             for (String id : List.of("c", "a", "d", "b")) {
-                store.compareAndSave(id, releasingEnvelope(id), 0);
+                compareAndSave(id, releasingEnvelope(id), 0);
             }
 
             assertAll(
@@ -440,7 +499,7 @@ class InMemorySagaStateStoreTest {
         void lists_ids_in_string_order_whatever_order_the_backing_map_iterates_them_in() {
             // The map iterates these as x10, x1, y, x2
             for (String id : List.of("x1", "x10", "x2", "y")) {
-                store.compareAndSave(id, releasingEnvelope(id), 0);
+                compareAndSave(id, releasingEnvelope(id), 0);
             }
 
             assertAll(
@@ -452,9 +511,9 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void lists_the_ids_after_one_that_is_not_there_and_is_not_releasing() {
-            store.compareAndSave("a", releasingEnvelope("a"), 0);
-            store.compareAndSave("c", releasingEnvelope("c"), 0);
-            store.compareAndSave("b", envelope("b", "x", 1, List.of()), 0);
+            compareAndSave("a", releasingEnvelope("a"), 0);
+            compareAndSave("c", releasingEnvelope("c"), 0);
+            compareAndSave("b", envelope("b", "x", 1, List.of()), 0);
 
             assertAll(
                     () -> assertThat(store.findReleasingSagaIds("b", 10)).containsExactly("c"),
@@ -468,27 +527,45 @@ class InMemorySagaStateStoreTest {
         }
     }
 
+    private void instance(String... sagaIds) {
+        for (String sagaId : sagaIds) {
+            compareAndSave(sagaId, releasingEnvelope(sagaId), 0);
+        }
+    }
+
+    // Fails inside the transition after it has been handed the instance, since the index is derived from a status that is not a string
+    private StoredSaga unreadable(String sagaId, long version) {
+        return new StoredSaga(sagaId, version, new EncodedSaga(Map.of(SagaCodec.STATUS, 5)), SagaCodec.indexOf(codec.encode(releasingEnvelope(sagaId)).encoded()));
+    }
+
+    // As unreadable, with the index of a completed instance, so that a quarantine end handed it deletes the records
+    private StoredSaga unreadableCompleted(String sagaId, long version) {
+        return new StoredSaga(sagaId, version, new EncodedSaga(Map.of(SagaCodec.STATUS, 5)), SagaCodec.indexOf(codec.encode(completedEnvelope(sagaId, "a", 1, List.of())).encoded()));
+    }
+
     @Nested
     class SkippedInputRecords {
 
         @Test
         void are_read_in_seq_order_whatever_order_they_were_written_in() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(7, "b@2"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(-1, "a@1"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "c@3"));
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(7, "b@2"));
+            skip("s1", "q1", new SkippedInput(-1, "a@1"));
+            skip("s1", "q1", new SkippedInput(3, "c@3"));
 
             assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(3, "c@3"), new SkippedInput(7, "b@2"));
         }
 
         @Test
         void with_the_same_seq_are_read_in_key_order_whatever_order_they_were_written_in() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(-1, "b@2"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(-1, "a@1"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "g@7"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "f@6"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "e@5"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "d@4"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(3, "c@3"));
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(-1, "b@2"));
+            skip("s1", "q1", new SkippedInput(-1, "a@1"));
+            skip("s1", "q1", new SkippedInput(3, "g@7"));
+            skip("s1", "q1", new SkippedInput(3, "f@6"));
+            skip("s1", "q1", new SkippedInput(3, "e@5"));
+            skip("s1", "q1", new SkippedInput(3, "d@4"));
+            skip("s1", "q1", new SkippedInput(3, "c@3"));
 
             assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(
                     new SkippedInput(-1, "a@1"), new SkippedInput(-1, "b@2"),
@@ -496,27 +573,30 @@ class InMemorySagaStateStoreTest {
         }
 
         @Test
-        void keep_the_first_record_of_a_key_and_its_seq() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(2, "a@1"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(5, "a@1"));
+        void keep_the_first_record_of_a_key_and_its_seq_when_skipped_again() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(2, "a@1"));
+            skip("s1", "q1", new SkippedInput(5, "a@1"));
 
             assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(2, "a@1"));
         }
 
         @Test
         void are_read_for_one_saga_and_quarantine_id_only() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
-            store.recordSkippedInput("s1", "q2", new SkippedInput(0, "b@1"));
-            store.recordSkippedInput("s2", "q1", new SkippedInput(0, "c@1"));
+            instance("s1", "s2");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q2", new SkippedInput(0, "b@1"));
+            skip("s2", "q1", new SkippedInput(0, "c@1"));
 
             assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(0, "a@1"));
         }
 
         @Test
         void are_read_up_to_the_limit_from_the_lowest_seq() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(2, "c@3"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(1, "b@2"));
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(2, "c@3"));
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(1, "b@2"));
 
             assertThat(store.findSkippedInputs("s1", "q1", 2)).containsExactly(new SkippedInput(0, "a@1"), new SkippedInput(1, "b@2"));
         }
@@ -527,49 +607,50 @@ class InMemorySagaStateStoreTest {
         }
 
         @Test
-        void get_a_record_of_a_key_that_has_none_when_recorded_at_the_head() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "b@2"));
+        void get_a_record_of_a_key_that_has_none_when_the_release_starts() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "b@2"));
 
-            store.recordSkippedInputAtHead("s1", "q1", new SkippedInput(-1, "a@1"));
+            startRelease("s1", "q1", new SkippedInput(-1, "a@1"));
 
             assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(0, "b@2"));
         }
 
         @Test
-        void move_the_record_of_a_key_to_the_seq_it_is_recorded_at_the_head_with_and_keep_one_record_of_it() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(4, "a@1"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(5, "b@2"));
+        void move_the_record_of_a_key_to_the_seq_the_release_starts_with_and_keep_one_record_of_it() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(4, "a@1"));
+            skip("s1", "q1", new SkippedInput(5, "b@2"));
 
-            store.recordSkippedInputAtHead("s1", "q1", new SkippedInput(-1, "a@1"));
+            startRelease("s1", "q1", new SkippedInput(-1, "a@1"));
 
             assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(5, "b@2"));
         }
 
         @Test
-        void keep_the_head_record_of_a_key_that_another_caller_records_at_a_later_seq_at_once() throws Exception {
+        void keep_one_record_of_a_key_when_a_skip_and_a_release_start_race_from_the_same_version() throws Exception {
             ExecutorService executor = Executors.newFixedThreadPool(2);
             try {
                 for (int round = 0; round < 50; round++) {
                     String sagaId = "s" + round;
+                    instance(sagaId);
+                    StoredSaga read = store.find(sagaId).orElseThrow();
+                    StoredSaga written = codec.encodeWithoutState(atVersion(codec.decode(read), read.version() + 1));
                     CountDownLatch go = new CountDownLatch(1);
-                    List<Future<?>> writers = List.of(
-                            executor.submit(() -> {
-                                go.await();
-                                store.recordSkippedInputAtHead(sagaId, "q1", new SkippedInput(-1, "a@1"));
-                                return null;
-                            }),
-                            executor.submit(() -> {
-                                go.await();
-                                store.recordSkippedInput(sagaId, "q1", new SkippedInput(7, "a@1"));
-                                return null;
-                            }));
+                    Future<Boolean> head = executor.submit(() -> {
+                        go.await();
+                        return store.compareAndSaveReleaseStarted(written, read.version(), "q1", new SkippedInput(-1, "a@1"));
+                    });
+                    Future<Boolean> skipped = executor.submit(() -> {
+                        go.await();
+                        return store.compareAndSaveSkipped(written, read.version(), "q1", new SkippedInput(7, "a@1"));
+                    });
                     go.countDown();
-                    for (Future<?> writer : writers) {
-                        writer.get(10, TimeUnit.SECONDS);
-                    }
+                    boolean headWon = head.get(10, TimeUnit.SECONDS);
+                    boolean skipWon = skipped.get(10, TimeUnit.SECONDS);
 
-                    assertThat(store.findSkippedInputs(sagaId, "q1", 10)).hasSize(1).singleElement()
-                            .isEqualTo(new SkippedInput(-1, "a@1"));
+                    assertThat(headWon ^ skipWon).as("exactly one of them wins the version").isTrue();
+                    assertThat(store.findSkippedInputs(sagaId, "q1", 10)).containsExactly(headWon ? new SkippedInput(-1, "a@1") : new SkippedInput(7, "a@1"));
                 }
             } finally {
                 executor.shutdownNow();
@@ -577,31 +658,34 @@ class InMemorySagaStateStoreTest {
         }
 
         @Test
-        void are_deleted_exactly_when_the_key_and_the_seq_both_match() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
-            store.recordSkippedInput("s1", "q1", new SkippedInput(1, "b@2"));
+        void are_deleted_by_a_replay_exactly_when_the_key_and_the_seq_both_match() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(1, "b@2"));
 
-            store.deleteSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+            replayed("s1", "q1", new SkippedInput(0, "a@1"));
 
             assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(1, "b@2"));
         }
 
         @Test
-        void keep_a_record_of_the_same_key_with_another_seq_when_deleted_exactly() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(-1, "a@1"));
+        void keep_a_record_of_the_same_key_with_another_seq_when_replayed() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(-1, "a@1"));
 
-            store.deleteSkippedInput("s1", "q1", new SkippedInput(3, "a@1"));
+            replayed("s1", "q1", new SkippedInput(3, "a@1"));
 
             assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(-1, "a@1"));
         }
 
         @Test
-        void keep_a_record_of_the_same_key_and_seq_under_another_quarantine_id_or_instance_when_deleted_exactly() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
-            store.recordSkippedInput("s1", "q2", new SkippedInput(0, "a@1"));
-            store.recordSkippedInput("s2", "q1", new SkippedInput(0, "a@1"));
+        void keep_a_record_of_the_same_key_and_seq_under_another_quarantine_id_or_instance_when_replayed() {
+            instance("s1", "s2");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q2", new SkippedInput(0, "a@1"));
+            skip("s2", "q1", new SkippedInput(0, "a@1"));
 
-            store.deleteSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+            replayed("s1", "q1", new SkippedInput(0, "a@1"));
 
             assertAll(
                     () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
@@ -612,15 +696,15 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void are_deleted_with_the_instance_under_its_quarantine_id_only_and_only_for_that_instance() {
-            store.compareAndSave("s1", releasingEnvelope("s1"), 0);
-            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
-            store.recordSkippedInput("s1", "q2", new SkippedInput(0, "b@1"));
-            store.recordSkippedInput("s2", "q1", new SkippedInput(0, "c@1"));
+            instance("s1", "s2");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q2", new SkippedInput(0, "b@1"));
+            skip("s2", "q1", new SkippedInput(0, "c@1"));
 
             store.delete("s1");
 
             assertAll(
-                    () -> assertThat(store.find("s1")).isEmpty(),
+                    () -> assertThat(find("s1")).isEmpty(),
                     () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
                     () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1")),
                     () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "c@1"))
@@ -629,27 +713,29 @@ class InMemorySagaStateStoreTest {
 
         @Test
         void are_kept_when_the_instance_deleted_has_no_quarantine_id_or_there_is_none() {
-            store.compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
-            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
+            compareAndSave("s1", envelope("s1", "a", 1, List.of()), 0);
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
 
             store.delete("s1");
             store.delete("missing");
 
             assertAll(
-                    () -> assertThat(store.find("s1")).isEmpty(),
+                    () -> assertThat(find("s1")).isEmpty(),
                     () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).containsExactly(new SkippedInput(0, "a@1"))
             );
         }
 
         @Test
-        void are_deleted_for_one_quarantine_id_only_by_the_bulk_delete() {
-            store.recordSkippedInput("s1", "q1", new SkippedInput(0, "a@1"));
-            store.recordSkippedInput("s1", "q2", new SkippedInput(0, "b@1"));
-            store.recordSkippedInput("s2", "q1", new SkippedInput(0, "c@1"));
+        void are_deleted_for_one_quarantine_id_only_by_the_write_that_ends_the_quarantine() {
+            instance("s1", "s2");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q2", new SkippedInput(0, "b@1"));
+            skip("s2", "q1", new SkippedInput(0, "c@1"));
 
-            store.deleteSkippedInputs("s1", "q1");
+            boolean ended = quarantineEndedByCompletion("s1", "q1");
 
             assertAll(
+                    () -> assertThat(ended).isTrue(),
                     () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).isEmpty(),
                     () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1")),
                     () -> assertThat(store.findSkippedInputs("s2", "q1", 10)).containsExactly(new SkippedInput(0, "c@1"))
@@ -662,8 +748,10 @@ class InMemorySagaStateStoreTest {
         @Test
         void read_the_lowest_seq_recorded_before_the_read_while_other_skips_record_concurrently() throws Exception {
             int recorded = 10_000;
+            instance("s1", "noise-1", "noise-2");
             for (int i = 0; i < 20_000; i++) {
-                store.recordSkippedInput("other-" + i, "q1", new SkippedInput(i, "x@" + i));
+                instance("other-" + i);
+                skip("other-" + i, "q1", new SkippedInput(i, "x@" + i));
             }
             AtomicLong completed = new AtomicLong();
             AtomicReference<String> violation = new AtomicReference<>();
@@ -673,7 +761,7 @@ class InMemorySagaStateStoreTest {
                 Future<?> writer = executor.submit(() -> {
                     go.await();
                     for (int i = 0; i < recorded; i++) {
-                        store.recordSkippedInput("s1", "q1", new SkippedInput(i, "s@" + i));
+                        skip("s1", "q1", new SkippedInput(i, "s@" + i));
                         completed.incrementAndGet();
                     }
                     return null;
@@ -681,7 +769,7 @@ class InMemorySagaStateStoreTest {
                 List<Future<Object>> noise = List.of(1, 2).stream().map(thread -> executor.submit(() -> {
                     go.await();
                     for (int i = 0; i < recorded && completed.get() < recorded; i++) {
-                        store.recordSkippedInput("noise-" + thread + "-" + i, "q1", new SkippedInput(i, "n@" + i));
+                        skip("noise-" + thread, "q1", new SkippedInput(i, "n@" + i));
                     }
                     return null;
                 })).toList();
@@ -706,10 +794,10 @@ class InMemorySagaStateStoreTest {
                     return null;
                 });
                 go.countDown();
-                writer.get(20, TimeUnit.SECONDS);
-                reader.get(20, TimeUnit.SECONDS);
+                writer.get(60, TimeUnit.SECONDS);
+                reader.get(60, TimeUnit.SECONDS);
                 for (Future<?> future : noise) {
-                    future.get(20, TimeUnit.SECONDS);
+                    future.get(60, TimeUnit.SECONDS);
                 }
             } finally {
                 executor.shutdownNow();
@@ -717,5 +805,336 @@ class InMemorySagaStateStoreTest {
 
             assertThat(violation.get()).as("a read of the records of one instance").isNull();
         }
+    }
+
+    @Nested
+    class AQuarantineEndedByAnInstanceThatIsNotCompleted {
+
+        private void recordsOf(String sagaId, SkippedInput... expected) {
+            assertThat(store.findSkippedInputs(sagaId, "q1", 10)).containsExactly(expected);
+        }
+
+        @Test
+        void is_refused_while_a_record_is_under_the_quarantine_id_and_leaves_the_instance_and_the_record_as_they_were() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            StoredSaga before = store.find("s1").orElseThrow();
+
+            boolean ended = quarantineEnded("s1", "q1");
+
+            assertAll(
+                    () -> assertThat(ended).as("an instance that is not completed ends its quarantine only with no record left").isFalse(),
+                    () -> assertThat(store.find("s1")).as("the instance as it was, version and fields").contains(before),
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1")));
+        }
+
+        @Test
+        void succeeds_once_no_record_is_under_the_quarantine_id() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            replayed("s1", "q1", new SkippedInput(0, "a@1"));
+            long version = store.find("s1").orElseThrow().version();
+
+            boolean ended = quarantineEnded("s1", "q1");
+
+            assertAll(
+                    () -> assertThat(ended).isTrue(),
+                    () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(version + 1));
+        }
+
+        @Test
+        void is_not_refused_by_a_record_under_another_quarantine_id() {
+            instance("s1");
+            skip("s1", "q2", new SkippedInput(0, "b@1"));
+
+            boolean ended = quarantineEnded("s1", "q1");
+
+            assertAll(
+                    () -> assertThat(ended).isTrue(),
+                    () -> assertThat(store.findSkippedInputs("s1", "q2", 10)).containsExactly(new SkippedInput(0, "b@1")));
+        }
+
+        @Test
+        void that_completes_the_instance_deletes_every_record_under_the_quarantine_id() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(1, "b@2"));
+
+            boolean ended = quarantineEndedByCompletion("s1", "q1");
+
+            assertAll(
+                    () -> assertThat(ended).isTrue(),
+                    () -> assertThat(find("s1").orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> recordsOf("s1"));
+        }
+    }
+
+    @Nested
+    class TransitionAtomicity {
+
+        private void recordsOf(String sagaId, SkippedInput... expected) {
+            assertThat(store.findSkippedInputs(sagaId, "q1", 10)).containsExactly(expected);
+        }
+
+        @Test
+        void a_skip_that_fails_writing_the_instance_records_no_input() {
+            instance("s1");
+
+            assertThatThrownBy(() -> store.compareAndSaveSkipped(unreadable("s1", 2), 1, "q1", new SkippedInput(0, "a@1"))).isInstanceOf(RuntimeException.class);
+
+            assertAll(
+                    () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(1),
+                    () -> recordsOf("s1"));
+        }
+
+        @Test
+        void a_release_start_that_fails_writing_the_instance_records_no_head() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "b@2"));
+
+            assertThatThrownBy(() -> store.compareAndSaveReleaseStarted(unreadable("s1", 3), 2, "q1", new SkippedInput(-1, "a@1"))).isInstanceOf(RuntimeException.class);
+
+            assertAll(
+                    () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(2),
+                    () -> recordsOf("s1", new SkippedInput(0, "b@2")));
+        }
+
+        @Test
+        void a_replay_that_fails_writing_the_instance_keeps_the_record() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+
+            assertThatThrownBy(() -> store.compareAndSaveReplayed(unreadable("s1", 3), 2, "q1", new SkippedInput(0, "a@1"))).isInstanceOf(RuntimeException.class);
+
+            assertAll(
+                    () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(2),
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1")));
+        }
+
+        @Test
+        void an_end_of_the_quarantine_that_fails_writing_the_instance_keeps_every_record() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            skip("s1", "q1", new SkippedInput(1, "b@2"));
+
+            assertThatThrownBy(() -> store.compareAndSaveQuarantineEnded(unreadableCompleted("s1", 4), 3, "q1")).isInstanceOf(RuntimeException.class);
+
+            assertAll(
+                    () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(3),
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1"), new SkippedInput(1, "b@2")));
+        }
+
+        @Test
+        void a_skip_that_loses_the_version_writes_no_record_and_no_instance() {
+            instance("s1");
+            StoredSaga written = codec.encodeWithoutState(next("s1"));
+
+            boolean saved = store.compareAndSaveSkipped(written, 7, "q1", new SkippedInput(0, "a@1"));
+
+            assertAll(
+                    () -> assertThat(saved).isFalse(),
+                    () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(1),
+                    () -> recordsOf("s1"));
+        }
+
+        @Test
+        void a_release_start_that_loses_the_version_writes_no_head() {
+            instance("s1");
+            StoredSaga written = codec.encodeWithoutState(next("s1"));
+
+            boolean saved = store.compareAndSaveReleaseStarted(written, 7, "q1", new SkippedInput(-1, "a@1"));
+
+            assertAll(
+                    () -> assertThat(saved).isFalse(),
+                    () -> recordsOf("s1"));
+        }
+
+        @Test
+        void a_replay_that_loses_the_version_deletes_no_record() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            StoredSaga written = codec.encode(next("s1"));
+
+            boolean saved = store.compareAndSaveReplayed(written, 7, "q1", new SkippedInput(0, "a@1"));
+
+            assertAll(
+                    () -> assertThat(saved).isFalse(),
+                    () -> assertThat(store.find("s1").orElseThrow().version()).isEqualTo(2),
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1")));
+        }
+
+        @Test
+        void an_end_of_the_quarantine_that_loses_the_version_deletes_no_record() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+            StoredSaga written = codec.encode(next("s1"));
+
+            boolean saved = store.compareAndSaveQuarantineEnded(written, 7, "q1");
+
+            assertAll(
+                    () -> assertThat(saved).isFalse(),
+                    () -> recordsOf("s1", new SkippedInput(0, "a@1")));
+        }
+
+        @Test
+        void a_replay_of_the_last_record_leaves_no_record_under_the_quarantine_id() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+
+            replayed("s1", "q1", new SkippedInput(0, "a@1"));
+
+            recordsOf("s1");
+        }
+
+        @Test
+        void a_delete_removes_the_instance_and_its_records_together() {
+            instance("s1");
+            skip("s1", "q1", new SkippedInput(0, "a@1"));
+
+            store.delete("s1");
+
+            assertAll(
+                    () -> assertThat(find("s1")).isEmpty(),
+                    () -> recordsOf("s1"));
+        }
+    }
+
+    @Nested
+    class ReadsConcurrentWithWrites {
+
+        private static final int ROUNDS = 300;
+        private static final int RECORDS_PER_ROUND = 100;
+        private static final int READERS = 3;
+
+        private record Round(String sagaId, long versionBeforeTheWrites) {
+        }
+
+        // A writer does RECORDS_PER_ROUND writes to a fresh saga in each round, and READERS threads read the saga of the current
+        // round without a pause until it is done. The count is fixed, so the test ends after the same amount of work every run
+        private void writesWhileReading(Consumer<String> setUp, BiConsumer<String, Integer> write, Function<Round, String> readerViolation) throws Exception {
+            AtomicReference<Round> current = new AtomicReference<>();
+            AtomicBoolean writing = new AtomicBoolean(true);
+            Queue<String> violations = new ConcurrentLinkedQueue<>();
+            ExecutorService executor = Executors.newFixedThreadPool(READERS + 1);
+            try {
+                List<Future<?>> readers = new ArrayList<>();
+                for (int reader = 0; reader < READERS; reader++) {
+                    readers.add(executor.submit(() -> {
+                        while (writing.get()) {
+                            Round round = current.get();
+                            String violation = round == null ? null : readerViolation.apply(round);
+                            if (violation != null) {
+                                violations.add(violation);
+                            }
+                        }
+                        return null;
+                    }));
+                }
+                Future<?> writer = executor.submit(() -> {
+                    try {
+                        for (int round = 0; round < ROUNDS; round++) {
+                            String sagaId = "saga-" + round;
+                            setUp.accept(sagaId);
+                            current.set(new Round(sagaId, store.find(sagaId).orElseThrow().version()));
+                            for (int record = 0; record < RECORDS_PER_ROUND; record++) {
+                                write.accept(sagaId, record);
+                            }
+                        }
+                    } finally {
+                        writing.set(false);
+                    }
+                });
+                writer.get(120, TimeUnit.SECONDS);
+                for (Future<?> reader : readers) {
+                    reader.get(120, TimeUnit.SECONDS);
+                }
+            } finally {
+                executor.shutdownNow();
+            }
+
+            assertThat(violations).isEmpty();
+        }
+
+        @Test
+        void that_miss_a_replayed_record_are_followed_by_an_instance_read_at_the_version_that_replayed_it() throws Exception {
+            writesWhileReading(
+                    sagaId -> {
+                        instance(sagaId);
+                        for (int record = 0; record < RECORDS_PER_ROUND; record++) {
+                            skip(sagaId, "q1", new SkippedInput(record, "a@" + record));
+                        }
+                    },
+                    (sagaId, record) -> assertThat(replayed(sagaId, "q1", new SkippedInput(record, "a@" + record))).isTrue(),
+                    round -> {
+                        long firstVersion = store.find(round.sagaId()).orElseThrow().version();
+                        List<SkippedInput> lowest = store.findSkippedInputs(round.sagaId(), "q1", 1);
+                        long secondVersion = store.find(round.sagaId()).orElseThrow().version();
+                        int replayedRecords = lowest.isEmpty() ? RECORDS_PER_ROUND : (int) lowest.get(0).seq();
+                        long versionThatReplayedTheLastMissingRecord = round.versionBeforeTheWrites() + replayedRecords;
+                        boolean missesARecordTheInstanceHasNotReplayed = replayedRecords > 0 && secondVersion < versionThatReplayedTheLastMissingRecord;
+                        return secondVersion < firstVersion || missesARecordTheInstanceHasNotReplayed
+                                ? round.sagaId() + ": " + replayedRecords + " records replayed by the records read, instance v" + firstVersion + " before it and v" + secondVersion + " after it, below v" + versionThatReplayedTheLastMissingRecord
+                                : null;
+                    });
+        }
+
+        @Test
+        void that_find_a_skipped_record_are_followed_by_an_instance_read_at_the_version_that_skipped_it() throws Exception {
+            writesWhileReading(
+                    sagaId -> instance(sagaId),
+                    (sagaId, record) -> assertThat(skip(sagaId, "q1", new SkippedInput(record, "a@" + record))).isTrue(),
+                    round -> {
+                        long firstVersion = store.find(round.sagaId()).orElseThrow().version();
+                        int skippedRecords = store.findSkippedInputs(round.sagaId(), "q1", RECORDS_PER_ROUND).size();
+                        long secondVersion = store.find(round.sagaId()).orElseThrow().version();
+                        long versionThatSkippedTheLastFoundRecord = round.versionBeforeTheWrites() + skippedRecords;
+                        return secondVersion < firstVersion || secondVersion < versionThatSkippedTheLastFoundRecord
+                                ? round.sagaId() + ": " + skippedRecords + " skipped records found, instance v" + firstVersion + " before it and v" + secondVersion + " after it, below v" + versionThatSkippedTheLastFoundRecord
+                                : null;
+                    });
+        }
+    }
+
+    @Nested
+    class CompareAndSaveWithoutState {
+
+        @Test
+        void leaves_an_instance_that_stores_no_state_and_no_current_step_without_both_when_the_given_fields_hold_them() {
+            compareAndSave("s1", stepped("s1", null, 1), 0);
+            StoredSaga given = withCurrentStep(codec.encode(stepped("s1", "given-state", 2)), "given-step");
+            assertThat(given.encoded().fields()).containsKeys(SagaCodec.STATE, SagaCodec.CURRENT_STEP);
+
+            boolean saved = store.compareAndSaveWithoutState(given, 1);
+
+            assertThat(saved).isTrue();
+            assertThat(store.find("s1")).hasValueSatisfying(stored -> assertThat(stored.encoded().fields())
+                    .doesNotContainKeys(SagaCodec.STATE, SagaCodec.CURRENT_STEP));
+        }
+
+        @Test
+        void keeps_the_state_and_current_step_of_the_stored_instance_over_the_ones_in_the_given_fields() {
+            store.compareAndSave(withCurrentStep(codec.encode(stepped("s1", "stored-state", 1)), "stored-step"), 0);
+            Map<String, Object> before = store.find("s1").orElseThrow().encoded().fields();
+            assertThat(before).containsKeys(SagaCodec.STATE, SagaCodec.CURRENT_STEP);
+
+            boolean saved = store.compareAndSaveWithoutState(withCurrentStep(codec.encode(stepped("s1", "given-state", 2)), "given-step"), 1);
+
+            assertThat(saved).isTrue();
+            Map<String, Object> after = store.find("s1").orElseThrow().encoded().fields();
+            assertAll(
+                    () -> assertThat(after).containsEntry(SagaCodec.STATE, before.get(SagaCodec.STATE)),
+                    () -> assertThat(after).containsEntry(SagaCodec.CURRENT_STEP, "stored-step"));
+        }
+    }
+
+    private static SagaEnvelope<String> stepped(String sagaId, String state, long version) {
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, List.of(), Map.of(), null, NOW, NOW, null, null, true, null, Map.of(), null);
+    }
+
+    // The step a flow saga stores next to its state, which the codec writes only for a flow state
+    private static StoredSaga withCurrentStep(StoredSaga saga, String currentStep) {
+        Map<String, Object> fields = new LinkedHashMap<>(saga.encoded().fields());
+        fields.put(SagaCodec.CURRENT_STEP, currentStep);
+        return new StoredSaga(saga.sagaId(), saga.version(), new EncodedSaga(fields), saga.index());
     }
 }

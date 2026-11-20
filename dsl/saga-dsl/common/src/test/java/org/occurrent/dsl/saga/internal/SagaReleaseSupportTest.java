@@ -101,7 +101,7 @@ class SagaReleaseSupportTest {
     }
 
     private static SagaFailure failedBy034(long streamVersion) {
-        return new SagaFailure("o1@" + streamVersion, streamVersion, QUARANTINED_AT, IllegalStateException.class.getName(), "boom");
+        return new SagaFailure("o1@" + streamVersion, streamVersion, QUARANTINED_AT, IllegalStateException.class.getName(), "boom", null, null);
     }
 
     // Applied up to version 6 of stream o1, with version 9 failing since it was quarantined
@@ -179,7 +179,7 @@ class SagaReleaseSupportTest {
             SagaEnvelope<OrderState> current = quarantined(failedOn(9), 4L);
 
             SagaEnvelope<OrderState> counted = SagaExecutionSupport.withSkipCounted(current);
-            SagaEnvelope<OrderState> finished = SagaExecutionSupport.withSkipFinished(counted);
+            SagaEnvelope<OrderState> finished = SagaExecutionSupport.oneVersionUp(counted);
 
             assertAll(
                     () -> assertThat(finished.version()).isEqualTo(current.version() + 2),
@@ -242,7 +242,7 @@ class SagaReleaseSupportTest {
     class TheWriteThatQuarantines {
 
         private final SagaEnvelope<OrderState> failing = instance(SagaStatus.ACTIVE, true,
-                new SagaFailure("o1@9", 9L, NOW.minus(BUDGET).minusSeconds(1), IllegalStateException.class.getName(), "boom"), null);
+                new SagaFailure("o1@9", 9L, NOW.minus(BUDGET).minusSeconds(1), IllegalStateException.class.getName(), "boom", null, null), null);
 
         private FailureRecord<OrderState> quarantine() {
             return SagaExecutionSupport.onFailure(saga(), "o1", failing, at(9), new IllegalStateException("boom"), NOW, BUDGET);
@@ -684,7 +684,7 @@ class SagaReleaseSupportTest {
         @Test
         void is_an_append_when_only_the_version_and_the_skip_count_moved() {
             SagaEnvelope<OrderState> before = quarantined(releasingOn(9), 3L);
-            SagaEnvelope<OrderState> after = SagaExecutionSupport.withSkipFinished(SagaExecutionSupport.withSkipCounted(before));
+            SagaEnvelope<OrderState> after = SagaExecutionSupport.oneVersionUp(SagaExecutionSupport.withSkipCounted(before));
 
             assertThat(SagaExecutionSupport.differsOnlyByRecordedSkips(before, after)).isTrue();
         }
@@ -715,7 +715,7 @@ class SagaReleaseSupportTest {
         @Test
         void is_rewritten_one_version_above_the_instance_read_again_with_its_skip_count() {
             SagaEnvelope<OrderState> before = quarantined(releasingOn(9), 3L);
-            SagaEnvelope<OrderState> after = SagaExecutionSupport.withSkipFinished(SagaExecutionSupport.withSkipCounted(before));
+            SagaEnvelope<OrderState> after = SagaExecutionSupport.oneVersionUp(SagaExecutionSupport.withSkipCounted(before));
             SagaEnvelope<OrderState> computed = SagaExecutionSupport.replay(saga(), "o1", before, new SkippedInput(0, "o1@7"),
                     SagaInput.event(new OrderPlaced("o1")), at(7), NOW, SagaExecutionSupport.DEFAULT_REORDER_WINDOW).envelope();
 
@@ -753,7 +753,7 @@ class SagaReleaseSupportTest {
         @MethodSource("fieldsThatMoveAlone")
         void is_not_an_append_when_one_more_field_moved_as_well(String field, UnaryOperator<SagaEnvelope<OrderState>> move) {
             SagaEnvelope<OrderState> before = quarantined(releasingOn(9), 3L);
-            SagaEnvelope<OrderState> counted = SagaExecutionSupport.withSkipFinished(SagaExecutionSupport.withSkipCounted(before));
+            SagaEnvelope<OrderState> counted = SagaExecutionSupport.oneVersionUp(SagaExecutionSupport.withSkipCounted(before));
 
             assertAll(
                     () -> assertThat(SagaExecutionSupport.differsOnlyByRecordedSkips(before, counted)).as("control: nothing but the skip moved").isTrue(),

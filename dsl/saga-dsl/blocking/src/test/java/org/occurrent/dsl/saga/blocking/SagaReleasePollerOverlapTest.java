@@ -30,6 +30,7 @@ import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.blocking.SagaSubscription.ReleaseResult;
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
 import java.net.URI;
@@ -98,6 +99,7 @@ class SagaReleasePollerOverlapTest {
     private final List<Object> dispatched = new CopyOnWriteArrayList<>();
     private final AtomicInteger eventIds = new AtomicInteger();
     private final InMemorySagaStateStore<Order> store = new InMemorySagaStateStore<>();
+    private final SagaEnvelopes<Order> envelopes = SagaEnvelopes.of(store, null);
     private final AtomicBoolean blockOnA = new AtomicBoolean(false);
     private final CountDownLatch dispatchingA = new CountDownLatch(1);
     private final CountDownLatch mayFinishA = new CountDownLatch(1);
@@ -137,7 +139,7 @@ class SagaReleasePollerOverlapTest {
     }
 
     private SagaEnvelope<Order> instance() {
-        return store.find(ORDER).orElseThrow();
+        return envelopes.find(ORDER).orElseThrow();
     }
 
     // Quarantined on "poison", with "a" and "b" skipped after it, the way a saga that has not been released looks

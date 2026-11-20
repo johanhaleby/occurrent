@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
@@ -220,7 +221,7 @@ class SpringMongoSagaStateStoreActiveMarkedRunnerTest {
                 .as("the failed event is recorded as pending, which gives the instance its first marks")
                 .isEqualTo("ACTIVE_MARKED"));
         assertThat(replaceAsOf034()).as("a 0.34.0 replace of the version the instance had before it got marks matches nothing").isNull();
-        assertThat(stateStore.find(ORDER).orElseThrow().streamMarks()).containsKey(ORDER);
+        assertThat(SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow().streamMarks()).containsKey(ORDER);
         assertThat(storedStatus()).isEqualTo("ACTIVE_MARKED");
     }
 
@@ -236,7 +237,7 @@ class SpringMongoSagaStateStoreActiveMarkedRunnerTest {
                 .as("the applied event gives the instance its first marks")
                 .isEqualTo("ACTIVE_MARKED"));
         assertThat(replaceAsOf034()).as("a 0.34.0 replace of the version the instance had before it got marks matches nothing").isNull();
-        assertThat(stateStore.find(ORDER).orElseThrow().streamMarks()).containsKey(ORDER);
+        assertThat(SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow().streamMarks()).containsKey(ORDER);
         assertThat(storedStatus()).isEqualTo("ACTIVE_MARKED");
     }
 
@@ -249,7 +250,7 @@ class SpringMongoSagaStateStoreActiveMarkedRunnerTest {
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(storedStatus())
                 .as("an ACTIVE instance that applied an input with a stream version holds marks, so it is stored as ACTIVE_MARKED")
                 .isEqualTo("ACTIVE_MARKED"));
-        assertThat(stateStore.find(ORDER).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE);
+        assertThat(SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE);
     }
 
     @Test

@@ -111,17 +111,6 @@ public record SagaFailure(String input,
         }
     }
 
-    /** A record with no quarantine id. */
-    public SagaFailure(String input, @Nullable Long position, Instant firstFailedAt, String failureType, @Nullable String failureMessage,
-                       @Nullable Instant releasedAt) {
-        this(input, position, firstFailedAt, failureType, failureMessage, releasedAt, null);
-    }
-
-    /** A record of an instance that is not being released and has no quarantine id. */
-    public SagaFailure(String input, @Nullable Long position, Instant firstFailedAt, String failureType, @Nullable String failureMessage) {
-        this(input, position, firstFailedAt, failureType, failureMessage, null);
-    }
-
     /** Whether a release of the instance is running, see {@link #releasedAt()}. */
     public boolean isReleasing() {
         return releasedAt != null;

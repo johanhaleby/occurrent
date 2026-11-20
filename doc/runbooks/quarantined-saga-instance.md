@@ -88,17 +88,6 @@ instance's status with step 1 rather than reading the quiet either way.
 When an instance is quarantined, the same logger logs an `ERROR` saying it is now `QUARANTINED`. That line is the one
 to alert on. It names two durations, how long the event had been failing and then the budget, in that order.
 
-Alert on an `ERROR` saying the instance was quarantined but its state store did not persist
-`SagaFailure.quarantineId` or `SagaEnvelope.quarantineSkipCount` too. The saga reads the instance back after the
-write that quarantines it, and logs this line when the store lost either field. It writes the instance back as it was
-before the quarantine, and the event goes back to whatever feeds the subscription instead of being acknowledged. Every
-delivery of the event fails the same way until the store persists both fields, so fix the store. When another write
-changes the instance before that, the saga reads it again and writes it back again, up to
-`SagaRunnerConfig.maxCasAttempts` times. When the line says the quarantine could not be undone, something outside the saga wrote the instance on every
-attempt. The instance is then stored as `QUARANTINED` without them and skips every later input without recording it,
-so it can't be released with them. When the line says undoing the quarantine failed, the store threw during the undo,
-and the instance may still be `QUARANTINED` without them. Read its status to find out.
-
 A release in step 5 logs lines of its own from the same logger. The one to alert on is an `ERROR` saying the instance
 is `QUARANTINED` again, and step 5 lists the others.
 
@@ -226,37 +215,32 @@ enumeration is the optional capability and a by-id lookup is not.
 Optional<SagaInstance> one = instances.find("order-4711");
 ```
 
-It reads through `SagaStateStore.findWithoutState`, so on a store that overrides that member it answers for an
-instance whose state no longer decodes as well. On a store that does not override it, that member inherits to `find`,
-which decodes, so this throws for such an instance and `findByStatus` in step 1 is the read that still answers.
+It reads through `SagaStateStore.findWithoutState`, so it answers for an instance whose state no longer decodes as
+well.
 
 ### 3. [you] Read the state, if you need it and it still decodes
 
 Nothing `SagaInstance` answers comes from the saga's own state, which is why step 1 works on the instance you are most
 likely to be looking at. `findByStatus` reads no state on any store, since that is what the `SagaStateStoreQueries`
-contract requires of it. Step 2's by-id read is state-free only on a store that overrides `findWithoutState`, as above.
+contract requires of it. Step 2's by-id read reads no state either.
 
 An instance whose state can no longer be decoded, after an event class was renamed or a converter changed, is
 quarantined like any other. Its state is still stored, untouched, so repairing the converter and reading it again
 gets the state back. The instance stays quarantined.
 
-`SagaStateStore.find(sagaId)` is the read that does decode the state, and it is the one that throws on such an
-instance. Use it when the state itself is what you need:
+`SagaStateStore.find(sagaId)` returns the instance as the store keeps it, and decoding that with `SagaCodec` throws on
+such an instance. Use the two when the state itself is what you need:
 
 ```java
-Optional<SagaEnvelope<OrderFulfilment>> envelope = stateStore.find("order-4711");
+SagaCodec<OrderFulfilment> codec = SagaCodec.of(stateStore.stateCodec(), null);
+Optional<SagaEnvelope<OrderFulfilment>> envelope = stateStore.find("order-4711").map(codec::decode);
 ```
 
-Two members make the state-free reads work, `SagaStateStore.findWithoutState` and
-`SagaStateStore.compareAndSaveWithoutState`. Both are `default` methods that inherit to `find` and `compareAndSave`,
-so a store written against 0.33.0 keeps working without them. `SpringMongoSagaStateStore` overrides both.
-`SagaStateStore.inMemory()` does not and does not need to, since it holds each envelope as an object rather than a
-document, so nothing there can fail to decode.
+For a flow saga, pass the application's `CloudEventConverter` instead of `null`.
 
-A store of your own that overrides neither cannot quarantine an instance whose state does not decode, because the
-executor's own read throws for the same reason yours does, so that instance never reaches its budget. It keeps
-failing for as long as the subscription model offers the failing event again, the way it did in 0.33.0. The contract for an override is in
-[section 8 of the upgrade guide](../migration/upgrading-to-0.34.0.md#the-five-breaks).
+Every store implements the two members that read and write an instance without its state,
+`SagaStateStore.findWithoutState` and `SagaStateStore.compareAndSaveWithoutState`. The executor quarantines an
+instance whose state does not decode with them, so that works on any store.
 
 ### 4. [you] Fix the cause, or decide there is nothing to fix
 
@@ -269,7 +253,7 @@ runner. On 0.34.0 nothing replays it, and step 6 is what ends it.
 
 **The state cannot be decoded.** That shows up as a store or converter class in `failureType()` rather than
 anything of your saga's. Repair the converter or restore the event class, deploy, and read the instance again with
-`SagaStateStore.find`. If it decodes now, you know what the instance held, and step 5 can release it. A release reads
+`SagaStateStore.find` and `SagaCodec`, as in step 3. If it decodes now, you know what the instance held, and step 5 can release it. A release reads
 the instance with its state, so while the state still doesn't decode, `release` throws an `IllegalStateException`
 that names the decoding failure.
 
@@ -322,7 +306,7 @@ What `release` returns, and what to do next:
 |---|---|---|
 | `RELEASED` | The instance replayed every input and is `ACTIVE`, or `COMPLETED` when one of them completed it. | Go to step 7. |
 | `STILL_RELEASING` | An input failed again during the release. The instance is still `QUARANTINED`, with the release under way. | See below. The timer poller tries the input again. |
-| `QUARANTINED_AGAIN` | An input kept failing during the release until its quarantine budget ran out, or the event store handed back an input's event without a stream id and stream version, which only an `EventStoreQueries` other than Occurrent's own event stores can do. The instance is quarantined on that input, and the release has stopped. | Go back to step 2. The failure record names the new input, which stays recorded with the inputs after it, so the next release starts from it. For an event without a stream id and version, give the runner an `EventStoreQueries` that returns them and release again, or delete the instance in step 6. |
+| `QUARANTINED_AGAIN` | An input kept failing during the release until its quarantine budget ran out, or the event store handed back an input's event without a stream id and stream version, which only an `EventStoreQueries` other than Occurrent's own event stores can do. The instance is quarantined on that input, and the release has stopped. | Go back to step 2. The failure record names the new input, which stays recorded with the inputs after it, so the next release starts from it. For an event without a stream id and version, give the runner an `EventStoreQueries` that returns them and release again, or delete the instance in step 6. When the release replayed nothing, check that the stored instance has `failureReleasedAt`. A store that drops it ends every release this way, and the `INFO` line a release logs when it starts names that cause. |
 | `QUARANTINED_EVENT_MISSING` | The event store no longer has the event of one of the inputs. The instance is quarantined on that input at once, and the release has stopped. | See below. |
 | `NOT_QUARANTINED` | The instance is not quarantined, so there was nothing to release. | Nothing. Another call or node may have released it already. |
 | `NOT_FOUND` | No instance has that id. | Check the saga id and the bean name. |
@@ -343,8 +327,9 @@ cases:
 - The poller's clock is `timerPollInterval` or more ahead of the clock of the node that wrote.
 - You call `release` while the poller is replaying the instance. Your call goes on beside the poller.
 - The release spends longer than `timerPollInterval` on inputs the stream marks show as applied. It deletes their
-  records without writing the instance, so the poller goes on beside it. Neither dispatches anything for those inputs,
-  so only the first input that isn't applied can have its commands dispatched twice.
+  records in writes that leave the instance's `updatedAt` as it is, so the poller goes on beside it. Neither
+  dispatches anything for those inputs, so only the first input that isn't applied can have its commands dispatched
+  twice.
 - Two polls read the instance at the same time, once its `updatedAt` is `timerPollInterval` old, and both go on with
   it. Without a competing-consumer strategy every node polls. With one, two nodes can poll at once while the timer
   lease moves from one to the other, so the lease does not rule this case out. An input that fails again within its
@@ -387,17 +372,17 @@ Three ways on from there:
 - The runner has no `EventStoreQueries`. The message names `SagaRunner.eventStoreQueries(..)`.
 - The state store doesn't implement `SagaStateStoreSkippedInputs`. The message names the interface. `release`
   throws for it even when the store doesn't hold the saga id, instead of returning `NOT_FOUND`.
+- The instance is stored as `QUARANTINED_RECORDING` without its failure input, quarantine id or skip count, which a
+  state store of your own does when it doesn't persist every field it is given. The message names the missing field.
 
 The first can't be released at all. Its message names `SagaStateStore.delete(sagaId)`, and step 6 is what is left.
 For the second, fix how the state decodes, as in step 4, and release the instance again, or delete it in step 6.
+For the last, fix the store so it persists every field. An instance it already wrote stays without the field, so set
+the field on it by hand or delete it in step 6. Until then every delivery to the instance throws the same refusal, and
+so does a `findByStatus` page that holds it.
 
 An instance whose state stops decoding while it is releasing stays releasing. On a store that can list the releasing
 instances, each poll logs the failure at `WARN` and tries again, so the release goes on once the state decodes.
-
-`release` also throws an `IllegalStateException` when the state store didn't persist `SagaFailure.releasedAt`,
-`SagaFailure.quarantineId` or `SagaEnvelope.quarantineSkipCount` as the release started. The message names the store.
-A `SagaStateStore` of your own has to save all three, as
-[the 0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#stored-saga-state-for-a-release) describes.
 
 **Checking on a release.** `SagaInstance.failure().isReleasing()` is `true` while a release is under way, and
 `failure().releasedAt()` says when it started. Against MongoDB:
@@ -439,8 +424,8 @@ happens.
 So delete an instance only once its source can no longer redeliver any of its events. Leaving it in `QUARANTINED`
 until then is safe, because the runner skips every event addressed to it. It is not free, though. Every later event
 addressed to that instance is still delivered and still reads the instance from the state store before the runner
-skips it. From 0.35.0 the skip also records the event's key, which takes two writes to the instance and one record
-between them, so a correlation id that keeps receiving events costs a read and three writes for each one.
+skips it. From 0.35.0 the skip also records the event's key, in one write of the instance and the record together, a
+transaction on MongoDB, so a correlation id that keeps receiving events costs a read and that write for each one.
 
 `SagaStateStore.delete(sagaId)` is the call, and whether you have anything to call it on depends on how the store was
 wired.
@@ -474,10 +459,10 @@ Don't delete the records by saga id alone. An event can start a new instance wit
 and when that instance is quarantined, its records are kept under a quarantine id of its own. A delete by saga id
 alone would delete those too, and the events they stand for have already been acknowledged.
 
-The Java call also drops the saga id from the store's in-memory latch for the retained-event warning a flow saga gets
-when it crosses the size threshold, and nothing in MongoDB does that. The consequence is that if this saga id comes
-back and crosses that threshold again, the warning stays suppressed until the entry is evicted or the application
-restarts.
+Neither delete resets the retained-event warning a flow saga logs when an instance crosses the size threshold. Each
+runner keeps in memory which saga ids have warned, and forgets one when it inserts an instance under it, so the runner
+that starts a new instance under this saga id warns when that instance crosses the threshold. A runner on another node
+that warned before keeps its entry until the entry is evicted or the node restarts.
 
 The business process the instance was running is a separate question, and Occurrent has no answer for it. An order
 half way through fulfilment when its instance stopped is still half way through it after you delete the row. Finish or
