@@ -131,6 +131,15 @@ class StartupGapTest {
         public void startHeldBack() {
             started.add(name);
         }
+
+        @Override
+        public boolean registrationStarts() {
+            return !open;
+        }
+
+        @Override
+        public void registrationEnds() {
+        }
     }
 
     // Starts what StartupSubscribes held back, like the post-processors, and is open from the start
@@ -143,6 +152,15 @@ class StartupGapTest {
         @Override
         public void startHeldBack() {
             startupSubscribes.start();
+        }
+
+        @Override
+        public boolean registrationStarts() {
+            return false;
+        }
+
+        @Override
+        public void registrationEnds() {
         }
     }
 }
