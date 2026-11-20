@@ -36,6 +36,7 @@ import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.BeanFactoryAware;
 import org.springframework.beans.factory.BeanNameAware;
 import org.springframework.beans.factory.FactoryBean;
+import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.ObjectFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -61,6 +62,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -84,6 +86,7 @@ class LateFactoryBeanProductLiveStartTest {
     private static final AtomicInteger GET_OBJECT_CALLS = new AtomicInteger();
     private static final AtomicInteger NESTED_FACTORIES = new AtomicInteger();
     private static final AtomicInteger STALE_ATTEMPTS = new AtomicInteger();
+    private static ReentrantFactory reentrantFactory;
     private static final List<WeakReference<StaleFactory>> STALE_FACTORIES = new CopyOnWriteArrayList<>();
     private static final CountDownLatch[] REACHED_GET_OBJECT = latches(3);
     private static final CountDownLatch[] RELEASE_GET_OBJECT = latches(3);
@@ -103,6 +106,7 @@ class LateFactoryBeanProductLiveStartTest {
         GET_OBJECT_CALLS.set(0);
         NESTED_FACTORIES.set(0);
         STALE_ATTEMPTS.set(0);
+        reentrantFactory = null;
         STALE_FACTORIES.clear();
         for (int i = 0; i < REACHED_GET_OBJECT.length; i++) {
             REACHED_GET_OBJECT[i] = new CountDownLatch(1);
@@ -410,6 +414,22 @@ class LateFactoryBeanProductLiveStartTest {
         });
     }
 
+    /**
+     * One FactoryBean instance is a lazy bean under two names. Its afterPropertiesSet asks for the second one, so the
+     * container initializes the same instance again, under the second name, inside its first initialization.
+     */
+    @Test
+    void a_factory_that_the_container_initializes_again_under_another_name_inside_its_own_initialization_is_still_a_factory_when_the_first_initialization_ends() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+
+            BOUNDARY.set(2);
+            assertThatCode(() -> context.getBean("reentrantOuterFactory")).describedAs("asking for the product of the outer name").doesNotThrowAnyException();
+
+            assertThat(ConcurrentLateFactoryBeanLiveStartTest.startOfLateRegistration(context, "reentrant-handler")).isEqualTo(GlobalCheckpoint.of(2));
+        });
+    }
+
     private static <T> T onNewThread(Callable<T> work) throws Exception {
         FutureTask<T> task = new FutureTask<>(work);
         new Thread(task, "late-factory-test").start();
@@ -515,6 +535,12 @@ class LateFactoryBeanProductLiveStartTest {
         @Override
         public Class<?> getObjectType() {
             return Object.class;
+        }
+    }
+
+    static class ReentrantProduct implements LateMarker {
+        @Subscription(id = "reentrant-handler", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        void onReentrant(LateBeanAnnotationRegistrationTest.TestEvent event) {
         }
     }
 
@@ -649,6 +675,42 @@ class LateFactoryBeanProductLiveStartTest {
         @Override
         public boolean isSingleton() {
             return false;
+        }
+    }
+
+    // Its afterPropertiesSet asks for the product of the second name it is registered under, once. That product is
+    // built first and has no handler, and the product of the first name, built after it, has one.
+    static class ReentrantFactory implements FactoryBean<LateMarker>, BeanFactoryAware, InitializingBean {
+        private BeanFactory beanFactory;
+        private boolean askedForInnerName;
+        private int products;
+
+        @Override
+        public void setBeanFactory(BeanFactory beanFactory) {
+            this.beanFactory = beanFactory;
+        }
+
+        @Override
+        public void afterPropertiesSet() {
+            if (!askedForInnerName) {
+                askedForInnerName = true;
+                beanFactory.getBean("reentrantInnerFactory");
+            }
+        }
+
+        @Override
+        public LateMarker getObject() {
+            return products++ == 0 ? new PlainProduct() : new ReentrantProduct();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return LateMarker.class;
+        }
+
+        @Override
+        public boolean isSingleton() {
+            return true;
         }
     }
 
@@ -803,6 +865,19 @@ class LateFactoryBeanProductLiveStartTest {
         @Lazy
         LateMarker plainLateHandler() {
             return new PlainLateHandler();
+        }
+
+        @Bean
+        @Lazy
+        ReentrantFactory reentrantOuterFactory() {
+            reentrantFactory = new ReentrantFactory();
+            return reentrantFactory;
+        }
+
+        @Bean
+        @Lazy
+        ReentrantFactory reentrantInnerFactory() {
+            return reentrantFactory;
         }
 
         @Bean

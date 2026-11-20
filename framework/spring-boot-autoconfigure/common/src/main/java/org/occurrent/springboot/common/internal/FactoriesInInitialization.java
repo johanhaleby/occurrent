@@ -61,7 +61,17 @@ public final class FactoriesInInitialization {
             return false;
         }
         Object target = SubscriptionAnnotations.ultimateTarget(bean);
-        boolean factory = initializing.removeIf(reference -> reference.refersTo(bean) || reference.refersTo(target));
+        boolean factory = false;
+        // The latest start only, since one instance can start again inside its own initialization, under another
+        // bean name, and the outer end must still find its own start
+        for (int i = initializing.size() - 1; i >= 0; i--) {
+            WeakReference<Object> reference = initializing.get(i);
+            if (reference.refersTo(bean) || reference.refersTo(target)) {
+                initializing.remove(i);
+                factory = true;
+                break;
+            }
+        }
         initializing.removeIf(reference -> reference.refersTo(null));
         if (initializing.isEmpty()) {
             initializingOnThisThread.remove();

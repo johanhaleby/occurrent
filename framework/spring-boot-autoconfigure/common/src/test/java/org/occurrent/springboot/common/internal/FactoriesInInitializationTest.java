@@ -54,6 +54,17 @@ class FactoriesInInitializationTest {
     }
 
     @Test
+    void a_factory_that_started_twice_is_recognised_at_each_of_its_two_ends_and_not_at_a_third() {
+        StubFactory factory = new StubFactory();
+        factories.initializationStarts(factory);
+        factories.initializationStarts(factory);
+
+        assertThat(factories.initializationEnds(factory)).describedAs("inner end").isTrue();
+        assertThat(factories.initializationEnds(factory)).describedAs("outer end").isTrue();
+        assertThat(factories.initializationEnds(factory)).describedAs("third end").isFalse();
+    }
+
+    @Test
     void something_that_never_started_is_not_recognised_when_no_factory_started_on_the_thread() {
         assertThat(factories.initializationEnds(new StubFactory())).isFalse();
     }
