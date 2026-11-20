@@ -300,7 +300,7 @@ What `release` returns, and what to do next:
 |---|---|---|
 | `RELEASED` | The instance replayed every input and is `ACTIVE`, or `COMPLETED` when one of them completed it. | Go to step 7. |
 | `STILL_RELEASING` | An input failed again during the release. The instance is still `QUARANTINED`, with the release under way. | See below. The timer poller tries the input again. |
-| `QUARANTINED_AGAIN` | An input kept failing during the release until its quarantine budget ran out. The instance is quarantined on that input, and the release has stopped. | Go back to step 2. The failure record names the new input, which stays recorded with the inputs after it, so the next release starts from it. When the release replayed nothing, check that the stored instance has `failureReleasedAt`. A store that drops it ends every release this way, and the `INFO` line a release logs when it starts names that cause. |
+| `QUARANTINED_AGAIN` | An input kept failing during the release until its quarantine budget ran out, or the release reached the 500,000 stream versions one release keeps, see below. The instance is quarantined on that input, and the release has stopped. | At the bound, call `release` again, and it goes on from that input. Otherwise go back to step 2. The failure record names the new input, which stays recorded with the inputs after it, so the next release starts from it. When the release replayed nothing, check that the stored instance has `failureReleasedAt`. A store that drops it ends every release this way, and the `INFO` line a release logs when it starts names that cause. |
 | `NOT_QUARANTINED` | The instance is not quarantined, so there was nothing to release. | Nothing. Another call or node may have released it already. |
 | `NOT_FOUND` | No instance has that id. | Check the saga id and the bean name. |
 
@@ -347,6 +347,14 @@ Fix the cause the
 same way as in step 4. If the input keeps failing until its quarantine budget runs out, measured from the start of the
 release for the input the instance stopped on, the instance is quarantined again and the release stops, which is
 `QUARANTINED_AGAIN`. With quarantine off the poller keeps trying the input until it succeeds.
+
+**When a release reaches its bound.** A release keeps every stream version it applies in the instance's stream marks
+until it ends, so the instance's document grows by one number per replayed stream event. Before it applies an input it
+counts the versions the marks keep, and at 500,000 it stops without applying that input or dispatching its commands.
+On MongoDB that is about 8 MB of the 16 MB a document may hold. The instance is quarantined again on that input with
+its marks trimmed, the release returns `QUARANTINED_AGAIN`, and an `ERROR` names the instance and the input. That
+happens with quarantine off too, and on a store that doesn't write atomically. Call `release` again, and it goes on from
+that input. A backlog longer than that takes more than one release.
 
 **When `release` throws.** It throws an `IllegalStateException` before it writes anything when:
 
@@ -579,8 +587,10 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    the released instance.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
    longer decodes, and release the instance again.
-5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `QUARANTINED_AGAIN`, or that
-   keeps failing for a cause you can't fix.
+5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `RELEASED`, or that keeps
+   failing for a cause you can't fix. With quarantine off, a release returns `QUARANTINED_AGAIN` only when it reached
+   the 500,000 stream versions one release keeps. Call `release` again on that instance, since after step 6
+   nothing replays the inputs it still holds recorded.
 6. Stop every 0.35.0 node. Then, from a process that runs no `SagaRunner`, store every instance that is still
    `QUARANTINED_RECORDING` as `QUARANTINED`, without its quarantine id, skip count and release time, and every
    `ACTIVE_MARKED` instance as `ACTIVE`. A released instance is `ACTIVE_MARKED` when it holds stream marks. On MongoDB,

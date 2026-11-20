@@ -568,10 +568,13 @@ The upgrade guide has the procedure for operators, in
   the time a majority takes, and a replica set without a majority available fails them where `w: 1` would have
   succeeded.
 - A release keeps every stream version it applies in the instance's stream marks until the write that ends it, see
-  point 2, so the instance's document grows by one number per replayed input during one release. A release whose
-  backlog takes the document past MongoDB's 16 MB limit fails on every write from that record on. The instance stays
-  releasing, the failure is never recorded, so its budget never runs out, and every poll applies that record again
-  and dispatches its commands again before the write fails. Deleting the instance is the only way out.
+  point 2, so the instance's document grows by one number per replayed input during one release. Before a release
+  applies a record it counts the versions the marks keep, and at 500,000 it stops without applying the record or
+  dispatching its commands. The instance is quarantined again on that record with its marks trimmed to the reorder
+  window, the release returns `QUARANTINED_AGAIN`, and an ERROR names the instance. A further release goes on from that
+  record. On MongoDB 500,000 versions take about 8 MB of the 16 MB a document may hold, which leaves the rest for the
+  state. A longer backlog takes more than one release. Keeping the
+  versions a release applies outside the instance's document would remove the bound, and is left for later.
 - A quarantined instance keeps a record of the inputs it skips, with no limit on how many, and each record holds a whole event.
   The records take space in the store until a release replays them, a replayed input completes the instance, or the
   0.35.0 store deletes the instance. The downgrade in point 8 keeps the records of the instances that stay quarantined

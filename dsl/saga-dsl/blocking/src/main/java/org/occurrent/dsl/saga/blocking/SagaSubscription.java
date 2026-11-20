@@ -64,8 +64,9 @@ public final class SagaSubscription implements AutoCloseable {
         STILL_RELEASING,
         /**
          * The instance is quarantined again and not releasing, because an input kept failing during the release until
-         * its budget ran out. That input is the failure record's input now, and the inputs after it stay recorded, so a
-         * later release replays it first and then those.
+         * its budget ran out, or because the release reached the most stream versions one release keeps, see
+         * {@link SagaSubscription#release(String)}. That input is the failure record's input now, and the inputs after
+         * it stay recorded, so a further release replays it first and then those.
          */
         QUARANTINED_AGAIN,
         /** The instance is not quarantined, so there was nothing to release. */
@@ -119,6 +120,12 @@ public final class SagaSubscription implements AutoCloseable {
      * A replayed input's commands are dispatched before the write that applies it, so like a live input's they are
      * dispatched at least once. A write that loses only to inputs recorded meanwhile is written again without
      * dispatching them a second time.
+     * <p>
+     * The instance keeps every stream version the release applies in its stream marks until the release ends. Before
+     * the release applies an input it counts the versions the marks keep, and at 500,000 it stops without applying
+     * that input or dispatching its commands. The instance is quarantined again on that input with its marks trimmed,
+     * the release returns {@link ReleaseResult#QUARANTINED_AGAIN}, and an ERROR names the instance. A further release goes on from that input. On MongoDB 500,000 versions take
+     * about 8 MB of the 16 MB a document may hold, and the state gets the rest.
      * <p>
      * It takes no lease and pauses nothing, so it can be called on any node. Calling it again on an instance that is
      * releasing goes on where the release stands. The timer poller also goes on with a release, on the node that holds

@@ -587,6 +587,50 @@ public final class SagaExecutionSupport {
     public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseFailure(SagaEnvelope<S> current, EventMeta meta,
                                                                                            Throwable failure, Instant now,
                                                                                            Duration quarantineAfter, int reorderWindow) {
+        return onReleaseFailure(current, meta, failure, now, quarantineAfter, reorderWindow, false);
+    }
+
+    /**
+     * The most applied versions a releasing instance keeps in its stream marks before a release applies another record.
+     * A release keeps every version it applies until it ends, see {@link #replay}, so each stream event it applies adds
+     * one. MongoDB stores a version in about 16 bytes, so an instance at the bound keeps about 8 MB of the 16 MB it
+     * allows a document, and the rest is left for the state and the other fields.
+     */
+    public static final int MAX_APPLIED_VERSIONS_IN_A_RELEASE = 500_000;
+
+    /**
+     * How many applied versions {@code current} keeps in its stream marks, over every stream and event type. A release
+     * compares it with {@link #MAX_APPLIED_VERSIONS_IN_A_RELEASE} before it applies a record.
+     */
+    public static <S extends @Nullable Object> long appliedVersions(SagaEnvelope<S> current) {
+        long count = 0;
+        for (StreamMarks marks : current.streamMarks().values()) {
+            for (TypeMark typeMark : marks.byType().values()) {
+                count += typeMark.applied().size();
+            }
+        }
+        return count;
+    }
+
+    /**
+     * What to write when a release reached {@link #MAX_APPLIED_VERSIONS_IN_A_RELEASE} before the record {@code key}, or
+     * {@code null} when the instance applied that record's input already, and the release deletes the record as it
+     * would anyway. Save it with {@code compareAndSaveWithoutState(..., expectedVersion())}.
+     * <p>
+     * The instance is quarantined again on the record, as {@link #onReleaseFailure} quarantines it when the input's
+     * budget has run out, whatever the budget, so quarantine turned off does not change it. The marks are trimmed to
+     * {@code reorderWindow}, the record and the ones after it stay, and a further release goes on from that record.
+     * {@code reason} names the bound in the failure record.
+     */
+    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseBound(SagaEnvelope<S> current, EventMeta meta,
+                                                                                         Throwable reason, Instant now, int reorderWindow) {
+        return onReleaseFailure(current, meta, reason, now, Duration.ZERO, reorderWindow, true);
+    }
+
+    private static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseFailure(SagaEnvelope<S> current, EventMeta meta,
+                                                                                            Throwable failure, Instant now,
+                                                                                            Duration quarantineAfter, int reorderWindow,
+                                                                                            boolean atTheBound) {
         String input = meta.skipKey();
         if (input == null) {
             return null;
@@ -602,7 +646,7 @@ public final class SagaExecutionSupport {
             return null;
         }
         Instant failingSince = failingSince(current, meta, now);
-        boolean budgetUsedUp = Duration.between(failingSince, now).compareTo(quarantineAfter) >= 0;
+        boolean budgetUsedUp = atTheBound || Duration.between(failingSince, now).compareTo(quarantineAfter) >= 0;
         // An input with no stream has its clock on the record alone, so the record naming it is enough
         if (!budgetUsedUp && existing.input().equals(input) && (!streamKeyed || isPending(current.streamMarks().get(meta.streamId()), meta))) {
             return null;

@@ -1117,8 +1117,10 @@ its subscription goes live. To downgrade without that stall, do steps 1 to 5 whi
    the released instance.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
    longer decodes, and release the instance again.
-5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `QUARANTINED_AGAIN`, or that keeps
-   failing for a cause you can't fix.
+5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `RELEASED`, or that keeps
+   failing for a cause you can't fix. With quarantine off, a release returns `QUARANTINED_AGAIN` only when it reached
+   the 500,000 stream versions one release keeps. Call `release` again on that instance, since after step 6 nothing
+   replays the inputs it still holds recorded.
 6. Stop every 0.35.0 node. Then, from a process that runs no `SagaRunner`, store every instance that is still
    `QUARANTINED_RECORDING` as `QUARANTINED`, without its quarantine id, skip count and release time, and every
    `ACTIVE_MARKED` instance as `ACTIVE`. A released instance is `ACTIVE_MARKED` when it holds stream marks. On MongoDB,

@@ -704,6 +704,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * dispatching, see {@link #saveReplayed}. A write that loses to anything else reads the instance again and goes on
      * from what it finds, so two nodes releasing the same instance compete for each record.
      * <p>
+     * Before a record is applied, the stream marks of the instance are counted. With
+     * {@link SagaExecutionSupport#MAX_APPLIED_VERSIONS_IN_A_RELEASE} applied versions or more, the record is not applied
+     * and its commands are not dispatched. The instance is quarantined again on it with its marks trimmed, see
+     * {@link SagaExecutionSupport#onReleaseBound}, this returns {@code QUARANTINED_AGAIN}, and a further release goes on
+     * from that record.
+     * <p>
      * At most {@code maxRecords} records are replayed. When a further record is there after that, this returns
      * {@code null} with the instance still releasing, and the next call goes on from that record. With
      * {@code leaveIfWrittenSince}, an instance first read with an {@code updatedAt} after it is left as it is, and this
@@ -760,6 +766,26 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             SkippedInput record = first.getFirst();
             CloudEvent cloudEvent = record.event();
             EventMeta meta = extractMeta(cloudEvent).meta();
+            // A release keeps every version it applies until it ends, so a long enough backlog would take the instance
+            // past the size its store allows a document. Every write from then on would fail after the record's commands
+            // were dispatched, so the release stops here and quarantines the instance again, which trims the marks
+            long appliedVersions = SagaExecutionSupport.appliedVersions(current);
+            if (appliedVersions >= SagaExecutionSupport.MAX_APPLIED_VERSIONS_IN_A_RELEASE) {
+                IllegalStateException bound = new IllegalStateException("The release of saga instance '" + sagaId + "' keeps " + appliedVersions
+                                                                        + " applied versions in its stream marks, and stops at " + SagaExecutionSupport.MAX_APPLIED_VERSIONS_IN_A_RELEASE + ".");
+                FailureRecord<S> atTheBound = SagaExecutionSupport.onReleaseBound(current, meta, bound, now, config.reorderWindow());
+                // Null when the instance applied the record's input already. The replay below then only deletes the
+                // record, which adds no version
+                if (atTheBound != null) {
+                    if (envelopes.compareAndSaveWithoutState(sagaId, atTheBound.envelope(), atTheBound.expectedVersion())) {
+                        log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because its release keeps {} applied versions in its stream marks, the most a release keeps. Another version could take the instance past the size its state store allows. The event and the inputs after it stay recorded. Release the instance again to go on from that event.",
+                                subscriptionId, sagaId, record.key(), appliedVersions);
+                        return SagaSubscription.ReleaseResult.QUARANTINED_AGAIN;
+                    }
+                    lostInARow = lostAgain(sagaId, lostInARow);
+                    continue;
+                }
+            }
             boolean saved;
             try {
                 E event = converter.toDomainEvent(cloudEvent);
