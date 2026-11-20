@@ -17,6 +17,10 @@ Corrected by [ADR 159](0159-six-passages-in-released-adrs-do-not-describe-the-co
 writes a first position with `ifAbsent()` since 0.34.0, on a storage that evaluates write conditions, so the sentence
 below saying it still records one with `any()` is no longer true.
 
+Amended by [ADR 184](0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md). A
+storage that can't evaluate `ifAbsent()` no longer keeps the unconditional first write by default. The first position
+is refused instead, unless `startWhenFirstPositionCanBeOverwritten` is set.
+
 ## Context
 
 ADR 86 shipped `occurrent.subscription.mode` for the blocking stack and said the reactive stack "already

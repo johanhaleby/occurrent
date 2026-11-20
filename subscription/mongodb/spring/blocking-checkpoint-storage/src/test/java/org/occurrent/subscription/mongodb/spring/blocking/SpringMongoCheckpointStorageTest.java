@@ -274,6 +274,12 @@ public class SpringMongoCheckpointStorageTest {
         AtomicInteger numberOfWritesToBlockingSubscriptionStorage = new AtomicInteger(0);
         CheckpointStorage storage = new CheckpointStorage() {
 
+            // It reads nothing back, so a write that only holds when nothing is stored always holds
+            @Override
+            public boolean evaluatesWriteConditions() {
+                return true;
+            }
+
             @Override
             public Checkpoint read(@NonNull String subscriptionId) {
                 return null;
@@ -330,6 +336,12 @@ public class SpringMongoCheckpointStorageTest {
 
         AtomicInteger numberOfWritesToBlockingSubscriptionStorage = new AtomicInteger(0);
         CheckpointStorage storage = new CheckpointStorage() {
+
+            // It reads nothing back, so a write that only holds when nothing is stored always holds
+            @Override
+            public boolean evaluatesWriteConditions() {
+                return true;
+            }
 
             @Override
             public Checkpoint read(@NonNull String subscriptionId) {

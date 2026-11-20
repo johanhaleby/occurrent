@@ -85,11 +85,25 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * and {@link #cancelSubscription(String)} tries the cancel again and keeps the checkpoint stored for the id, which the
  * held subscription itself, an earlier run or another node may have written. A subscription with a
  * checkpoint already stored starts from that checkpoint and is never refused this way, and one subscribing with
- * a {@link StartAt} of its own records no position and is never refused either. This is the same answer
+ * a {@link StartAt} of its own that doesn't resolve to the model default records no position and is never refused
+ * either. This is the same answer
  * {@link ManualStartSubscriptionModel} gives for a {@code null} position source and the same one the reactor
  * {@code ReactorDurableSubscriptionModel} gives for the same registration.
  * {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turns the refusal into a
  * start without a recorded position, accepting the loss window it documents.
+ * <p>
+ * The first position is written with {@link CheckpointWriteCondition#ifAbsent()}, so of two nodes recording one at the
+ * same moment, only one write is stored. A {@link CheckpointStorage} that answers {@code false} from
+ * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} could only write it unconditionally, and then the two
+ * nodes could overwrite each other's and lose the events between the two positions. Such a subscription is refused with
+ * {@link IllegalStateException} where a subscription with no position to record is, before anything is written for it.
+ * A subscription with a checkpoint already stored, or with a {@link StartAt} of its own that doesn't resolve to the
+ * model default, records no first position and is never refused this way. Every storage Occurrent ships evaluates
+ * write conditions, apart from {@code SpringRedisCheckpointStorage} in Cluster-safe mode for an id
+ * Redis Cluster can't put in one slot with its version key, and for an id in the reserved namespace of its version
+ * key, which it refuses for every read and write anyway.
+ * {@link DurableSubscriptionModelConfig#startWhenFirstPositionCanBeOverwritten(boolean)} writes the first position
+ * unconditionally instead, with a warning, accepting that loss.
  * <p>
  * The position is recorded once the wrapped model's {@code subscribe(..)} has returned, or earlier if the wrapped model
  * evaluates the start position before then, and the wrapped model gets no start position before it is stored. So with
@@ -111,8 +125,13 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * a later {@code subscribe(..)} of the id has stopped the checkpoint writes of its subscribe. On a storage that
  * evaluates write conditions, an evaluation whose write loses starts from the position
  * {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint)} answers, or else from the one it reads back,
- * and is refused when that read fails or finds nothing. On a storage that doesn't, its write replaces whatever is
- * stored.
+ * and is refused when that read fails or finds nothing. A storage that doesn't evaluate them had a checkpoint stored
+ * when the position was decided, since this model refuses the subscribe otherwise. An evaluation there that finds
+ * nothing stored any more, for example because a cancel on another node deleted the checkpoint, starts from the
+ * checkpoint read when the position was decided, also once the checkpoint writes of its subscribe have stopped. That
+ * can deliver events again but skips none. With
+ * {@link DurableSubscriptionModelConfig#startWhenFirstPositionCanBeOverwritten(boolean) startWhenFirstPositionCanBeOverwritten(true)}
+ * the evaluation records a position instead, and its write replaces whatever is stored.
  * <p>
  * When a wrapped model's {@code subscribe(..)} throws, this model cancels nothing on the wrapped model, as in 0.33.0,
  * since a subscription the wrapped model holds for the id may belong to another subscribe. A wrapped model of your own
@@ -134,8 +153,9 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * an action of the held subscription writes and the first position an evaluation of its start position records, so
  * neither overwrites a checkpoint that subscribe stores. A later {@code subscribe(..)} that the wrapped model refuses
  * stops them too, so the held subscription then stores no checkpoint for an event it delivers until a cancel of the
- * id, and an evaluation of its start position that finds nothing stored is refused. Until a cancel or a later
- * {@code subscribe(..)} of the id, the held subscription writes its checkpoints.
+ * id, and an evaluation of its start position that finds nothing stored is refused, unless the storage doesn't
+ * evaluate write conditions, where it starts from the checkpoint read when the position was decided. Until a cancel
+ * or a later {@code subscribe(..)} of the id, the held subscription writes its checkpoints.
  * <p>
  * This model stores the position a wrapped {@link QuietPositionReportingSubscriptions} reports for a quiet
  * subscription, and the one a wrapped {@link HistoryLossReportingSubscriptions} restarts a subscription from after its
@@ -451,12 +471,18 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      *                               {@link CheckpointAwareSubscriptionModel#globalCheckpoint()} answers
      *                               {@code null}, which is how it reports a problem it cannot resolve. The
      *                               subscription the wrapped model accepted is cancelled, so subscribe again once the
-     *                               model can answer, pass a {@link StartAt} of your own, which records no position
+     *                               model can answer, pass a {@link StartAt} of your own that doesn't resolve to the
+     *                               model default, which records no position
      *                               and makes no resume promise, or configure
      *                               {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)}.
      *                               When that cancel throws too, the exception has a suppressed exception saying the
      *                               wrapped model may still hold the id, and {@link #cancelSubscription(String)} tries
-     *                               the cancel again and keeps the checkpoint stored for the id.
+     *                               the cancel again and keeps the checkpoint stored for the id. Thrown the same way,
+     *                               and with the same cancel, when {@code startAt} resolves to the model default, no
+     *                               checkpoint is stored for {@code subscriptionId}, and the storage answers
+     *                               {@code false} from {@link CheckpointStorage#evaluatesWriteConditionsFor(String)},
+     *                               unless {@link DurableSubscriptionModelConfig#startWhenFirstPositionCanBeOverwritten(boolean)}
+     *                               is set.
      */
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
@@ -747,7 +773,28 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                          "occurrent.subscription.start-when-no-start-position-can-be-recorded=true when " +
                                          "using the Spring Boot starter. A subscription with a checkpoint already stored " +
                                          "starts from that checkpoint and is never refused this way. Subscribing with a " +
-                                         "StartAt of your own records no position and makes no such promise.");
+                                         "StartAt of your own that doesn't resolve to the model default records no " +
+                                         "position and makes no such promise.");
+    }
+
+    // Thrown where noStartPositionCanBeRecorded is, before anything is written for the subscription, so it reaches the
+    // caller of subscribe, or the evaluation that would have recorded the first position
+    private IllegalStateException firstPositionCanBeOverwritten(String subscriptionId) {
+        return new IllegalStateException("Checkpoint storage " + storage.getClass().getName() + " does not evaluate " +
+                                         "write conditions for subscription " + subscriptionId + ", so the first " +
+                                         "position recorded for it could only be written unconditionally. Two nodes " +
+                                         "recording a first position for this subscription at the same moment could " +
+                                         "then overwrite each other's and lose the events between the two positions. " +
+                                         "The subscription is therefore refused before anything is written. Use a " +
+                                         "storage that evaluates CheckpointWriteCondition.ifAbsent() and answers true " +
+                                         "from evaluatesWriteConditionsFor(String) for this subscription. To start " +
+                                         "anyway, accepting that loss, configure " +
+                                         "DurableSubscriptionModelConfig.startWhenFirstPositionCanBeOverwritten(true), " +
+                                         "or, when a Spring Boot starter built this model, set " +
+                                         "occurrent.subscription.start-when-first-position-can-be-overwritten=true. " +
+                                         "A subscription with a checkpoint already " +
+                                         "stored, or with a StartAt of your own that doesn't resolve to the model " +
+                                         "default, records no first position and is never refused this way.");
     }
 
     // Pinned with ifAbsent(), the same protocol ManualStartSubscriptionModel and ReactorDurableSubscriptionModel
@@ -757,10 +804,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // is the one this node itself computed.
     private Checkpoint saveFirstPosition(String subscriptionId, Checkpoint globalCheckpoint) {
         if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
-            // Nothing here can make a storage that writes unconditionally do otherwise, so this is the write
-            // before this method existed and two nodes recording a first position at the same moment keep the
-            // race. Logged rather than refused, because refusing would take out a storage that has worked until
-            // now over a capability it never claimed.
+            // Nothing here can make a storage that writes unconditionally do otherwise, so two nodes recording a
+            // first position at the same moment would race. Refused before anything is written, unless the config
+            // accepts that loss. Settling refuses this first while the storage answers the same for the id, so this
+            // refuses a storage whose answer changed since
+            if (!config.startWhenFirstPositionCanBeOverwritten) {
+                throw firstPositionCanBeOverwritten(subscriptionId);
+            }
             log.warn("Checkpoint storage {} does not evaluate write conditions for subscription {}, so the first " +
                      "position recorded for it is written unconditionally. Two nodes recording a first position " +
                      "for this subscription at the same moment can then lose the events between the two positions. " +
@@ -846,6 +896,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 }
                 // Read inside the supplier so a retry picks up the latest checkpoint, not a stale one
                 Checkpoint checkpoint = storage.read(subscriptionId);
+                if (checkpoint == null && !config.startWhenFirstPositionCanBeOverwritten && !storage.evaluatesWriteConditionsFor(subscriptionId)) {
+                    // Settling refused this subscribe unless a checkpoint was stored then, so it was, and something such
+                    // as a cancel on another node deleted it since. A first position written here could only be written
+                    // unconditionally, and a refusal here is retried without end by the blocking MongoDB models, so the
+                    // evaluation starts from the checkpoint read then. That can deliver an event again but skips none, as
+                    // when the delete comes after the subscription started
+                    checkpoint = firstPosition.storedWhenSettled();
+                }
                 if (checkpoint == null) {
                     Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
                     if (globalCheckpoint != null) {
@@ -1280,7 +1338,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     //   without a settled position, nor while nothing is stored because the override let an unanswerable source
     //   through.
     private final class FirstPosition {
-        private static final Settled ENDED = new Settled(null);
+        private static final Settled ENDED = new Settled(null, null);
 
         private final String subscriptionId;
         private final ReentrantLock settling = new ReentrantLock();
@@ -1332,6 +1390,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             return handedOut.compareAndSet(false, true) ? outcome.recorded : null;
         }
 
+        // The checkpoint read when the first position settled, for an evaluation that has settled it
+        @Nullable Checkpoint storedWhenSettled() {
+            Settled outcome = settled;
+            return outcome == null ? null : outcome.stored;
+        }
+
         private Settled settle() {
             Settled outcome = settled;
             if (outcome != null) {
@@ -1342,11 +1406,17 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             if (stored == null && position == null && !config.startWhenNoStartPositionCanBeRecorded) {
                 throw noStartPositionCanBeRecorded(subscriptionId);
             }
+            // With nothing stored, a first position is recorded now or, when the override let a missing position through,
+            // by a later evaluation once the wrapped model has one. A refusal there comes after subscribe has returned,
+            // and the blocking MongoDB models retry it without end, so it is refused here, where it reaches subscribe
+            if (stored == null && !config.startWhenFirstPositionCanBeOverwritten && !storage.evaluatesWriteConditionsFor(subscriptionId)) {
+                throw firstPositionCanBeOverwritten(subscriptionId);
+            }
             settling.lock();
             try {
                 outcome = settled;
                 if (outcome == null) {
-                    outcome = new Settled(position == null ? null : saveFirstPosition(subscriptionId, position));
+                    outcome = new Settled(position == null ? null : saveFirstPosition(subscriptionId, position), stored);
                     if (stored != null || position != null) {
                         // Before the outcome is published, so no evaluation returns the position before it runs
                         positionStored();
@@ -1374,8 +1444,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     // What a first position settled on. A null recorded means nothing was recorded, because a checkpoint was stored
-    // already or the override let an unanswerable source through
-    private record Settled(@Nullable Checkpoint recorded) {
+    // already or the override let an unanswerable source through. stored is the checkpoint read when it settled
+    private record Settled(@Nullable Checkpoint recorded, @Nullable Checkpoint stored) {
     }
 
     // The checkpoint and write version stored for an id once a subscribe at a checkpoint of the caller's own was
