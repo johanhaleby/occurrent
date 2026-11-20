@@ -42,6 +42,7 @@ import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.springframework.beans.factory.config.AutowireCapableBeanFactory;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
@@ -234,6 +235,13 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // the writes the application service admits. A handler already registered under this name misses nothing. A
     // factory whose product declares the handlers doesn't fail, since its own class is what is checked.
     private void refuseSynchronousHandlerOn(Object factory, String beanName, boolean handledAsFactory) {
+        // Spring's test support initializes the test instance under its class name plus ORIGINAL_INSTANCE_SUFFIX, the
+        // name AutoProxyUtils also uses to leave an instance unproxied. The context never exposes that instance, so
+        // its handlers can't miss a write through the application service, and 0.34.0 started it without registering
+        // them
+        if (beanName.equals(factory.getClass().getName() + AutowireCapableBeanFactory.ORIGINAL_INSTANCE_SUFFIX)) {
+            return;
+        }
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         String scanName = HandlerScan.isScopedTarget(beanFactory, beanName) ? ScopedProxyUtils.getOriginalBeanName(beanName) : beanName;
         Object target = SubscriptionAnnotations.ultimateTarget(factory);

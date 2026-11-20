@@ -2978,10 +2978,11 @@ a class that doesn't implement `FactoryBean`.
 
 An object Spring initializes under a name with no bean definition fails its creation the same way when it declares a
 synchronous handler that isn't registered. That is the product of a `FactoryBean` registered with `registerSingleton`,
-an object passed to `initializeBean` of `AutowireCapableBeanFactory`, and a test instance that Spring's test support
-initializes. The startup scan reads only names with a bean definition, and in 0.34.0 the starter didn't register such
-a handler when the object was created either. Declare the bean, or the `FactoryBean` that creates it, with a bean
-definition, for example with a `@Bean` method.
+and an object passed to `initializeBean` of `AutowireCapableBeanFactory`. The startup scan reads only names with a bean
+definition, and in 0.34.0 the starter didn't register such a handler when the object was created either. Declare the
+bean, or the `FactoryBean` that creates it, with a bean definition, for example with a `@Bean` method. An object
+initialized under its class name with `.ORIGINAL` appended isn't checked. That is the name Spring's test support gives
+a test instance, so a test class that declares a synchronous handler starts as it did in 0.34.0.
 
 ### What to do
 
