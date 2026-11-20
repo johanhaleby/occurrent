@@ -77,6 +77,8 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
     @Container
     private static final GenericContainer<?> standaloneMongo = new GenericContainer<>("mongo:8.0")
             .withExposedPorts(27017)
+            // As in test-support. Without it mongod 8.0 refuses to start on the CI runners' Linux 7.0 kernel (SERVER-121912)
+            .withEnv("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
             .waitingFor(Wait.forLogMessage(".*Waiting for connections.*", 1))
             .withStartupTimeout(Duration.ofMinutes(5));
 

@@ -399,6 +399,72 @@ class SpringMongoSagaStateStoreReleaseTest {
     }
 
     @Test
+    void an_instance_whose_first_input_fails_is_inserted_already_quarantined_with_the_record_of_that_input() {
+        MongoOperations mongoOperations = mongoOperations();
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations);
+        SagaEnvelope<Payment> quarantined = envelope("order-first", SagaStatus.QUARANTINED, 1, failure(null, QUARANTINE_ID), 1L);
+
+        boolean skipped = SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, quarantined, 0, QUARANTINE_ID, new SkippedInput(0, "order-1@7", heldEvent("order-1@7")));
+
+        SagaEnvelope<Payment> found = SagaEnvelopes.of(store, null).find("order-first").orElseThrow();
+        assertAll(
+                () -> assertThat(skipped).isTrue(),
+                () -> assertThat(stored(mongoOperations, "order-first").getString("status")).isEqualTo("QUARANTINED_RECORDING"),
+                () -> assertThat(found.status()).isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(found.quarantineId()).isEqualTo(QUARANTINE_ID),
+                () -> assertThat(store.findSkippedInputs("order-first", QUARANTINE_ID, 10)).containsExactly(new SkippedInput(0, "order-1@7", heldEvent("order-1@7")))
+        );
+    }
+
+    @Test
+    void a_second_quarantining_insert_of_the_same_saga_id_loses_without_an_error_and_leaves_the_first_instance_and_its_record() {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        SagaEnvelope<Payment> first = envelope("order-twice", SagaStatus.QUARANTINED, 1, failure(null, "q-first"), 1L);
+        SagaEnvelope<Payment> second = envelope("order-twice", SagaStatus.QUARANTINED, 1, failure(null, "q-second"), 1L);
+        assertThat(SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, first, 0, "q-first", new SkippedInput(0, "first@1", heldEvent("first@1")))).as("control: the first insert wins").isTrue();
+
+        boolean lost = SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, second, 0, "q-second", new SkippedInput(0, "second@1", heldEvent("second@1")));
+
+        assertAll(
+                () -> assertThat(lost).isFalse(),
+                () -> assertThat(SagaEnvelopes.of(store, null).find("order-twice").orElseThrow().quarantineId()).isEqualTo("q-first"),
+                () -> assertThat(store.findSkippedInputs("order-twice", "q-first", 10)).containsExactly(new SkippedInput(0, "first@1", heldEvent("first@1"))),
+                () -> assertThat(store.findSkippedInputs("order-twice", "q-second", 10)).as("the losing insert records nothing").isEmpty()
+        );
+    }
+
+    @Test
+    void of_two_concurrent_quarantining_inserts_of_the_same_saga_id_exactly_one_wins_and_the_other_returns_false_without_an_error() throws Exception {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        CountDownLatch bothReady = new CountDownLatch(2);
+        CountDownLatch go = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<Boolean>> inserts = List.of("q-a", "q-b").stream().map(quarantineId -> executor.submit(() -> {
+                SagaEnvelope<Payment> quarantined = envelope("order-race", SagaStatus.QUARANTINED, 1, failure(null, quarantineId), 1L);
+                bothReady.countDown();
+                go.await();
+                return SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, quarantined, 0, quarantineId, new SkippedInput(0, quarantineId + "@1", heldEvent(quarantineId + "@1")));
+            })).toList();
+            bothReady.await();
+            go.countDown();
+
+            boolean a = inserts.get(0).get(30, TimeUnit.SECONDS);
+            boolean b = inserts.get(1).get(30, TimeUnit.SECONDS);
+
+            String winner = requireNonNull(SagaEnvelopes.of(store, null).find("order-race").orElseThrow().quarantineId());
+            String loser = winner.equals("q-a") ? "q-b" : "q-a";
+            assertAll(
+                    () -> assertThat(a ^ b).as("exactly one insert wins").isTrue(),
+                    () -> assertThat(store.findSkippedInputs("order-race", winner, 10)).containsExactly(new SkippedInput(0, winner + "@1", heldEvent(winner + "@1"))),
+                    () -> assertThat(store.findSkippedInputs("order-race", loser, 10)).as("the losing insert records nothing").isEmpty()
+            );
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void records_are_read_for_one_saga_and_quarantine_id_up_to_the_limit() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         instances(store, "order-9", "order-10");
