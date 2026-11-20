@@ -28,7 +28,6 @@ import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.HandlerScan;
-import org.occurrent.springboot.common.internal.FactoriesInInitialization;
 import org.occurrent.springboot.common.internal.LateFactoryLiveStarts;
 import org.occurrent.springboot.common.internal.LateLiveStarts;
 import org.occurrent.springboot.common.internal.RegisteredHandlers;
@@ -137,8 +136,6 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private final LateLiveStarts lateLiveStarts = new LateLiveStarts();
     // The boundaries FactoryBeans built after startup read for their products
     private final LateFactoryLiveStarts lateFactoryLiveStarts = new LateFactoryLiveStarts();
-    // Tells a FactoryBean the container built from a product that implements FactoryBean too
-    private final FactoriesInInitialization factoriesInInitialization = new FactoriesInInitialization();
     private StartPositionSupport startPositionSupport;
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
     private ProjectionAnnotationRegistrar projectionRegistrar;
@@ -178,7 +175,6 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     @Override
     public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
         if (bean instanceof FactoryBean<?>) {
-            factoriesInInitialization.initializationStarts(bean);
             ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
             boolean prototype = beanFactory.containsBeanDefinition(beanName) && beanFactory.getMergedBeanDefinition(beanName).isPrototype();
             if (startupScanComplete) {
@@ -212,6 +208,21 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
         }
         return bean;
+    }
+
+    // Spring passes a FactoryBean's product through postProcessAfterInitialization under the factory's bean name, and the
+    // product can implement FactoryBean too, so the type doesn't tell the two apart, and neither does the instance the
+    // callback above saw, since a post-processor that runs earlier can return another object for the factory. The
+    // container does. It runs this callback for the factory while that name is in creation and before it registers
+    // the factory as a singleton. A product comes after a prototype or scoped factory's creation ends, and after a
+    // singleton factory is registered. A FactoryBean with no bean definition behind it has no product to tell apart.
+    private boolean isTheFactoryItself(Object bean, String beanName) {
+        if (!(bean instanceof FactoryBean<?>)) {
+            return false;
+        }
+        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
+        return !beanFactory.containsBeanDefinition(beanName)
+                || (beanFactory.isCurrentlyInCreation(beanName) && !beanFactory.containsSingleton(beanName));
     }
 
     // The instance the callback above saw, which a proxy created since wraps
@@ -256,9 +267,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // it asked for.
     @Override
     public Object postProcessAfterInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
-        // The factory the callback above saw, and not its product, which arrives here under the same name and can
-        // implement FactoryBean too
-        if (factoriesInInitialization.initializationEnds(bean)) {
+        if (isTheFactoryItself(bean, beanName)) {
             return bean;
         }
         // Every event store bean passes through here as it is created, before anything can write through it

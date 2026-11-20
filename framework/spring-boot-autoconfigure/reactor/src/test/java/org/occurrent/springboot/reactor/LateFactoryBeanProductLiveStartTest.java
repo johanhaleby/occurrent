@@ -38,6 +38,7 @@ import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.BeanFactoryAware;
 import org.springframework.beans.factory.BeanNameAware;
 import org.springframework.beans.factory.FactoryBean;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.ObjectFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -46,6 +47,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Scope;
+import org.springframework.core.Ordered;
+import org.springframework.core.PriorityOrdered;
 import reactor.core.publisher.Mono;
 
 import java.lang.ref.WeakReference;
@@ -69,6 +72,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
@@ -98,6 +102,7 @@ class LateFactoryBeanProductLiveStartTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+            .withBean(FactoryDecoratingPostProcessor.class, FactoryDecoratingPostProcessor::new)
             .withInitializer(context -> context.getBeanFactory().registerScope(ContextScope.NAME, new ContextScope()))
             .withUserConfiguration(ProductFactoryConfiguration.class);
 
@@ -433,6 +438,49 @@ class LateFactoryBeanProductLiveStartTest {
         });
     }
 
+    /**
+     * A post-processor that runs before ours returns a plain FactoryBean decorator, which is no Spring proxy, for the
+     * factory. The container hands the decorator to ours as the factory, and the product comes after.
+     */
+    @Test
+    void a_product_of_a_late_singleton_factory_that_an_earlier_post_processor_decorated_registers_and_the_decorator_is_no_product() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+
+            BOUNDARY.set(2);
+            assertThatCode(() -> context.getBean("&decoratedSingletonFactory")).describedAs("creating the factory").doesNotThrowAnyException();
+            BOUNDARY.set(3);
+            assertThatCode(() -> context.getBean("decoratedSingletonFactory")).describedAs("asking for the product").doesNotThrowAnyException();
+
+            assertThat(ConcurrentLateFactoryBeanLiveStartTest.startOfLateRegistration(context, "decorated-singleton-handler")).isNotNull();
+            assertThat(subscribedIds(context)).describedAs("handlers registered").contains("decorated-singleton-handler").doesNotContain("decorator-handler");
+        });
+    }
+
+    @Test
+    void a_product_of_a_late_prototype_factory_that_an_earlier_post_processor_decorated_registers_and_leaves_no_claim_for_the_next_factory_of_its_name_on_the_thread() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+            NOT_BEFORE.clear();
+
+            BOUNDARY.set(2);
+            assertThatCode(() -> context.getBean("decoratedPrototypeFactory")).describedAs("asking for the product").doesNotThrowAnyException();
+            BOUNDARY.set(3);
+            context.getBean("&decoratedPrototypeFactory");
+
+            assertThat(ConcurrentLateFactoryBeanLiveStartTest.startOfLateRegistration(context, "decorated-prototype-handler")).isEqualTo(GlobalCheckpoint.of(2));
+            assertThat(subscribedIds(context)).describedAs("handlers registered").doesNotContain("decorator-handler");
+            assertThat(NOT_BEFORE).containsExactly(null, null);
+        });
+    }
+
+    private static List<String> subscribedIds(org.springframework.context.ApplicationContext context) {
+        return mockingDetails(context.getBean(Subscriptions.class)).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals("subscribe"))
+                .map(invocation -> (String) invocation.getArgument(0))
+                .collect(java.util.stream.Collectors.toList());
+    }
+
     private static <T> T onNewThread(Callable<T> work) throws Exception {
         FutureTask<T> task = new FutureTask<>(work);
         new Thread(task, "late-factory-test").start();
@@ -456,6 +504,59 @@ class LateFactoryBeanProductLiveStartTest {
             latches[i] = new CountDownLatch(1);
         }
         return latches;
+    }
+
+    static class DecoratedSingletonHandler implements LateMarker {
+        @Subscription(id = "decorated-singleton-handler", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT, startupMode = StartupMode.BACKGROUND)
+        void onDecorated(LateBeanAnnotationRegistrationTest.TestEvent event) {
+        }
+    }
+
+    static class DecoratedPrototypeHandler implements LateMarker {
+        @Subscription(id = "decorated-prototype-handler", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT, startupMode = StartupMode.BACKGROUND)
+        void onDecorated(LateBeanAnnotationRegistrationTest.TestEvent event) {
+        }
+    }
+
+    // A plain FactoryBean around another one, with a handler that only registers if it is taken for a product
+    static class FactoryDecorator implements FactoryBean<LateMarker> {
+        private final SimpleFactory delegate;
+
+        FactoryDecorator(SimpleFactory delegate) {
+            this.delegate = delegate;
+        }
+
+        @Subscription(id = "decorator-handler", startAt = StartPosition.NOW, resumeBehavior = ResumeBehavior.SAME_AS_START_AT, startupMode = StartupMode.BACKGROUND)
+        void onDecorator(LateBeanAnnotationRegistrationTest.TestEvent event) {
+        }
+
+        @Override
+        public LateMarker getObject() {
+            return delegate.getObject();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return delegate.getObjectType();
+        }
+
+        @Override
+        public boolean isSingleton() {
+            return delegate.isSingleton();
+        }
+    }
+
+    // Runs before the post-processor under test and decorates the factories whose name starts with "decorated"
+    static class FactoryDecoratingPostProcessor implements BeanPostProcessor, PriorityOrdered {
+        @Override
+        public Object postProcessAfterInitialization(Object bean, String beanName) {
+            return bean instanceof SimpleFactory && beanName.startsWith("decorated") ? new FactoryDecorator((SimpleFactory) bean) : bean;
+        }
+
+        @Override
+        public int getOrder() {
+            return Ordered.HIGHEST_PRECEDENCE;
+        }
     }
 
     interface LateMarker {
@@ -866,6 +967,18 @@ class LateFactoryBeanProductLiveStartTest {
         @Scope("prototype")
         SimpleFactory factoryProductPrototypeFactory() {
             return new SimpleFactory(new PrototypeFactoryProduct(), false);
+        }
+
+        @Bean
+        @Lazy
+        SimpleFactory decoratedSingletonFactory() {
+            return new SimpleFactory(new DecoratedSingletonHandler(), true);
+        }
+
+        @Bean
+        @Scope("prototype")
+        SimpleFactory decoratedPrototypeFactory() {
+            return new SimpleFactory(new DecoratedPrototypeHandler(), false);
         }
 
         @Bean
