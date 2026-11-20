@@ -2742,7 +2742,9 @@ from an `ApplicationRunner` there too.
 
 The starter refuses the write also when the application declares no synchronous handler. A write made directly to
 the event store, with `EventStore.write` or `DcbEventStore.append`, is not refused. No synchronous handler sees such a
-write, whenever it is made.
+write, whenever it is made, unless the application also passes its events to the `SynchronousSubscriptionModel`
+directly, with `dispatch` on either stack or `accept` on the blocking one, which reaches the synchronous handlers the
+starter registered for those events.
 
 A `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`, or a `@Saga` on the
 blocking starter, that starts live now gets that direct write. On its first start at `NOW`, or at `DEFAULT` with
@@ -2754,9 +2756,18 @@ on, and sends commands for, an event written directly to the event store while t
 skipped it. A handler on a bean built after startup, such as a `@Lazy` bean, starts from where the event store is
 when that bean is built, so it gets what the bean's own `@PostConstruct` method writes. For a `FactoryBean` built
 after startup that is where the event store was when the factory was built, so its product's handler also gets what
-the factory writes while it builds the product. When the factory was built while the application started and its
-product only later, the product's handler starts from where the event store is once the product exists, and misses
-what the factory writes while it builds the product.
+the factory writes while it builds the product. The product's handler gets events written before the product was built
+in three more cases:
+
+- The factory is a singleton or scoped one created in an earlier call than the product, for example with
+  `getBean("&name")` or by injecting it, or its `isSingleton()` returns false so each lookup builds a new product. The
+  handler also gets what was written between the factory's creation and the product's.
+- The factory is a prototype, and an older factory of the same name that the same thread created is still there,
+  unclaimed by a product and not garbage collected, for example the factory whose `getObject` asked for this product.
+  The handler starts from where the event store was when that older factory was built.
+- The factory was built while the application started and its product only later, also a prototype factory whose
+  `getObject` ran after startup. The handler starts from where the event store was when the event store bean was
+  created, so it also gets what was written while the application started and while the factory built the product.
 
 Except where a `SubscriptionResumePoints` bean answers for the subscription, a handler starts where the event store
 is when it subscribes, which is once the startup scan is done, in these cases:

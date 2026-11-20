@@ -43,15 +43,17 @@ import java.lang.annotation.*;
  *
  * <h4>What a synchronous handler gets</h4>
  * <p>
- * A synchronous handler gets the events written through the application service of its own process after it
- * registered, and no others:
+ * Registered by the Spring Boot starter, a synchronous handler gets the events written through the application service
+ * of its own process after it registered. It also gets the events your code passes to the
+ * {@code SynchronousSubscriptionModel} directly, with {@code dispatch} on either stack or {@code accept} on the
+ * blocking one, for example from an in-memory event store's write listener. It gets no others:
  * </p>
  * <ul>
  * <li>It has no replay, so it doesn't get the events stored before it registered. A synchronous handler added to an
  * application whose event store already has events starts from nothing. To build a read model from the events already
  * stored, use an asynchronous handler that starts at the beginning.</li>
  * <li>An event written directly to the event store, without going through the application service, doesn't reach
- * it.</li>
+ * it unless your code also passes it to the model.</li>
  * <li>An event that another process writes doesn't reach it. Every process that writes through an application service
  * must run the same synchronous handlers, so add or remove one with every process stopped, or use an asynchronous
  * handler. During a rolling deploy, a process still running the previous version writes events that a handler only

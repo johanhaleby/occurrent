@@ -262,14 +262,31 @@ when it is created, and its subscriptions begin there. A write between startup a
 to it, so a subscription at `NOW` doesn't get it. The read comes before the bean's `@PostConstruct` method runs, since
 Spring runs that method from `CommonAnnotationBeanPostProcessor`, which it moves to the end of the post-processor
 chain, so a subscription at `NOW` gets what that method writes. A `FactoryBean` built after startup reads the live
-start for its product the same way, before the factory's own `@PostConstruct` method runs. The product's class is
-unknown until `getObject` runs, so every such factory makes that read, also one whose product declares no handler. A
-factory built while the application starts, whose product is built only after startup, reads the live start for that
-product once the product exists, after `getObject` has run. The product's subscription at `NOW` misses what the
-factory writes while it builds the product.
+start for its product the same way, before the factory's own `@PostConstruct` method runs, so the product's
+subscription at `NOW` gets what the factory writes while it is initialized and while `getObject` runs. The product's
+class is unknown until `getObject` runs, so every such factory makes that read, also one whose product declares no
+handler. Spring calls no post-processor before `getObject` runs on a factory that already exists, so the live start
+belongs to the factory, and the product can get events written before it was built:
+
+- The product of a singleton or scoped factory starts where that factory read. When the factory was created in an
+  earlier call, for example by `getBean("&name")` or by injecting the factory, or its `isSingleton()` returns false so
+  each lookup builds a new product, the product also gets what was written between the factory's creation and its own.
+- The product of a prototype factory starts where the oldest factory of its bean name read that its thread created, no
+  product claimed, and the garbage collector hasn't collected. That's its own factory unless an older one is still
+  there, such as the factory whose `getObject` asked for this product under its own name, one asked for with
+  `getBean("&name")`, or one whose creation failed. The product then also gets what was written since that older
+  factory was created. A new prototype factory reads its live start no earlier than the newest of those factories, so
+  the oldest one's is the earliest even when two reads of the event store go back, as two MongoDB sessions can when the
+  primary changes. That rests on MongoDB's documented `afterClusterTime` behaviour, which no test here runs against a
+  primary change.
+- The product of a factory built before the startup scan ended starts from the live start read when the event store
+  bean was created, so it also gets what was written while the application started and while `getObject` ran. That
+  includes a prototype factory whose creation began before the scan ended and whose `getObject` ran after it, and a
+  prototype product whose oldest factory, as above, is such a factory.
 
 The post-processors keep each bean's live start from before its initialization to after it by the bean instance, not
-by its name, so two concurrent creations of one prototype bean each start from their own.
+by its name, so two concurrent creations of one prototype bean each start from their own, and they keep a factory's
+by the factory instance the same way.
 
 A bean built after startup that declares a synchronous handler the scan didn't register fails its creation before its
 `@PostConstruct` method runs, see decision point 3, so that method writes nothing the handler would miss. 0.34.0
