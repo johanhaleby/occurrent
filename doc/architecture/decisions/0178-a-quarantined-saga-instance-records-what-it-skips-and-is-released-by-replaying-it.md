@@ -21,6 +21,22 @@ every write that changes a record change the instance in the same atomic write, 
 `j: true` on MongoDB. Points 1, 2, 3 and 5 and the consequences below are corrected in place to that rule, and ADR 182
 says why the separate writes went.
 
+Amended in place for [#918](https://github.com/johanhaleby/occurrent/issues/918) and
+[#952](https://github.com/johanhaleby/occurrent/issues/952), before 0.35.0 shipped. #952 found quarantine off for every
+push saga, including one whose catch-up reads the event store. #918 found that a saga on a source that can't hand an
+event back can't have both instance isolation and no lost events. A record now holds the event of the input it records,
+and the write that quarantines an instance records the input it was quarantined on as the first record. So a release
+replays the held events in order and reads nothing from the event store, and every push saga quarantines and releases
+like any other saga. The runner refuses quarantine only for a store that doesn't implement
+`SagaStateStoreSkippedInputs`, or one that can't write a transition atomically. Points 1 to 5 and 7 to 9, the
+consequences and the rejected alternatives are corrected in place. Point 6 points at
+[ADR 185](0185-saga-timers-run-on-processing-time.md) for how timers are ordered against held inputs.
+
+The amendment reverses ADR 134's "not moved to a holding area" in its Decision point 1 for a quarantined instance. A
+skipped event is now copied into the saga's store. ADR 134 argued against that copy because the event store still had
+the first one, and a push source may have no event store behind it, which is the case #918 is about. `HistoryRetainingSubscriptions`, which
+0.34.0 shipped for the retention check this amendment removes, is removed in 0.35.0 and nothing replaces it.
+
 ## Context
 
 ADR 134 quarantines a saga instance once one input has kept failing for longer than `quarantineAfter`. A quarantined
@@ -50,17 +66,26 @@ arrive live while the instance still waits for its replay.
 
 ## Decision
 
-### 1. A quarantined instance records the key of every event it skips
+### 1. A quarantined instance records every event it skips, and holds the event
 
-Every event a quarantined instance skips has its key recorded, in the order the events arrive. A timeout records
-nothing, because its timer stays on the instance, see point 6.
+Every event a quarantined instance skips is recorded with its key and the event itself, in the order the events
+arrive. The write that quarantines an instance also records the input it was quarantined on, K, as the first record of
+the quarantine. A timeout records nothing, because its timer stays on the instance, see point 6. A timeout never
+quarantines an instance either, since it has no redelivery key to quarantine on.
+
 The key is the stream id with the stream version when the event has both, which is the redelivery key
-`SagaFailure.input` holds for an input that failed live. An event without them is keyed by its CloudEvent id and source,
-which `Filter.cloudEvent(id, source)` reads back. After a release finds a recorded input's event missing,
-`SagaFailure.input` holds the key that input was recorded under, so it can be a CloudEvent key, see point 5. A key
-already recorded isn't recorded again, and neither is the key of the input the failure record names, so a redelivered
-input adds no record. An instance a 0.34.0 node quarantined or last wrote has no quarantine id, see point 2, so its
-skips record nothing, as in 0.34.0.
+`SagaFailure.input` holds for an input that failed. An event without them is keyed by its CloudEvent id and source.
+Only `RedeliveryDetection.BEST_EFFORT` lets such an event reach an instance (ADR 109). The key tells two deliveries of
+one event apart, and a release doesn't use it to find the event, since the record holds the event. A key already
+recorded isn't recorded again, so a redelivered input, K included, adds no record. An instance a 0.34.0 node
+quarantined or last wrote has no quarantine id, see point 2, so its skips record nothing, as in 0.34.0.
+
+K is recorded in the write that quarantines the instance, `compareAndSaveSkipped`, which inserts the instance at
+version 0 when K is its first input. K gets the sequence number 0 and the skip counter starts at 1, so K comes before
+every input the instance skips. K's event is the one the failing delivery has in hand. On a push source that delivery
+may be the only time the saga sees it, so the quarantining write is the one place it can be kept. When that write
+fails, the delivery throws, K isn't acknowledged, and the instance stays as its last write left it, so a redelivery of
+K that quarantines the instance records K then.
 
 The rule is keyed on the instance being quarantined, not on one branch of the executor. Three places skip an input for
 a quarantined instance, and all three record it:
@@ -68,10 +93,11 @@ a quarantined instance, and all three record it:
 - the quarantined skip in `SagaExecutionSupport.process`.
 - the skip for an instance that never started, which runs first when the instance was quarantined on its start event.
 - `SagaExecution`'s load-failure path, which skips an input when the state no longer decodes and the instance is
-  quarantined. It records through `compareAndSaveWithoutState`, so the undecodable state is never written.
+  quarantined. It records through `compareAndSaveSkipped`, which changes the skip counter or the status but not the
+  state, so the state that no longer decodes is never written back.
 
-A skip used to write nothing. It now records its input in one compare-and-set on the instance that raises the skip
-counter and writes the record together, as point 2 describes, and the compare-and-set is retried on a lost write like
+A skip used to write nothing. It now records its input and its event in one compare-and-set on the instance that raises
+the skip counter and writes the record together, as point 2 describes, and the compare-and-set is retried on a lost write like
 any other save. That write changes the instance's version together with the record, which point 3 relies on. A
 redelivered input whose key a skip recorded takes a number that goes unused, since its write keeps the record already
 there. The watermarks still don't move, which is what ADR 134 Decision point 5 requires.
@@ -81,17 +107,21 @@ like any other.
 
 ### 2. The records are kept outside the instance's document
 
-Each recorded key is a record of its own in the state store, holding the saga id, a quarantine id, a sequence number and
-the key. A quarantine can record any number of inputs without growing the instance's document toward MongoDB's 16 MB
-limit, so there is no limit on how many it records.
+Each recorded input is a record of its own in the state store, holding the saga id, a quarantine id, a sequence number,
+the key and the event. A quarantine can record any number of inputs without growing the instance's document toward
+MongoDB's 16 MB limit, so there is no limit on how many it records.
+
+A store keeps a record's event with the same data, extensions and time it was given, and returns it from
+`findSkippedInputs`. The saga keeps no other copy of a skipped event. `SpringMongoSagaStateStore` writes it as a
+CloudEvents JSON string in the record's `event` field.
 
 The methods that read and write the records are on an interface of their own, `SagaStateStoreSkippedInputs`, which a
 store implements next to `SagaStateStore`, the way it implements `SagaStateStoreQueries`. It has no state type
 parameter, since none of its methods reads the state, and none of them has a default. The in-memory store and
 `SpringMongoSagaStateStore` implement it. Point 7 says what the runner does with a store that doesn't.
 
-The write that quarantines an `ACTIVE` instance gives its failure record a new quarantine id and sets the skip counter
-to 0. The quarantine id and the skip counter have to be written with the status that says the instance is
+The write that quarantines an `ACTIVE` instance gives its failure record a new quarantine id, records K with the
+sequence number 0 and sets the skip counter to 1, see point 1. The quarantine id and the skip counter have to be written with the status that says the instance is
 quarantined. Once [ADR 180](0180-occurrent-owns-the-stored-form-of-a-saga-instance.md) has Occurrent encode every
 field of the instance itself, and a store write every field the encoding holds, they are, and the saga doesn't read the
 instance back to check them.
@@ -106,8 +136,7 @@ record with the value it read as the record's sequence number. Each number the s
 no two skipped inputs of a quarantine share one. Release reads the records it finds in order of sequence number, which
 is the order those inputs took their numbers in. A skip that loses its compare-and-set has written nothing. It reads
 the instance again, records its input when the instance is still quarantined, and applies the input live when the
-instance is `ACTIVE`. The one number written again is -1, which every release writes for its head record, see point 3
-step 1.
+instance is `ACTIVE`.
 
 After a crash the store holds either the raised counter and the record, or neither, so an input is acknowledged only
 once its record is written. When the write doesn't happen, the input was never acknowledged, so it is offered again and
@@ -117,8 +146,8 @@ unused in the same way.
 
 Release deletes a record it replayed in the write that applies its input, `compareAndSaveReplayed`, which deletes the
 record of that key only when its sequence number is the one release read. So a release never removes another record
-written under the same key in the meantime. The one write that moves a record is `compareAndSaveReleaseStarted`, which
-starts a release, to make the input it starts from the first record it replays, in point 3 step 1.
+written under the same key in the meantime. No write moves a record. A release starts in a write to the instance alone,
+see point 3 step 1.
 
 `SagaStateStore.delete(sagaId)` deletes the instance and the records under the quarantine id it had in one atomic
 write. When a replayed input completes the instance, the write that completes it, `compareAndSaveQuarantineEnded`,
@@ -141,18 +170,19 @@ acknowledges, whatever `writeConcernMajorityJournalDefault` says. A server that 
 `j: true`, and the write then fails after one attempt, whatever the store's `RetryStrategy` retries, with an
 `IllegalStateException` that says the store needs journaling.
 
-### 3. Release replays the input the instance stopped on, then the records
+### 3. Release replays the held events in order, the input the instance stopped on first
 
-`SagaSubscription.release(String sagaId)` releases one instance. K is the input the instance was quarantined on.
+`SagaSubscription.release(String sagaId)` releases one instance. K is the input the instance was quarantined on, the
+one its failure record names.
 
-1. Release records K as a record with the sequence number -1, below every other record's, and sets `releasedAt` on the
-   failure record, in one compare-and-set, `compareAndSaveReleaseStarted`. A record of K's key left from an earlier
-   attempt gets the number -1, whatever it was, and K gets a record when it has none. So K's record moves to the head,
-   the first record a release replays. The same write restarts K's quarantine budget at the release instant, on the
-   failure record, and on K's pending entry when K is a stream key with one, so K gets a full budget again before it
-   can quarantine the instance again. An instance with `releasedAt` set is releasing.
-2. Release replays the records in order of sequence number, K's first. For each one it reads the event from the event
-   store by the record's key and applies it through the executor's normal processing, with the quarantined skip
+1. Release sets `releasedAt` on the failure record in one compare-and-set on the instance,
+   `compareAndSaveWithoutState`, and writes no record. K's record is the first of the quarantine from the write that
+   quarantined the instance, and an instance quarantined again during a release stops on its first record left, see
+   point 5. So the input the failure record names always has the first record. The same write restarts K's quarantine
+   budget at the release instant, on the failure record, and on K's pending entry when it has one, so K gets a full
+   budget again before it can quarantine the instance again. An instance with `releasedAt` set is releasing.
+2. Release replays the records in order of sequence number, K's first. For each one it applies the event the record
+   holds through the executor's normal processing, with the quarantined skip
    bypassed for that one input, and deletes the record in the write that applies its input. That write keeps the
    instance `QUARANTINED`, with its failure record and `releasedAt`, while a live write that applies the input the
    failure record names clears the record and writes `ACTIVE`. So while the instance is releasing, its failure record
@@ -181,11 +211,8 @@ acknowledges, whatever `writeConcernMajorityJournalDefault` says. A server that 
    the instance again and applies its input, which was never acknowledged, to the `ACTIVE` instance like any live
    input.
 
-Release applies the event it read back by that event's stream id and version, with the same budget and stream marks as
-any other input. A failure while releasing replaces the failure record differently from a live one, see point 5. A
-record's CloudEvent key is used only to find the event. Every event the MongoDB event
-stores write has a stream id and version. An event read back without them, which only a custom `EventStoreQueries` can
-return, quarantines the instance again at once, as a missing event does in point 5, with a failure type of its own.
+Release applies a held event by that event's stream id and version, with the same budget and stream marks as any
+other input. A failure while releasing replaces the failure record differently from a live one, see point 5.
 
 An input that arrives live while the instance is releasing reaches the quarantined skip and is recorded. The skip's
 write changes the instance's version together with the record, so a release that read the records before the record
@@ -210,19 +237,16 @@ again.
 An event that commits late below a position another read reached isn't a problem here. Nothing reads a range of
 positions. The late event is delivered live, is skipped, and is recorded like any other.
 
-Release reads the store through an `EventStoreQueries` that `SagaRunner` is given. The Spring Boot starter passes its
-own bean. A `SagaRunner` built without one refuses to start while quarantine is on, as point 7 says. When such a runner
-starts because quarantine is off, `release` throws and names `SagaRunner.eventStoreQueries(..)`.
+Release reads nothing from the event store, so it needs no `EventStoreQueries`, and it works the same whichever
+subscription model delivered the inputs, a push model included.
 
 Release returns a `ReleaseResult` that says what it did:
 
 - `RELEASED`: every record was replayed and the instance is `ACTIVE`, or `COMPLETED` when a replayed input completed
   it.
-- `STILL_RELEASING`: an input failed again inside its budget, or with quarantine off, and the instance stays
-  releasing.
-- `QUARANTINED_AGAIN`: an input's budget ran out, or the event of K or of a recorded input was read back without a
-  stream id and version.
-- `QUARANTINED_EVENT_MISSING`: the event of K or of a recorded input is missing from the store.
+- `STILL_RELEASING`: an input failed again inside its budget, with quarantine off, or without a stream id and version,
+  and the instance stays releasing.
+- `QUARANTINED_AGAIN`: an input's budget ran out.
 - `NOT_QUARANTINED`: the instance isn't quarantined.
 - `NOT_FOUND`: no instance has that id.
 
@@ -254,6 +278,11 @@ the stream marks, and the instance stays releasing. A live failure that replaces
 replaced record named on the stream marks as one that failed, so a redelivery of it is applied. A failure while
 releasing keeps nothing of the replaced record on the marks, since the release has applied that input by then, and
 keeping it would make an applied input count as not applied and apply it twice.
+
+A held input without a stream id and version has no redelivery key, so its failure isn't recorded and can't quarantine
+the instance again. The release stops on it, returns `STILL_RELEASING` and logs a `WARN`, and the instance stays
+releasing with nothing written. The poller tries the input again on every poll, with no budget to run out, until it
+succeeds or the instance is deleted. A live failure of such an input doesn't quarantine an instance either.
 
 The timer poller also asks for releasing instances on every poll and continues their replay. With a
 competing-consumer strategy only the node holding the saga's timer lease polls, which is the Spring Boot starter's
@@ -321,47 +350,24 @@ When the budget runs out, the instance is quarantined again under the same quara
 the failure record's input, `releasedAt` is cleared, and the records after it stay in order. A later release replays the
 failed input first and then those records.
 
-When release reads K or a recorded input and its event no longer exists in the store, the instance is quarantined again
-at once, with no budget, since retrying doesn't bring a deleted event back. That input becomes the failure record's
-input under the same quarantine id, by the key it was recorded under, `releasedAt` is cleared, and the records after it
-stay in order. The failure record's type and message say that the event is missing from the store.
+The instance keeps the record of the input that failed, since the write for a used-up budget doesn't delete it. Release
+applies the records in order, so the input that failed has the first record left, and the next release replays it
+first without moving anything. Only an input with a stream id and version can use up a budget, and its record is under
+that stream key, the same key the failure record names.
 
-To go on, restore the event in the store and release the instance again, or delete the instance with
-`SagaStateStore.delete(sagaId)`. When the event is in the store and release was given an `EventStoreQueries` for another
-store, fix the configuration and release the instance again.
-
-An event read back without a stream id and version is handled the same way, with a failure type and message of its own.
-To go on, give release an `EventStoreQueries` that returns the event with them and release the instance again, or delete
-the instance.
-
-In all three cases the instance keeps the record of the input that failed, since neither the write for a used-up
-budget nor the write for an event that can't be replayed deletes it. The next release starts by setting the number of
-the record of the input the failure record names to -1, in one write. So that record moves to the head whatever its
-number was.
-
-The record that stays does no harm:
-
-- When its key is the input the failure record names, it is the record the next release moves to the head and replays
-  first. That is always so for an event that is missing or has no stream id and version, and for a used-up budget when
-  the input was recorded by its stream key.
-- When it was recorded under a CloudEvent key, a used-up budget names the input by its stream key instead. The next
-  release replays the input under its stream key first and reaches the record that stayed after it. The stream marks
-  show that input as applied by then, so the release deletes the record without applying it again, whatever the
-  failure record says, see point 3 step 2. When the record that stayed is K's own at -1, two records share -1. Both
-  name the same input, so whichever is replayed first applies it, and the stream marks show it as applied when the
-  other is reached, so that one is deleted.
-
-When the read itself fails, the release throws and the instance stays releasing. On a store that answers the poller's
-query, the poller tries again on its next poll.
+When a read of the store fails, the release throws and the instance stays releasing. On a store that answers the
+poller's query, the poller tries again on its next poll.
 
 ### 6. Timers stay held until the instance is ACTIVE
 
 The status stays `QUARANTINED` while an instance is releasing, and `findWithDueTimers` returns `ACTIVE` instances only.
 A timer that came due while the instance was quarantined or releasing fires once it is `ACTIVE`.
 
-So such a timer fires only after every recorded input has been replayed, including inputs that arrived after its
-deadline, because a saga's timers run on processing time. For a saga that uses a timer as a deadline, a recorded input
-from after the deadline that cancels or re-arms the timer means the timeout never fires. This record keeps that order.
+So such a timer fires only after every held input has been replayed, including inputs that arrived after its deadline.
+For a saga that uses a timer as a deadline, a held input from after the deadline that cancels or re-arms the timer
+means the timeout never fires. A saga's timers run on processing time across the framework, and
+[ADR 185](0185-saga-timers-run-on-processing-time.md) records that rule, this order, and what an application that needs
+a deadline ordered against its inputs by event time does instead.
 
 ### 7. Quarantine is on by default again
 
@@ -369,33 +375,30 @@ from after the deadline that cancels or re-arms the timer means the timeout neve
 `occurrent.saga.quarantine-after` is left out. ADR 134 turned it off only because nothing brought a quarantined
 instance back. Five minutes is the budget ADR 134 Decision point 3 argues for.
 
-It still applies only to subscription models that retain every event they deliver. On any other model `SagaRunner`
-turns quarantine off and logs that at startup. A budget you set, with `withQuarantineAfter(..)`, a `SagaRunnerConfig`
-constructor or `occurrent.saga.quarantine-after`, gets a `WARN`, as in 0.34.0. The default budget gets a `DEBUG`, so an
-application that never asked for quarantine doesn't get a new warning each time the saga starts.
-`SagaRunnerConfig` records which of the two it holds in `quarantineAfterDefaulted`.
+It applies to every saga, whichever subscription model feeds it, a push model included, since a release replays the
+events the instance holds and asks the model for nothing. 0.34.0 quarantined only on a model that retains every event
+it delivers, and turned quarantine off on any other with a log line at startup. That check and its log lines are gone,
+and so is `HistoryRetainingSubscriptions`, the capability a model implemented to say it retains every event. 0.34.0
+shipped it, and 0.35.0 removes it with nothing in its place.
 
 The default applies to a `SagaRunner.run` given no config or `SagaRunnerConfig.defaults()`, and to every `@Saga` in
-Spring Boot. The 3- and 4-argument `SagaRunnerConfig` constructors keep quarantine off. On a model that retains every
-event, `SagaRunner.run` throws an
-`IllegalStateException` when quarantine is on and the runner has no `EventStoreQueries`, whether quarantine comes from
-the defaults or was configured explicitly. The message names `SagaRunner.eventStoreQueries(..)` and
-`SagaRunnerConfig.disableQuarantine()` as the two ways out. A runner that quarantines without an `EventStoreQueries`
-can't release anything, so `SagaStateStore.delete(sagaId)` would be the only way out, which is the situation ADR 134
-turned quarantine off for.
+Spring Boot. The 3- and 4-argument `SagaRunnerConfig` constructors keep quarantine off.
 
-For the same reason `SagaRunner.run` throws an `IllegalStateException` when quarantine is on and the saga's state store
-doesn't implement `SagaStateStoreSkippedInputs`. The message names the interface and `disableQuarantine()`. Such a
-store would quarantine an instance and skip its inputs without recording any of them.
+`SagaRunner.run` throws an `IllegalStateException` when quarantine is on and the saga's state store doesn't implement
+`SagaStateStoreSkippedInputs`, whether quarantine comes from the defaults or was configured explicitly. The message
+names the interface and `disableQuarantine()`. Such a store would quarantine an instance and skip its inputs without
+recording any of them, so `SagaStateStore.delete(sagaId)` would be the only way out, which is the situation ADR 134
+turned quarantine off for. The Spring Boot starter refuses a `@Saga` the same way on every subscription model, and its
+message names `occurrent.saga.quarantine-enabled=false`.
 
-That is a startup failure for a `SagaRunner` built in plain Java without an `EventStoreQueries` that runs on the
-defaults, from `SagaRunnerConfig.defaults()` or from the `run` overloads that take no config, which pass
-`SagaRunnerConfig.defaults()` themselves. It started in 0.34.0, since the defaults kept quarantine off then.
-
-The Spring Boot starter gives `SagaRunner` the application's `EventStoreQueries` bean when there is one, or several
-with one of them `@Primary`. With quarantine on and a model that retains every event, a `@Saga` fails at startup when
-there is no `EventStoreQueries` bean, or several and none of them `@Primary`. The message names the saga id and
-`occurrent.saga.quarantine-enabled=false`.
+Right after that check, `SagaRunner.run` calls `requireAtomicTransitions()` on the store, which throws when the store
+can't write a transition atomically in the database it is connected to. `SpringMongoSagaStateStore` throws on a
+standalone MongoDB server, which refuses transactions, and the message names
+`occurrent.saga.quarantine-enabled=false` and `SagaRunnerConfig.disableQuarantine()`. A saga on a standalone server
+runs with quarantine off, and
+[ADR 182](0182-a-saga-instance-and-its-skipped-input-records-change-in-one-atomic-write.md) has the details. Both
+refusals happen at startup, so a saga fails before it receives its first input rather than when an instance is first
+quarantined.
 
 `disableQuarantine()` turns it off. In Spring Boot, `occurrent.saga.quarantine-enabled=false` does. A blank
 `occurrent.saga.quarantine-after` kept quarantine off in 0.34.0, so the starter refuses to start on one, and the
@@ -418,6 +421,9 @@ on its first deploy, instead of quarantining without knowing it.
   `_skipped_inputs` appended. A unique index on the
   saga id, the quarantine id and the key keeps a key from being recorded twice, and an index on the saga id, the
   quarantine id and the sequence number serves the order release reads them in.
+- A record document holds the event of its input as a CloudEvents JSON string, in its `event` field. Every record has
+  one, K's record included, which the write that quarantines the instance writes. The collection is new in 0.35.0, so
+  no released document changes.
 - A document a 0.34.0 node wrote has none of these fields and reads as not releasing, with no quarantine id.
 
 On MongoDB, an instance whose failure record has a quarantine id is stored with the status `QUARANTINED_RECORDING`
@@ -435,11 +441,13 @@ that deploy safe. When the instance gets its events from a broker source that pa
 the source acknowledges the event, and a push feed whose caller doesn't push the event again loses it. No node records
 such an input, so a release never replays it, and nothing a 0.35.0 node does can stop that. Every 0.34.0 node that
 runs sagas therefore stops before any 0.35.0 node starts, which takes the service that hosts the sagas down for the
-deploy, as the upgrade guide says.
+deploy, as the upgrade guide says. 0.35.0 quarantines a push saga too, which 0.34.0 never did, so a push saga's
+instances are among those a 0.34.0 node throws on.
 
-On a subscription model that writes its position or checkpoint only after the action returns, which every model a
-saga can quarantine on does, the event the 0.34.0 node fails on, and everything after it, is delivered again. The next
-paragraphs say how a 0.34.0 node that runs anyway stalls on it.
+On a subscription model that writes its position or checkpoint only after the action returns, such as the MongoDB
+subscription models, the event the 0.34.0 node fails on, and everything after it, is delivered again. The next
+paragraphs say how a 0.34.0 node that runs anyway stalls on it. A push feed delivers the event again only when its
+caller pushes it again.
 
 On a live MongoDB subscription the 0.34.0 node retries the event in place with the subscription model's retry
 strategy, which by default backs off from 100 ms to 2 s and never gives up. In a catch-up replay that a subscribe
@@ -481,9 +489,9 @@ nodes:
    takes no expected version, so a delete that reaches the store after the poller has finished the release deletes
    the released instance.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
-   longer decodes or an event store read that failed, and release the instance again.
-5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `QUARANTINED_AGAIN` or
-   `QUARANTINED_EVENT_MISSING`, or that keeps failing for a cause you can't fix.
+   longer decodes or a read of the store that failed, and release the instance again.
+5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `QUARANTINED_AGAIN`, or that keeps
+   failing for a cause you can't fix.
 6. Stop every 0.35.0 node. Then, from a process that runs no `SagaRunner`, store every `QUARANTINED_RECORDING`
    instance as `QUARANTINED` without its quarantine id, skip count and release time, and every `ACTIVE_MARKED` instance,
    released ones included, as `ACTIVE`, with the update ADR 154 describes. On MongoDB, on each saga collection:
@@ -507,8 +515,9 @@ a delete takes it out of quarantine, as for any instance 0.34.0 quarantined.
 Step 6 removes the quarantine id because 0.34.0 skips inputs without recording them. A release after a later upgrade
 would replay the inputs recorded before the downgrade and miss the ones skipped after it. Without a quarantine id, a
 0.35.0 node reads the instance as one 0.34.0 quarantined, which `release` refuses, as point 4 says. The records of the
-inputs it skipped on 0.35.0 stay in the store, where nothing reads them once the quarantine id is gone. They take up
-storage and nothing else.
+inputs it skipped on 0.35.0 stay in the store, where nothing reads them once the quarantine id is gone. Each holds the
+event it recorded, which on a push source is the only copy there is. The records take up storage, and they keep that
+copy until they are deleted by hand.
 
 ADR 154 stores an instance with stream marks as `ACTIVE_MARKED` for the same reason this record stores
 `QUARANTINED_RECORDING`, and says what setting it back to `ACTIVE` loses.
@@ -520,7 +529,8 @@ The upgrade guide has the procedure for operators, in
 
 - ADR 134's Status section says the quarantine budget is off on "push feeds and the broker sources". `SagaRunner` also
   turns it off for `CatchupThenPushSubscriptionModel` and for the in-memory subscription model, so that list is
-  incomplete. Quarantine runs only on a model that retains every event, and point 7 of this record keeps that rule.
+  incomplete. That rule is gone since the amendment for #918 and #952, and quarantine runs on every model, see point
+  7.
 - ADR 134 Decision point 3 calls the budget "the earliest a failing instance can be quarantined". The budget runs from
   the first time an event failed, not from its latest failure. So an event whose earlier failure the instance still
   records, from longer ago than the budget, quarantines the instance the first time it fails again. Replaying a parked
@@ -536,10 +546,12 @@ The upgrade guide has the procedure for operators, in
   has code that calls `SagaSubscription.release`. An application with no such code needs a deploy that adds it. While the poller
   continues a release, the saga's timers wait for at most one batch of records per poll.
 - A skip by a quarantined instance now makes one write, a compare-and-set that raises the skip counter and records the
-  input.
+  input with its event. The write that quarantines an instance records K the same way.
+- Every saga quarantines and releases, a push saga included, and a release reads nothing from the event store.
 - On MongoDB every saga write waits for a majority of the replica set to journal it, up to 10 seconds an attempt, or the
   client's `timeoutMS` when it sets one above 0, as ADR 182 says. With a `timeoutMS` of 0 the commit of a transaction
-  the store runs waits without limit. That slows a skip, the start of a release and every record a release replays by
+  the store runs waits without limit. That slows a quarantine, a skip, the start of a release and every record a
+  release replays by
   the time a majority takes, and a replica set without a majority available fails them where `w: 1` would have
   succeeded.
 - A release keeps every stream version it applies in the instance's stream marks until the write that ends it, see
@@ -547,13 +559,19 @@ The upgrade guide has the procedure for operators, in
   backlog takes the document past MongoDB's 16 MB limit fails on every write from that record on. The instance stays
   releasing, the failure is never recorded, so its budget never runs out, and every poll applies that record again
   and dispatches its commands again before the write fails. Deleting the instance is the only way out.
-- A quarantined instance keeps a record of every input it skips, with no limit. The records take space in the store
-  until a release replays them, a replayed input completes the instance, or the 0.35.0 store deletes the instance. The
-  downgrade in point 8 keeps the records of the instances that stay quarantined in the store, and nothing reads or
-  deletes them, since a release, a completion and a delete all go by the instance's current quarantine id. They take
-  up storage and nothing else. A 0.34.0 `delete` after a downgrade removes none of the records.
-- An instance whose K or recorded input refers to an event that was deleted from the store stays quarantined until the
-  event is restored or the instance is deleted.
+- A quarantined instance keeps a record of every input it skips, with no limit, and each record holds a whole event.
+  The records take space in the store until a release replays them, a replayed input completes the instance, or the
+  0.35.0 store deletes the instance. The downgrade in point 8 keeps the records of the instances that stay quarantined
+  in the store, and nothing reads or deletes them, since a release, a completion and a delete all go by the instance's
+  current quarantine id. A 0.34.0 `delete` after a downgrade removes none of the records.
+- Deleting a quarantined instance deletes the only copy the saga has of the events it skipped. On a push source that
+  can be the only copy there is.
+- An event erased from the event store while an instance holds it, for a GDPR request for example, stays in its record
+  until a release replays it or the instance is deleted. Erasing an event means releasing or deleting the quarantined
+  instances that hold it as well.
+- A held input without a stream id and version that fails during a release can't quarantine the instance again, since
+  it has no redelivery key. The release stays incomplete and the poller tries the input again on every poll, until it
+  succeeds or the instance is deleted, see point 5.
 - Every 0.34.0 node that runs sagas stops before any 0.35.0 node starts, so the service that hosts the sagas is down
   for the deploy.
 - A 0.34.0 node that runs next to a 0.35.0 node anyway, or after a downgrade, fails on every event for an instance
@@ -570,17 +588,18 @@ The upgrade guide has the procedure for operators, in
 - An application that never configured quarantine starts quarantining on upgrade. One that set
   `occurrent.saga.quarantine-after` blank to keep it off fails at startup instead, with a message that names
   `occurrent.saga.quarantine-enabled=false`.
-- A `SagaRunner` with quarantine on, on a model that retains every event, and without an `EventStoreQueries` fails at
-  startup. That includes a runner built in plain Java on the defaults, from `SagaRunnerConfig.defaults()` or from a
-  `run` overload without a config, which started in 0.34.0. A
-  `@Saga` in Spring Boot fails at startup the same way when there is no `EventStoreQueries` bean, or several and none
-  of them `@Primary`. The changelog and the upgrade guide name `disableQuarantine()` and
+- A saga with quarantine on fails at startup when its state store doesn't implement `SagaStateStoreSkippedInputs`, or
+  can't write a transition atomically. That includes a `SagaRunner` built in plain Java on the defaults, from
+  `SagaRunnerConfig.defaults()` or from a `run` overload without a config, which started in 0.34.0, and a saga on a
+  standalone MongoDB server. The changelog and the upgrade guide name `disableQuarantine()` and
   `occurrent.saga.quarantine-enabled=false` as the ways to turn quarantine off.
+- `HistoryRetainingSubscriptions`, which 0.34.0 shipped, is removed. A subscription model of your own that implements
+  it stops compiling until the `implements` clause goes, together with its `retains` and `retainsEveryEvent`
+  overrides.
 - `SagaFailure` gains two components, so a record pattern over it stops compiling. `SagaEnvelope` changes in 0.35.0
-  already, and gains one more component. `SagaRunnerConfig` gains `quarantineAfterDefaulted` as its 7th component, so
-  a record pattern over it stops compiling too.
-- A custom `SagaStateStore` with quarantine on has to implement `SagaStateStoreSkippedInputs` and delete the records in
-  `delete(sagaId)`, or turn quarantine off. Without the interface the runner refuses to start, see point 7. The new
+  already, and gains one more component.
+- A custom `SagaStateStore` with quarantine on has to implement `SagaStateStoreSkippedInputs`, keep each record's event
+  and return it unchanged, and delete the records in `delete(sagaId)`, or turn quarantine off. Without the interface the runner refuses to start, see point 7. The new
   fields ask nothing of the store once ADR 180 has Occurrent encode them with the rest of the instance.
 
 ## Rejected alternatives
@@ -602,9 +621,14 @@ The upgrade guide has the procedure for operators, in
   so it needs a limit, and an instance that skips more inputs than the limit can't be released. A release grows the
   stream marks the same way, see the consequences, but by one number per input instead of a whole record, and only
   until the release ends.
-- **Log an input whose event is missing and drop its record.** That loses the input. A wrong `EventStoreQueries`, one
-  pointed at another database for example, would find no event for any record, drop them all, and set the instance
-  `ACTIVE` without any of the inputs it skipped.
+- **Record only the key, and read each record's event back from the event store at release**, as this record first
+  decided. That needs a subscription model that keeps every event it delivers, so a push saga couldn't quarantine
+  (#952, #918), and it needs an `EventStoreQueries` on the runner. An event erased from the store, or a runner given an
+  `EventStoreQueries` for another database, left an input release couldn't replay, which quarantined the instance
+  again.
+- **Record K when a release starts, at a sequence number below every other record's.** It needs a fourth transition
+  that moves K's record to the head. On a push source the event K failed on is in hand only during the delivery that
+  quarantines the instance, so a release that starts later has nothing to record K from.
 - **A new `SagaStatus.RELEASING`.** Every exhaustive `switch` over `SagaStatus` would stop compiling again. A 0.34.0 node
   throwing on a status it doesn't know is what point 8 wants, and the store-only `QUARANTINED_RECORDING` gets that
   without a public enum value.
