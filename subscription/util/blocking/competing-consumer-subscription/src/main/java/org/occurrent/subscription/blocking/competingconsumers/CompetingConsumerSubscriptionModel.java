@@ -3078,15 +3078,24 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private static final String UNWANTED_BY_THE_WRAPPED_MODEL = "the wrapped model no longer wants it, as when a cancel or a stop ends the catch-up replay that delivered it";
 
     // Whether the wrapped model no longer wants the event delivered on this thread, which wakes the waits of delivery
-    // once it no longer does. Never, when the wrapped model set no stage for the call to this subscription.
-    private static BooleanSupplier unwantedByTheWrappedModel(String subscriptionId, Delivery delivery) {
-        CompletionStage<Void> stage = UnwantedDelivery.ofTheCallOnThisThread(subscriptionId);
+    // once it no longer does. Never, when no model that this model wraps set a stage for the call to this subscription.
+    private BooleanSupplier unwantedByTheWrappedModel(String subscriptionId, Delivery delivery) {
+        CompletionStage<Void> stage = UnwantedDelivery.ofTheCallOnThisThread(subscriptionId, this::wraps);
         if (stage == null) {
             return () -> false;
         }
         CompletableFuture<Void> unwanted = stage.toCompletableFuture();
         unwanted.whenComplete((ignored, alsoIgnored) -> delivery.wakeTheWaitingEvents());
         return unwanted::isDone;
+    }
+
+    // Whether model is the delegate or a model the delegate wraps, directly or through other wrappers
+    private boolean wraps(Object model) {
+        SubscriptionModel wrapped = delegate;
+        while (wrapped != model && wrapped instanceof SubscriptionModelWrapper wrapper) {
+            wrapped = wrapper.getWrappedSubscriptionModel();
+        }
+        return wrapped == model;
     }
 
     // Thrown from awaitTheLease, so the wrapped model doesn't move the position past the event and delivers it again

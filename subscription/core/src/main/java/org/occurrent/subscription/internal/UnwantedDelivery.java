@@ -19,6 +19,7 @@ package org.occurrent.subscription.internal;
 import org.jspecify.annotations.Nullable;
 
 import java.util.concurrent.CompletionStage;
+import java.util.function.Predicate;
 
 /**
  * Internal to Occurrent and not part of its public API, so it can change or go away in any release.
@@ -30,9 +31,12 @@ import java.util.concurrent.CompletionStage;
  * lease, and withdraws the event once the stage is complete.
  * <p>
  * Read on the thread that calls the action. A call that a model makes on a thread of its own never sees it. The stage
- * names the subscription it was set for, and a reader asks for the stage of its own subscription, so an event that the
- * action delivers on the same thread to a subscription with another id doesn't read it. A model that reads it calls
- * the action it wraps through {@link #without}, so no event delivered from inside that action reads it either.
+ * names the subscription it was set for and the model whose call to the action it is, the live model that the
+ * catch-up model wraps. A reader asks for the stage of its own subscription, and only when that model is one it reads
+ * events through. So an event that the action delivers on the same thread to a subscription with another id doesn't
+ * read it, nor does one delivered to a subscription with the same id in a model that doesn't wrap that live model. A
+ * model that reads it calls the action it wraps through {@link #without}, so no event delivered from inside that
+ * action reads it either.
  */
 public final class UnwantedDelivery {
 
@@ -42,15 +46,16 @@ public final class UnwantedDelivery {
     }
 
     /**
-     * Runs {@code call} with {@code unwanted} as the stage of the call on this thread for {@code subscriptionId}, and puts
-     * back the stage that was there before once {@code call} returns or throws.
+     * Runs {@code call} with {@code unwanted} as the stage of the call on this thread for {@code subscriptionId} in
+     * {@code model}, and puts back the stage that was there before once {@code call} returns or throws.
      *
      * @param subscriptionId the subscription whose action {@code call} calls
+     * @param model          the model a reader must read events through for the stage to be its own
      * @param unwanted       completes once the model that runs {@code call} no longer wants the event it delivers
      * @param call           the call to the action
      */
-    public static void run(String subscriptionId, CompletionStage<Void> unwanted, Runnable call) {
-        runWith(new OfTheCall(subscriptionId, unwanted), call);
+    public static void run(String subscriptionId, Object model, CompletionStage<Void> unwanted, Runnable call) {
+        runWith(new OfTheCall(subscriptionId, model, unwanted), call);
     }
 
     /**
@@ -64,13 +69,14 @@ public final class UnwantedDelivery {
     }
 
     /**
-     * @param subscriptionId the subscription whose action is called on this thread
-     * @return the stage of the call to the action of {@code subscriptionId} on this thread, or {@code null} when the
-     * model that called the action set none for that subscription
+     * @param subscriptionId     the subscription whose action is called on this thread
+     * @param readsEventsThrough whether the reader reads events through the model given to {@link #run}
+     * @return the stage of the call to the action of {@code subscriptionId} on this thread, or {@code null} when no
+     * model the reader reads events through set one for that subscription
      */
-    public static @Nullable CompletionStage<Void> ofTheCallOnThisThread(String subscriptionId) {
+    public static @Nullable CompletionStage<Void> ofTheCallOnThisThread(String subscriptionId, Predicate<Object> readsEventsThrough) {
         OfTheCall ofTheCall = OF_THE_CALL.get();
-        return ofTheCall == null || !ofTheCall.subscriptionId.equals(subscriptionId) ? null : ofTheCall.unwanted;
+        return ofTheCall == null || !ofTheCall.subscriptionId.equals(subscriptionId) || !readsEventsThrough.test(ofTheCall.model) ? null : ofTheCall.unwanted;
     }
 
     private static void runWith(@Nullable OfTheCall ofTheCall, Runnable call) {
@@ -91,6 +97,6 @@ public final class UnwantedDelivery {
         }
     }
 
-    private record OfTheCall(String subscriptionId, CompletionStage<Void> unwanted) {
+    private record OfTheCall(String subscriptionId, Object model, CompletionStage<Void> unwanted) {
     }
 }

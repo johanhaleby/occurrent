@@ -2420,9 +2420,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * event through are one step under the handover lock, and the action runs after the lock is released. A cancel or a
      * stop that takes effect before that step lets no event through, and one that takes effect after it waits up to a
      * second for the action to return. That cancel or stop first completes the stage this sets for the call through
-     * {@link UnwantedDelivery}, so an action that waits on it can withdraw the event and return. A shutdown completes
-     * the stage too, and doesn't wait for the action. Only meaningful on the virtual thread {@link #startCatchupAsync}
-     * started for this attempt.
+     * {@link UnwantedDelivery}, so an action that waits on it can withdraw the event and return. The stage names the
+     * live delegate, so a competing consumer model reads it only when the live delegate is among the models it wraps,
+     * as it is when the competing consumer model wraps this model. A shutdown completes the stage too, and doesn't
+     * wait for the action. Only meaningful on the virtual thread {@link #startCatchupAsync} started for this attempt.
      */
     private boolean deliverIfStillWanted(String subscriptionId, Runnable delivery) {
         CatchupAttempt attempt = CURRENT_ATTEMPT.get();
@@ -2442,7 +2443,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
         try {
             betweenHandoverLockAndAction.run();
-            UnwantedDelivery.run(subscriptionId, actionUnwanted, delivery);
+            UnwantedDelivery.run(subscriptionId, getWrappedSubscriptionModel(), actionUnwanted, delivery);
         } finally {
             actionReturned.complete(null);
         }
