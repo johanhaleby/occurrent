@@ -93,7 +93,12 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * start without a recorded position, accepting the loss window it documents.
  * <p>
  * The first position is written with {@link CheckpointWriteCondition#ifAbsent()}, so of two nodes recording one at the
- * same moment, only one write is stored. A {@link CheckpointStorage} that answers {@code false} from
+ * same moment, only one write is stored. With a {@code CheckpointWriteVersionSource} that answers a version, a first
+ * position this node wrote is then saved again with {@link CheckpointWriteCondition#notOlderThan(long)}, since an
+ * {@code ifAbsent()} write stores no version, and a node whose lease has moved on could otherwise overwrite the first
+ * position until the next checkpoint is written. A position adopted from another node isn't saved again. When that
+ * second save is refused because a node with a newer lease has written since, the refusal is logged and the
+ * subscription starts from the position it recorded. A {@link CheckpointStorage} that answers {@code false} from
  * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} could only write it unconditionally, and then the two
  * nodes could overwrite each other's and lose the events between the two positions. Such a subscription is refused with
  * {@link IllegalStateException} where a subscription with no position to record is, before anything is written for it.
@@ -819,11 +824,50 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     storage.getClass().getName(), subscriptionId);
             return storage.save(subscriptionId, globalCheckpoint);
         }
+        CheckpointWriteCondition stamp = stampFor(subscriptionId);
+        Checkpoint pinned;
         try {
-            return storage.save(subscriptionId, globalCheckpoint, CheckpointWriteCondition.ifAbsent());
+            pinned = storage.save(subscriptionId, globalCheckpoint, CheckpointWriteCondition.ifAbsent());
         } catch (CheckpointWriteConditionNotFulfilledException e) {
             return storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint)
                           .orElseGet(() -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, globalCheckpoint));
+        }
+        stampWriteVersion(subscriptionId, pinned, stamp);
+        return pinned;
+    }
+
+    // Read before the ifAbsent() write, as for an event. When the source throws, the first position is recorded without
+    // a version and the subscription isn't refused
+    private CheckpointWriteCondition stampFor(String subscriptionId) {
+        try {
+            return writeConditionFor(subscriptionId);
+        } catch (RuntimeException e) {
+            log.warn("Could not read the write version for subscription {}, so its first position is recorded without one. " +
+                     "Its next checkpoint write stores the version.", subscriptionId, e);
+            return CheckpointWriteCondition.any();
+        }
+    }
+
+    // An ifAbsent() write stores no version, and notOlderThan(v) accepts any write while none is stored, so without this
+    // a node whose lease moved on could overwrite the first position. A write that gets in between the two calls is of
+    // an event that node processed, so writing the first position over it only delivers events again
+    private void stampWriteVersion(String subscriptionId, Checkpoint pinned, CheckpointWriteCondition stamp) {
+        if (!(stamp instanceof CheckpointWriteCondition.NotOlderThan)) {
+            return;
+        }
+        try {
+            storage.save(subscriptionId, pinned, stamp);
+        } catch (CheckpointWriteConditionNotFulfilledException e) {
+            log.warn("Subscription {} recorded its first position {}, and saving it again with the write version of this " +
+                     "node's lease was refused, because a node with a newer lease has written a checkpoint for it since. " +
+                     "The subscription starts from {}, and its next checkpoint write is refused the same way.",
+                    subscriptionId, pinned.asString(), pinned.asString(), e);
+        } catch (Exception e) {
+            // Exception, since a storage written in Kotlin can throw a checked exception. The first position is stored
+            // either way, only without a version
+            log.warn("Subscription {} recorded its first position {}, and saving it again with the write version of this " +
+                     "node's lease failed. The subscription starts from {}, and its next checkpoint write stores the version.",
+                    subscriptionId, pinned.asString(), pinned.asString(), e);
         }
     }
 
