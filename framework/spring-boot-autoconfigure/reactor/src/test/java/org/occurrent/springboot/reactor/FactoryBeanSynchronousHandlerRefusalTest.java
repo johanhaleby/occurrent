@@ -16,6 +16,11 @@
  */
 package org.occurrent.springboot.reactor;
 
+import java.lang.reflect.Proxy;
+import org.springframework.beans.factory.BeanCreationException;
+import org.occurrent.annotation.Mode;
+import org.occurrent.annotation.Projection;
+import org.occurrent.annotation.Snapshot;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.BeforeEach;
@@ -124,6 +129,88 @@ class FactoryBeanSynchronousHandlerRefusalTest {
 
                     assertThatCode(() -> context.getBean("registeredProductFactory")).doesNotThrowAnyException();
                 });
+    }
+
+    @Test
+    void a_FactoryBean_whose_handlers_cant_be_read_fails_its_creation() {
+        FactoryBean<Object> factory = conflictingHandlerFactory();
+
+        runner.withBean("unreadableFactory", FactoryBean.class, () -> factory)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+
+                    assertThat(context.getStartupFailure())
+                            .isInstanceOf(BeanCreationException.class)
+                            .hasMessageContaining("Occurrent can't read the handlers of")
+                            .hasMessageContaining("which implements FactoryBean")
+                            .hasCauseInstanceOf(IllegalArgumentException.class);
+                });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static FactoryBean<Object> conflictingHandlerFactory() {
+        return (FactoryBean<Object>) Proxy.newProxyInstance(FactoryBeanSynchronousHandlerRefusalTest.class.getClassLoader(),
+                new Class<?>[]{FactoryBean.class, FirstConflictingHandler.class, SecondConflictingHandler.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "getObject" -> new Object();
+                    case "getObjectType" -> Object.class;
+                    case "isSingleton" -> true;
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
+    }
+
+    interface FirstConflictingHandler {
+        @SynchronousSubscription(id = "first-conflicting-handler")
+        void onEvent(LateBeanAnnotationRegistrationTest.TestEvent event);
+    }
+
+    interface SecondConflictingHandler {
+        @SynchronousSubscription(id = "second-conflicting-handler")
+        void onEvent(LateBeanAnnotationRegistrationTest.TestEvent event);
+    }
+
+    @Test
+    void a_FactoryBean_class_that_declares_a_synchronous_projection_starts_when_no_Subscribable_bean_exists() {
+        runner.withBean("projectionFactory", ProjectionDeclaringFactory.class, ProjectionDeclaringFactory::new)
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void a_FactoryBean_class_that_declares_a_synchronous_snapshot_starts_when_no_Subscribable_bean_exists() {
+        runner.withBean("snapshotFactory", SnapshotDeclaringFactory.class, SnapshotDeclaringFactory::new)
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    static class ProjectionDeclaringFactory implements FactoryBean<Object> {
+        @Projection(id = "factory-synchronous-projection", mode = Mode.SYNCHRONOUS)
+        void onEvent(LateBeanAnnotationRegistrationTest.TestEvent event) {
+        }
+
+        @Override
+        public Object getObject() {
+            return new Object();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return Object.class;
+        }
+    }
+
+    static class SnapshotDeclaringFactory implements FactoryBean<Object> {
+        @Snapshot(id = "factory-synchronous-snapshot", mode = Mode.SYNCHRONOUS)
+        void onEvent(LateBeanAnnotationRegistrationTest.TestEvent event) {
+        }
+
+        @Override
+        public Object getObject() {
+            return new Object();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return Object.class;
+        }
     }
 
     static class RegisteredFactoryProduct implements FactoryBean<Object> {

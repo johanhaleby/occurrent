@@ -239,7 +239,15 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         Object target = SubscriptionAnnotations.ultimateTarget(factory);
         for (Object candidate : target == factory ? List.of(factory) : List.of(factory, target)) {
             Class<?> type = userClassOf(candidate);
-            for (Method handler : synchronousHandlersByClass.computeIfAbsent(type, OccurrentBlockingAnnotationBeanPostProcessor::synchronousHandlersOf)) {
+            List<Method> handlers;
+            try {
+                handlers = synchronousHandlersOf(type);
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                // Nothing scans an object handled as a factory afterwards, so nothing else would report this
+                throw new BeanCreationException(beanName, ("Occurrent can't read the handlers of %s, which implements FactoryBean, so it can't check " +
+                        "that none of them is a synchronous handler it would never register.").formatted(type.getName()), e);
+            }
+            for (Method handler : handlers) {
                 if (!registeredHandlers.isRegistered(scanName, new HandlerMethod(handler, type))) {
                     throw new BeanCreationException(beanName, ("%s implements FactoryBean and declares the synchronous handler %s, which isn't registered. " +
                             "Occurrent doesn't register the handlers of an object it handles as a FactoryBean, so writes through the application " +
@@ -488,7 +496,12 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // under, or null. A bean the scan never reads, one without a definition, has none. Neither has a class whose
     // handlers are refused, since the scan reports that refusal itself.
     private @Nullable Method unregisteredSynchronousHandler(String beanName, Class<?> type) {
-        List<Method> handlers = synchronousHandlersByClass.computeIfAbsent(type, OccurrentBlockingAnnotationBeanPostProcessor::synchronousHandlersOf);
+        List<Method> handlers;
+        try {
+            handlers = synchronousHandlersOf(type);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return null;
+        }
         if (handlers.isEmpty()) {
             return null;
         }
@@ -511,12 +524,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         return handler != null || target == bean ? handler : unregisteredSynchronousHandler(beanName, userClassOf(target));
     }
 
-    private static List<Method> synchronousHandlersOf(Class<?> type) {
-        try {
-            return HandlerScan.handlerMethods(type, HANDLER_ANNOTATIONS).stream().filter(HandlerScan::isSynchronousHandler).toList();
-        } catch (IllegalStateException | IllegalArgumentException e) {
-            return List.of();
-        }
+    // The synchronous handler methods type declares, read once per class. A class whose handlers can't be read isn't
+    // cached and throws at every read, so each caller decides what that failure means.
+    private List<Method> synchronousHandlersOf(Class<?> type) {
+        return synchronousHandlersByClass.computeIfAbsent(type, t -> HandlerScan.handlerMethods(t, HANDLER_ANNOTATIONS).stream().filter(HandlerScan::isSynchronousHandler).toList());
     }
 
     // Whether a handler invocation for this name can reach the object the container published, rather than the

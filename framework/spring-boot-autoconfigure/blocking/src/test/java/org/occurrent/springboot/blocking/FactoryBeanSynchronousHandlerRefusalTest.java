@@ -16,6 +16,8 @@
  */
 package org.occurrent.springboot.blocking;
 
+import java.lang.reflect.Proxy;
+import org.springframework.beans.factory.BeanCreationException;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.BeforeEach;
@@ -125,6 +127,44 @@ class FactoryBeanSynchronousHandlerRefusalTest {
 
                     assertThatCode(() -> context.getBean("registeredProductFactory")).doesNotThrowAnyException();
                 });
+    }
+
+    @Test
+    void a_FactoryBean_whose_handlers_cant_be_read_fails_its_creation() {
+        FactoryBean<Object> factory = conflictingHandlerFactory();
+
+        runner.withBean("unreadableFactory", FactoryBean.class, () -> factory)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+
+                    assertThat(context.getStartupFailure())
+                            .isInstanceOf(BeanCreationException.class)
+                            .hasMessageContaining("Occurrent can't read the handlers of")
+                            .hasMessageContaining("which implements FactoryBean")
+                            .hasCauseInstanceOf(IllegalArgumentException.class);
+                });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static FactoryBean<Object> conflictingHandlerFactory() {
+        return (FactoryBean<Object>) Proxy.newProxyInstance(FactoryBeanSynchronousHandlerRefusalTest.class.getClassLoader(),
+                new Class<?>[]{FactoryBean.class, FirstConflictingHandler.class, SecondConflictingHandler.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "getObject" -> new Object();
+                    case "getObjectType" -> Object.class;
+                    case "isSingleton" -> true;
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
+    }
+
+    interface FirstConflictingHandler {
+        @SynchronousSubscription(id = "first-conflicting-handler")
+        void onEvent(LateBeanAnnotationRegistrationTest.TestEvent event);
+    }
+
+    interface SecondConflictingHandler {
+        @SynchronousSubscription(id = "second-conflicting-handler")
+        void onEvent(LateBeanAnnotationRegistrationTest.TestEvent event);
     }
 
     static class RegisteredFactoryProduct implements FactoryBean<Object> {
