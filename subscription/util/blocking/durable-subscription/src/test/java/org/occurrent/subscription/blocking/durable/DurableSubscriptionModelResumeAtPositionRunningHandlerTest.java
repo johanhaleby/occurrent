@@ -53,9 +53,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -78,6 +80,7 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
     private static final Checkpoint EARLIER_THAN_THE_EVENT = new StringBasedCheckpoint("earlier-than-the-event");
     private static final Checkpoint EVENT_AFTER_THE_RESUME = new StringBasedCheckpoint("event-after-the-resume");
     private static final Checkpoint EVENT_READ_BEFORE_THE_PAUSE = new StringBasedCheckpoint("event-read-before-the-pause");
+    private static final Checkpoint EVENT_OF_THE_RUN_THE_FAILED_RESUME_STARTED = new StringBasedCheckpoint("event-of-the-run-the-failed-resume-started");
     private static final Checkpoint QUIET = new StringBasedCheckpoint("quiet");
 
     private final PausableModel wrapped = new PausableModel();
@@ -263,6 +266,29 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
             // Then
             assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(EARLIER_THAN_THE_EVENT);
         }
+
+        @Test
+        void the_checkpoint_of_the_event_it_read_is_not_stored_over_the_position_of_the_resume_when_no_quiet_position_is_saved() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).neverSaveQuietPosition());
+            subscribeFromTheStoredStart(model);
+            CountDownLatch hasRead = new CountDownLatch(1);
+            CompletableFuture<Void> run = CompletableFuture.runAsync(() -> {
+                wrapped.beforeReading(SUBSCRIPTION_ID);
+                hasRead.countDown();
+                awaitQuietly(handlerMayReturn);
+                wrapped.deliver(SUBSCRIPTION_ID, EVENT_READ_BEFORE_THE_PAUSE);
+            }, handlerThreads);
+            assertThat(awaitLatch(hasRead)).as("read before the pause").isTrue();
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT));
+
+            // When
+            handlerReturns(run);
+
+            // Then
+            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(EARLIER_THAN_THE_EVENT);
+        }
     }
 
     @Nested
@@ -270,7 +296,7 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
     class When_a_resume_at_a_position_fails {
 
         @Test
-        void a_resume_whose_save_of_the_position_is_refused_leaves_the_running_handler_able_to_store_its_checkpoint() {
+        void a_resume_whose_save_of_the_position_is_refused_does_not_let_the_running_handler_store_its_checkpoint() {
             // Given
             InMemoryCheckpointStorage refusing = new InMemoryCheckpointStorage() {
                 @Override
@@ -296,11 +322,11 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
             handlerReturns(handler);
 
             // Then
-            assertThat(refusing.read(SUBSCRIPTION_ID)).isEqualTo(EVENT_OF_THE_RUNNING_HANDLER);
+            assertThat(refusing.read(SUBSCRIPTION_ID)).isEqualTo(START);
         }
 
         @Test
-        void a_resume_whose_wrapped_resume_throws_puts_back_the_previous_checkpoint_and_the_running_handler_still_stores_its_checkpoint() {
+        void a_resume_whose_wrapped_resume_throws_puts_back_the_previous_checkpoint_and_the_running_handler_does_not_store_its_checkpoint() {
             // Given
             DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
             subscribeFromTheStoredStart(model);
@@ -315,7 +341,152 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
             handlerReturns(handler);
 
             // Then
-            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(EVENT_OF_THE_RUNNING_HANDLER);
+            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(START);
+        }
+
+        @Test
+        void a_resume_that_fails_and_a_later_one_that_succeeds_do_not_let_the_run_the_failed_one_started_store_its_checkpoint() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            subscribeFromTheStoredStart(model);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            CountDownLatch hasRead = new CountDownLatch(1);
+            CompletableFuture<Void> run = new CompletableFuture<>();
+            wrapped.whenResuming = () -> {
+                wrapped.whenResuming = () -> {
+                };
+                CompletableFuture.runAsync(() -> {
+                    wrapped.beforeReading(SUBSCRIPTION_ID);
+                    hasRead.countDown();
+                    awaitQuietly(handlerMayReturn);
+                    wrapped.deliver(SUBSCRIPTION_ID, EVENT_OF_THE_RUN_THE_FAILED_RESUME_STARTED);
+                }, handlerThreads).whenComplete((result, failure) -> {
+                    if (failure == null) {
+                        run.complete(null);
+                    } else {
+                        run.completeExceptionally(failure);
+                    }
+                });
+                assertThat(awaitLatch(hasRead)).as("read by the run of the failed resume").isTrue();
+            };
+            wrapped.failsResume = true;
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class);
+            wrapped.failsResume = false;
+            model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(LATER_THAN_THE_EVENT));
+
+            // When
+            handlerReturns(run);
+
+            // Then
+            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(LATER_THAN_THE_EVENT);
+        }
+
+        @Test
+        void a_resume_whose_save_of_the_position_throws_after_storing_it_does_not_let_the_running_handler_store_its_checkpoint_over_it() {
+            // Given
+            InMemoryCheckpointStorage losingTheReply = new InMemoryCheckpointStorage() {
+                @Override
+                public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                    Checkpoint saved = super.save(subscriptionId, checkpoint, condition);
+                    if (checkpoint.equals(EARLIER_THAN_THE_EVENT)) {
+                        throw new RuntimeException("The reply of the save was lost");
+                    }
+                    return saved;
+                }
+            };
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, losingTheReply);
+            subscribeFromTheStoredStart(model, losingTheReply);
+            CompletableFuture<Void> handler = deliverAHandlerThatStaysRunning(EVENT_OF_THE_RUNNING_HANDLER);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .hasMessage("The reply of the save was lost");
+            handlerReturns(handler);
+
+            // Then
+            assertThat(losingTheReply.read(SUBSCRIPTION_ID)).isEqualTo(EARLIER_THAN_THE_EVENT);
+        }
+
+        @Test
+        void a_resume_whose_wrapped_resume_throws_and_whose_put_back_throws_too_leaves_its_position_stored_once_the_running_handler_has_returned() {
+            // Given
+            AtomicBoolean putBackFails = new AtomicBoolean();
+            InMemoryCheckpointStorage failingToPutBack = new InMemoryCheckpointStorage() {
+                @Override
+                public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                    if (putBackFails.get() && checkpoint.equals(START)) {
+                        throw new IllegalStateException("The put-back failed");
+                    }
+                    return super.save(subscriptionId, checkpoint, condition);
+                }
+            };
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, failingToPutBack);
+            subscribeFromTheStoredStart(model, failingToPutBack);
+            CompletableFuture<Void> handler = deliverAHandlerThatStaysRunning(EVENT_OF_THE_RUNNING_HANDLER);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+            putBackFails.set(true);
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("resume failed for " + SUBSCRIPTION_ID);
+            handlerReturns(handler);
+
+            // Then
+            assertThat(failingToPutBack.read(SUBSCRIPTION_ID)).isEqualTo(EARLIER_THAN_THE_EVENT);
+        }
+
+        @Test
+        void a_quiet_position_is_saved_again_once_a_later_resume_at_a_position_has_stored_its_position() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model);
+            CompletableFuture<Void> handler = deliverAHandlerThatStaysRunning(EVENT_OF_THE_RUNNING_HANDLER);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class);
+            handlerReturns(handler);
+            wrapped.failsResume = false;
+
+            // When
+            model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(LATER_THAN_THE_EVENT));
+
+            // Then
+            await().atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(QUIET);
+            });
+        }
+
+        @Test
+        void no_quiet_position_is_saved_while_the_checkpoint_the_failed_resume_refused_is_the_latest_one() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model);
+            CompletableFuture<Void> handler = deliverAHandlerThatStaysRunning(EVENT_OF_THE_RUNNING_HANDLER);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class);
+
+            // When
+            handlerReturns(handler);
+
+            // Then
+            await().during(300, MILLISECONDS).atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(START);
+            });
         }
     }
 
@@ -329,7 +500,11 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
     }
 
     private void subscribeFromTheStoredStart(DurableSubscriptionModel model) {
-        storage.save(SUBSCRIPTION_ID, START);
+        subscribeFromTheStoredStart(model, storage);
+    }
+
+    private void subscribeFromTheStoredStart(DurableSubscriptionModel model, InMemoryCheckpointStorage checkpointStorage) {
+        checkpointStorage.save(SUBSCRIPTION_ID, START);
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), cloudEvent -> {
             if (positionOf(cloudEvent).equals(EVENT_OF_THE_RUNNING_HANDLER)) {
                 handlerStarted.countDown();
@@ -378,6 +553,8 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
         final Set<Checkpoint> cannotRestartAt = ConcurrentHashMap.newKeySet();
         volatile boolean failsAfterAccepting;
         volatile boolean failsResume;
+        volatile Runnable whenResuming = () -> {
+        };
         private final Map<String, Consumer<CloudEvent>> actions = new ConcurrentHashMap<>();
         private final Set<String> paused = ConcurrentHashMap.newKeySet();
         private final List<QuietPositionListener> listeners = new CopyOnWriteArrayList<>();
@@ -402,6 +579,7 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            whenResuming.run();
             if (failsResume) {
                 throw new IllegalStateException("resume failed for " + subscriptionId);
             }

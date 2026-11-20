@@ -370,10 +370,22 @@ class DurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
-    void no_listener_is_added_when_the_quiet_position_is_never_saved() {
-        new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).neverSaveQuietPosition());
+    void the_listener_added_when_the_quiet_position_is_never_saved_saves_no_quiet_position() throws InterruptedException {
+        // Given
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).neverSaveQuietPosition());
+        subscribeFromTheStoredStart(model, storage, __ -> {
+        });
+        Checkpoint positionOfTheEvent = new StringBasedCheckpoint("event");
+        wrapped.deliver("id", positionOfTheEvent);
+        Thread.sleep(INTERVAL.toMillis() + 50);
 
-        assertThat(wrapped.listeners).isEmpty();
+        // When
+        boolean saved = wrapped.readNothing("id", QUIET);
+
+        // Then
+        assertThat(wrapped.listeners).hasSize(1);
+        assertThat(saved).isFalse();
+        assertThat(storage.read("id")).isEqualTo(positionOfTheEvent);
     }
 
     @Test
