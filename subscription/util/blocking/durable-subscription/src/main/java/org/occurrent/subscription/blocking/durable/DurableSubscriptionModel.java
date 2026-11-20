@@ -785,8 +785,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                          "from evaluatesWriteConditionsFor(String) for this subscription. To start " +
                                          "anyway, accepting that loss, configure " +
                                          "DurableSubscriptionModelConfig.startWhenFirstPositionCanBeOverwritten(true), " +
-                                         "or set occurrent.subscription.start-when-first-position-can-be-overwritten=true " +
-                                         "when using the Spring Boot starter. A subscription with a checkpoint already " +
+                                         "or, when a Spring Boot starter built this model, set " +
+                                         "occurrent.subscription.start-when-first-position-can-be-overwritten=true. " +
+                                         "A subscription with a checkpoint already " +
                                          "stored, or with a StartAt of your own that doesn't resolve to the model " +
                                          "default, records no first position and is never refused this way.");
     }

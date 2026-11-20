@@ -44,7 +44,9 @@ refused with `IllegalStateException` before anything is written for the subscrip
 
 `startWhenFirstPositionCanBeOverwritten(boolean)` on `DurableSubscriptionModelConfig` and
 `ReactorDurableSubscriptionModelConfig`, and the property `occurrent.subscription.start-when-first-position-can-be-overwritten`,
-keep the unconditional write and the warning. The name says what the application accepts, following
+keep the unconditional write and the warning. The property reaches the starter's own check and the durable model a
+MongoDB starter builds, so a durable model the application builds itself needs the config method as well. The name says
+what the application accepts, following
 `startWhenNoStartPositionCanBeRecorded`. Both default to `false`.
 
 A subscription that records no first position isn't refused, whatever the storage answers. That covers a checkpoint

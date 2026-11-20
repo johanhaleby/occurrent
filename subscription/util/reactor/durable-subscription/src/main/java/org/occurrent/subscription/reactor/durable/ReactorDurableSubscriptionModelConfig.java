@@ -110,9 +110,7 @@ public class ReactorDurableSubscriptionModelConfig {
      * writes it unconditionally, logged at {@code WARN}, so the two nodes can overwrite each other's first position and
      * lose the events between the two positions for good. The default is {@code false}, which refuses such a
      * registration with {@code IllegalStateException} on {@code waitUntilStarted()} before anything is written for it.
-     * Every storage Occurrent ships evaluates write conditions, apart from {@code SpringRedisCheckpointStorage} in
-     * Cluster-safe mode for an id Redis Cluster can't put in one slot with its version key, and for an id in the
-     * reserved namespace of its version key, which it refuses for every read and write anyway.
+     * Every reactor storage Occurrent ships evaluates write conditions.
      *
      * @param startWhenFirstPositionCanBeOverwritten {@code true} to start anyway, accepting that loss
      * @return A new instance of {@code ReactorDurableSubscriptionModelConfig}

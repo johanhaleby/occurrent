@@ -117,9 +117,7 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * from {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} cannot be written to conditionally, so two nodes
  * recording a first position at the same moment could overwrite each other's and lose the events between the two
  * positions. That registration is refused the same way, with {@link IllegalStateException}, before anything is written
- * for it. Every storage Occurrent ships evaluates write conditions, apart from {@code SpringRedisCheckpointStorage} in
- * Cluster-safe mode for an id Redis Cluster can't put in one slot with its version key, and for an id in the reserved
- * namespace of its version key, which it refuses for every read and write anyway.
+ * for it. Every reactor storage Occurrent ships evaluates write conditions.
  * {@link ReactorDurableSubscriptionModelConfig#startWhenFirstPositionCanBeOverwritten(boolean)} writes the first
  * position unconditionally instead, logged at {@code WARN}, accepting that loss. See ADR 89. A {@code save(..)} for that first
  * position answering nothing, rather than the checkpoint it wrote, refuses the registration the same way, with
@@ -2019,8 +2017,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                          "from evaluatesWriteConditionsFor(String) for this subscription. To start " +
                                          "anyway, accepting that loss, configure " +
                                          "ReactorDurableSubscriptionModelConfig.startWhenFirstPositionCanBeOverwritten(true), " +
-                                         "or set occurrent.subscription.start-when-first-position-can-be-overwritten=true " +
-                                         "when using the Spring Boot starter. A subscription with a checkpoint already " +
+                                         "or, when a Spring Boot starter built this model, set " +
+                                         "occurrent.subscription.start-when-first-position-can-be-overwritten=true. " +
+                                         "A subscription with a checkpoint already " +
                                          "stored, or with a StartAt of its own that doesn't resolve to the model " +
                                          "default, records no first position and is never refused this way.");
     }

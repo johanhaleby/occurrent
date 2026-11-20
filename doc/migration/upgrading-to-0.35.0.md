@@ -459,6 +459,10 @@ From 0.35.0 the subscription is refused with `IllegalStateException` before anyt
 * Both Spring Boot starters fail startup when they would store a live start as the subscription's first checkpoint.
   For a handler on a bean built after startup, the creation of that bean fails instead.
 
+Under `CompetingConsumerSubscriptionModel`, only the node that holds the lease when the subscription is made gets the
+exception from `subscribe(..)`. Every other node logs it as a warning when it gets the lease and gives the lease back,
+and does that again each time it gets the lease.
+
 A subscription that records no first position isn't refused, whatever the storage answers. That covers a checkpoint
 already stored, a `StartAt` of your own that doesn't resolve to the model default, `StartAt.now()` and a dynamic one
 answering it included, and a starter subscription at `NOW` with `resumeBehavior = SAME_AS_START_AT`.
@@ -481,8 +485,10 @@ or the same method on `ReactorDurableSubscriptionModelConfig`. With a Spring Boo
 occurrent.subscription.start-when-first-position-can-be-overwritten=true
 ```
 
-instead. The starter reads only the property before it stores a first checkpoint, so the config method alone doesn't
-stop that refusal. There is no OpenRewrite recipe for this. See
+The starter reads only the property before it stores a first checkpoint, so the config method alone doesn't stop that
+refusal. The MongoDB starters pass the property to the durable subscription model they build, so the property is all
+that model needs. An application that defines its own `SubscriptionModel` bean gets no durable model from the starter,
+and the one it builds reads only its own config, so it needs the config method as well as the property. There is no OpenRewrite recipe for this. See
 [ADR 184](../architecture/decisions/0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md).
 
 ## A capability that acts on a subscription is not found past a wrapper

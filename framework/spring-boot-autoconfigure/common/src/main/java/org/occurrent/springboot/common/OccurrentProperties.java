@@ -431,7 +431,10 @@ public class OccurrentProperties {
          * {@code CheckpointStorage} Occurrent ships evaluates write conditions, apart from
          * {@code SpringRedisCheckpointStorage} in Cluster-safe mode for an id Redis Cluster can't put in one slot with its
          * version key, and for an id in the reserved namespace of its version key, which it refuses for every read and
-         * write anyway.
+         * write anyway. The starter reads this before it stores a live start as the first checkpoint, and the MongoDB
+         * starters pass it to the durable subscription model they build. A durable subscription model the application
+         * builds itself doesn't read it, so set {@code startWhenFirstPositionCanBeOverwritten(true)} on that model's
+         * config as well.
          */
         private boolean startWhenFirstPositionCanBeOverwritten = false;
 
