@@ -55,6 +55,7 @@ import java.util.function.Consumer;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
 
@@ -178,6 +179,60 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
         }
     }
 
+    @Nested
+    @DisplayName("when the handler that started before the resume has returned")
+    class When_the_handler_that_started_before_the_resume_has_returned {
+
+        @Test
+        void a_quiet_position_is_saved_without_a_new_delivery() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model);
+            CompletableFuture<Void> handler = deliverAHandlerThatStaysRunning(EVENT_OF_THE_RUNNING_HANDLER);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT));
+            handlerReturns(handler);
+
+            // When
+            // Then
+            await().atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(QUIET);
+            });
+        }
+    }
+
+    @Nested
+    @DisplayName("when the wrapped model accepted a subscribe that then failed")
+    class When_the_wrapped_model_accepted_a_subscribe_that_then_failed {
+
+        @Test
+        void a_handler_of_that_run_still_running_after_a_resume_at_a_position_does_not_store_its_checkpoint_over_it() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            wrapped.failsAfterAccepting = true;
+            storage.save(SUBSCRIPTION_ID, START);
+            assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+                handlerStarted.countDown();
+                awaitQuietly(handlerMayReturn);
+            })).isInstanceOf(IllegalStateException.class);
+            assertThat(model.idsWithUntrackedRegistrations()).isEqualTo(1);
+            CompletableFuture<Void> handler = CompletableFuture.runAsync(() -> wrapped.deliver(SUBSCRIPTION_ID, EVENT_OF_THE_RUNNING_HANDLER), handlerThreads);
+            assertThat(awaitLatch(handlerStarted)).as("handler started").isTrue();
+            model.pauseSubscription(SUBSCRIPTION_ID);
+
+            // When
+            model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(LATER_THAN_THE_EVENT));
+            handlerReturns(handler);
+
+            // Then
+            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(LATER_THAN_THE_EVENT);
+        }
+    }
+
     private Consumer<Checkpoint> aSaverOnceTheIntervalHasPassed() {
         AtomicReference<Consumer<Checkpoint>> saver = new AtomicReference<>();
         await().atMost(5, SECONDS).until(() -> {
@@ -235,6 +290,7 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
      */
     private static final class PausableModel implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions, QuietPositionReportingSubscriptions {
         final Set<Checkpoint> cannotRestartAt = ConcurrentHashMap.newKeySet();
+        volatile boolean failsAfterAccepting;
         private final Map<String, Consumer<CloudEvent>> actions = new ConcurrentHashMap<>();
         private final Set<String> paused = ConcurrentHashMap.newKeySet();
         private final List<QuietPositionListener> listeners = new CopyOnWriteArrayList<>();
@@ -251,6 +307,9 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             actions.put(subscriptionId, action);
+            if (failsAfterAccepting) {
+                throw new IllegalStateException("failed after accepting " + subscriptionId);
+            }
             return subscription(subscriptionId);
         }
 
