@@ -29,6 +29,7 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.saga.*;
 import org.occurrent.dsl.saga.blocking.SagaSubscription.ReleaseResult;
+import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
@@ -338,6 +339,56 @@ class SagaReleaseConcurrentCallersTest {
         );
     }
 
+    @Test
+    void a_release_call_replaying_a_record_another_call_applied_that_no_longer_fits_does_not_quarantine_the_instance_again_on_it()
+            throws Exception {
+        CloudEvent streamless = withoutStream(append(new ItemAdded("streamless", ORDER, "a")));
+        NoLongerFittingStore store = new NoLongerFittingStore(streamless.getId());
+        SagaExecution<OrderEvent, Order, Object> execution = execution(store);
+        execution.onCloudEvent(append(new OrderPlaced(nextEventId(), ORDER)));
+        poisonFails = true;
+        quarantineOn(execution, append(new ItemAdded(nextEventId(), ORDER, "poison")));
+        poisonFails = false;
+        execution.onCloudEvent(streamless);
+        execution.onCloudEvent(append(new ItemAdded(nextEventId(), ORDER, "b")));
+        String quarantineId = instance().quarantineId();
+        assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE))
+                .as("poison, the input with no stream and b").hasSize(3);
+
+        CompletableFuture<ReleaseResult> a = CompletableFuture.supplyAsync(() -> {
+            store.a = Thread.currentThread();
+            try {
+                return execution.release(ORDER);
+            } finally {
+                store.aFinished.countDown();
+            }
+        });
+        await(store.aHasReadTheRecordWithNoStream);
+        ReleaseResult bResult = execution.release(ORDER);
+        ReleaseResult aResult = a.get(10, TimeUnit.SECONDS);
+
+        SagaEnvelope<Order> after = instance();
+        String evidence = "A returned " + aResult + ", B returned " + bResult + ", status " + after.status()
+                          + ", items " + after.state().items() + ", dispatched " + dispatched
+                          + ", records left under the quarantine id: " + recordsLeft(quarantineId);
+        assertAll(
+                () -> assertThat(store.aSavedWithoutState)
+                        .as("A quarantined the instance B changed again on a record B deleted. " + evidence).isFalse(),
+                () -> assertThat(aResult).as("A's result. " + evidence).isEqualTo(ReleaseResult.RELEASED),
+                () -> assertThat(bResult).as("B's result. " + evidence).isEqualTo(ReleaseResult.RELEASED),
+                () -> assertThat(after.quarantineId()).as("the instance is not quarantined. " + evidence).isNull(),
+                () -> assertThat(after.state().items())
+                        .as("the input with no stream is applied once. " + evidence)
+                        .containsExactly("poison", "a", "b"),
+                () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, Integer.MAX_VALUE))
+                        .as("no record is left. " + evidence).isEmpty()
+        );
+    }
+
+    private static boolean holdsATwice(List<String> items) {
+        return Collections.frequency(items, "a") > 1;
+    }
+
     private static CloudEvent withoutStream(CloudEvent event) {
         return CloudEventBuilder.v1(event)
                 .withoutExtension(OccurrentCloudEventExtension.STREAM_ID)
@@ -517,7 +568,7 @@ class SagaReleaseConcurrentCallersTest {
         final CountDownLatch rDeletedTheStartRecord = new CountDownLatch(1);
         final CountDownLatch pDeletedItsRecord = new CountDownLatch(1);
         private final AtomicInteger rWrites = new AtomicInteger();
-        private final AtomicInteger rRecordReads = new AtomicInteger();
+        private final AtomicBoolean rPaused = new AtomicBoolean();
         private final AtomicInteger pRecordReads = new AtomicInteger();
 
         private boolean isR() {
@@ -544,9 +595,12 @@ class SagaReleaseConcurrentCallersTest {
                 pHasReadTheInstance.countDown();
                 await(rDeletedTheStartRecord);
             }
-            // R's reads are the check before it starts the release, the replay of the start record, and the read after it
-            if (isR() && rRecordReads.incrementAndGet() == 3) {
-                await(pDeletedItsRecord);
+            // R waits once, on its first read that finds a record after the start record
+            if (isR() && !rPaused.get()) {
+                List<SkippedInput> peek = super.findSkippedInputs(sagaId, quarantineId, limit);
+                if (!peek.isEmpty() && peek.getFirst().seq() > 0 && rPaused.compareAndSet(false, true)) {
+                    await(pDeletedItsRecord);
+                }
             }
             return super.findSkippedInputs(sagaId, quarantineId, limit);
         }
@@ -566,7 +620,7 @@ class SagaReleaseConcurrentCallersTest {
 
     // Call order: A replays the first record, reads the one with no stream and pauses, B applies that record and pauses
     // with a record left, A reads the instance B wrote and replays the record it read against it, and the two finish
-    private final class StaleRecordStore extends DelegatingStore {
+    private class StaleRecordStore extends DelegatingStore {
         volatile @Nullable Thread a;
         final CountDownLatch aHasReadTheRecordWithNoStream = new CountDownLatch(1);
         final CountDownLatch bAppliedThatRecord = new CountDownLatch(1);
@@ -574,22 +628,22 @@ class SagaReleaseConcurrentCallersTest {
         final AtomicBoolean staleReplayWon = new AtomicBoolean(false);
         final AtomicBoolean completingWriteWon = new AtomicBoolean(false);
         private final String staleEventId;
-        private final AtomicInteger aRecordReads = new AtomicInteger();
+        private final AtomicBoolean aPaused = new AtomicBoolean();
         private final AtomicInteger bReplays = new AtomicInteger();
 
         StaleRecordStore(String staleEventId) {
             this.staleEventId = staleEventId;
         }
 
-        private boolean isA() {
+        boolean isA() {
             return Thread.currentThread() == a;
         }
 
         @Override
         public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
             List<SkippedInput> found = super.findSkippedInputs(sagaId, quarantineId, limit);
-            // A's reads are the check before it starts the release, the replay of the first record, and the read that finds the record with no stream
-            if (isA() && aRecordReads.incrementAndGet() == 3) {
+            // A waits once, on its first read that returns the record with no stream first
+            if (isA() && !found.isEmpty() && found.getFirst().event().getId().equals(staleEventId) && aPaused.compareAndSet(false, true)) {
                 aHasReadTheRecordWithNoStream.countDown();
                 await(bAppliedThatRecord);
             }
@@ -625,6 +679,31 @@ class SagaReleaseConcurrentCallersTest {
             if (saved && SagaStatus.COMPLETED.name().equals(saga.index().storedStatus())) {
                 completingWriteWon.set(true);
             }
+        }
+    }
+
+    private final class NoLongerFittingStore extends StaleRecordStore {
+        final AtomicBoolean aSavedWithoutState = new AtomicBoolean(false);
+        private final SagaCodec<Order> codec = SagaCodec.of(inMemory.stateCodec(), null);
+
+        NoLongerFittingStore(String staleEventId) {
+            super(staleEventId);
+        }
+
+        // Refuses only a state that holds a twice, which is what replaying a again on B's instance produces
+        @Override
+        public boolean fits(StoredSaga candidate) {
+            return !holdsATwice(codec.decode(candidate).state().items());
+        }
+
+        // A save by A of a quarantined instance that is not releasing is a requarantine, the start of a release is not
+        @Override
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            boolean saved = super.compareAndSaveWithoutState(saga, expectedVersion);
+            if (saved && isA() && saga.index().quarantineId() != null && !saga.index().releasing()) {
+                aSavedWithoutState.set(true);
+            }
+            return saved;
         }
     }
 }
