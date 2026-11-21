@@ -35,6 +35,7 @@ import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
+import org.occurrent.subscription.internal.HistoryLossMessages;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -75,7 +76,8 @@ class ReactorCatchupMarkedTimeRefusalTest {
         assertThatThrownBy(() -> catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(MARKED_TIME), action))
                 .as("what the named subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
-                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint");
+                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
+                .hasMessageContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE);
         assertNothingReadSubscribedOrDelivered();
     }
 
@@ -88,7 +90,8 @@ class ReactorCatchupMarkedTimeRefusalTest {
         // Then
         StepVerifier.create(unnamed(() -> catchup.subscribe(StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(MARKED_TIME))))
                 .expectErrorSatisfies(error -> assertThat(error).as("the error signal")
-                        .isInstanceOf(CatchupCannotResumeException.class).hasMessageContainingAll(MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint"))
+                        .isInstanceOf(CatchupCannotResumeException.class).hasMessageContainingAll(MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
+                        .hasMessageNotContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE))
                 .verify();
         assertNothingReadSubscribedOrDelivered();
     }
@@ -103,7 +106,8 @@ class ReactorCatchupMarkedTimeRefusalTest {
         assertThatThrownBy(() -> catchup.subscribe("sub", DcbSubscriptionFilter.filter(CRITERIA), StartAt.checkpoint(MARKED_TIME), action))
                 .as("what the named subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
-                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint");
+                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
+                .hasMessageContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE);
         assertNothingReadSubscribedOrDelivered();
     }
 
@@ -116,7 +120,8 @@ class ReactorCatchupMarkedTimeRefusalTest {
         // Then
         StepVerifier.create(unnamed(() -> catchup.subscribe(DcbSubscriptionFilter.filter(CRITERIA), StartAt.checkpoint(MARKED_TIME))))
                 .expectErrorSatisfies(error -> assertThat(error).as("the error signal")
-                        .isInstanceOf(CatchupCannotResumeException.class).hasMessageContainingAll(MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint"))
+                        .isInstanceOf(CatchupCannotResumeException.class).hasMessageContainingAll(MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
+                        .hasMessageNotContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE))
                 .verify();
         assertNothingReadSubscribedOrDelivered();
     }
@@ -131,10 +136,12 @@ class ReactorCatchupMarkedTimeRefusalTest {
         assertThatThrownBy(() -> catchup.subscribe("sub", null, StartAt.checkpoint(MARKED_TIME), action))
                 .as("what the named subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
-                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint");
+                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
+                .hasMessageContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE);
         StepVerifier.create(unnamed(() -> catchup.subscribe(null, StartAt.checkpoint(MARKED_TIME))))
                 .expectErrorSatisfies(error -> assertThat(error).as("the error signal")
-                        .isInstanceOf(CatchupCannotResumeException.class).hasMessageContainingAll(MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint"))
+                        .isInstanceOf(CatchupCannotResumeException.class).hasMessageContainingAll(MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
+                        .hasMessageNotContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE))
                 .verify();
         assertNothingReadSubscribedOrDelivered();
         assertThat(catchup.isRunning("sub")).as("whether the refused subscription runs").isFalse();

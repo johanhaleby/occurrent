@@ -55,6 +55,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
+import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
@@ -396,7 +397,8 @@ class StreamCatchupSubscriptionModelTest {
             // Then the call itself is refused, before a Subscription exists to wait on
             assertThat(failure).isInstanceOf(UnsupportedStartAtException.class)
                     .hasMessageContaining("catch-up subscription subscription after a global position, since the event store doesn't write one")
-                    .hasMessageContaining("delete that checkpoint first");
+                    .hasMessageContaining("delete that checkpoint first")
+                    .hasMessageContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE);
             assertThat(received).as("delivered").isEmpty();
             assertThat(saved).as("stored").isEmpty();
             assertThat(storage.read("subscription")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());

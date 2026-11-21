@@ -38,6 +38,7 @@ import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConf
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
+import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.time.OffsetDateTime;
@@ -231,7 +232,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 && !startsAtPositionZero(firstStartAt, subscriptionModelContextType)) {
             throw new UnsupportedStartAtException(firstStartAt, "Cannot start catch-up subscription " + subscriptionId + " after a global position, since the event store doesn't write one. "
                     + "Start it from the beginning of time with StartAtTime.beginningOfTime(), or from a time. "
-                    + "If the position is the checkpoint stored for the subscription, delete that checkpoint first.");
+                    + "If the position is the checkpoint stored for the subscription, delete that checkpoint first. " + HistoryLossMessages.WHEN_INSTANCES_COMPETE);
         }
     }
 

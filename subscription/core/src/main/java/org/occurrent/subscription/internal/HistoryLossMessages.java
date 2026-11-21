@@ -30,13 +30,16 @@ public final class HistoryLossMessages {
     }
 
     /**
-     * What a recovery that cancels a subscription does instead when more than one instance competes for it, for the
-     * messages that tell someone to cancel a subscription after a history loss or a lost live start. A cancel gives up
-     * the lease only on the instance it's called on and deletes the checkpoint every instance shares, so another instance
-     * can take the lease and start from its own start before the one being recovered subscribes again.
+     * What a recovery that cancels a subscription, or deletes or replaces its stored checkpoint, does instead when more
+     * than one instance competes for it, for every message that tells someone to do either after a refusal, whatever
+     * the refusal was. A cancel gives up the lease only on the instance it's called on and deletes the checkpoint every
+     * instance shares, and a delete stops none of the instances that still compete for it, so another instance can take
+     * the lease and start from its own start, and store a newer checkpoint, before the one being recovered subscribes
+     * again.
      */
-    public static final String WHEN_INSTANCES_COMPETE = "When more than one instance competes for the subscription, stop every instance instead of cancelling it on one,"
-            + " delete its stored checkpoint or replace it with the checkpoint to start from, and start every instance again from the same start.";
+    public static final String WHEN_INSTANCES_COMPETE = "When more than one instance competes for the subscription, stop every instance,"
+            + " delete its stored checkpoint or replace it with the checkpoint to start from, and start every instance again from the same start."
+            + " A cancel on one instance, or a delete while one still runs, lets another instance take the subscription over from its own start.";
 
     /**
      * The error a catch-up logs once when it pauses a subscription with an id for good after the subscription model

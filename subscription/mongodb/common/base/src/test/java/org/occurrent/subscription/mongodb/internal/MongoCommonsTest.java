@@ -33,6 +33,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
@@ -612,7 +613,8 @@ class MongoCommonsTest {
         // Then
         assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
                 .hasMessageContaining("subscription \"mySubscription\"")
-                .hasMessageContaining("\"" + GlobalCheckpoint.of(0).asString() + "\"");
+                .hasMessageContaining("\"" + GlobalCheckpoint.of(0).asString() + "\"")
+                .hasMessageContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE);
         assertThat(((UnsupportedStartAtException) throwable).startAt()).isSameAs(answer);
     }
 
@@ -638,7 +640,8 @@ class MongoCommonsTest {
         Throwable throwable = catchThrowable(() -> wrapped.get(new SubscriptionModelContext(MongoCommonsTest.class)));
 
         // Then
-        assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("a subscription");
+        assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("a subscription")
+                .hasMessageNotContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE);
     }
 
     @Test

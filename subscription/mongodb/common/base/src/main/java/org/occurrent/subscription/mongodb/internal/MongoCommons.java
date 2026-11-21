@@ -36,6 +36,7 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
@@ -578,7 +579,9 @@ public class MongoCommons {
                 String subscription = subscriptionId == null ? "a subscription" : "subscription \"" + subscriptionId + "\"";
                 throw new UnsupportedStartAtException(requireNonNull(resolved), "The dynamic start position of " + subscription + " answered checkpoint \""
                         + checkpoint.asString() + "\", " + NOT_A_CHANGE_STREAM_POSITION + "Start the subscription through a catch-up subscription model. "
-                        + "When one already wraps this model, restore the start position its replay had or remove the stored checkpoint.");
+                        + "When one already wraps this model, restore the start position its replay had or remove the stored checkpoint."
+                        // Named only, since instances can only compete for a subscription with an id
+                        + (subscriptionId == null ? "" : " " + HistoryLossMessages.WHEN_INSTANCES_COMPETE));
             }
             return resolved;
         });

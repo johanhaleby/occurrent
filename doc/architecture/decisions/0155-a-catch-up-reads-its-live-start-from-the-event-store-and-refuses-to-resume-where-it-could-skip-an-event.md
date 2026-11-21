@@ -348,8 +348,8 @@ subscription and subscribing again from now skips every event since the lost tok
 - A tracing, metrics or tenancy decorator around `EventStoreQueries` can no longer be handed to a catch-up. It goes
   around the subscription instead.
 - While 0.34 and 0.35 nodes run side by side, a 0.34 node can still skip a late event on every checkpoint form it reads.
-  Closing that would stop every catch-up during the upgrade. Rolling back to 0.34 needs the marked checkpoints deleted
-  first.
+  Closing that would stop every catch-up during the upgrade. Rolling back to 0.34 needs every instance stopped and the
+  marked checkpoints deleted first, since a 0.35 instance that still runs can store a marked checkpoint again.
 - A 0.34 time checkpoint written under a sort that doesn't lead with time ascending can already be past an event its run
   never delivered, and nothing in the string says which sort wrote it. 0.35 resumes it as stored.
 - The reactor push model isn't checked for the defect.
