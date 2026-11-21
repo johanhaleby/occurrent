@@ -925,6 +925,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
                             .isInstanceOf(CatchupCannotResumeException.class)
                             .hasMessageContaining("catch-up subscription sub after position 1")
                             .hasMessageContaining("cancel it first, which deletes that checkpoint")
+                            .hasMessageContaining("When more than one instance competes for the subscription, stop every instance")
                             .hasMessageContaining("EventMetadata.getCheckpoint()"))
                     .verify(Duration.ofSeconds(10));
             assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
@@ -951,6 +952,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
                             .isInstanceOf(CatchupCannotResumeException.class)
                             .hasMessageContaining("catch-up subscription sub again from position 1")
                             .hasMessageContaining("cancel it first, which deletes that checkpoint")
+                            .hasMessageContaining("When more than one instance competes for the subscription, stop every instance")
                             .hasMessageContaining("from the beginning again"))
                     .verify(Duration.ofSeconds(10));
             assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();

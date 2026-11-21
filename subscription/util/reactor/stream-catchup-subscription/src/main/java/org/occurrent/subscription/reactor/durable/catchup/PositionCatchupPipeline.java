@@ -296,7 +296,7 @@ final class PositionCatchupPipeline {
                 + ", because the checkpoint holds no live start read before position " + position + " was, and an event that committed below position " + position
                 + " after it was read would never be delivered. " + cancelFirst(subscriptionId)
                 + "Start the subscription from the beginning, or from the checkpoint it delivered with the event at position " + position
-                + ", which EventMetadata.getCheckpoint() returns.");
+                + ", which EventMetadata.getCheckpoint() returns." + ifInstancesCompete(subscriptionId));
     }
 
     // A named subscription may run under a durable model that reads the refused checkpoint from its storage again on
@@ -305,13 +305,18 @@ final class PositionCatchupPipeline {
         return subscriptionId == null ? "" : "If the subscription stores its checkpoint, cancel it first, which deletes that checkpoint. ";
     }
 
+    // Named only, as in cancelFirst, since instances can only compete for a subscription with an id
+    private static String ifInstancesCompete(@Nullable String subscriptionId) {
+        return subscriptionId == null ? "" : " " + HistoryLossMessages.WHEN_INSTANCES_COMPETE;
+    }
+
     // A replay again from a position above 0, with a token read now, skips an event below that position that was
     // written after the lost token was read
     private static CatchupCannotResumeException liveStartLostAbovePositionZero(@Nullable String subscriptionId, long origin, Checkpoint lostLiveStart) {
         return HistoryLossMessages.liveStartLost("Cannot replay catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId) + " again from position " + origin
                 + ", because the subscription model no longer has the history from its live start, and a replay from there with a live start read now would never deliver an event before position "
-                + origin + " that was written after the lost live start was read. " + cancelFirst(subscriptionId) + "Start the subscription from the beginning again, and size the change stream history, such as the MongoDB oplog, to reach back across the replay. Lost live start: "
-                + lostLiveStart.asString(), lostLiveStart, false);
+                + origin + " that was written after the lost live start was read. " + cancelFirst(subscriptionId) + "Start the subscription from the beginning again, and size the change stream history, such as the MongoDB oplog, to reach back across the replay." + ifInstancesCompete(subscriptionId)
+                + " Lost live start: " + lostLiveStart.asString(), lostLiveStart, false);
     }
 
     private static CatchupCannotResumeException liveStartLostEachTime(@Nullable String subscriptionId, int replays, Checkpoint lastLiveStart, LongestReplay longestReplay) {

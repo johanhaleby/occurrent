@@ -435,7 +435,8 @@ class PositionCatchupPipelineTest {
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining("position 1")
                         .hasMessageContaining("from the beginning again")
-                        .hasMessageNotContaining("cancel it first"))
+                        .hasMessageNotContaining("cancel it first")
+                        .hasMessageNotContaining("When more than one instance competes for the subscription, stop every instance"))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.resumeProbes).containsExactly(agedOut);
         assertThat(live.liveStarts).as("nothing handed over").isEmpty();
@@ -457,7 +458,8 @@ class PositionCatchupPipelineTest {
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining("position 1")
                         .hasMessageContaining("from the beginning again")
-                        .hasMessageNotContaining("cancel it first"))
+                        .hasMessageNotContaining("cancel it first")
+                        .hasMessageNotContaining("When more than one instance competes for the subscription, stop every instance"))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.liveStarts).as("nothing handed over").isEmpty();
     }
@@ -475,7 +477,8 @@ class PositionCatchupPipelineTest {
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining("position 1")
                         .hasMessageContaining("from the beginning again")
-                        .hasMessageNotContaining("cancel it first"))
+                        .hasMessageNotContaining("cancel it first")
+                        .hasMessageNotContaining("When more than one instance competes for the subscription, stop every instance"))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.opensAt).as("opened once at the stored live start, not again after a second replay").containsExactly(storedLiveStart);
     }
@@ -527,7 +530,8 @@ class PositionCatchupPipelineTest {
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining("after position 1")
                         .hasMessageContaining("EventMetadata.getCheckpoint()")
-                        .hasMessageNotContaining("cancel it first"))
+                        .hasMessageNotContaining("cancel it first")
+                        .hasMessageNotContaining("When more than one instance competes for the subscription, stop every instance"))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.resumeProbes).as("asked").isEmpty();
         assertThat(live.liveStarts).as("handed over").isEmpty();

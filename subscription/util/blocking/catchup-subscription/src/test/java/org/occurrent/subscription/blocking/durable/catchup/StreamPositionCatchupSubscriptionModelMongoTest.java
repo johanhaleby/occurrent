@@ -215,6 +215,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
         assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContaining("subscription")
                 .hasMessageContaining("after position 1")
+                .hasMessageContaining("When more than one instance competes for the subscription, stop every instance")
                 .hasMessageContaining("EventMetadata.getCheckpoint()");
         assertThat(storage.read("subscription")).as("stored").isNull();
         assertThat(received).as("delivered").isEmpty();
@@ -245,7 +246,8 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
         assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContaining("subscription")
                 .hasMessageContaining(legacyTimeToken)
-                .hasMessageContaining("holds no live start");
+                .hasMessageContaining("holds no live start")
+                .hasMessageContaining("When more than one instance competes for the subscription, stop every instance");
         assertThat(storage.read("subscription").asString()).as("stored").isEqualTo(legacyTimeToken);
         assertThat(received).as("delivered").isEmpty();
     }
