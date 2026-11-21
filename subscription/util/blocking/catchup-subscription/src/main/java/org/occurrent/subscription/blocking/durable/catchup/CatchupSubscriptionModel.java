@@ -384,6 +384,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
         anyCatchupModel().runInTurn(this, "start(..)", () -> {
+            long shutdownsBegunBefore = anyCatchupModel().shutdownsBegun(this);
             Map<AbstractCatchupSubscriptionModel, AbstractCatchupSubscriptionModel.StartAttempt> attempts = new LinkedHashMap<>();
             presentCatchupModels().forEach(model -> attempts.put(model, model.beginStart()));
             final AbstractCatchupSubscriptionModel replaysOnResume;
@@ -391,7 +392,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 replaysOnResume = resumeSubscriptionsAutomatically
                         ? presentCatchupModels().filter(AbstractCatchupSubscriptionModel::anyResumeReplays).findFirst().orElse(null)
                         : null;
-                anyCatchupModel().startTheLiveDelegate(this, () -> getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && replaysOnResume == null));
+                anyCatchupModel().startTheLiveDelegate(this, shutdownsBegunBefore, () -> getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && replaysOnResume == null));
             } catch (Throwable e) {
                 boolean liveDelegateRuns = attempts.values().stream().anyMatch(AbstractCatchupSubscriptionModel.StartAttempt::wasStopped)
                         && AbstractCatchupSubscriptionModel.runsAfterFailedStart(getWrappedSubscriptionModel(), e);

@@ -339,6 +339,18 @@ rest to the lifecycle thread, which runs it once the action has returned. A `sta
 stuck in the wrapped model's `start(..)` on the lifecycle thread holds that `shutdown()` up, and only a `shutdown()` on
 an ordinary thread ends it.
 
+A `shutdown()` made on the thread of a `start(..)`, from code that start runs, can't wait for it either. The start holds
+the model lock on that thread, so the `shutdown()` takes the lock at once, and the start can't return before the
+`shutdown()` does. A `StartAt.dynamic` function the start asks gets there, and so does a wrapped model whose `start(..)`
+calls back into code that shuts the catch-up model down. Made before the wrapped model's `start(..)`, the `shutdown()`
+shuts the wrapped model down at once, and the start then doesn't call the wrapped model's `start(..)`. Made inside the
+wrapped model's `start(..)`, it calls the wrapped model's `shutdown()` at once as above, and the start makes the call
+under the lock instead, since the wrapped model may go on to start after the `shutdown()` has returned. The start makes
+that call once the wrapped model's `start(..)` has returned or thrown, before the start itself returns. The `shutdown()`
+counts as under way until then, so a `start(..)` made in between doesn't call the wrapped model's `start(..)`. The
+start returns or throws what it would have without the call. When that call throws, it is logged at `ERROR`, and the
+next `shutdown()` calls the wrapped model's `shutdown()` again.
+
 Once the wrapped model's `shutdown()` has returned normally under the lock, a later `shutdown()` doesn't call it there
 again. One that threw left the wrapped model running, so the next `shutdown()` calls it again. A `start(..)` after a
 `shutdown()`, with no handed call left to wait for, calls the wrapped model's `start(..)`, as 0.34.0 did, and the next `shutdown()` calls its `shutdown()`

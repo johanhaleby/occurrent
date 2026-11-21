@@ -376,14 +376,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // Starts of the live delegate under way
         private int starts;
         // Shutdowns of the model under way, from the moment they forgot the catch-ups until they return, or until the
-        // thread a held-up one handed the rest to has run it
+        // thread a held-up one handed the rest to has run it, or until the start one was made inside has run the rest
         private int shutdowns;
+        // Every shutdown of the model that has begun, so a start can tell whether one began while it ran
+        private long shutdownsBegun;
         // Whether a shutdown() that code a caller supplied held up has handed a thread of its own a shutdown of the
         // live delegate that hasn't run yet, so a later one held up the same way hands over no second one
         private boolean shutdownHandedOver;
         // Whether a shutdown() has shut the live delegate down, with no start(..) of the model since, so a later
         // shutdown() doesn't shut it down again. Written only with the model lock held, and read under it
         private boolean shutDown;
+        // The shutdowns made on the thread of a start(..) of the model while it was in the live delegate's start(..),
+        // which can start the live delegate again after them. Each counts in shutdowns until that start has returned
+        // and shut the live delegate down for them with shutDownLeftToTheStart
+        private int shutdownsLeftToTheStart;
+        private @Nullable Runnable shutDownLeftToTheStart;
     }
 
     // A subscribe whose function is asked with no claim held, kept from before the function is asked until the
@@ -985,6 +992,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * delegate down without waiting for this start, as {@link #shutDownInTurn} describes, and keeps it from resuming
      * anything once the live delegate's {@code start(..)} has returned. One under way when this start begins keeps it
      * from starting the live delegate.
+     * <p>
+     * A {@code shutdown()} made on the thread of this start, from code it runs such as a {@code StartAt.dynamic} function
+     * or the live delegate's {@code start(..)}, returns without waiting for this start, which can't return before it. When
+     * it comes before the live delegate's {@code start(..)}, this start doesn't call it. When it comes inside it, this
+     * start shuts the live delegate down again once that {@code start(..)} has returned or thrown, before this start
+     * returns or throws, since the live delegate may have gone on to start after the shutdown. That shutdown of the live
+     * delegate doesn't change what this start returns or throws. When it throws, it is logged at {@code ERROR}, and the
+     * next {@code shutdown()} calls the live delegate's {@code shutdown()} again.
      *
      * @throws IllegalStateException when called on a thread that runs a replay of this model outside the subscriber's
      *                               action, such as in a {@link CatchupListener}, or from a thread on which the model
@@ -995,11 +1010,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
         runInTurn(this, "start(..)", () -> {
+            long shutdownsBegunBefore = shutdownsBegun(this);
             StartAttempt attempt = beginStart();
             final boolean resumeEachHere;
             try {
                 resumeEachHere = resumeSubscriptionsAutomatically && anyResumeReplays();
-                startTheLiveDelegate(this, () -> getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && !resumeEachHere));
+                startTheLiveDelegate(this, shutdownsBegunBefore, () -> getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && !resumeEachHere));
             } catch (Throwable e) {
                 undoStart(attempt, attempt.wasStopped() && runsAfterFailedStart(getWrappedSubscriptionModel(), e), e);
                 throw e;
@@ -4723,17 +4739,38 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Calls {@code start}, which starts the live delegate for a {@code start(..)} of {@code model}, unless a
-     * {@code shutdown()} of {@code model} is under way. That shutdown has forgotten the catch-ups and shuts the live
-     * delegate down once this start has returned, so not starting it ends in the same state. A shutdown that comes
-     * while {@code start} runs shuts the live delegate down without waiting for it, as {@link #shutDownInTurn} describes,
-     * since a live delegate can hold its start until it is shut down. The next {@code shutdown()} of {@code model}
-     * shuts the live delegate down again, also after a start that threw and may have left it running.
+     * The shutdowns of {@code model} that have begun so far. A {@code start(..)} of {@code model} reads it first, under
+     * the model lock, and hands it to {@link #startTheLiveDelegate}.
      */
-    void startTheLiveDelegate(Object model, Runnable start) {
+    long shutdownsBegun(Object model) {
         LiveDelegateCalls calls = liveDelegateCalls.computeIfAbsent(model, ignored -> new LiveDelegateCalls());
         synchronized (calls) {
-            if (calls.shutdowns > 0) {
+            return calls.shutdownsBegun;
+        }
+    }
+
+    /**
+     * Calls {@code start}, which starts the live delegate for a {@code start(..)} of {@code model}, unless a
+     * {@code shutdown()} of {@code model} is under way, or one has begun since that start read
+     * {@code shutdownsBegunBefore} from {@link #shutdownsBegun}. A shutdown under way has forgotten the catch-ups and
+     * shuts the live delegate down once this start has returned, so not starting it ends in the same state. One that
+     * began since and is no longer under way was made on this thread, from code the start ran before this, such as a
+     * {@code StartAt.dynamic} function, since every other shutdown waits for the model lock the start holds. It has shut
+     * the live delegate down, and starting it now would leave it running once the start has returned. A shutdown that
+     * comes while {@code start} runs shuts the live delegate down without waiting for it, as {@link #shutDownInTurn}
+     * describes, since a live delegate can hold its start until it is shut down. The next {@code shutdown()} of
+     * {@code model} shuts the live delegate down again, also after a start that threw and may have left it running.
+     * <p>
+     * A shutdown made on this thread from inside {@code start}, as by a live delegate whose start calls back into code
+     * that shuts {@code model} down, can't wait for this start, which may still start the live delegate after it. So once
+     * {@code start} has returned or thrown, this shuts the live delegate down for it under the model lock, before it
+     * returns or rethrows, and logs an {@code ERROR} naming {@code model} for what that shutdown throws, leaving the live
+     * delegate to the next {@code shutdown()}.
+     */
+    void startTheLiveDelegate(Object model, long shutdownsBegunBefore, Runnable start) {
+        LiveDelegateCalls calls = liveDelegateCalls.computeIfAbsent(model, ignored -> new LiveDelegateCalls());
+        synchronized (calls) {
+            if (calls.shutdowns > 0 || calls.shutdownsBegun != shutdownsBegunBefore) {
                 return;
             }
             calls.starts++;
@@ -4742,8 +4779,34 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try {
             start.run();
         } finally {
+            int leftToThisStart;
+            Runnable shutDownTheLiveDelegate;
             synchronized (calls) {
                 calls.starts--;
+                leftToThisStart = calls.starts == 0 ? calls.shutdownsLeftToTheStart : 0;
+                shutDownTheLiveDelegate = calls.shutDownLeftToTheStart;
+                if (leftToThisStart > 0) {
+                    calls.shutdownsLeftToTheStart = 0;
+                    calls.shutDownLeftToTheStart = null;
+                }
+            }
+            if (leftToThisStart > 0 && shutDownTheLiveDelegate != null) {
+                shutDownForTheShutdownsLeftToTheStart(model, calls, leftToThisStart, shutDownTheLiveDelegate);
+            }
+        }
+    }
+
+    // Under the model lock the start holds. The shutdowns stay counted until the live delegate's shutdown() has run, so
+    // nothing in between starts the live delegate
+    private void shutDownForTheShutdownsLeftToTheStart(Object model, LiveDelegateCalls calls, int shutdowns, Runnable shutDownTheLiveDelegate) {
+        try {
+            underTheModelLock(() -> shutDownUnlessShutDown(calls, shutDownTheLiveDelegate));
+        } catch (Throwable e) {
+            // Every Throwable, since the shutdown it belongs to has returned, and the start's own outcome stands
+            log.error("shutdown() of {}, made from inside a start(..) of it and run once that start had returned from the live delegate, threw", model, e);
+        } finally {
+            synchronized (calls) {
+                calls.shutdowns -= shutdowns;
             }
         }
     }
@@ -4783,6 +4846,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * share shuts the live delegate down as above, once the action has returned, and logs an {@code ERROR} naming
      * {@code model} for what it throws.
      * <p>
+     * Called on the thread of a {@code start(..)} of {@code model}, from code that start runs, it takes the lock the start
+     * holds at once, so it can't wait for that start. Made from inside the live delegate's {@code start(..)}, it lets
+     * the start make the shutdown under the lock once the live delegate's {@code start(..)} has returned or thrown, and
+     * it counts as under way until then, as {@link #startTheLiveDelegate} describes.
+     * <p>
      * Once the live delegate's {@code shutdown()} has returned normally under the lock, a later {@code shutdown()} of
      * {@code model} doesn't call it there again, until a {@code start(..)} of {@code model} has started the live delegate
      * again. One that threw left the live delegate running, so the next {@code shutdown()} calls it again.
@@ -4808,6 +4876,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         boolean aStartIsInTheLiveDelegate;
         synchronized (calls) {
             calls.shutdowns++;
+            calls.shutdownsBegun++;
             aStartIsInTheLiveDelegate = calls.starts > 0;
         }
         boolean handedOver = false;
@@ -4822,7 +4891,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 throw callersCodeHeldUp("shutdown()", aStartIsInTheLiveDelegate ? SHUT_DOWN_TO_END_A_START : NOT_SHUT_DOWN);
             }
             try {
-                shutDownUnlessShutDown(calls, shutDownTheLiveDelegate);
+                handedOver = leaveToTheStartOnThisThread(calls, shutDownTheLiveDelegate);
+                if (!handedOver) {
+                    shutDownUnlessShutDown(calls, shutDownTheLiveDelegate);
+                }
             } finally {
                 modelLock.unlock();
             }
@@ -4832,6 +4904,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     calls.shutdowns--;
                 }
             }
+        }
+    }
+
+    // Under the model lock. Every start of the live delegate runs under it, so a start of model in the live delegate's
+    // start(..) now is one this thread runs and this shutdown was made from inside. That start can start the live delegate
+    // again after this returns, so the last shutdown of the live delegate is left to it, as startTheLiveDelegate
+    // describes, and this shutdown counts in calls.shutdowns until then. Answers whether it was left to the start
+    private static boolean leaveToTheStartOnThisThread(LiveDelegateCalls calls, Runnable shutDownTheLiveDelegate) {
+        synchronized (calls) {
+            if (calls.starts == 0) {
+                return false;
+            }
+            calls.shutdownsLeftToTheStart++;
+            calls.shutDownLeftToTheStart = shutDownTheLiveDelegate;
+            return true;
         }
     }
 

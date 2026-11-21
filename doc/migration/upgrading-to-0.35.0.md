@@ -2979,6 +2979,11 @@ the catch-up is not affected.
   wrapped model's `start(..)`. It calls the wrapped model's `shutdown()` without waiting for that start, since a wrapped
   model can hold its start until it's shut down, as a MongoDB subscription model retrying its start through an outage
   does, and then calls it once more after the start has returned.
+* A `shutdown()` made on the thread of a `start(..)`, from a `StartAt.dynamic(..)` function that start asks or from
+  inside the wrapped model's `start(..)`, doesn't wait for the start either, since the start can't return before it.
+  The start then doesn't call the wrapped model's `start(..)` after the `shutdown()`. When the `shutdown()` came from
+  inside the wrapped model's `start(..)`, the start calls the wrapped model's `shutdown()` once more after that
+  `start(..)` has returned, before the start itself returns, since the wrapped model may have started after all.
 * Code the caller supplied, a `StartAt.dynamic(..)` function or a `CatchupListener`, can run under the model's lock.
   Two examples are the function of a subscribe handed over from an action, and a listener that a
   `resumeSubscription(id)` calls when it relaunches a parked replay. While such code runs there, each of the waits
