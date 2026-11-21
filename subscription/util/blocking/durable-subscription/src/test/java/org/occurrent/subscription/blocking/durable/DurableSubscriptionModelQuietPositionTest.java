@@ -853,6 +853,24 @@ class DurableSubscriptionModelQuietPositionTest {
         assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-3"));
     }
 
+    @Test
+    void a_restart_position_stored_after_a_history_loss_over_a_quiet_save_that_threw_has_the_next_quiet_tick_save_the_quiet_position_with_no_new_event() throws InterruptedException {
+        // Given a quiet save that threw without writing
+        FlakyStorage flaky = new FlakyStorage();
+        subscribedAndStoredE1(flaky);
+        flaky.throwsWithoutWriting.add("quiet-1");
+        quietTickWhenWanted("quiet-1");
+
+        // When the wrapped model restarts the subscription after its history was lost, and a tick comes with no event
+        wrapped.historyLossListeners.getFirst().restartingAfterHistoryLoss("id", new StringBasedCheckpoint("restarted-from"), () -> true);
+        boolean wanted = quietTickWhenWanted("quiet-2");
+
+        // Then
+        assertThat(flaky.operations).containsExactly("save quiet-1", "save restarted-from", "save quiet-2");
+        assertThat(wanted).as("quiet save wanted").isTrue();
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-2"));
+    }
+
     // A subscribe at START that then stores e1, so a quiet position covers the delivery that ended last
     private DurableSubscriptionModel subscribedAndStoredE1(FlakyStorage flaky) {
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, flaky, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));

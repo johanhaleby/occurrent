@@ -550,18 +550,34 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // Stored now rather than with the next event, since a process stopping before that event would restart from
     // the lost position and skip everything written in between. Same write condition as any other checkpoint. Asked
     // under the lock resumeSubscription and cancelSubscription hold, so a run that a resume replaced or a cancel ended
-    // while it asked for the present stores nothing
+    // while it asked for the present stores nothing. Written under the deliveryLocks and saveLocks of the
+    // registrations writing for the id, like a put-back, so no delivery ends and no quiet position is saved before
+    // they note what the write left stored
     private void storeRestartPositionAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom, BooleanSupplier stillCurrent) {
         runUnderLockFor(subscriptionId, () -> {
             if (!checkpointedSubscriptions.contains(subscriptionId) || !stillCurrent.getAsBoolean()) {
                 return;
             }
-            try {
-                storage.save(subscriptionId, restartedFrom, writeConditionFor(subscriptionId));
-            } catch (CheckpointWriteConditionNotFulfilledException e) {
-                log.warn("Did not store the position subscription {} restarts from after its history was lost, since another node has written its checkpoint with a newer lease: {}",
-                        subscriptionId, e.getMessage());
-            }
+            CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
+            List<CheckpointRegistration> writing = registrationsWritingFor(subscriptionId);
+            List<ReentrantLock> locks = new ArrayList<>(deliveryLocksOf(writing));
+            locks.addAll(saveLocksOf(writing));
+            underLocks(locks, () -> {
+                try {
+                    storage.save(subscriptionId, restartedFrom, writeCondition);
+                    writing.forEach(registration -> registration.restartPositionStored(restartedFrom));
+                } catch (CheckpointWriteConditionNotFulfilledException e) {
+                    writing.forEach(CheckpointRegistration::storedUnknown);
+                    log.warn("Did not store the position subscription {} restarts from after its history was lost, since another node has written its checkpoint with a newer lease: {}",
+                            subscriptionId, e.getMessage());
+                } catch (Throwable e) {
+                    // Throwable, since a storage written in Kotlin can throw a checked exception
+                    writing.forEach(registration -> registration.restartPositionMayBeStored(restartedFrom));
+                    throw e;
+                } finally {
+                    writing.forEach(CheckpointRegistration::decideQuietTicks);
+                }
+            });
         });
     }
 
