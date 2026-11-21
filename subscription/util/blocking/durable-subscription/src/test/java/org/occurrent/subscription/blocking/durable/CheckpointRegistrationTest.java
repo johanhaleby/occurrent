@@ -604,6 +604,264 @@ class CheckpointRegistrationTest {
         }
     }
 
+    @Nested
+    @DisplayName("restarts after a lost history")
+    class RestartsAfterAHistoryLoss {
+
+        @Test
+        void a_restart_position_stored_after_a_quiet_save_that_threw_without_writing_has_the_quiet_ticks_after_it_save_without_a_read() {
+            // Given
+            deliverStored("e1");
+            quietTick("q1", Write.THROWS_WITHOUT_WRITING);
+            registration.reading();
+            restartPosition("r1", Write.RETURNS);
+            asked.clear();
+
+            // When
+            boolean allowed = registration.quietTickAllowed();
+            quietTick("q2", Write.RETURNS);
+            quietTick("q3", Write.RETURNS);
+
+            // Then
+            assertThat(allowed).as("allowed with the restart position stored").isTrue();
+            assertThat(asked).containsExactly("save q2", "save q3");
+            assertThat(stored).isEqualTo("q3");
+        }
+
+        @Test
+        void a_restart_position_stored_after_a_quiet_save_that_wrote_and_threw_has_the_quiet_ticks_after_it_save_without_a_read() {
+            // Given
+            deliverStored("e1");
+            quietTick("q1", Write.WRITES_THEN_THROWS);
+            registration.reading();
+            restartPosition("r1", Write.RETURNS);
+            asked.clear();
+
+            // When
+            quietTick("q2", Write.RETURNS);
+            quietTick("q3", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("save q2", "save q3");
+            assertThat(stored).isEqualTo("q3");
+        }
+
+        @Test
+        void a_restart_position_that_was_written_and_threw_is_found_stored_by_a_read_and_the_quiet_position_is_saved_in_that_attempt() {
+            // Given
+            deliverStored("e1");
+            quietTick("q1", Write.THROWS_WITHOUT_WRITING);
+            registration.reading();
+            restartPosition("r1", Write.WRITES_THEN_THROWS);
+            asked.clear();
+
+            // When
+            quietTick("q2", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("read", "save q2");
+            assertThat(stored).isEqualTo("q2");
+        }
+
+        @Test
+        void a_restart_position_that_threw_without_writing_is_followed_by_a_read_that_finds_the_delivery_and_the_quiet_position_is_saved_in_that_attempt() {
+            // Given
+            deliverStored("e1");
+            quietTick("q1", Write.THROWS_WITHOUT_WRITING);
+            registration.reading();
+            restartPosition("r1", Write.THROWS_WITHOUT_WRITING);
+            asked.clear();
+
+            // When
+            quietTick("q2", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("read", "save q2");
+            assertThat(stored).isEqualTo("q2");
+        }
+
+        @Test
+        void a_restart_position_that_threw_over_a_quiet_save_that_wrote_keeps_quiet_ticks_off_when_the_read_finds_that_quiet_position() {
+            // Given a quiet save that wrote and threw, and a restart write that threw without writing
+            deliverStored("e1");
+            quietTick("q1", Write.WRITES_THEN_THROWS);
+            registration.reading();
+            restartPosition("r1", Write.THROWS_WITHOUT_WRITING);
+            asked.clear();
+
+            // When
+            quietTick("q2", Write.RETURNS);
+            boolean allowedAfterTheRead = registration.quietTickAllowed();
+
+            // Then q1 is stored but the one slot for a position that threw holds r1. Off is correct, since it only
+            // postpones quiet saves until a delivery stores its checkpoint and no quiet save is written that
+            // the registration cannot tell covers the delivery. No event is lost by a quiet save that waits
+            assertThat(asked).containsExactly("read");
+            assertThat(allowedAfterTheRead).as("allowed after the read found q1, which the registration no longer remembers").isFalse();
+            assertThat(stored).isEqualTo("q1");
+        }
+
+        @Test
+        void a_restart_position_stored_after_a_delivery_started_stops_that_delivery_from_saving_and_the_tick_is_allowed_once_it_ends() {
+            // Given a delivery of a run that read before the run that restarts
+            registration.reading();
+            Delivery stale = registration.delivering();
+            registration.reading();
+            restartPosition("r1", Write.RETURNS);
+            boolean whileItWaits = registration.quietTickAllowed();
+            asked.clear();
+
+            // When
+            save(stale, "e5", Write.RETURNS);
+            List<String> askedBySave = new ArrayList<>(asked);
+            end(stale, "e5");
+            boolean afterItEnded = registration.quietTickAllowed();
+            quietTick("q1", Write.RETURNS);
+
+            // Then
+            assertThat(askedBySave).as("asked by the save of the delivery started before the restart").isEmpty();
+            assertThat(whileItWaits).as("allowed while the delivery waits").isFalse();
+            assertThat(afterItEnded).as("allowed once it ended with the restart position stored").isTrue();
+            assertThat(asked).containsExactly("save q1");
+            assertThat(stored).isEqualTo("q1");
+        }
+
+        @Test
+        void a_restart_position_stored_after_a_delivery_saved_and_ended_has_the_tick_allowed_with_the_restart_position_stored() {
+            // Given
+            registration.reading();
+            Delivery earlier = registration.delivering();
+            save(earlier, "e5", Write.RETURNS);
+            end(earlier, "e5");
+            registration.reading();
+
+            // When
+            restartPosition("r1", Write.RETURNS);
+            boolean allowed = registration.quietTickAllowed();
+            asked.clear();
+            quietTick("q1", Write.RETURNS);
+
+            // Then
+            assertThat(allowed).as("allowed with r1 stored over e5").isTrue();
+            assertThat(asked).containsExactly("save q1");
+            assertThat(stored).isEqualTo("q1");
+        }
+
+        @Test
+        void a_delivery_that_saved_before_a_restart_position_was_stored_and_ends_after_it_leaves_the_tick_allowed() {
+            // Given
+            registration.reading();
+            Delivery stale = registration.delivering();
+            save(stale, "e5", Write.RETURNS);
+            registration.reading();
+            restartPosition("r1", Write.RETURNS);
+
+            // When
+            end(stale, "e5");
+            boolean allowed = registration.quietTickAllowed();
+            asked.clear();
+            quietTick("q1", Write.RETURNS);
+
+            // Then its end says nothing about r1, which is stored
+            assertThat(allowed).as("allowed after the delivery ended with r1 stored over its e5").isTrue();
+            assertThat(asked).containsExactly("save q1");
+            assertThat(stored).isEqualTo("q1");
+        }
+
+        @Test
+        void a_restart_position_that_threw_stops_a_delivery_started_before_it_from_saving_and_the_read_that_finds_it_has_the_quiet_position_saved() {
+            // Given
+            registration.reading();
+            Delivery stale = registration.delivering();
+            registration.reading();
+            restartPosition("r1", Write.WRITES_THEN_THROWS);
+            asked.clear();
+
+            // When
+            save(stale, "e5", Write.RETURNS);
+            List<String> askedBySave = new ArrayList<>(asked);
+            end(stale, "e5");
+            quietTick("q1", Write.RETURNS);
+
+            // Then
+            assertThat(askedBySave).as("asked by the save of the delivery started before the restart").isEmpty();
+            assertThat(asked).containsExactly("read", "save q1");
+            assertThat(stored).isEqualTo("q1");
+        }
+
+        @Test
+        void a_delivery_started_after_a_restart_position_was_stored_on_the_restarted_read_saves_and_is_current() {
+            // Given
+            registration.reading();
+            Delivery stale = registration.delivering();
+            registration.reading();
+            restartPosition("r1", Write.RETURNS);
+            Delivery restarted = registration.delivering();
+
+            // When
+            save(restarted, "e6", Write.RETURNS);
+            asked.clear();
+            save(stale, "e5", Write.RETURNS);
+            List<String> askedByStale = new ArrayList<>(asked);
+            end(restarted, "e6");
+            end(stale, "e5");
+            asked.clear();
+            boolean allowed = registration.quietTickAllowed();
+            quietTick("q1", Write.RETURNS);
+
+            // Then
+            assertThat(stored).isEqualTo("q1");
+            assertThat(askedByStale).as("asked by the save of the delivery started before the restart").isEmpty();
+            assertThat(allowed).as("allowed with e6 stored by the current delivery").isTrue();
+            assertThat(asked).containsExactly("save q1");
+        }
+
+        @Test
+        void with_no_reads_numbered_a_delivery_started_before_a_restart_position_is_stopped_from_saving_and_one_started_after_it_saves() {
+            // Given
+            Delivery stale = registration.delivering();
+            restartPosition("r1", Write.RETURNS);
+            asked.clear();
+
+            // When
+            save(stale, "e5", Write.RETURNS);
+            List<String> askedByStale = new ArrayList<>(asked);
+            end(stale, "e5");
+            Delivery restarted = registration.delivering();
+            save(restarted, "e6", Write.RETURNS);
+            end(restarted, "e6");
+
+            // Then
+            assertThat(askedByStale).as("asked by the save of the delivery started before the restart").isEmpty();
+            assertThat(asked).containsExactly("save e6");
+            assertThat(stored).isEqualTo("e6");
+            assertThat(registration.quietTickAllowed()).as("allowed with e6 stored by the delivery started after the restart").isTrue();
+        }
+    }
+
+    // As the model does, holding the deliveryLock and then the saveLock of the registration, and deciding the quiet
+    // ticks once the write has returned or threw
+    private void restartPosition(String position, Write write) {
+        registration.deliveryLock.lock();
+        try {
+            registration.saveLock.lock();
+            try {
+                asked.add("restart " + position);
+                write(position, write);
+                registration.restartPositionStored(at(position));
+            } catch (CheckpointWriteConditionNotFulfilledException refused) {
+                registration.storedUnknown();
+            } catch (IllegalStateException failed) {
+                registration.restartPositionMayBeStored(at(position));
+            } finally {
+                registration.decideQuietTicks();
+                registration.saveLock.unlock();
+            }
+        } finally {
+            registration.deliveryLock.unlock();
+        }
+    }
+
     private void deliverStored(String position) {
         Delivery delivery = registration.delivering();
         save(delivery, position, Write.RETURNS);

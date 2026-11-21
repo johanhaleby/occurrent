@@ -132,7 +132,9 @@ public class DurableSubscriptionModelConfig {
      * the {@link #persistCloudEventPositionPredicate} is. Any other subscription, such as one from a {@code StartAt} of
      * your own, has none saved until the predicate has stored the position of an event, so with a predicate that
      * always returns {@code false} it has no position stored for an event or a quiet read. The position it restarts from
-     * is still stored when the wrapped model reports that its checkpoint is no longer in the model's history.
+     * is still stored when the wrapped model reports that its checkpoint is no longer in the model's history. Once that
+     * restart position is stored, the quiet position is saved after it, whatever the predicate decided for the events
+     * before it.
      * <p>
      * The position is not saved while the event the running subscription most recently gave the action is one the
      * predicate declined to store, and not while an event is being delivered. After a pause and a resume, an action of
@@ -142,9 +144,9 @@ public class DurableSubscriptionModelConfig {
      * <p>
      * After a checkpoint write throws, the next quiet save reads the stored checkpoint first, since the write may have
      * gone through. Once the subscription has delivered an event, it saves the position only when the read returns the
-     * checkpoint of the last event delivered, a position stored after it, or the quiet position whose save threw, and
-     * otherwise no position is saved until an event's checkpoint is stored. When the read throws, the save after the
-     * next interval reads again.
+     * checkpoint of the last event delivered, a position stored after it, or the last quiet position or restart position
+     * whose write threw, and otherwise no position is saved until the checkpoint of an event or a restart position is
+     * stored. When the read throws, the save after the next interval reads again.
      * <p>
      * The default is one minute. Keep it well below the time the wrapped model keeps its history, which for MongoDB
      * is the oplog window.
