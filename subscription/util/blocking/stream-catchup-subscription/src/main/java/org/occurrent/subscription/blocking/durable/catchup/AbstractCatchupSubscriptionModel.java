@@ -840,7 +840,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * position, or cancel it and subscribe it again. With more than one instance running it, stop every instance instead
      * of cancelling, delete its stored checkpoint and start them all again with the same start, as
      * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
-     * describes.
+     * describes. Deleting the checkpoint of a subscription that starts from now or at the subscription model default
+     * skips the events since that checkpoint, even with every instance stopped, because the first instance to start
+     * finds nothing stored and starts at the present.
      * <p>
      * A replay that {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
      * and ends once the live delegate has resumed the subscription, so the position given here wins over it. With

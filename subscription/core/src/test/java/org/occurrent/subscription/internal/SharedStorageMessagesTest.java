@@ -35,7 +35,15 @@ class SharedStorageMessagesTest {
         assertThat(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .startsWith("When more than one instance runs the subscription, stop every instance,")
                 .contains("delete its stored checkpoint or replace it with the checkpoint to start from")
-                .endsWith("start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes.");
+                .contains("start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes. " + SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE)
+                .endsWith(" describes. " + SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE);
+    }
+
+    @Test
+    void the_sentence_about_a_delete_names_a_start_from_now_or_at_the_model_default_the_events_since_the_checkpoint_and_that_the_first_instance_starts_at_the_present() {
+        assertThat(SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE).isEqualTo(
+                "Deleting the checkpoint of a subscription that starts from now or at the subscription model default skips the events since that checkpoint,"
+                        + " even with every instance stopped, because the first instance to start finds nothing stored and starts at the present.");
     }
 
     @Test
@@ -44,6 +52,7 @@ class SharedStorageMessagesTest {
                 .startsWith("When more than one instance runs it, stop every instance,")
                 .contains("delete the catch-up marker the checkpoint storage keeps under its id")
                 .doesNotContain("what is stored under")
+                .doesNotContain(SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE)
                 .endsWith("start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes.");
     }
 
@@ -53,7 +62,8 @@ class SharedStorageMessagesTest {
                 .isEqualTo("When nothing else uses that checkpoint and more than one instance runs the subscription, stop every instance, delete the checkpoint,"
                         + " and start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes.")
                 .startsWith("When nothing else uses that checkpoint and more than one instance runs the subscription, stop every instance,")
-                .isNotEqualTo(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .isNotEqualTo(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .doesNotContain(SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE);
     }
 
     @Test

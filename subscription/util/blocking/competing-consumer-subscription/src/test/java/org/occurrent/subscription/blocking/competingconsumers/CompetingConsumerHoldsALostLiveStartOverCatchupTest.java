@@ -123,7 +123,9 @@ class CompetingConsumerHoldsALostLiveStartOverCatchupTest {
                 () -> assertThat(strategy.holders).as("holding the lease").isEmpty()
         ));
         await().atMost(EVENTUALLY).untilAsserted(() ->
-                assertThat(logged.errors()).as("errors logged").singleElement().asString().contains("replays the subscription from the beginning again"));
+                assertThat(logged.errors()).as("errors logged").singleElement().asString()
+                        .contains("replays the subscription from the beginning again")
+                        .doesNotContain(SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE));
     }
 
     @Test
@@ -147,7 +149,7 @@ class CompetingConsumerHoldsALostLiveStartOverCatchupTest {
         await().atMost(EVENTUALLY).untilAsserted(() ->
                 assertThat(logged.errors()).as("errors logged").singleElement().asString()
                         .contains("is refused again when this node gets it")
-                        .contains("When the subscription's position is stored, stop every instance of the application, delete that stored checkpoint or replace it with a checkpoint the application kept that the subscription model still has the history back to, and start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes.")
+                        .contains("When the subscription's position is stored, stop every instance of the application, delete that stored checkpoint or replace it with a checkpoint the application kept that the subscription model still has the history back to, and start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes. " + SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE + " Otherwise cancel the subscription on every instance")
                         .contains("Otherwise cancel the subscription on every instance and subscribe it again from the beginning, or from a checkpoint the application kept that the subscription model still has the history back to")
                         .doesNotContain("replays the subscription from the beginning again"));
     }

@@ -52,7 +52,9 @@ public enum StartupMode {
      * the application kept that the subscription model still has the history back to, and start them all again with
      * the same start, as
      * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
-     * describes.
+     * describes. Deleting the checkpoint of a subscription with {@code startAt = NOW} or {@code startAt = DEFAULT} skips
+     * the events since that checkpoint, even with every instance stopped, because the first instance to start finds
+     * nothing stored and starts at the present.
      */
     BACKGROUND
 }

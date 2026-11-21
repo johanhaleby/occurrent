@@ -263,13 +263,18 @@ model opens at the model's default with no error. A live checkpoint resumes only
 
 A paused subscription delivers nothing until someone recovers it.
 
-The blocking Spring Boot starter runs every subscription through a `CompetingConsumerSubscriptionModel` over a
-`DurableSubscriptionModel`. A `cancelSubscription(id)` there gives up the lease on the one instance it's called on, and
-deletes the checkpoint every instance shares. Another instance waiting for the lease can then take it and start from
-its own annotation, at the present for `NOW` or `DEFAULT`, and store a checkpoint before the instance being recovered
-subscribes again. So when more than one instance runs the application, someone stops every instance, deletes the
-stored checkpoint or replaces it with one the application kept, and starts them all again with the same one of the two
-starts below, as
+The blocking Spring Boot starter runs a subscription that stores a checkpoint through a
+`CompetingConsumerSubscriptionModel`, over its catch-up when it has one, over a `DurableSubscriptionModel`. A
+subscription with `resumeBehavior = SAME_AS_START_AT` on a start that replays or on `NOW` skips the competing consumer
+and the durable model, and stores no checkpoint once it is live. One with `source = PUSH` runs through a push model instead,
+which stores a catch-up marker when it catches up. A `cancelSubscription(id)` through the competing consumer gives up the lease on
+the one instance it's called on, and deletes the checkpoint every instance shares. Another instance waiting for the
+lease can then take it and start from its own annotation, at the present for `NOW` or `DEFAULT`, and store a
+checkpoint before the instance being recovered subscribes again. The reactive starter has no competing consumer, so
+every instance runs such a subscription and stores its checkpoint, and another instance can store one the same way. So
+when more than one instance runs the application, on either starter, someone stops every instance, deletes the stored
+checkpoint or replaces it with one the application kept, and starts them all again with the same one of the two starts
+below, as
 [the upgrade guide](../../migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
 describes.
 

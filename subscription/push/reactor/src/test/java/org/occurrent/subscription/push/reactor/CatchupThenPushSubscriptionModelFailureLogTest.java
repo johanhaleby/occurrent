@@ -59,31 +59,25 @@ class CatchupThenPushSubscriptionModelFailureLogTest {
 
     @Test
     void a_failed_catch_up_logs_how_to_change_what_is_stored_when_several_instances_run_it() {
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
-
-        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty());
+        failCatchUp("failed-catch-up");
+        failCatchUp("failed-catch-up-neighbour");
 
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
-                assertThat(CapturingLoggerProvider.logged(CatchupThenPushSubscriptionModel.class, Level.ERROR)).singleElement().satisfies(logged ->
+                assertThat(loggedFor(Level.ERROR, "failed-catch-up")).singleElement().satisfies(logged ->
                         assertThat(logged.message())
-                                .startsWith("Catch-up failed for subscription sub. Its registration on the live feed is kept")
+                                .startsWith("Catch-up failed for subscription failed-catch-up. Its registration on the live feed is kept")
                                 .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
     }
 
     @Test
     void a_catch_up_that_refused_a_checkpoint_that_is_not_a_catch_up_marker_logs_to_cancel_only_when_nothing_else_uses_it_and_not_to_cancel_unconditionally() {
-        InMemoryReactivePositionOrderedReader store = new InMemoryReactivePositionOrderedReader();
-        InMemoryCheckpointStorage checkpoints = new InMemoryCheckpointStorage();
-        checkpoints.save("sub", new StringBasedCheckpoint("resume-token-xyz")).block(Duration.ofSeconds(5));
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, new PushSubscriptionModel(), checkpoints);
-
-        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty());
+        refuseCheckpointThatIsNotAMarker("refused-checkpoint");
+        refuseCheckpointThatIsNotAMarker("refused-checkpoint-neighbour");
 
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
-                assertThat(CapturingLoggerProvider.logged(CatchupThenPushSubscriptionModel.class, Level.ERROR)).singleElement().satisfies(logged ->
+                assertThat(loggedFor(Level.ERROR, "refused-checkpoint")).singleElement().satisfies(logged ->
                         assertThat(logged.message())
-                                .startsWith("Catch-up failed for subscription sub, because the checkpoint stored under its id is not a catch-up marker.")
+                                .startsWith("Catch-up failed for subscription refused-checkpoint, because the checkpoint stored under its id is not a catch-up marker.")
                                 .contains("cancel it only when nothing else uses that checkpoint.")
                                 .endsWith(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)
                                 .doesNotContain(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
@@ -92,20 +86,51 @@ class CatchupThenPushSubscriptionModelFailureLogTest {
 
     @Test
     void a_cancel_whose_catch_up_marker_delete_fails_warns_to_cancel_again_and_how_to_delete_the_marker_when_several_instances_run_it() {
+        cancelWhoseMarkerDeleteFails("failed-marker-delete");
+        cancelWhoseMarkerDeleteFails("failed-marker-delete-neighbour");
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(loggedFor(Level.WARN, "failed-marker-delete")).singleElement().satisfies(logged ->
+                        assertThat(logged.message())
+                                .startsWith("Could not delete the catch-up marker of cancelled subscription failed-marker-delete.")
+                                .endsWith("unless the subscription is cancelled again first. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+    }
+
+    /**
+     * The logger binding keeps every line any test in the module logs, so a test reads only the lines that name its own
+     * subscription id.
+     */
+    private static List<CapturingLoggerProvider.Logged> loggedFor(Level level, String subscriptionId) {
+        return CapturingLoggerProvider.logged(CatchupThenPushSubscriptionModel.class, level).stream()
+                .filter(logged -> logged.message().contains("subscription " + subscriptionId + ".") || logged.message().contains("subscription " + subscriptionId + ","))
+                .toList();
+    }
+
+    private static void failCatchUp(String subscriptionId) {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
+
+        model.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty());
+    }
+
+    private static void refuseCheckpointThatIsNotAMarker(String subscriptionId) {
+        InMemoryReactivePositionOrderedReader store = new InMemoryReactivePositionOrderedReader();
+        InMemoryCheckpointStorage checkpoints = new InMemoryCheckpointStorage();
+        checkpoints.save(subscriptionId, new StringBasedCheckpoint("resume-token-xyz")).block(Duration.ofSeconds(5));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, new PushSubscriptionModel(), checkpoints);
+
+        model.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty());
+    }
+
+    private static void cancelWhoseMarkerDeleteFails(String subscriptionId) {
         InMemoryReactivePositionOrderedReader store = new InMemoryReactivePositionOrderedReader();
         store.append(List.of(CloudEventBuilder.v1().withId("1").withSource(URI.create("urn:occurrent:test")).withType("Created").build()));
         MarkerStoreWhoseDeleteFails markers = new MarkerStoreWhoseDeleteFails();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, new PushSubscriptionModel(), markers);
-        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(5));
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(markers.read("sub").hasElement().block()).as("catch-up marker written").isTrue());
+        model.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(5));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(markers.read(subscriptionId).hasElement().block()).as("catch-up marker written").isTrue());
 
-        model.cancelSubscription("sub");
-
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
-                assertThat(CapturingLoggerProvider.logged(CatchupThenPushSubscriptionModel.class, Level.WARN)).singleElement().satisfies(logged ->
-                        assertThat(logged.message())
-                                .startsWith("Could not delete the catch-up marker of cancelled subscription sub.")
-                                .endsWith("unless the subscription is cancelled again first. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+        model.cancelSubscription(subscriptionId);
     }
 
     private static final class MarkerStoreWhoseDeleteFails implements CheckpointStorage {

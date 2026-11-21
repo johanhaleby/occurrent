@@ -38,11 +38,19 @@ public final class SharedStorageMessages {
     public static final String GUIDE = "https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share";
 
     /**
+     * For a message that tells someone to delete a stored checkpoint and start the subscription again, since a start
+     * from now, or at the subscription model default with nothing stored, then goes on from the present.
+     */
+    public static final String START_AT_THE_PRESENT_AFTER_A_DELETE = "Deleting the checkpoint of a subscription that starts from now or at the subscription model default"
+            + " skips the events since that checkpoint, even with every instance stopped, because the first instance to start finds nothing stored and starts at the present.";
+
+    /**
      * For a message that tells someone to cancel a subscription that stores a checkpoint, or to delete or replace that
      * checkpoint.
      */
     public static final String CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT = "When more than one instance runs the subscription, stop every instance,"
-            + " delete its stored checkpoint or replace it with the checkpoint to start from, and start every instance again with the same start, as " + GUIDE + " describes.";
+            + " delete its stored checkpoint or replace it with the checkpoint to start from, and start every instance again with the same start, as " + GUIDE + " describes."
+            + " " + START_AT_THE_PRESENT_AFTER_A_DELETE;
 
     /**
      * For a message that tells someone to cancel a catch-up-then-live subscription, or to delete its catch-up marker. It

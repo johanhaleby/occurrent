@@ -2406,7 +2406,10 @@ To roll back to 0.34, stop every instance of the application, delete the stored 
 checkpoint starts with `position:` and has `;v:2;` after its first value, and start every instance again on 0.34 with
 the same start, as
 [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes.
-Each of those subscriptions then starts from the start it is configured with. A 0.35 instance that still runs after the
+Each of those subscriptions then starts from the start it is configured with. Deleting the checkpoint of a subscription
+with `startAt = NOW` or `startAt = DEFAULT` skips the events since that checkpoint, even with every instance stopped,
+because the first instance to start finds nothing stored and starts at the present. The same goes for a subscription in
+code that starts from `StartAt.now()` or `StartAt.subscriptionModelDefault()`. A 0.35 instance that still runs after the
 delete can take such a subscription over and store a checkpoint in the new form again.
 
 ### When a catch-up loses its live start on every replay
@@ -3090,16 +3093,23 @@ The instance that starts first runs the subscription from that start, and what i
 every instance. An instance that starts once the first one has stored its checkpoint or marker finds it, and resumes
 after it or skips its replay. The store already has those events from the first instance. On the reactive starter and
 for `source = PUSH`, an instance that starts before that runs from the same start too, so the store gets those events
-from more than one instance, as on any start that finds nothing stored. Deleting the checkpoint of a subscription that
-starts at the present loses the events since that checkpoint, even with every instance stopped, because the first
-instance finds nothing stored and starts at the present.
+from more than one instance, as on any start that finds nothing stored. Deleting the checkpoint of a subscription with
+`startAt = NOW` or `startAt = DEFAULT` skips the events since that checkpoint, even with every instance stopped,
+because the first instance to start finds nothing stored and starts at the present. The same goes for a subscription
+in code that starts from `StartAt.now()` or `StartAt.subscriptionModelDefault()`.
 
 When each instance keeps what it builds for itself, for example in memory, one checkpoint or marker can't serve every
 instance. The one that starts first stores it, and every instance that starts after resumes after it or skips its
 replay, so what that instance builds misses those events. That happens on every start, also when nothing was deleted.
-So instances can share a subscription id only when they write to one store, and a step in this guide that stops every
-instance and starts them all again with the same start is for instances that do. Give each instance a subscription id
-of its own instead:
+So such instances can share a subscription id only when nothing is stored under it, and a step in this guide that stops
+every instance and starts them all again with the same start is for instances that write to one store.
+
+For an annotation without `source = PUSH`, set `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING`
+or an explicit position, or on `NOW`. The subscription then keeps no checkpoint in `CheckpointStorage` once it is live,
+and on the blocking starter it doesn't compete for the lease, so every instance runs it from that start on every boot.
+With `BEGINNING`, what an instance keeps in memory gets the whole history again on every boot.
+
+Otherwise give each instance a subscription id of its own:
 
 - The checkpoint and the catch-up marker are stored under the subscription id, so each instance then reads only what
   it stored itself, and a change to it needs only that instance stopped.
@@ -3107,12 +3117,14 @@ of its own instead:
   id and runs its subscription.
 - For a subscription with `source = PUSH` the broker decides which live events reach an instance, not the id. Each
   instance needs a RabbitMQ queue or a Kafka consumer group of its own, or it gets only some of the live events.
-- An annotation's `id` is a constant, so every instance of the application has the same one. Subscribe such a
-  subscription in code instead.
+- An annotation's `id` is a constant, so every instance of the application has the same one. An annotation with
+  `source = PUSH` can't set `resumeBehavior`, so subscribe such a subscription in code instead.
 
 When what an instance builds is gone after a restart, an id of its own still resumes from what that instance stored
 before it. Store nothing for it then, so every start replays from its start. For example, build a
-`CatchupThenPushSubscriptionModel` with `null` as its catch-up marker storage.
+`CatchupThenPushSubscriptionModel` with `null` as its catch-up marker storage. On an annotation without
+`source = PUSH`, `resumeBehavior = SAME_AS_START_AT` stores nothing once the subscription is live, as above, so its
+instances don't need an id of their own.
 
 `cancelSubscription(id)` deletes what every instance shares, and the other instances keep running and can store it
 again before the instance you recover subscribes again:
@@ -3149,6 +3161,8 @@ What else a new id takes depends on the deployment:
 - When each instance keeps what it builds for itself, a new id that every instance shares has the same problem as the
   old one, since every instance that starts after the first finds what the first one stored under it. Give each
   instance a new id of its own, and for `source = PUSH` keep each instance on a queue or consumer group of its own.
+  An annotation without `source = PUSH` and with `resumeBehavior = SAME_AS_START_AT` on a start that replays or on
+  `NOW` stores nothing under its id once it is live, so every instance can share the new id, as above.
 
 An instance on the old id that consumes the queue or consumer group of the new subscription gets some of the events
 stored after the catch-up of the new subscription read the history. `RabbitMqCloudEventSource` acknowledges such an
@@ -3679,6 +3693,9 @@ error in the log that names it. With every instance of the application stopped, 
 replace it with a checkpoint the application kept that the subscription model still has the history back to, and start
 every instance again with the same start, as
 [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes.
+Deleting the checkpoint of a subscription with `startAt = NOW` or `startAt = DEFAULT` skips the events since that
+checkpoint, even with every instance stopped, because the first instance to start finds nothing stored and starts at
+the present.
 A handler at `NOW` with `resumeBehavior = SAME_AS_START_AT` stores no checkpoint, so it is paused with an
 error in the log, and the next start of the application reads a new position. Without a catch-up subscription, the
 MongoDB subscription model restarts the handler from now when
@@ -4286,7 +4303,9 @@ Pick one, as the exception's message says:
   subscribed at. With more than one instance, remove it with every instance stopped and start them all again with
   the same start, as
   [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
-  describes.
+  describes. Deleting the checkpoint of a subscription that starts from now or at the subscription model default skips
+  the events since that checkpoint, even with every instance stopped, because the first instance to start finds
+  nothing stored and starts at the present.
 * Turn `restartSubscriptionsOnChangeStreamHistoryLost` on, which restarts the subscription at the present and skips
   what was written in between.
 
