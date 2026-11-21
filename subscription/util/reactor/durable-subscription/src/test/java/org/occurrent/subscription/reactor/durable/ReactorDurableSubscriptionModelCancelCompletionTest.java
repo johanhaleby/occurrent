@@ -42,6 +42,7 @@ import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.ResumeStartPositions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
@@ -903,6 +904,35 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         assertThat(catchThrowable(() -> cancelledAgain.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS))).as("how the cancel queued behind it ended once the model shut down")
                 .hasRootCauseMessage(DELETE_FAILED);
         assertThat(storage.deleteAttempts).as("deletes the storage was asked for, once both cancels had ended").hasValue(deletesAskedForBeforeTheShutdown);
+    }
+
+    /**
+     * The storage fails every delete and the model is shut down before one succeeds. Nobody waits for the cancel, so the
+     * warning is where the person running the application learns that the checkpoint is still stored, and it says what
+     * to do when several instances run the subscription.
+     */
+    @Test
+    void a_delete_that_fails_until_the_model_is_shut_down_is_logged_with_how_to_cancel_it_when_several_instances_run_the_subscription() throws Exception {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        runningFromAStoredPosition(model, storage);
+        storage.deleteFailures.set(Integer.MAX_VALUE);
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+            await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 2);
+
+            // When
+            model.shutdown();
+            catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+
+            // Then
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(logged.at(Level.WARN)).as("warnings about the delete")
+                    .containsOnlyOnce("Failed to delete the stored checkpoint of cancelled subscription " + SUBSCRIPTION_ID + " before the model was shut down. "
+                                      + "Cancel it again once it runs, or a later subscribe with the subscription-model default start position resumes from that checkpoint. "
+                                      + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT));
+        }
     }
 
     /**

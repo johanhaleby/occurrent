@@ -36,6 +36,7 @@ import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.HistoryLostException;
 import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.helpers.MessageFormatter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -85,7 +86,9 @@ class ReactorStreamCatchupSubscriptionModelUnnamedHistoryLossTest {
                 .expectErrorSatisfies(failure -> assertThat(failure).as("failure")
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining("Cannot start catch-up subscription")
-                        .hasMessageContaining(LOST_TOKEN.asString()))
+                        .hasMessageContaining(LOST_TOKEN.asString())
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining("delete it first"))
                 .verify();
 
         assertAll(
@@ -102,6 +105,7 @@ class ReactorStreamCatchupSubscriptionModelUnnamedHistoryLossTest {
                 .expectErrorSatisfies(failure -> assertThat(failure).as("failure")
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining(LATER_TOKEN.asString())
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                         .hasCauseInstanceOf(HistoryLostException.class))
                 .verify();
 
@@ -116,7 +120,8 @@ class ReactorStreamCatchupSubscriptionModelUnnamedHistoryLossTest {
 
         StepVerifier.create(catchup.subscribe(Filter.all(), StartAt.now()))
                 .assertNext(delivered -> assertThat(delivered.getId()).isEqualTo("e1"))
-                .expectErrorSatisfies(failure -> assertThat(failure).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(LATER_TOKEN.asString()))
+                .expectErrorSatisfies(failure -> assertThat(failure).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(LATER_TOKEN.asString())
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT))
                 .verify();
 
         assertAll(

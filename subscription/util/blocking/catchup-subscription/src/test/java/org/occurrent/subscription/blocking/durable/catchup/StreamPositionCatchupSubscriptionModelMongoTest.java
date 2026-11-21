@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
@@ -215,6 +216,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
         assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContaining("subscription")
                 .hasMessageContaining("after position 1")
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .hasMessageContaining("EventMetadata.getCheckpoint()");
         assertThat(storage.read("subscription")).as("stored").isNull();
         assertThat(received).as("delivered").isEmpty();
@@ -245,7 +247,8 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
         assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContaining("subscription")
                 .hasMessageContaining(legacyTimeToken)
-                .hasMessageContaining("holds no live start");
+                .hasMessageContaining("holds no live start")
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertThat(storage.read("subscription").asString()).as("stored").isEqualTo(legacyTimeToken);
         assertThat(received).as("delivered").isEmpty();
     }

@@ -103,6 +103,14 @@ public final class DomainEventFeed<E> {
      *                        the stored marker skips the replay, and the changed projection never sees the history.
      *                        Any checkpoint stored under the id counts as the marker, so do not share an id with a
      *                        durable subscription that uses this storage.
+     *                        Under a new id the subscription starts from the beginning of the history and repeats
+     *                        everything its handler does, the records it writes, the commands it dispatches and the
+     *                        messages it sends. Stop every instance on the old id before the first one on the new id
+     *                        starts. Stopping them doesn't prevent the repeats. With more than one instance, what else
+     *                        a new id needs depends on where each instance keeps what it builds and which broker queue
+     *                        or consumer group it consumes, as
+     *                        <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
+     *                        upgrade guide</a> describes.
      */
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
                            Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker) {

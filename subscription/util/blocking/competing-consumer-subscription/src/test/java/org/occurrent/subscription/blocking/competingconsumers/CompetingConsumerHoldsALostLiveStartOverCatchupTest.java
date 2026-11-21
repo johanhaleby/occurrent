@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.blocking.competingconsumers;
 
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -146,8 +147,8 @@ class CompetingConsumerHoldsALostLiveStartOverCatchupTest {
         await().atMost(EVENTUALLY).untilAsserted(() ->
                 assertThat(logged.errors()).as("errors logged").singleElement().asString()
                         .contains("is refused again when this node gets it")
-                        .contains("When the subscription's position is stored, stop every instance of the application and delete or replace that stored checkpoint")
-                        .contains("Otherwise cancel the subscription on every instance and subscribe it again from the beginning or from a checkpoint the application kept")
+                        .contains("When the subscription's position is stored, stop every instance of the application, delete that stored checkpoint or replace it with a checkpoint the application kept that the subscription model still has the history back to, and start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes.")
+                        .contains("Otherwise cancel the subscription on every instance and subscribe it again from the beginning, or from a checkpoint the application kept that the subscription model still has the history back to")
                         .doesNotContain("replays the subscription from the beginning again"));
     }
 

@@ -31,6 +31,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.testsupport.mongodb.ChangeStreamHistory;
@@ -107,6 +108,7 @@ class NativeMongoSubscriptionModelHistoryLostAtStartTest {
 
         assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
                 .hasMessageStartingWith("There was not enough oplog to resume subscription \"" + subscriptionId + "\"")
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .isInstanceOfSatisfying(UnsupportedStartAtException.class, refusal -> assertThat(refusal.startAt())
                         .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class, refused -> assertThat(refused.checkpoint).isEqualTo(lost)))
                 .rootCause().isInstanceOfSatisfying(MongoCommandException.class, e -> assertThat(e.getErrorCode()).isEqualTo(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE));
