@@ -39,6 +39,7 @@ import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.internal.ReplayFilters;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
@@ -461,7 +462,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                     // with no replay running and relaunches a catch-up that failed.
                     log.error("Catch-up failed for subscription {}. Its registration on the live feed is kept and now "
                             + "refuses every event, so the source redelivers rather than losing them. Cancel the "
-                            + "subscription and subscribe again once the cause is fixed.", subscriptionId, error);
+                            + "subscription and subscribe again once the cause is fixed. "
+                            + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, error);
                     interruptibleReplays.remove(subscriptionId, ownLaunch.get());
                     forget(subscriptionId, replayDone);
                     catchupOwners.remove(subscriptionId, replayDone);

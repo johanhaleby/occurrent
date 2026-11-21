@@ -37,4 +37,16 @@ class HandoverMessagesTest {
                 .doesNotContain("acceptAndWait")
                 .endsWith("Feed the event from code this subscription does not run.");
     }
+
+    @Test
+    void the_refusal_after_a_failed_catch_up_says_how_to_change_what_is_stored_when_several_instances_run_it() {
+        assertThat(HandoverMessages.catchUpFailed("subscription")).endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
+        assertThat(HandoverMessages.catchUpFailed("projection feed")).endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
+
+    @Test
+    void the_refusal_after_a_queued_event_failed_says_how_to_change_what_is_stored_when_several_instances_run_it() {
+        assertThat(HandoverMessages.queuedEventFailed("subscription")).endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
+        assertThat(HandoverMessages.queuedEventFailed("projection feed")).endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
 }

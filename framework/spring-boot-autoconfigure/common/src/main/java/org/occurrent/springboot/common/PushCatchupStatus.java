@@ -103,7 +103,10 @@ public interface PushCatchupStatus {
     /**
      * The catch-up failed and will not recover on its own. The subscription keeps its registration and refuses every
      * event afterwards, so the source redelivers rather than losing them. Fix the cause, then cancel the subscription
-     * and subscribe again.
+     * and subscribe again. With more than one instance running it, stop every instance instead, delete its catch-up
+     * marker, and start them all again with the same start, as
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
+     * describes.
      */
     record Failed(String id, Throwable cause) implements CatchupStatus {
         public Failed {

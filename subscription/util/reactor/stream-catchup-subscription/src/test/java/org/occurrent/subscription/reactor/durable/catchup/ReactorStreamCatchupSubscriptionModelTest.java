@@ -33,7 +33,9 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -53,6 +55,7 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -925,7 +928,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
                             .isInstanceOf(CatchupCannotResumeException.class)
                             .hasMessageContaining("catch-up subscription sub after position 1")
                             .hasMessageContaining("cancel it first, which deletes that checkpoint")
-                            .hasMessageContaining("When more than one instance competes for the subscription, stop every instance")
+                            .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                             .hasMessageContaining("EventMetadata.getCheckpoint()"))
                     .verify(Duration.ofSeconds(10));
             assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
@@ -952,9 +955,32 @@ class ReactorStreamCatchupSubscriptionModelTest {
                             .isInstanceOf(CatchupCannotResumeException.class)
                             .hasMessageContaining("catch-up subscription sub again from position 1")
                             .hasMessageContaining("cancel it first, which deletes that checkpoint")
-                            .hasMessageContaining("When more than one instance competes for the subscription, stop every instance")
+                            .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                             .hasMessageContaining("from the beginning again"))
                     .verify(Duration.ofSeconds(10));
+            assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_named_start_from_the_marked_form_of_a_time_replay_is_refused_with_how_to_change_the_checkpoint_when_several_instances_run_it_and_hands_nothing_over() {
+        // Given a checkpoint that only a blocking catch-up replaying by time stores
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new UnusedPositionOrderedReader());
+        Checkpoint stored = new StringBasedCheckpoint(CatchupCheckpoints.format("2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z", new StringBasedCheckpoint("live start")));
+        try {
+            // When
+            Throwable thrown = catchThrowable(() -> catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(stored), cloudEvent -> Mono.empty()));
+
+            // Then
+            assertThat(thrown)
+                    .isInstanceOf(CatchupCannotResumeException.class)
+                    .hasMessageContaining("catch-up subscription sub from checkpoint")
+                    .hasMessageContaining("replays only by position")
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
             assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
         } finally {
             catchup.shutdown();

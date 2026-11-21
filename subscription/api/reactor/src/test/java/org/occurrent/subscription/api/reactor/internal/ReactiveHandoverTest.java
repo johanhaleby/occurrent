@@ -29,7 +29,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.subscription.CatchupThenLiveOptions;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -4787,6 +4790,53 @@ class ReactiveHandoverTest {
         assertThat(outcome.source().markCaughtUpCallCount()).as("the marker for a replay that fed a refused payload").isZero();
     }
 
+    @Test
+    void a_catch_up_that_fails_logs_how_to_change_what_is_stored_when_several_instances_run_it() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        try (CapturedLog captured = new CapturedLog()) {
+            ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
+
+            StepVerifier.create(handover.catchUp(source(List.of("bad1"), false))).expectError().verify(Duration.ofSeconds(5));
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(captured.errors()).singleElement()
+                    .satisfies(error -> assertThat(error.getFormattedMessage())
+                            .startsWith("A catch-up of this test payload failed. The test payload refuses every event")
+                            .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+        }
+    }
+
+    @Test
+    void a_catch_up_that_fails_on_a_checkpoint_that_is_not_a_catch_up_marker_logs_how_to_change_what_is_stored_when_several_instances_run_it() {
+        Throwable notAMarker = catchThrowable(() -> CatchupMarkers.positionOf("proj", new StringBasedCheckpoint("resume-token-xyz")));
+        try (CapturedLog captured = new CapturedLog()) {
+            ReactiveHandover<String, String> handover = handoverFolding(CatchupThenLiveOptions.defaults(), (self, payload) -> Mono.error(notAMarker));
+
+            StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectError().verify(Duration.ofSeconds(5));
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(captured.errors()).singleElement()
+                    .satisfies(error -> assertThat(error.getFormattedMessage())
+                            .startsWith("A catch-up of this test payload failed, since the checkpoint stored under its id is not a catch-up marker.")
+                            .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+        }
+    }
+
+    @Test
+    void a_payload_that_fails_after_its_caller_was_told_it_was_queued_logs_how_to_change_what_is_stored_when_several_instances_run_it() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        try (CapturedLog captured = new CapturedLog()) {
+            ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
+            FakeSource source = source(List.of("R1"), false);
+            source.onLiveDrained = () -> handover.accept("bad1").subscribe();
+
+            StepVerifier.create(handover.catchUp(source)).expectNext(true).verifyComplete();
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(captured.errors()).singleElement()
+                    .satisfies(error -> assertThat(error.getFormattedMessage())
+                            .startsWith("A payload of this test payload with de-dup key bad1 failed to be delivered after its caller was told it was taken in.")
+                            .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+        }
+    }
+
     // Thread safe, unlike a ListAppender, since the handover logs from the thread of a timer
     private static final class CapturedLog implements AutoCloseable {
         private final Logger logger = (Logger) LoggerFactory.getLogger(ReactiveHandover.class);
@@ -4805,6 +4855,10 @@ class ReactiveHandoverTest {
 
         List<ILoggingEvent> warnings() {
             return events.stream().filter(event -> event.getLevel() == Level.WARN).toList();
+        }
+
+        List<ILoggingEvent> errors() {
+            return events.stream().filter(event -> event.getLevel() == Level.ERROR).toList();
         }
 
         @Override

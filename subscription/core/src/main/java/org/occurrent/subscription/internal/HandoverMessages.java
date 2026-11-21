@@ -80,7 +80,8 @@ public final class HandoverMessages {
     public static String catchUpFailed(String noun) {
         return "Catch-up failed for this " + noun + ", so it refuses live events rather than acknowledging events "
                 + "that nothing folded, and the source keeps redelivering them. Fix the cause, then replace it: a "
-                + "subscription by cancelling it and subscribing again, a projection feed by building a new one.";
+                + "subscription by cancelling it and subscribing again, a projection feed by building a new one. "
+                + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT;
     }
 
     /**
@@ -96,7 +97,7 @@ public final class HandoverMessages {
         return "An event the handler of this " + noun + " fed it failed to apply after it was queued, so it refuses "
                 + "live events rather than acknowledging events that nothing folded, and the source keeps redelivering "
                 + "them. Fix the cause, then replace it: a subscription by cancelling it and subscribing again, a "
-                + "projection feed by building a new one.";
+                + "projection feed by building a new one. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT;
     }
 
     /**

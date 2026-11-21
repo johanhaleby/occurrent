@@ -30,24 +30,12 @@ public final class HistoryLossMessages {
     }
 
     /**
-     * What a recovery that cancels a subscription, or deletes or replaces its stored checkpoint, does instead when more
-     * than one instance competes for it, for every message that tells someone to do either after a refusal, whatever
-     * the refusal was. A cancel gives up the lease only on the instance it's called on and deletes the checkpoint every
-     * instance shares, and a delete stops none of the instances that still compete for it, so another instance can take
-     * the lease and start from its own start, and store a newer checkpoint, before the one being recovered subscribes
-     * again.
-     */
-    public static final String WHEN_INSTANCES_COMPETE = "When more than one instance competes for the subscription, stop every instance,"
-            + " delete its stored checkpoint or replace it with the checkpoint to start from, and start every instance again from the same start."
-            + " A cancel on one instance, or a delete while one still runs, lets another instance take the subscription over from its own start.";
-
-    /**
      * The error a catch-up logs once when it pauses a subscription with an id for good after the subscription model
      * lost its history. The arguments are the subscription id, the lost position and the lost position again.
      */
     public static final String TERMINAL_FAILURE_LOG = "The subscription model no longer has the history to resume catch-up subscription {} from {}, so the subscription is paused and delivers nothing more."
             + " Resuming it throws CatchupCannotResumeException until it is cancelled, or on the blocking stack resumed at a position. To get every event, cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
-            + " " + WHEN_INSTANCES_COMPETE
+            + " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT
             + " Cancelling and subscribing again from now skips the events since {}.";
 
     /**
@@ -58,7 +46,7 @@ public final class HistoryLossMessages {
      */
     public static final String LIVE_START_LOST_LOG = "The subscription model no longer has the history to resume catch-up subscription {} from {}, the live start its replay would go live from, so the subscription is paused and delivers nothing more."
             + " Resuming it throws CatchupCannotResumeException until it is cancelled, or on the blocking stack resumed at a position. To get every event, cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
-            + " " + WHEN_INSTANCES_COMPETE
+            + " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT
             + " Cancelling and subscribing again from now skips the events its replay hadn't delivered, which can start before {}.";
 
     /**
@@ -100,7 +88,7 @@ public final class HistoryLossMessages {
     public static CatchupCannotResumeException historyLost(@Nullable String subscriptionId, Checkpoint lostFrom) {
         return new HistoryLost(lostFrom, true, "Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + lostFrom.asString()
                 + "\", where it stopped, and resuming from anywhere later would skip the events in between. Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
-                + " " + WHEN_INSTANCES_COMPETE);
+                + " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
 
     /**
@@ -113,7 +101,7 @@ public final class HistoryLossMessages {
         return new HistoryLost(liveStart, true, "Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + liveStart.asString()
                 + "\", the live start its replay would go live from, and resuming from anywhere later would skip the events its replay hadn't delivered, which can start before that live start."
                 + " Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
-                + " " + WHEN_INSTANCES_COMPETE);
+                + " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
 
     /**

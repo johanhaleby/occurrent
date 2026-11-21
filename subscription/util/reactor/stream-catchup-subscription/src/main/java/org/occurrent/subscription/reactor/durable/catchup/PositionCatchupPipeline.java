@@ -33,6 +33,7 @@ import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.internal.LongestReplay;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -307,7 +308,7 @@ final class PositionCatchupPipeline {
 
     // Named only, as in cancelFirst, since instances can only compete for a subscription with an id
     private static String ifInstancesCompete(@Nullable String subscriptionId) {
-        return subscriptionId == null ? "" : " " + HistoryLossMessages.WHEN_INSTANCES_COMPETE;
+        return subscriptionId == null ? "" : " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT;
     }
 
     // A replay again from a position above 0, with a token read now, skips an event below that position that was

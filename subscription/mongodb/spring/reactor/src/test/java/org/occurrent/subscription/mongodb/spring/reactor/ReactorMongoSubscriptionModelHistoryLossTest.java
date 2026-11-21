@@ -51,7 +51,7 @@ import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.HistoryLostException;
 import org.occurrent.subscription.api.reactor.Subscription;
-import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -163,7 +163,7 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
 
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(modelLog.list).as("what the model logged about the lost history")
                 .filteredOn(event -> event.getLevel() == Level.ERROR && event.getFormattedMessage().contains("will not restart subscription"))
-                .singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("subscription sub").contains(HistoryLossMessages.WHEN_INSTANCES_COMPETE)));
+                .singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("subscription sub").contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)));
     }
 
     @Test

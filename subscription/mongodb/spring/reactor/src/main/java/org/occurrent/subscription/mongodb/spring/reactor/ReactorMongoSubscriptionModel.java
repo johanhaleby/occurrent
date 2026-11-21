@@ -42,7 +42,7 @@ import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.*;
 import org.occurrent.subscription.api.reactor.internal.CancellableRegistration;
-import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
@@ -775,7 +775,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             } else {
                 // Named only, since instances can only compete for a subscription with an id
                 log.error("There was not enough oplog to resume {}, will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.{}",
-                        subscription, subscriptionId == null ? "" : " " + HistoryLossMessages.WHEN_INSTANCES_COMPETE, throwable);
+                        subscription, subscriptionId == null ? "" : " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT, throwable);
                 return false;
             }
         }

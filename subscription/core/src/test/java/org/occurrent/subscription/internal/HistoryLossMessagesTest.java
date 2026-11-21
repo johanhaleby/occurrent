@@ -48,4 +48,30 @@ class HistoryLossMessagesTest {
     void a_failure_that_is_not_a_catchup_cannot_resume_exception_is_not_history_lost() {
         assertThat(HistoryLossMessages.isHistoryLost(new IllegalStateException("Cannot resume"))).isFalse();
     }
+
+    @Test
+    void the_log_for_a_subscription_paused_after_a_loss_says_how_to_change_the_checkpoint_when_several_instances_run_it() {
+        assertThat(HistoryLossMessages.TERMINAL_FAILURE_LOG).contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT).contains(SharedStorageMessages.GUIDE);
+    }
+
+    @Test
+    void the_log_for_a_subscription_paused_after_a_live_start_loss_says_how_to_change_the_checkpoint_when_several_instances_run_it() {
+        assertThat(HistoryLossMessages.LIVE_START_LOST_LOG).contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT).contains(SharedStorageMessages.GUIDE);
+    }
+
+    @Test
+    void the_log_picked_for_a_loss_says_how_to_change_the_checkpoint_when_several_instances_run_it_whether_or_not_it_was_the_live_start() {
+        assertThat(HistoryLossMessages.terminalFailureLog(false)).as("a lost position").contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+        assertThat(HistoryLossMessages.terminalFailureLog(true)).as("a lost live start").contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
+
+    @Test
+    void the_refusal_to_resume_a_subscription_says_how_to_change_the_checkpoint_when_several_instances_run_it() {
+        assertThat(HistoryLossMessages.historyLost("id", CHECKPOINT)).hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
+
+    @Test
+    void the_refusal_to_resume_a_subscription_whose_live_start_was_lost_says_how_to_change_the_checkpoint_when_several_instances_run_it() {
+        assertThat(HistoryLossMessages.liveStartLostOnResume("id", CHECKPOINT)).hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
 }

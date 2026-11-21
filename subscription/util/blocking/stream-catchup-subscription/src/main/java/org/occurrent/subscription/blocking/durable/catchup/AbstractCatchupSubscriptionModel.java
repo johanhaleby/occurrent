@@ -53,6 +53,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.internal.LongestReplay;
 import org.occurrent.subscription.internal.LostStartHold;
 import org.slf4j.Logger;
@@ -836,7 +837,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * subscription paused while its {@code subscribe(..)} replay runs isn't refused, and the live delegate, which doesn't
      * hold it yet, throws its own exception, as in 0.34.0. A subscription whose live delegate gave up restarting it after
      * it went live still runs here, as it did on the MongoDB live delegates in 0.34.0. Pause it before you resume it at a
-     * position, or cancel it and subscribe it again.
+     * position, or cancel it and subscribe it again. With more than one instance running it, stop every instance instead
+     * of cancelling, delete its stored checkpoint and start them all again with the same start, as
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
+     * describes.
      * <p>
      * A replay that {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
      * and ends once the live delegate has resumed the subscription, so the position given here wins over it. With
@@ -1726,7 +1730,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             return "The subscription model runs the subscription.";
         } else if (liveDelegate.isPaused(subscriptionId)) {
             return "The subscription model holds the subscription paused until it is resumed. Resuming it through the catch-up replays from the position stored for it when that is one the catch-up replays from, and otherwise resumes it where the subscription model holds it. If the subscription model loses that position again, cancel the subscription and subscribe it again. "
-                   + HistoryLossMessages.WHEN_INSTANCES_COMPETE;
+                   + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT;
         }
         return "The subscription model neither runs the subscription nor holds it paused.";
     }
@@ -2998,7 +3002,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         return new CatchupCannotResumeException("Cannot start catch-up subscription " + subscriptionId + " after position " + position + ", because the checkpoint holds no live start read before position " + position
                 + " was, and an event that committed below position " + position + " after it was read would never be delivered. Cancel the subscription first, which deletes the checkpoint stored for it."
                 + " Then start the subscription from the beginning, or from the checkpoint it delivered with the event at position "
-                + position + ", which EventMetadata.getCheckpoint() returns. " + HistoryLossMessages.WHEN_INSTANCES_COMPETE);
+                + position + ", which EventMetadata.getCheckpoint() returns. " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
 
     // A replay again from an origin after the beginning, with a live start read now, skips an event before the origin
@@ -3007,7 +3011,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         return HistoryLossMessages.liveStartLost("Cannot replay catch-up subscription " + subscriptionId + " again from " + origin + ", because the subscription model no longer has the history from its live start,"
                 + " and a replay from there with a live start read now would never deliver an event before " + origin + " that was written after the lost live start was read."
                 + " Cancel the subscription first, which deletes the checkpoint stored for it. Start the subscription from the beginning again, and size the change stream history, such as the MongoDB oplog, to reach back across the replay. "
-                + HistoryLossMessages.WHEN_INSTANCES_COMPETE + " Lost live start: " + lostLiveStart.asString(), lostLiveStart, false);
+                + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT + " Lost live start: " + lostLiveStart.asString(), lostLiveStart, false);
     }
 
     // Null when the wrapped model can still resume from the live start, or when this attempt should no longer replay
@@ -3086,7 +3090,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             throw new CatchupCannotResumeException("Cannot resume catch-up subscription " + subscriptionId + " from stored checkpoint \"" + stored.asString() + "\", because it holds no live start,"
                     + " and an event with an earlier time that was written after the earlier replay read past that time would never be delivered."
                     + " Cancel the subscription, which deletes the checkpoint, and start it from the beginning of time, or from a checkpoint it delivered with an event, which EventMetadata.getCheckpoint() returns. "
-                    + HistoryLossMessages.WHEN_INSTANCES_COMPETE);
+                    + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         }
     }
 

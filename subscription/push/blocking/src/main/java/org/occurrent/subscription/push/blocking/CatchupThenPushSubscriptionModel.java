@@ -37,6 +37,7 @@ import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.internal.ReplayFilters;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -554,7 +555,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // no one.
                 log.error("Catch-up failed for subscription {}. Its registration on the live feed is kept and now "
                         + "refuses every event, so the source redelivers rather than losing them. Cancel the "
-                        + "subscription and subscribe again once the cause is fixed.", subscriptionId, e);
+                        + "subscription and subscribe again once the cause is fixed. "
+                        + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, e);
                 // Dropped before the replay entry, so a start(true) racing this never sees a launcher with no replay
                 // running and relaunches a catch-up that failed. By identity, never by key alone, so this replay's
                 // own completion can never evict a newer launcher a cancelSubscription(id) plus subscribe(id, ...)

@@ -54,4 +54,11 @@ class CatchupMarkersTest {
         assertThat(CatchupMarkers.refusedANonMarker(new IllegalStateException("not a marker, but not that refusal either"))).as("a plain IllegalStateException").isFalse();
         assertThat(CatchupMarkers.refusedANonMarker(new RuntimeException("outer", new IllegalArgumentException("cause")))).as("a wrapped unrelated failure").isFalse();
     }
+
+    @Test
+    void the_refusal_of_a_checkpoint_that_is_not_a_position_says_how_to_change_what_is_stored_when_several_instances_run_it() {
+        Throwable refused = catchThrowable(() -> CatchupMarkers.positionOf("proj", new StringBasedCheckpoint("resume-token-xyz")));
+
+        assertThat(refused).hasMessageEndingWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
 }

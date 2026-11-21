@@ -270,7 +270,7 @@ its own annotation, at the present for `NOW` or `DEFAULT`, and store a checkpoin
 subscribes again. So when more than one instance runs the application, someone stops every instance, deletes the
 stored checkpoint or replaces it with one the application kept, and starts them all again with the same one of the two
 starts below, as
-[the upgrade guide](../../migration/upgrading-to-0.35.0.md#changing-a-stored-checkpoint-when-instances-compete)
+[the upgrade guide](../../migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
 describes.
 
 With one instance, or on a subscription model the application calls directly without competing consumers, someone
@@ -353,7 +353,7 @@ subscription and subscribing again from now skips every event since the lost tok
   Closing that would stop every catch-up during the upgrade. Rolling back to 0.34 needs every instance stopped and the
   marked checkpoints deleted first, since a 0.35 instance that still runs can store a marked checkpoint again, and
   every instance started again on 0.34 with the same start, as
-  [the upgrade guide](../../migration/upgrading-to-0.35.0.md#changing-a-stored-checkpoint-when-instances-compete)
+  [the upgrade guide](../../migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
   describes.
 - A 0.34 time checkpoint written under a sort that doesn't lead with time ascending can already be past an event its run
   never delivered, and nothing in the string says which sort wrote it. 0.35 resumes it as stored.

@@ -52,7 +52,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
@@ -331,7 +331,7 @@ public class SpringMongoSubscriptionModelTest {
     private static void assertRefusedBecauseTheHistoryWasLost(Throwable thrown, String subscriptionId) {
         assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
                 .hasMessageStartingWith("There was not enough oplog to resume subscription \"" + subscriptionId + "\"")
-                .hasMessageContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE)
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .rootCause().isInstanceOfSatisfying(MongoCommandException.class, e -> assertThat(e.getErrorCode()).isEqualTo(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE));
     }
 

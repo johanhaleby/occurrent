@@ -70,6 +70,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -1357,7 +1358,7 @@ class StreamCatchupResumeReplayMongoTest {
         assertThat(errorLog.thrown).as("the throwable of the held replay").singleElement().isInstanceOf(CatchupCannotResumeException.class);
         assertThat(errorLog.failures).as("the failure of the held replay").singleElement().asString()
                 .contains(subscriptionId).contains("from the beginning again")
-                .contains("When more than one instance competes for the subscription, stop every instance");
+                .contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertThat(storage.read(subscriptionId)).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());
         assertThat(receivedByB).as("delivered").isEmpty();
     }
@@ -2721,7 +2722,7 @@ class StreamCatchupResumeReplayMongoTest {
                 .untilAsserted(() -> assertThat(errorLog.messagesAbout(subscriptionId)).filteredOn(message -> message.contains("it was held")).hasSize(1));
         assertThat(errorLog.failures).as("the failure of the held replay").singleElement().asString()
                 .startsWith(CatchupCannotResumeException.class.getName()).contains(subscriptionId).contains(messagePart)
-                .contains("When more than one instance competes for the subscription, stop every instance");
+                .contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertThat(storage.read(subscriptionId)).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());
         assertThat(receivedByB).as("delivered").isEmpty();
     }

@@ -51,7 +51,7 @@ public enum StartupMode {
      * instance of the application, delete the checkpoint stored for the subscription or replace it with a checkpoint
      * the application kept that the subscription model still has the history back to, and start them all again with
      * the same start, as
-     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-stored-checkpoint-when-instances-compete">the upgrade guide</a>
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
      * describes.
      */
     BACKGROUND

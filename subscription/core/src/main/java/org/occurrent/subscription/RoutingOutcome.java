@@ -124,7 +124,10 @@ public enum RoutingOutcome {
      * <p>
      * Offering the same event to the same registration again gets the same answer, so a caller stops rather than
      * parking, discarding or redelivering. Recovery is a lifecycle action, cancelling the subscription and
-     * subscribing again, or building a new projection feed. A refusal that can clear on its own reports
+     * subscribing again, or building a new projection feed. With more than one instance running it, recovery stops
+     * every instance instead, deletes what is stored under its id and starts them all again with the same start, as
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
+     * describes. A refusal that can clear on its own reports
      * {@link #NOT_DELIVERABLE} instead, so this outcome alone is enough to decide on.
      * <p>
      * On the reactor stack a catch-up-then-live engine also reports this outcome after its handler has run, when it

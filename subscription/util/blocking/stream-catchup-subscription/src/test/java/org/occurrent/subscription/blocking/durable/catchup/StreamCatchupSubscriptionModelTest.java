@@ -55,7 +55,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
-import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
@@ -398,7 +398,7 @@ class StreamCatchupSubscriptionModelTest {
             assertThat(failure).isInstanceOf(UnsupportedStartAtException.class)
                     .hasMessageContaining("catch-up subscription subscription after a global position, since the event store doesn't write one")
                     .hasMessageContaining("delete that checkpoint first")
-                    .hasMessageContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE);
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
             assertThat(received).as("delivered").isEmpty();
             assertThat(saved).as("stored").isEmpty();
             assertThat(storage.read("subscription")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());
@@ -1386,7 +1386,7 @@ class StreamCatchupSubscriptionModelTest {
                     .hasMessageContaining("subscription")
                     .hasMessageContaining("again from position 1")
                     .hasMessageContaining("Start the subscription from the beginning again")
-                    .hasMessageContaining("When more than one instance competes for the subscription, stop every instance");
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
             // And nothing was replayed, stored or handed over
             assertThat(received).as("delivered").isEmpty();
             assertThat(saved).as("stored").isEmpty();
@@ -1417,7 +1417,7 @@ class StreamCatchupSubscriptionModelTest {
                     .isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessageContaining("subscription")
                     .hasMessageContaining("again from position 1")
-                    .hasMessageContaining("When more than one instance competes for the subscription, stop every instance");
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
             assertThat(received).as("the rest of the stored replay, and no replay again").containsExactly(history.get(2), history.get(3));
             assertThat(model.resumeProbes).as("once when the subscribe is made, once before the replay and once after it").containsExactly(storedLiveStart, storedLiveStart, storedLiveStart);
             assertThat(model.liveStarts).as("handed over").isEmpty();
@@ -1446,7 +1446,7 @@ class StreamCatchupSubscriptionModelTest {
             assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessageContaining("subscription")
                     .hasMessageContaining("after position 1")
-                    .hasMessageContaining("When more than one instance competes for the subscription, stop every instance")
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                     .hasMessageContaining("EventMetadata.getCheckpoint()");
             assertThat(received).as("delivered").isEmpty();
             assertThat(saved).as("stored").isEmpty();
@@ -1480,7 +1480,7 @@ class StreamCatchupSubscriptionModelTest {
             assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessageContaining("subscription")
                     .hasMessageContaining("after position 2")
-                    .hasMessageContaining("When more than one instance competes for the subscription, stop every instance");
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
             assertThat(received).as("delivered").isEmpty();
             assertThat(saved).as("stored").isEmpty();
             assertThat(storage.read("subscription")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(GlobalCheckpoint.of(2).asString());
@@ -1886,7 +1886,7 @@ class StreamCatchupSubscriptionModelTest {
                     .hasMessageContaining("subscription")
                     .hasMessageContaining("again from time " + asTime(at(2)))
                     .hasMessageContaining("Start the subscription from the beginning again")
-                    .hasMessageContaining("When more than one instance competes for the subscription, stop every instance");
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
             // And nothing was replayed, stored or handed over
             assertThat(received).as("delivered").isEmpty();
             assertThat(saved).as("stored").isEmpty();
@@ -1913,7 +1913,7 @@ class StreamCatchupSubscriptionModelTest {
                     .isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessageContaining("subscription")
                     .hasMessageContaining("again from time " + asTime(at(2)))
-                    .hasMessageContaining("When more than one instance competes for the subscription, stop every instance");
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
             assertThat(received).as("delivered").isEmpty();
             assertThat(model.resumeProbes).containsExactly(agedOut);
         } finally {
@@ -1958,7 +1958,7 @@ class StreamCatchupSubscriptionModelTest {
                     .isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessageContaining("subscription")
                     .hasMessageContaining("again from time " + asTime(at(2)))
-                    .hasMessageContaining("When more than one instance competes for the subscription, stop every instance");
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
             assertThat(received).as("the rest of the stored replay, and no replay again").containsExactly(history.get(2), history.get(3));
             assertThat(model.resumeProbes).as("once when the subscribe is made, once before the replay and once after it").containsExactly(storedLiveStart, storedLiveStart, storedLiveStart);
             assertThat(model.liveStarts).as("handed over").isEmpty();
@@ -1986,7 +1986,7 @@ class StreamCatchupSubscriptionModelTest {
                     .isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessageContaining("subscription")
                     .hasMessageContaining("again from time " + asTime(at(2)))
-                    .hasMessageContaining("When more than one instance competes for the subscription, stop every instance")
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                     .hasMessageNotContaining("replays");
             assertThat(received).as("the history from the time of event2, once").containsExactlyElementsOf(history.subList(1, 4));
             assertThat(model.resumeProbes).as("asked once, after the only replay").hasSize(1);
@@ -2175,7 +2175,7 @@ class StreamCatchupSubscriptionModelTest {
                     .hasMessageContaining("subscription")
                     .hasMessageContaining(asTime(at(3)))
                     .hasMessageContaining("holds no live start")
-                    .hasMessageContaining("When more than one instance competes for the subscription, stop every instance")
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                     .hasMessageContaining("EventMetadata.getCheckpoint()");
             // And nothing was delivered, stored or handed over
             assertThat(received).as("delivered").isEmpty();

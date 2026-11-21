@@ -1373,13 +1373,20 @@ the marker read fails on a subscription that had already caught up, the next cat
 
 What to do:
 
-- After a failure, fix its cause, then cancel the subscription and subscribe again, or build a new feed. Once the
-  catch-up marker is gone, its catch-up replays the history, the failed event and the events after it included. An
-  event that no replay can bring back and nothing waits for is lost when applying it fails, or when the process stops
-  before it is applied.
+- After a failure, fix its cause, then cancel the subscription and subscribe again, or build a new feed. With more
+  than one instance running it, stop every instance instead, delete its catch-up marker and start them all again
+  with the same start, as
+  [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes. Once the catch-up marker is gone, its catch-up replays the history, the failed event and the events
+  after it included. An event that no replay can bring back and nothing waits for is lost when applying it fails, or
+  when the process stops before it is applied.
 - When deleting the marker still fails after 3 retries, the subscription or feed logs an error naming its id. Delete
   the marker stored under that id in the `CheckpointStorage` you passed for catch-up markers before you subscribe again
-  or build the new feed, since a marker left in place makes that catch-up skip the replay.
+  or build the new feed, since a marker left in place makes that catch-up skip the replay. With more than one
+  instance running it, delete the marker with every instance stopped and start them all again with the same start,
+  as
+  [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes.
 - To have the call recognized, subscribe it on the thread the handler or fold was called on, by blocking on it for
   example, or return it as part of the `Mono` the handler returns. A handler that blocks on the call from a thread it
   switched to still waits forever.

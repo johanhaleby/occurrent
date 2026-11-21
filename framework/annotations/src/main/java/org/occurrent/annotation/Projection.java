@@ -259,7 +259,7 @@ public @interface Projection {
      * {@link #startAt()} to {@link StartPosition#BEGINNING} to have a rebuild replay and clear correctly, but clear
      * its stored checkpoint too. With more than one instance, clear it with every instance stopped and start them all
      * again with the same start, as
-     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-stored-checkpoint-when-instances-compete">the upgrade guide</a>
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
      * describes. The default {@link #resumeBehavior()} resumes from an existing checkpoint instead of
      * replaying again, so a read model wiped without its checkpoint stays stale. Clear stale memberships with an
      * operator step instead if a replay is not what you want.

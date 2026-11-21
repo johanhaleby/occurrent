@@ -42,7 +42,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
-import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 
 import java.net.URI;
 import java.time.LocalDateTime;
@@ -102,7 +102,7 @@ class DcbCatchupMarkedTimeRefusalTest {
                 .as("what subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position", "StreamCatchupSubscriptionModel", "delete the checkpoint")
-                .hasMessageContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE);
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertNothingWrittenSubscribedOrDelivered(null);
     }
 
@@ -118,7 +118,7 @@ class DcbCatchupMarkedTimeRefusalTest {
                 .as("what subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position", "StreamCatchupSubscriptionModel", "delete the checkpoint")
-                .hasMessageContaining(HistoryLossMessages.WHEN_INSTANCES_COMPETE);
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertNothingWrittenSubscribedOrDelivered(MARKED_TIME);
     }
 

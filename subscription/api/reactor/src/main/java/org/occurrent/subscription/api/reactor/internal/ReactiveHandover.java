@@ -22,6 +22,7 @@ import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
 import reactor.core.Exceptions;
@@ -2108,7 +2109,8 @@ public final class ReactiveHandover<T, K> {
                 + "in. The {} refuses every other event from now on, delivers what it has already taken in, and then "
                 + "fails for good. Fix the cause, then replace it, a subscription by cancelling it and subscribing "
                 + "again, a projection feed by building a new one. Only a replacement under a new id is sure to replay "
-                + "from the beginning, see the \"Cancel\" section of ADR 179.", noun, dedupKey, noun, error);
+                + "from the beginning, see the \"Cancel\" section of ADR 179. "
+                + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT, noun, dedupKey, noun, error);
         Source<T> source = liveSource.get();
         return forgetCaughtUp(source == null ? List.of() : List.of(source))
                 .then(Mono.fromRunnable(() -> {
@@ -2174,13 +2176,15 @@ public final class ReactiveHandover<T, K> {
                     + "marker. The {} refuses every event that does not come from its own handler from now on, "
                     + "delivers the events its handler fed it, and then fails for good. Replace it with one under a new "
                     + "id. Cancelling a subscription deletes the checkpoint stored under its id, so cancel it only when "
-                    + "nothing else uses that checkpoint.", noun, noun, error);
+                    + "nothing else uses that checkpoint. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT,
+                    noun, noun, error);
         } else {
             log.error("A catch-up of this {} failed. The {} refuses every event that does not come from its own handler "
                     + "from now on, delivers the events its handler fed it, and then fails for good. Fix the cause, then "
                     + "replace it, a subscription by cancelling it and subscribing again, a projection feed by building a "
                     + "new one. Only a replacement under a new id is sure to replay from the beginning, see the "
-                    + "\"Cancel\" section of ADR 179.", noun, noun, error);
+                    + "\"Cancel\" section of ADR 179. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT,
+                    noun, noun, error);
         }
         Source<T> live = liveSource.get();
         List<Source<T>> sources = live == null || live == source ? List.of(source) : List.of(source, live);

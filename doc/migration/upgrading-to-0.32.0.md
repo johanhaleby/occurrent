@@ -548,7 +548,11 @@ and live.
 release the registration instead, which freed the subscription id but meant your listener acknowledged every later
 event into a projection that received nothing, and your broker then discarded them. Now the acknowledgement fails, so
 the source holds the backlog. Fix the cause, call `cancelSubscription(..)` to release the id, and subscribe again. The
-fresh `subscribe(...)` replays the whole history, because nothing was recorded as caught up.
+fresh `subscribe(...)` replays the whole history when nothing is recorded as caught up for the id. With more than one
+instance running the subscription, stop every instance instead, delete its catch-up marker and start them all again
+with the same start, as
+[Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes.
 
 Two things follow. The subscription id stays taken until you cancel it, so a second `subscribe(...)` under the same id
 is refused rather than quietly replacing the failed one. And `isRunning(id)` now answers `true` for a subscription
