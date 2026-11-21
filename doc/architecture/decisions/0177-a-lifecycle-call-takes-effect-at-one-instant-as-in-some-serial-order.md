@@ -234,11 +234,15 @@ When the marked code never returns, the handed shutdown waits for good, so the w
 `shutdown()` held up the same way before the handed one has run hands over no second one. A `shutdown()` that gets the
 lock before the handed one shuts the wrapped model down itself, and the handed one then doesn't call it again. One that
 gets the lock after the handed one returns without calling the wrapped model again, so the wrapped model is shut down
-once either way. A `start(..)`, `stop()` or `resumeSubscription(id)` from another thread made before the handed one has
-returned runs on the lifecycle thread behind the calls queued there, and then changes nothing, since a `shutdown()` has
-begun. A `start(..)` on a thread that holds the lock meanwhile doesn't call the wrapped model's `start(..)`, as with any
-`shutdown()` under way. The handed shutdown's thread logs an `ERROR` for what it throws, and the next `shutdown()` calls
-the wrapped model's `shutdown()` again.
+once either way. A `start(..)`, `stop()` or `resumeSubscription(id)` made before the handed one has returned changes
+nothing, since a `shutdown()` has begun. Made from another thread, it runs on the lifecycle thread behind the calls
+queued there. When none was queued as it was made, it waits for the model lock on its own thread, and it still changes
+nothing when it gets the lock only after the handed one has shut the wrapped model down. Made on the thread that holds
+the lock, it changes nothing either. The catch-up counts the shutdowns handed over and those of them that have
+returned, and a call compares the two under the model lock with the second count as it was when the call was made, so
+what the call read before the hand-over doesn't decide it. A `start(..)` made once the handed one has returned starts
+the wrapped model again. The handed shutdown's thread logs an `ERROR` for what it throws, and the next
+`shutdown()` calls the wrapped model's `shutdown()` again.
 
 A `shutdown()` held up by the marked code doesn't shut the wrapped model down without the lock. The marked code can
 be inside the wrapped model, which can ask the function again in its own `subscribe(..)` and register the subscription

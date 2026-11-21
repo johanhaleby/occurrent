@@ -41,6 +41,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,6 +76,16 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
     private final CountDownLatch listenerHoldsTheLock = new CountDownLatch(1);
     private final CountDownLatch actionHandedACallOver = new CountDownLatch(1);
     private final AtomicBoolean actionSawTheWrappedShutdown = new AtomicBoolean();
+    // Holds the thread of the one call under test between the handed calls and the model lock, see givenACallIsHeldBeforeTheModelLock
+    private final AtomicBoolean holdTheNextCallBeforeTheLock = new AtomicBoolean();
+    private final CountDownLatch callIsHeldBeforeTheLock = new CountDownLatch(1);
+    private final CountDownLatch callMayTakeTheLock = new CountDownLatch(1);
+    private final AtomicReference<@Nullable Call> heldCall = new AtomicReference<>();
+    // Runs on the thread that asks the function, under the model lock, once the call the function waited for has ended
+    private volatile Runnable onTheThreadHoldingTheLock = () -> {
+    };
+    private final AtomicReference<@Nullable Throwable> thrownUnderTheLock = new AtomicReference<>();
+    private final AtomicInteger stopsSeenUnderTheLock = new AtomicInteger(-1);
     private final AtomicBoolean functionAsked = new AtomicBoolean();
     private final AtomicBoolean callEndedWhileTheFunctionWaited = new AtomicBoolean();
     private final AtomicReference<@Nullable Throwable> thrownByTheAction = new AtomicReference<>();
@@ -99,6 +110,7 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
         functionMayReturn.countDown();
         wrappedShutdownMayReturn.countDown();
         actionHandedACallOver.countDown();
+        callMayTakeTheLock.countDown();
         CompletableFuture.runAsync(() -> {
             model.shutdown();
             inMemory.shutdown();
@@ -339,6 +351,143 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
         assertThat(live.stops.get()).as("the stops the wrapped model got from the stop made while the handed shutdown was in it").isZero();
     }
 
+    @Test
+    void a_start_that_found_no_handed_call_pending_before_a_held_up_shutdown_handed_its_shutdown_over_starts_nothing_once_that_shutdown_has_run() throws Exception {
+        // Given a start made from another thread that read no handed call pending and is held before the model lock, and a shutdown that then threw because a listener under the lock waited for it
+        givenACallIsHeldBeforeTheModelLock(() -> model.start(false));
+
+        // When the listener returns, the handed shutdown has shut the wrapped model down, and the start takes the lock
+        theShutdownThrewAndTheHandedOneHasReturnedAndThenTheHeldCallTakesTheLock();
+
+        // Then the start returns without error, the wrapped model got no start from it, and was shut down once
+        assertThat(heldCall.get().thrown()).as("what the start threw").isNull();
+        assertThat(live.starts.get()).as("the starts the wrapped model got from the start made before the handed shutdown returned").isZero();
+        assertTheWrappedModelIsShutDownOnce();
+    }
+
+    @Test
+    void a_stop_that_found_no_handed_call_pending_before_a_held_up_shutdown_handed_its_shutdown_over_stops_nothing_once_that_shutdown_has_run() throws Exception {
+        // Given a stop made from another thread that read no handed call pending and is held before the model lock, and a shutdown that then threw because a listener under the lock waited for it
+        givenACallIsHeldBeforeTheModelLock(model::stop);
+
+        // When the listener returns, the handed shutdown has shut the wrapped model down, and the stop takes the lock
+        theShutdownThrewAndTheHandedOneHasReturnedAndThenTheHeldCallTakesTheLock();
+
+        // Then the stop returns without error, the wrapped model got no stop from it, and was shut down once
+        assertThat(heldCall.get().thrown()).as("what the stop threw").isNull();
+        assertThat(live.stops.get()).as("the stops the wrapped model got from the stop made before the handed shutdown returned").isZero();
+        assertTheWrappedModelIsShutDownOnce();
+    }
+
+    @Test
+    void a_resume_of_a_paused_subscription_that_found_no_handed_call_pending_before_a_held_up_shutdown_handed_its_shutdown_over_leaves_it_held_once_that_shutdown_has_run() throws Exception {
+        // Given x held paused, a resume of x made from another thread that read no handed call pending and is held before the model lock, and a shutdown that then threw because a listener under the lock waited for it
+        givenXPaused();
+        givenACallIsHeldBeforeTheModelLock(() -> handleOfX.set(model.resumeSubscription(X)));
+
+        // When the listener returns, the handed shutdown has shut the wrapped model down, and the resume takes the lock
+        theShutdownThrewAndTheHandedOneHasReturnedAndThenTheHeldCallTakesTheLock();
+
+        // Then the resume returns without error, its handle never reports x started, and x does not run
+        assertThat(heldCall.get().thrown()).as("what the resume of x threw").isNull();
+        assertThat(handleOfX.get()).as("the handle the resume of x returned").isNotNull();
+        assertThat(handleOfX.get().waitUntilStarted(Duration.ofSeconds(1))).as("whether the handle of the resume made before the handed shutdown returned completes started").isFalse();
+        assertThat(model.isRunning(X)).as("whether x runs after the resume made before the handed shutdown returned").isFalse();
+        assertTheWrappedModelIsShutDownOnce();
+    }
+
+    @Test
+    void a_stop_made_by_the_function_under_the_model_lock_after_a_shutdown_handed_its_shutdown_over_stops_nothing() throws Exception {
+        // Given a function that waits for a shutdown on another thread, which threw and handed its wrapped model's shutdown over, and then makes a stop itself while it still holds the model lock
+        givenTheFunctionMakesACallUnderTheLockAfterTheShutdownHandedItsShutdownOver(model::stop);
+
+        // When the function returns
+        // Then the stop returned without error, the wrapped model got no stop from it, and it is shut down once
+        assertThat(thrownUnderTheLock.get()).as("what the stop made under the model lock threw").isNull();
+        assertThat(stopsSeenUnderTheLock.get()).as("the stops the wrapped model had got once the stop made under the model lock returned").isZero();
+        functionMayReturn.countDown();
+        assertTheWrappedModelIsShutDownOnce();
+        assertThat(live.stops.get()).as("the stops the wrapped model got in all").isZero();
+    }
+
+    @Test
+    void a_start_made_after_the_handed_shutdown_has_returned_with_no_handed_call_left_starts_the_wrapped_model_again() throws Exception {
+        // Given a shutdown that threw because a listener under the model lock waited for it, whose handed shutdown has shut the wrapped model down and returned
+        functionMayReturn = new CountDownLatch(1);
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
+        aListenerOfZHoldsTheLockAndWaitsForAShutdown(() -> {
+        });
+        awaitTheFunction();
+        assertTheShutdownThrewAfterTheWait(callOfTheFunction.get());
+        functionMayReturn.countDown();
+        assertTheWrappedModelIsShutDownOnce();
+        awaitTheHandedShutdownThreadHasEnded();
+        assertThat(live.starts.get()).as("the starts the wrapped model got before the start made after the handed shutdown returned").isZero();
+
+        // When a start is made from another thread
+        assertThat(CompletableFuture.runAsync(() -> model.start(false), daemonExecutor("later-start"))).as("a start made after the handed shutdown returned").succeedsWithin(BOUND);
+
+        // Then the wrapped model is started once
+        assertThat(live.starts.get()).as("the starts the wrapped model got from the start made after the handed shutdown returned").isEqualTo(1);
+    }
+
+    // A listener of z holds the model lock and waits for a shutdown, which throws once it has handed its wrapped model's
+    // shutdown over. Before it asks that shutdown, the listener has call made from another thread, which reads that no handed
+    // call is pending, and the hook given to runBetweenTheHandedCallsAndTheLock holds it before it waits for the model lock.
+    // So the call is held ahead of the handover
+    private void givenACallIsHeldBeforeTheModelLock(Runnable call) throws InterruptedException {
+        model.runBetweenTheHandedCallsAndTheLock(() -> {
+            if (holdTheNextCallBeforeTheLock.compareAndSet(true, false)) {
+                callIsHeldBeforeTheLock.countDown();
+                HookedSubscriptionModel.awaitLatch(callMayTakeTheLock);
+            }
+        });
+        functionMayReturn = new CountDownLatch(1);
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
+        aListenerOfZHoldsTheLockAndWaitsForAShutdown(() -> {
+            holdTheNextCallBeforeTheLock.set(true);
+            heldCall.set(new Call("call-held-before-the-lock", call));
+            HookedSubscriptionModel.awaitLatch(callIsHeldBeforeTheLock);
+        });
+        assertThat(callIsHeldBeforeTheLock.await(20, TimeUnit.SECONDS)).as("whether the call under test is held before the model lock").isTrue();
+    }
+
+    private void theShutdownThrewAndTheHandedOneHasReturnedAndThenTheHeldCallTakesTheLock() throws Exception {
+        awaitTheFunction();
+        assertTheShutdownThrewAfterTheWait(callOfTheFunction.get());
+        assertThat(live.shutdowns.get()).as("the shutdowns the wrapped model got while the listener held the lock").isZero();
+        functionMayReturn.countDown();
+        assertTheWrappedModelIsShutDownOnce();
+        awaitTheHandedShutdownThreadHasEnded();
+        callMayTakeTheLock.countDown();
+        assertThat(heldCall.get().endedWithin(BOUND)).as("whether the held call returned once it could take the model lock").isTrue();
+    }
+
+    // The handed shutdown runs on a thread of its own, which has returned once that thread has ended
+    private static void awaitTheHandedShutdownThreadHasEnded() {
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(Thread.getAllStackTraces().keySet())
+                .as("the handed shutdown threads still alive")
+                .noneMatch(thread -> thread.getName().equals("occurrent-catchup-handed-shutdown") && thread.isAlive()));
+    }
+
+    // The function of z asks a shutdown from another thread under the model lock, on the lifecycle thread, which holds no claim
+    // for z while it asks. Once that shutdown has thrown and handed its wrapped model's shutdown over, which waits for the lock
+    // the function holds, the function itself makes call, so call finds the lock held by its own thread
+    private void givenTheFunctionMakesACallUnderTheLockAfterTheShutdownHandedItsShutdownOver(Runnable call) throws Exception {
+        functionMayReturn = new CountDownLatch(1);
+        onTheThreadHoldingTheLock = () -> {
+            try {
+                call.run();
+            } catch (Throwable e) {
+                thrownUnderTheLock.set(e);
+            }
+            stopsSeenUnderTheLock.set(live.stops.get());
+        };
+        actionResumesXThenSubscribesZWhoseFunctionWaitsFor(model::shutdown);
+        awaitTheFunction();
+        assertTheShutdownThrewAfterTheWait(callOfTheFunction.get());
+    }
+
     // A listener of z holds the model lock on the thread that resumes z, and asks a shutdown from another thread, which
     // throws after LIFECYCLE_WAIT, once beforeTheShutdown has run. Returns once the listener holds the lock. z has history
     // by then
@@ -433,6 +582,7 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
         Call started = new Call("call-the-function-waits-for", call);
         callOfTheFunction.set(started);
         callEndedWhileTheFunctionWaited.set(started.endedWithin(BOUND));
+        onTheThreadHoldingTheLock.run();
         functionReturned.countDown();
         HookedSubscriptionModel.awaitLatch(functionMayReturn);
     }

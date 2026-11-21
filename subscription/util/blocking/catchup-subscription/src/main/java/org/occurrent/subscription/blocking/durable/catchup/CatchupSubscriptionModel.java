@@ -359,6 +359,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         return presentCatchupModels().findFirst().orElseThrow();
     }
 
+    // Package-private for the test that stands where AbstractCatchupSubscriptionModel.runBetweenTheHandedCallsAndTheLock
+    // describes, on the child that runs the lifecycle calls of this model. Not public, and not part of its contract
+    void runBetweenTheHandedCallsAndTheLock(Runnable hook) {
+        anyCatchupModel().runBetweenTheHandedCallsAndTheLock(hook);
+    }
+
     // beginStart() rather than a child's own start(), for the same reason stop() uses stopReplay(). The parked replays
     // run again only once the live delegate is started, so each hands over to a delegate that runs, and only when
     // resuming automatically, as the delegate itself resumes only then. When the delegate's start throws, each child

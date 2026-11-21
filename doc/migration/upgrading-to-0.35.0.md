@@ -2986,7 +2986,8 @@ the catch-up is not affected.
   `stopReplay()`, `resumeReplay()` or `resumeSubscription(..)` then throws `IllegalStateException` with "Nothing was
   changed." in its message. A `shutdown()` throws `IllegalStateException` too, but by then it has ended the catch-up
   replays and marked the model as shutting down. The wrapped model goes on running until that code returns, and is
-  then shut down with no further call. That covers a `shutdown()` the Spring context makes while it closes.
+  then shut down with no further call. A `start(..)`, `stop()` or `resumeSubscription(id)` made before that shutdown
+  has returned changes nothing. That covers a `shutdown()` the Spring context makes while it closes.
 
 ### What to do
 
