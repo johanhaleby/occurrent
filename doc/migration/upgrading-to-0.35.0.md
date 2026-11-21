@@ -127,6 +127,9 @@ other sections compile fine and behave differently, so read them first.
 - [A first position a checkpoint storage can only write unconditionally is refused](#a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused).
   A `CheckpointStorage` of your own that answers `false` from `evaluatesWriteConditionsFor` fails a new subscription
   at the model default, where 0.34.0 wrote its first position unconditionally with a warning. Compiles unchanged.
+- [A durable subscription's first position is stored with the write version](#a-durable-subscriptions-first-position-is-stored-with-the-write-version).
+  A `CheckpointStorage` of your own gets the version stored with the first position in one write only once it
+  implements the three-argument `resolveFirstCheckpointRace`. Compiles unchanged.
 - [A capability that acts on a subscription is not found past a wrapper](#a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper).
   `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
   `ManualStartSubscriptionModel` answers empty. Compiles unchanged.
@@ -475,7 +478,10 @@ A durable subscription that starts at the model default, with no checkpoint stor
 anything is delivered. `DurableSubscriptionModel` and `ReactorDurableSubscriptionModel` write it with
 `CheckpointWriteCondition.ifAbsent()`, so of two nodes recording one at the same moment, only one write is stored. Both
 models record one for a `StartAt.dynamic(..)` that answers `StartAt.subscriptionModelDefault()` too, and the Spring
-Boot starters store a live start as the first checkpoint the same way.
+Boot starters store a live start as the first checkpoint the same way. With a write version, `DurableSubscriptionModel`
+first asks the storage to store the position and the version in one write, as
+[A durable subscription's first position is stored with the write version](#a-durable-subscriptions-first-position-is-stored-with-the-write-version)
+describes.
 
 ### Who is affected
 
@@ -538,6 +544,33 @@ refusal. The MongoDB starters pass the property to the durable subscription mode
 that model needs. An application that defines its own `SubscriptionModel` bean gets no durable model from the starter,
 and the one it builds reads only its own config, so it needs the config method as well as the property. There is no OpenRewrite recipe for this. See
 [ADR 184](../architecture/decisions/0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md).
+
+## A durable subscription's first position is stored with the write version
+
+### Who is affected
+
+An application whose `DurableSubscriptionModel` has a `CheckpointWriteVersionSource`, such as the
+`CompetingConsumerCheckpointWriteVersionSource` the Spring Boot starter uses for a competing consumer, and records the
+first position of a subscription that starts at the model default with no checkpoint stored. Compiles unchanged.
+
+### What changes
+
+In 0.34.0 that first position was written with `CheckpointWriteCondition.ifAbsent()` and no write version, so a node
+that had lost its lease could write over it until the new lease holder saved its next checkpoint. From 0.35.0 the
+model first calls the new `CheckpointStorage.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion)`,
+which stores the first position and the version in one write. When the storage holds a newer version, the call writes
+nothing and the subscription starts from the checkpoint stored. `NativeMongoCheckpointStorage`,
+`SpringMongoCheckpointStorage`, `SpringRedisCheckpointStorage` and `InMemoryCheckpointStorage` implement it, so there
+the old lease holder's writes are refused from the first write on.
+
+### What to do
+
+Nothing, unless you implement `CheckpointStorage` yourself. A storage of your own that doesn't override the
+three-argument `resolveFirstCheckpointRace`, or answers it empty, gets the `ifAbsent()` write and no version, as in
+0.34.0. Until the next checkpoint write stores the version, a node that had lost its lease can write over the first
+position, which delivers events again but skips none. To get the version stored with the first position in one write,
+override the three-argument `resolveFirstCheckpointRace` as its javadoc describes. There is no OpenRewrite recipe for
+this.
 
 ## A capability that acts on a subscription is not found past a wrapper
 

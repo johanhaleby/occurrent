@@ -170,6 +170,25 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
     }
 
     /**
+     * Compares the way {@link #resolveFirstCheckpointRace(String, Checkpoint)} does, and stores {@code writeVersion}
+     * in the same {@code findOneAndUpdate}, see
+     * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildFirstCheckpointRaceResolution(Document, long)}.
+     * A stored resume token or generic checkpoint is kept and answered, and gets {@code writeVersion} too. Answers
+     * empty, writing nothing, only for a {@code candidate} that is not a {@link MongoOperationTimeCheckpoint}.
+     */
+    @Override
+    public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        if (!(candidate instanceof MongoOperationTimeCheckpoint)) {
+            return Optional.empty();
+        }
+        Document candidateDocument = generateCheckpointDocument(subscriptionId, candidate);
+        Supplier<Document> resolve = () -> persistFirstCheckpointRaceResolution(subscriptionId, candidateDocument, writeVersion);
+        // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
+        Document afterDocument = requireNonNull(executeWithRetry(resolve, __ -> !shutdown, retryStrategy).get());
+        return Optional.of(interpretFirstCheckpointRaceResolution(subscriptionId, afterDocument, writeVersion));
+    }
+
+    /**
      * The single {@code findOneAndUpdate} round trip {@link #resolveFirstCheckpointRace} is, see
      * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildFirstCheckpointRaceResolution}. Package
      * private for the same reason {@link #persistConditionalCheckpointDocument} is.
@@ -178,6 +197,18 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
         return requireNonNull(checkpointCollection.findOneAndUpdate(
                 eq(ID, subscriptionId),
                 singletonList(buildFirstCheckpointRaceResolution(candidateDocument)),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
+    }
+
+    /**
+     * The single {@code findOneAndUpdate} round trip {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} is,
+     * see {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildFirstCheckpointRaceResolution(Document, long)}.
+     * Package private for the same reason {@link #persistConditionalCheckpointDocument} is.
+     */
+    Document persistFirstCheckpointRaceResolution(String subscriptionId, Document candidateDocument, long writeVersion) {
+        return requireNonNull(checkpointCollection.findOneAndUpdate(
+                eq(ID, subscriptionId),
+                singletonList(buildFirstCheckpointRaceResolution(candidateDocument, writeVersion)),
                 new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
     }
 

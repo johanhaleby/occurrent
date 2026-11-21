@@ -206,4 +206,38 @@ public interface CheckpointStorage {
     default Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
         return Optional.empty();
     }
+
+    /**
+     * Settles a subscription's first position and stores {@code writeVersion} with it, in one atomic write, so a caller
+     * can ask this before it writes anything. The checkpoint that governs is {@code candidate} when nothing is stored
+     * or the stored first position is later, and the stored checkpoint otherwise, so this never moves a stored
+     * position later. A stored checkpoint this storage can't compare {@code candidate} against, such as one written
+     * for a delivered event, governs as it is and is never overwritten.
+     * <p>
+     * The write is allowed when {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan(writeVersion)} would
+     * allow it. When the storage holds a newer version, whatever checkpoint is stored, nothing is written and
+     * {@link CheckpointWriteConditionNotFulfilledException} is thrown.
+     * <p>
+     * The default answers {@link Optional#empty()} and writes nothing, like the default of
+     * {@link #resolveFirstCheckpointRace(String, Checkpoint)}. The blocking {@code DurableSubscriptionModel} then
+     * writes the first position with {@link CheckpointWriteCondition#ifAbsent()} and stores no version with it, as in
+     * 0.34.0. It doesn't save the position again with the version, since that save would write over whatever another
+     * node stored between the two writes. Until the next checkpoint write stores the version, a node that has lost its
+     * lease can then write over the first position, which delivers events again but skips none.
+     * {@code NativeMongoCheckpointStorage}, {@code SpringMongoCheckpointStorage}, {@code SpringRedisCheckpointStorage}
+     * and the blocking {@code InMemoryCheckpointStorage} override this method.
+     *
+     * @param subscriptionId The id of the subscription whose first position is being settled
+     * @param candidate      The position competing to be the subscription's first
+     * @param writeVersion   The version to store with the checkpoint that governs
+     * @return The checkpoint that governs {@code subscriptionId}'s first position once this call returns, stored with
+     * {@code writeVersion}, or empty when this storage doesn't settle the first position for this call, and then
+     * nothing is written
+     * @throws CheckpointWriteConditionNotFulfilledException if the storage holds a version newer than
+     *                                                       {@code writeVersion}
+     */
+    @NullMarked
+    default Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        return Optional.empty();
+    }
 }

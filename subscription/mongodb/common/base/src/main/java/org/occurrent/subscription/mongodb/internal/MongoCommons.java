@@ -428,6 +428,70 @@ public class MongoCommons {
     }
 
     /**
+     * The {@code $replaceWith} pipeline stage for a checkpoint storage's
+     * {@code resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion)}, one round trip like
+     * {@link #buildFirstCheckpointRaceResolution(Document)}. {@code candidateDocument} must contain
+     * {@link #OPERATION_TIME}.
+     * <p>
+     * Writes only when {@code notOlderThan(writeVersion)} allows it, and then always with {@code writeVersion}. It
+     * writes {@code candidateDocument} when nothing is stored or the stored {@link #OPERATION_TIME} is later, and
+     * keeps the stored checkpoint otherwise. That includes a stored resume token or generic checkpoint, which is
+     * never overwritten. A newer stored version keeps the document as it is.
+     *
+     * @param candidateDocument The document {@link #generateCheckpointDocument(String, Checkpoint)} built for the
+     *                          candidate position, which must contain {@link #OPERATION_TIME}
+     * @param writeVersion      The version to store with the checkpoint that governs
+     * @return The {@code $replaceWith} pipeline stage to run through {@code findOneAndUpdate}
+     */
+    public static Document buildFirstCheckpointRaceResolution(Document candidateDocument, long writeVersion) {
+        Document takeCandidate = new Document("$or", asList(
+                ifAbsentIsAllowedExpr(),
+                new Document("$and", asList(
+                        fieldExistsExpr(OPERATION_TIME),
+                        new Document("$gt", asList("$" + OPERATION_TIME, candidateDocument.get(OPERATION_TIME)))))));
+
+        Document candidateWithVersion = new Document("$mergeObjects", asList(
+                new Document("$literal", candidateDocument),
+                new Document(WRITE_VERSION, writeVersion)));
+        Document storedWithVersion = new Document("$mergeObjects", asList(
+                "$$ROOT",
+                new Document(WRITE_VERSION, writeVersion)));
+
+        Document written = new Document("$cond", new Document(Map.of(
+                "if", takeCandidate,
+                "then", candidateWithVersion,
+                "else", storedWithVersion)));
+
+        Document cond = new Document("$cond", new Document(Map.of(
+                "if", notOlderThanIsAllowedExpr(writeVersion),
+                "then", written,
+                "else", "$$ROOT")));
+
+        return new Document("$replaceWith", cond);
+    }
+
+    /**
+     * What {@code findOneAndUpdate} returned for {@link #buildFirstCheckpointRaceResolution(Document, long)} means.
+     * <p>
+     * A successful write stores exactly {@code writeVersion}, so any other stored version means a newer version
+     * refused the write, whatever kind of checkpoint is stored. Otherwise {@code afterDocument} is the checkpoint that
+     * governs.
+     *
+     * @param subscriptionId The id of the subscription the write was for
+     * @param afterDocument  The document {@code findOneAndUpdate} returned
+     * @param writeVersion   The version the write offered
+     * @return The checkpoint that now governs the subscription's first position
+     * @throws CheckpointWriteConditionNotFulfilledException if a newer stored version refused the write
+     */
+    public static Checkpoint interpretFirstCheckpointRaceResolution(String subscriptionId, Document afterDocument, long writeVersion) {
+        OptionalLong storedVersion = extractWriteVersion(afterDocument);
+        if (storedVersion.isEmpty() || storedVersion.getAsLong() != writeVersion) {
+            throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, CheckpointWriteCondition.notOlderThan(writeVersion));
+        }
+        return calculateCheckpointFromMongoStreamPositionDocument(afterDocument);
+    }
+
+    /**
      * Reads the version {@link #buildConditionalCheckpointWrite(Document, CheckpointWriteCondition)} recorded, or
      * empty if the document has none.
      */
