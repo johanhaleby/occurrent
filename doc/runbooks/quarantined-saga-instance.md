@@ -349,10 +349,10 @@ release for the input the instance stopped on, the instance is quarantined again
 `QUARANTINED_AGAIN`. With quarantine off the poller keeps trying the input until it succeeds.
 
 **When the write doesn't fit.** A release keeps every stream version it applies in the instance's stream marks until it
-ends, so the instance's document grows by one number per replayed stream event. Before it dispatches an input's
-commands it asks the store whether it can write the instance with the input applied. On MongoDB the store refuses a
-document of more than 16 MB less 16 KiB. When the write doesn't fit, the release applies and dispatches nothing for
-that input. The instance is quarantined again on that input with its marks trimmed, the release returns
+ends, so the instance's document grows by one number per replayed stream event. The release asks the store before
+every write whether it can take it, and for the write that applies an input it asks before it dispatches the input's
+commands. On MongoDB the store refuses a document of more than 16 MiB. When the store can't take the instance with the
+input applied, or with the input's failure recorded, the release applies and dispatches nothing for that input. The instance is quarantined again on that input with its marks trimmed, the release returns
 `QUARANTINED_AGAIN`, and an `ERROR` names the instance and the input. That happens with quarantine off too, and on a
 store that doesn't write atomically. The `ERROR` says which of two cases it is:
 
@@ -361,6 +361,16 @@ store that doesn't write atomically. The `ERROR` says which of two cases it is:
 - A further release stops on that input too, since the instance doesn't fit even with the marks trimmed, such as an
   instance with tens of thousands of streams or a large state. Delete the instance, or handle that input and the ones
   after it by hand. They stay recorded until you do.
+
+When the store can't take the write that quarantines the instance again either, even with no pending entry for the
+input and no failure message, the release writes nothing, dispatches nothing and returns `STILL_RELEASING`. Its `ERROR`
+names the instance and says to delete it. The timer poller tries the instance again on every poll and logs that `ERROR`
+again until you do. The same happens when the store can't take the write that releases the instance, or the one that
+deletes the record of an input the instance applied already. Deleting the instance deletes the inputs it recorded, so
+export them first, as step 6 of the rollback below does. When the store can't take the write that starts a release,
+the release starts with the marks trimmed to the reorder window instead, since a write outside a release doesn't ask
+the store and can leave more marks than a release may write. When the store can't take that either, `release` throws
+an `IllegalStateException` that names the instance and says the same.
 
 A store of your own that keeps the default of `SagaStateStoreSkippedInputs.fits` refuses nothing, so a release on it
 dispatches the commands of an input whose write the store then fails.
@@ -591,18 +601,33 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    all only when it returns fewer than its `limit`. Raise the limit until it does.
 3. When a release returns `STILL_RELEASING`, an input failed again. With quarantine off there is no budget to run out,
    so the instance stays releasing and the timer poller retries the input until it succeeds. Fix what makes the input
-   fail and call `release` again. Don't delete the instance while a 0.35.0 node runs. `SagaStateStore.delete(sagaId)`
+   fail and call `release` again. When the release's `ERROR` says instead that the store can't write the instance,
+   nothing moves that release on, and the instance counts as one that keeps failing in step 5. Don't delete the instance while a 0.35.0 node runs. `SagaStateStore.delete(sagaId)`
    takes no expected version, so a delete that reaches the store after the poller has finished the release deletes
    the released instance.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
    longer decodes, and release the instance again.
 5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `RELEASED`, or that keeps
    failing for a cause you can't fix. With quarantine off, a release returns `QUARANTINED_AGAIN` only when the store
-   couldn't write the instance with the next input applied, and its `ERROR` says which of two cases it is. When it says
+   couldn't write the instance with the next input applied, or with that input's failure recorded, and its `ERROR` says
+   what to do. When it says
    to release the instance again, call `release` again on that instance, since after step 6 nothing replays the inputs
    it still holds recorded. When it says a further release stops on that input too, the instance can't be released and
-   stays quarantined through the downgrade, like an instance that keeps failing.
-6. Stop every 0.35.0 node. Then, from a process that runs no `SagaRunner`, store every instance that is still
+   stays quarantined through the downgrade, like an instance that keeps failing. Every instance that keeps failing
+   still holds records of inputs that were acknowledged and never applied, and after step 6 no release replays them.
+6. Stop every 0.35.0 node. Before you change any instance, export every record still in
+   `<sagaCollection>_skipped_inputs`, with the instance it belongs to and its order. Those records are the only copy of
+   the inputs the instances that keep failing never applied, so handle them by hand from that export. On MongoDB, run
+   this for each saga's collection, with your own connection string:
+
+   ```
+   mongoexport --uri "<connection string>" --collection "saga-order-fulfilment_skipped_inputs" \
+     --sort '{"sagaId": 1, "quarantineId": 1, "seq": 1, "key": 1}' --out saga-order-fulfilment_skipped_inputs.json
+   ```
+
+   Each exported record holds `sagaId` and `quarantineId`, and `seq` and then `key` give the order the instance would
+   have applied them in. The `event` field holds the whole event, personal data included when the event holds any, so
+   keep the file where such data may be kept. Then, from a process that runs no `SagaRunner`, store every instance that is still
    `QUARANTINED_RECORDING` as `QUARANTINED`, without its quarantine id, skip count and release time, and every
    `ACTIVE_MARKED` instance as `ACTIVE`. A released instance is `ACTIVE_MARKED` when it holds stream marks. On MongoDB,
    run this on each saga's collection:
@@ -626,7 +651,8 @@ instance stays quarantined until you delete it, as in 0.34.0. After a later upgr
 because 0.34.0 skipped inputs without recording them. The records of the inputs it skipped on 0.35.0 stay in
 `<sagaCollection>_skipped_inputs`. Each one holds a full copy of the event it stands for, personal data included when
 the event holds any, and 0.34.0 never reads or deletes them. Step 6 removed the quarantine ids they are filed under,
-so no release can replay them either, also after a later upgrade to 0.35.0. Delete them once step 6 has run:
+so no release can replay them either, also after a later upgrade to 0.35.0. Delete them once step 6 has run, and only
+when the export in step 6 holds them, since the delete removes the last copy of every input that was never applied:
 
 ```javascript
 db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({})

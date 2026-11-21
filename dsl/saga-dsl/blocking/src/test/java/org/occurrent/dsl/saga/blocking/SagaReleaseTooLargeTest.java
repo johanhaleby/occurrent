@@ -46,6 +46,7 @@ import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.slf4j.LoggerFactory;
 
@@ -56,6 +57,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -240,11 +242,63 @@ class SagaReleaseTooLargeTest {
         assertThat(appliedVersions(instance())).as("control: the instance keeps the seeded versions").isGreaterThanOrEqualTo(SEEDED_VERSIONS);
     }
 
+    // Applied versions and state items, because applying a record here adds an item and no applied version
+    private static long size(SagaEnvelope<Order> envelope) {
+        return appliedVersions(envelope) + (envelope.state() == null ? 0 : envelope.state().items().size());
+    }
+
+    // Seeds the versions and lets the store take the size the instance holds and no more. The release start has that
+    // size and fits, applying a record adds an item and does not, and the quarantine again trims the marks and fits
+    private long seedVersionsAndLimitStoreToThem() {
+        keepSeededVersions();
+        long held = size(instance());
+        fits = candidate -> size(candidate) <= held;
+        return held;
+    }
+
     @Test
-    void a_release_whose_next_write_does_not_fit_stops_before_dispatching_logs_that_a_further_release_goes_on_and_the_further_release_applies_the_record_once() {
+    void a_release_whose_start_does_not_fit_with_every_mark_kept_is_written_trimmed_and_releases_in_one_call_dispatching_every_record_once() {
         SagaExecution<OrderEvent, Order, Object> execution = quarantinedOnPoisonWithTwoSkipped(predicateStore, CONFIG);
         keepSeededVersions();
         fits = candidate -> appliedVersions(candidate) <= LIMIT;
+        SagaEnvelope<Order> held = instance();
+        SagaEnvelope<Order> untrimmedStart = Objects.requireNonNull(SagaExecutionSupport.startRelease(held, now.get()));
+        SagaEnvelope<Order> trimmedStart = Objects.requireNonNull(SagaExecutionSupport.startReleaseTrimmed(held, now.get(), CONFIG.reorderWindow()));
+        assertThat(fits.test(untrimmedStart)).as("control: the untrimmed start does not fit").isFalse();
+        assertThat(fits.test(trimmedStart)).as("control: the trimmed start fits").isTrue();
+
+        AtomicReference<ReleaseResult> result = new AtomicReference<>();
+        Throwable thrown = catchThrowable(() -> result.set(execution.release(ORDER)));
+
+        assertAll(
+                () -> assertThat(thrown).as("the release does not throw").isNull(),
+                () -> assertThat(result.get()).isEqualTo(ReleaseResult.RELEASED),
+                () -> assertThat(dispatched).as("each record once").containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b")),
+                () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
+                () -> assertThat(errors()).as("no ERROR").isEmpty()
+        );
+    }
+
+    @Test
+    void a_release_whose_start_does_not_fit_even_trimmed_throws_naming_the_instance_dispatches_nothing_and_leaves_the_instance_as_it_was() {
+        SagaExecution<OrderEvent, Order, Object> execution = quarantinedOnPoisonWithTwoSkipped(predicateStore, CONFIG);
+        fits = candidate -> !candidate.isReleasing();
+        SagaEnvelope<Order> before = instance();
+
+        Throwable thrown = catchThrowable(() -> execution.release(ORDER));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + ORDER + "'").hasMessageContaining("cannot be released"),
+                () -> assertThat(dispatched).isEmpty(),
+                () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(instance()).as("the stored instance is unchanged").isEqualTo(before)
+        );
+    }
+
+    @Test
+    void a_release_whose_next_write_does_not_fit_stops_before_dispatching_logs_that_a_further_release_goes_on_and_the_further_release_applies_the_record_once() {
+        SagaExecution<OrderEvent, Order, Object> execution = quarantinedOnPoisonWithTwoSkipped(predicateStore, CONFIG);
+        long held = seedVersionsAndLimitStoreToThem();
 
         ReleaseResult stopped = execution.release(ORDER);
 
@@ -259,7 +313,8 @@ class SagaReleaseTooLargeTest {
                 () -> assertThat(dispatchedAtTheStop).as("nothing is dispatched for the record").isEmpty(),
                 () -> assertThat(afterTheStop.status()).isEqualTo(SagaStatus.QUARANTINED),
                 () -> assertThat(afterTheStop.isReleasing()).isFalse(),
-                () -> assertThat(appliedVersions(afterTheStop)).as("the marks are trimmed").isLessThanOrEqualTo(LIMIT),
+                () -> assertThat(appliedVersions(afterTheStop)).as("the marks are trimmed").isLessThan(held),
+                () -> assertThat(size(afterTheStop)).as("the stored instance fits").isLessThanOrEqualTo(held),
                 () -> assertThat(recordsAtTheStop).as("every record stays recorded").hasSize(3),
                 () -> assertThat(errorsAfterTheStop).as("one ERROR, that a further release goes on").singleElement().asString().contains(RELEASE_AGAIN).doesNotContain(STOPS_AGAIN),
                 () -> assertThat(further).as("the further release gets past the record").isEqualTo(ReleaseResult.RELEASED),
@@ -294,8 +349,7 @@ class SagaReleaseTooLargeTest {
     @Test
     void the_candidate_the_stop_expects_a_further_release_to_write_is_the_candidate_the_further_release_asks_the_store_about() {
         SagaExecution<OrderEvent, Order, Object> execution = quarantinedOnPoisonWithTwoSkipped(predicateStore, CONFIG);
-        keepSeededVersions();
-        fits = candidate -> appliedVersions(candidate) <= LIMIT;
+        seedVersionsAndLimitStoreToThem();
         asked.clear();
         execution.release(ORDER);
         List<StoredSaga> askedByTheStop = List.copyOf(asked);
@@ -303,10 +357,10 @@ class SagaReleaseTooLargeTest {
 
         execution.release(ORDER);
 
-        StoredSaga expected = askedByTheStop.get(1);
-        StoredSaga actual = asked.getFirst();
+        StoredSaga expected = askedByTheStop.getLast();
+        StoredSaga actual = asked.get(1);
         assertAll(
-                () -> assertThat(askedByTheStop).as("the stop asks twice, for the record and for the further release").hasSize(2),
+                () -> assertThat(askedByTheStop).as("the stop asks four times, for the start, the record, the quarantine again and the further release").hasSize(4),
                 () -> assertThat(withoutVersion(actual)).isEqualTo(withoutVersion(expected))
         );
     }
@@ -330,8 +384,7 @@ class SagaReleaseTooLargeTest {
     @Test
     void a_release_with_quarantine_turned_off_still_stops_on_a_write_the_store_cannot_take_and_dispatches_nothing() {
         quarantinedOnPoisonWithTwoSkipped(predicateStore, CONFIG);
-        keepSeededVersions();
-        fits = candidate -> appliedVersions(candidate) <= LIMIT;
+        seedVersionsAndLimitStoreToThem();
         SagaExecution<OrderEvent, Order, Object> withoutQuarantine = execution(predicateStore, CONFIG_WITHOUT_QUARANTINE);
 
         ReleaseResult stopped = withoutQuarantine.release(ORDER);
@@ -348,8 +401,7 @@ class SagaReleaseTooLargeTest {
     @Test
     void a_store_that_cannot_write_atomically_stops_a_release_on_a_write_it_cannot_take_and_dispatches_nothing() {
         quarantinedOnPoisonWithTwoSkipped(predicateStore, CONFIG);
-        keepSeededVersions();
-        fits = candidate -> appliedVersions(candidate) <= LIMIT;
+        seedVersionsAndLimitStoreToThem();
         SagaExecution<OrderEvent, Order, Object> onTheNonAtomicStore = execution(new StoreThatCannotWriteAtomically(), CONFIG_WITHOUT_QUARANTINE);
 
         ReleaseResult stopped = onTheNonAtomicStore.release(ORDER);

@@ -158,18 +158,19 @@ public interface SagaStateStoreSkippedInputs {
     boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId);
 
     /**
-     * Whether the store can write {@code candidate}, the instance a release computed for a record and is about to save
-     * with {@link #compareAndSaveReplayed}. A release asks before it dispatches the record's commands. When the write
-     * fails after them, the commands went out for an input the instance never applied, and every later attempt sends
-     * them again. When the answer is {@code false}, the release dispatches nothing and quarantines the instance again on
-     * the record, with the stream versions it applied trimmed to the reorder window, see
+     * Whether the store can write {@code candidate}, the whole instance as a write a release is about to make leaves it.
+     * A release asks before every write it makes. For a write without the state, {@code candidate} is the stored
+     * instance with the fields that write sets replaced. For the write that applies a record, the release asks before it
+     * dispatches the record's commands. When that write fails after them, the commands went out for an input the
+     * instance never applied, and every later attempt sends them again. When the answer is {@code false}, the release
+     * dispatches nothing and quarantines the instance again on the record, with the stream versions it applied trimmed
+     * to the reorder window, or writes nothing when the store cannot take that either, see
      * {@code SagaSubscription.release(sagaId)}.
      * <p>
      * The default says {@code true} to every instance, so a release on a store that keeps it checks nothing, and
      * dispatches the commands of a record whose write the store then refuses. A store whose writes have a size limit
-     * answers {@code false} for an instance it would refuse, and leaves room under that limit for the failure record
-     * the release writes when it quarantines the instance again. The release calls this outside a transaction, and the
-     * answer must not depend on a read of the database.
+     * answers {@code false} for an instance over it. The release calls this outside a transaction, and the answer must
+     * not depend on a read of the database.
      */
     default boolean fits(StoredSaga candidate) {
         return true;

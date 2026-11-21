@@ -24,10 +24,14 @@ import org.occurrent.dsl.saga.SagaStateStoreQueries;
 import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
+import org.occurrent.dsl.saga.codec.EncodedSaga;
 import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
@@ -112,6 +116,32 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
     public boolean fits(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope) {
         requireNonNull(records, "records cannot be null");
         return records.fits(codec.encode(envelope));
+    }
+
+    /**
+     * Whether {@code records} can write {@code envelope} with {@code compareAndSaveWithoutState}, which leaves the stored
+     * state where it is. The instance is read whole, and the fields that write sets are replaced with
+     * {@code envelope}'s, see {@link SagaStateStore#compareAndSaveWithoutState}. An instance that is not stored, or is
+     * stored with another version than {@code expectedVersion}, fits, since the compare-and-set refuses the write anyway.
+     */
+    public boolean fitsWithoutState(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope, long expectedVersion) {
+        requireNonNull(records, "records cannot be null");
+        requireNonNull(envelope, "envelope cannot be null");
+        StoredSaga stored = store.find(envelope.sagaId()).orElse(null);
+        if (stored == null || stored.version() != expectedVersion) {
+            return true;
+        }
+        StoredSaga written = codec.encodeWithoutState(envelope);
+        Map<String, @Nullable Object> fields = new LinkedHashMap<>(stored.encoded().fields());
+        Map<String, Object> set = written.encoded().fields();
+        for (String field : SagaCodec.fieldsExceptState()) {
+            if (set.containsKey(field)) {
+                fields.put(field, set.get(field));
+            } else {
+                fields.remove(field);
+            }
+        }
+        return records.fits(new StoredSaga(written.sagaId(), written.version(), new EncodedSaga(fields), written.index()));
     }
 
     /** End a quarantine, see {@link SagaStateStoreSkippedInputs#compareAndSaveQuarantineEnded}. The whole envelope is written. */

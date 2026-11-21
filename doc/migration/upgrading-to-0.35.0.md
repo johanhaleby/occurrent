@@ -1112,18 +1112,33 @@ its subscription goes live. To downgrade without that stall, do steps 1 to 5 whi
    all only when it returns fewer than its `limit`. Raise the limit until it does.
 3. When a release returns `STILL_RELEASING`, an input failed again. With quarantine off there is no budget to run out,
    so the instance stays releasing and the timer poller retries the input until it succeeds. Fix what makes the input
-   fail and call `release` again. Don't delete the instance while a 0.35.0 node runs. `SagaStateStore.delete(sagaId)`
+   fail and call `release` again. When the release's `ERROR` says instead that the store can't write the instance,
+   nothing moves that release on, and the instance counts as one that keeps failing in step 5. Don't delete the instance while a 0.35.0 node runs. `SagaStateStore.delete(sagaId)`
    takes no expected version, so a delete that reaches the store after the poller has finished the release deletes
    the released instance.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
    longer decodes, and release the instance again.
 5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `RELEASED`, or that keeps
    failing for a cause you can't fix. With quarantine off, a release returns `QUARANTINED_AGAIN` only when the store
-   couldn't write the instance with the next input applied, and its `ERROR` says which of two cases it is. When it says
+   couldn't write the instance with the next input applied, or with that input's failure recorded, and its `ERROR` says
+   what to do. When it says
    to release the instance again, call `release` again on that instance, since after step 6 nothing replays the inputs
    it still holds recorded. When it says a further release stops on that input too, the instance can't be released and
-   stays quarantined through the downgrade, like an instance that keeps failing.
-6. Stop every 0.35.0 node. Then, from a process that runs no `SagaRunner`, store every instance that is still
+   stays quarantined through the downgrade, like an instance that keeps failing. Every instance that keeps failing
+   still holds records of inputs that were acknowledged and never applied, and after step 6 no release replays them.
+6. Stop every 0.35.0 node. Before you change any instance, export every record still in
+   `<sagaCollection>_skipped_inputs`, with the instance it belongs to and its order. Those records are the only copy of
+   the inputs the instances that keep failing never applied, so handle them by hand from that export. On MongoDB, run
+   this for each saga's collection, with your own connection string:
+
+   ```
+   mongoexport --uri "<connection string>" --collection "saga-order-fulfilment_skipped_inputs" \
+     --sort '{"sagaId": 1, "quarantineId": 1, "seq": 1, "key": 1}' --out saga-order-fulfilment_skipped_inputs.json
+   ```
+
+   Each exported record holds `sagaId` and `quarantineId`, and `seq` and then `key` give the order the instance would
+   have applied them in. The `event` field holds the whole event, personal data included when the event holds any, so
+   keep the file where such data may be kept. Then, from a process that runs no `SagaRunner`, store every instance that is still
    `QUARANTINED_RECORDING` as `QUARANTINED`, without its quarantine id, skip count and release time, and every
    `ACTIVE_MARKED` instance as `ACTIVE`. A released instance is `ACTIVE_MARKED` when it holds stream marks. On MongoDB,
    run this on each saga's collection:
@@ -1147,7 +1162,8 @@ instance stays quarantined until you delete it, as in 0.34.0. After a later upgr
 because 0.34.0 skipped inputs without recording them. The records of the inputs it skipped on 0.35.0 stay in
 `<sagaCollection>_skipped_inputs`. Each one holds a full copy of the event it stands for, personal data included when
 the event holds any, and 0.34.0 never reads or deletes them. Step 6 removed the quarantine ids they are filed under,
-so no release can replay them either, also after a later upgrade to 0.35.0. Delete them once step 6 has run:
+so no release can replay them either, also after a later upgrade to 0.35.0. Delete them once step 6 has run, and only
+when the export in step 6 holds them, since the delete removes the last copy of every input that was never applied:
 
 ```javascript
 db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({})

@@ -435,6 +435,24 @@ public final class SagaExecutionSupport {
     }
 
     /**
+     * {@link #startRelease} with the marks trimmed to {@code reorderWindow}, the way a quarantine again during a release
+     * trims them. A release writes it when the store cannot write the start with every mark kept, and replays from it
+     * what a further release would replay after that quarantine again, see {@link #appliedAfterReleasingAgain}.
+     *
+     * @throws IllegalStateException as {@link #startRelease} does
+     */
+    public static <S extends @Nullable Object> @Nullable SagaEnvelope<S> startReleaseTrimmed(SagaEnvelope<S> current, Instant now, int reorderWindow) {
+        SagaEnvelope<S> releasing = startRelease(current, now);
+        if (releasing == null) {
+            return null;
+        }
+        return new SagaEnvelope<>(releasing.sagaId(), releasing.state(), releasing.status(), releasing.version(), releasing.timers(),
+                releasing.streamWatermarks(), releasing.positionWatermark(), releasing.createdAt(), releasing.updatedAt(), releasing.completedAt(),
+                releasing.currentStep(), releasing.started(), releasing.failure(), withinWindow(releasing.streamMarks(), reorderWindow),
+                releasing.quarantineSkipCount());
+    }
+
+    /**
      * Why an instance cannot be released, with the way out that is left.
      */
     public static <S extends @Nullable Object> IllegalStateException cannotRelease(SagaEnvelope<S> current, String because) {
@@ -603,6 +621,28 @@ public final class SagaExecutionSupport {
     public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseTooLarge(SagaEnvelope<S> current, EventMeta meta,
                                                                                             Throwable reason, Instant now, int reorderWindow) {
         return onReleaseFailure(current, meta, reason, now, Duration.ZERO, reorderWindow, true);
+    }
+
+    /**
+     * The smallest write that stops a release on the record {@code meta} names, for when the store cannot write what
+     * {@link #onReleaseTooLarge} returns either, or {@code null} when that returns {@code null}. Save it with
+     * {@code compareAndSaveWithoutState(..., expectedVersion())}.
+     * <p>
+     * The instance is quarantined again on the record as {@code onReleaseTooLarge} quarantines it, with the marks
+     * trimmed to {@code reorderWindow}, but the marks get no pending entry for the record and the failure record holds
+     * no message. A further release does not need either, since it applies the record whatever its marks say, see
+     * {@link #replay}. Leaving both out is the only difference between the two writes.
+     */
+    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseTooLargeBare(SagaEnvelope<S> current, EventMeta meta,
+                                                                                                Throwable reason, Instant now, int reorderWindow) {
+        FailureRecord<S> full = onReleaseTooLarge(current, meta, reason, now, reorderWindow);
+        if (full == null) {
+            return null;
+        }
+        SagaFailure stoppedOn = Objects.requireNonNull(full.envelope().failure());
+        SagaFailure record = new SagaFailure(stoppedOn.input(), stoppedOn.position(), stoppedOn.firstFailedAt(), stoppedOn.failureType(), null,
+                null, stoppedOn.quarantineId());
+        return new FailureRecord<>(requarantined(current, now, record, current.streamMarks(), reorderWindow), current.version(), true);
     }
 
     /**

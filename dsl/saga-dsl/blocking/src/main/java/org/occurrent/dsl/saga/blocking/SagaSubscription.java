@@ -59,12 +59,14 @@ public final class SagaSubscription implements AutoCloseable {
         RELEASED,
         /**
          * An input failed again during the release. The failure is recorded the way any failure is, the instance stays
-         * releasing, and the timer poller tries the input again until it succeeds or its budget runs out.
+         * releasing, and the timer poller tries the input again until it succeeds or its budget runs out. It also means
+         * that the store could not take any write that moves the release on, see {@link SagaSubscription#release(String)}.
          */
         STILL_RELEASING,
         /**
          * The instance is quarantined again and not releasing, because an input kept failing during the release until
-         * its budget ran out, or because the store could not write the instance with that input applied, see
+         * its budget ran out, or because the store could not write the instance with that input applied or with its
+         * failure recorded, see
          * {@link SagaSubscription#release(String)}. That input is the failure record's input now, and the inputs after
          * it stay recorded, so a further release replays it first and then those.
          */
@@ -122,17 +124,28 @@ public final class SagaSubscription implements AutoCloseable {
      * dispatching them a second time.
      * <p>
      * The instance keeps every stream version the release applies in its stream marks until the release ends, so a
-     * long backlog can grow the instance past what its store can write. Before the release dispatches an input's
-     * commands, it asks the store whether it can write the instance with the input applied, see
-     * {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs#fits}. When the store can't, the release applies and
-     * dispatches nothing for that input. The instance is quarantined again on that input with its marks trimmed, the
-     * release returns {@link ReleaseResult#QUARANTINED_AGAIN}, and an ERROR names the instance and says which of two
-     * cases it is. When the store can write the input applied to the trimmed instance, the ERROR says to release the
-     * instance again, and a further release goes on from that input. Otherwise a further release stops on that input
-     * too, and the ERROR says to delete the instance or handle the input and the ones after it by hand.
-     * {@code SpringMongoSagaStateStore} refuses an instance that takes more than 16 MB less 16 KiB of BSON. A store that
-     * keeps the default of {@code fits} refuses none, so a release on it dispatches the commands of an input whose write
-     * the store then fails.
+     * long backlog can grow the instance past what its store can write. The release asks the store before every write
+     * whether it can take it, see {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs#fits}, and for the write
+     * that applies an input it asks before it dispatches the input's commands. When the store can't take the instance
+     * with the input applied, or with its failure recorded, the release applies and dispatches nothing for that input.
+     * The instance is quarantined again on that input with its marks trimmed, the release returns
+     * {@link ReleaseResult#QUARANTINED_AGAIN}, and an ERROR names the instance and says which of two cases it is. When
+     * the store can write the input applied to the trimmed instance, the ERROR says to release the instance again, and a
+     * further release goes on from that input. Otherwise a further release stops on that input too, and the ERROR says
+     * to delete the instance or handle the input and the ones after it by hand.
+     * <p>
+     * When the store can't take the write that quarantines the instance again either, even with no pending entry for the
+     * input and no failure message, the release writes nothing and returns {@link ReleaseResult#STILL_RELEASING}, and an
+     * ERROR names the instance and says to delete it, after exporting or handling the inputs it recorded, since deleting
+     * it deletes them. The timer poller tries the instance again on every poll and logs that ERROR again. The same holds
+     * when the store can't take the write that releases the instance, or the one that deletes the record of an input the
+     * instance applied already. When the store can't take the write that starts the release, the release starts with
+     * the marks trimmed to the reorder window instead, since a live write asks the store nothing and can leave more marks
+     * than a release may write. When the store can't take that either, this throws an {@link IllegalStateException} that
+     * names the instance and the way out, and logs it as an ERROR.
+     * {@code SpringMongoSagaStateStore} refuses an instance that takes more than 16 MiB of BSON. A store that keeps the
+     * default of {@code fits} refuses none, so a release on it dispatches the commands of an input whose write the store
+     * then fails.
      * <p>
      * It takes no lease and pauses nothing, so it can be called on any node. Calling it again on an instance that is
      * releasing goes on where the release stands. The timer poller also goes on with a release, on the node that holds

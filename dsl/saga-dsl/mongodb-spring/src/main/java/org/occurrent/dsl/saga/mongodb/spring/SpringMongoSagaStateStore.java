@@ -709,30 +709,20 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     /**
-     * Whether {@code candidate}, stored as one document, takes at most {@link #MAX_DOCUMENT_SIZE} less
-     * {@link #FAILURE_RECORD_ROOM} bytes of BSON. MongoDB refuses a document larger than {@code MAX_DOCUMENT_SIZE}, and
-     * this store would retry such a write until its retry strategy gives up. The check encodes the document the way a
-     * write does and reads nothing from the database.
-     * <p>
-     * {@code FAILURE_RECORD_ROOM} is 16 KiB. A release that gets {@code false} writes the instance it read with a new
-     * failure record, quarantined again, and with the stream versions it applied trimmed. When the release wrote that
-     * instance for the record before, it passed this check, so the write fits as long as the new failure record adds
-     * less than the room. The failure
-     * message takes at most 1,000 characters, about 3 KB in UTF-8, and the input key, the exception type and the
-     * timestamps take a few hundred bytes more.
+     * Whether {@code candidate}, stored as one document, takes at most {@link #MAX_DOCUMENT_SIZE} bytes of BSON. MongoDB
+     * refuses a larger document. The check encodes the document the way a write does and reads nothing from the
+     * database.
      */
     @Override
     public boolean fits(StoredSaga candidate) {
         Objects.requireNonNull(candidate, "candidate cannot be null");
         CodecRegistry codecs = instances(databaseFactory.getMongoDatabase()).getCodecRegistry();
         int size = new RawBsonDocument(toDocument(candidate), codecs.get(Document.class)).getByteBuffer().remaining();
-        return size <= MAX_DOCUMENT_SIZE - FAILURE_RECORD_ROOM;
+        return size <= MAX_DOCUMENT_SIZE;
     }
 
     // The largest document MongoDB stores, its maxBsonObjectSize
     private static final int MAX_DOCUMENT_SIZE = 16 * 1024 * 1024;
-    // What fits(..) leaves free for the failure record of an instance quarantined again, see fits(..)
-    private static final int FAILURE_RECORD_ROOM = 16 * 1024;
 
     private static Bson setOnInsert(Document document) {
         List<Bson> updates = new ArrayList<>();

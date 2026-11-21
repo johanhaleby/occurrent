@@ -601,13 +601,25 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (!current.isQuarantined()) {
                 return SagaSubscription.ReleaseResult.NOT_QUARANTINED;
             }
-            SagaEnvelope<S> releasing = SagaExecutionSupport.startRelease(current, clock.get());
+            Instant now = clock.get();
+            SagaEnvelope<S> releasing = SagaExecutionSupport.startRelease(current, now);
             if (releasing == null) {
                 // Released already, by another call or another node, so this one goes on with it
                 return continueReleaseToTheEnd(sagaId, records);
             }
             if (!holdsTheStoppedOnInput(sagaId, records, current, attempt == config.maxCasAttempts())) {
                 continue;
+            }
+            if (!envelopes.fitsWithoutState(records, releasing, current.version())) {
+                // A live write asks the store nothing, so the instance can hold more marks than the store takes from a release
+                releasing = Objects.requireNonNull(SagaExecutionSupport.startReleaseTrimmed(current, now, config.reorderWindow()));
+                if (!envelopes.fitsWithoutState(records, releasing, current.version())) {
+                    IllegalStateException refused = SagaExecutionSupport.cannotRelease(current, "its state store " + records.getClass().getName()
+                            + " cannot write it with the release started, which sets SagaFailure.releasedAt, even with its marks trimmed to the reorder window. "
+                            + "Deleting the instance deletes the inputs it recorded too, so handle them by hand first");
+                    log.error("Saga '{}' did not start the release of instance '{}'.", subscriptionId, sagaId, refused);
+                    throw refused;
+                }
             }
             // No record is written, since the input the instance was quarantined on has the first record already
             if (!envelopes.compareAndSaveWithoutState(sagaId, releasing, current.version())) {
@@ -704,12 +716,16 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * dispatching, see {@link #saveReplayed}. A write that loses to anything else reads the instance again and goes on
      * from what it finds, so two nodes releasing the same instance compete for each record.
      * <p>
-     * Before a record's commands are dispatched, the store is asked whether it can write the instance with the record
-     * applied, see {@link SagaStateStoreSkippedInputs#fits}. When it cannot, the record is not applied and its commands
-     * are not dispatched. The instance is quarantined again on it with its marks trimmed, see
-     * {@link SagaExecutionSupport#onReleaseTooLarge}, and this returns {@code QUARANTINED_AGAIN}. The ERROR says whether a
-     * further release gets past the record, which it does when the store can write the record applied to the trimmed
-     * instance.
+     * The store is asked before every write whether it can take it, see {@link SagaStateStoreSkippedInputs#fits}, and
+     * for the instance with a record applied that is before the record's commands are dispatched. When it cannot take
+     * that write, or the failure record of a record that failed, the record is not applied and its commands are not
+     * dispatched. The instance is quarantined again on it with its marks trimmed, see
+     * {@link SagaExecutionSupport#onReleaseTooLarge}, or with
+     * {@link SagaExecutionSupport#onReleaseTooLargeBare} when the store cannot take that either, and this returns
+     * {@code QUARANTINED_AGAIN}. The ERROR says whether a further release gets past the record, which it does when the
+     * store can write the record applied to the trimmed instance. When the store cannot take any write that moves the
+     * release on, nothing is written, the instance stays releasing, this returns {@code STILL_RELEASING}, and an ERROR
+     * names the instance and says to delete it.
      * <p>
      * At most {@code maxRecords} records are replayed. When a further record is there after that, this returns
      * {@code null} with the instance still releasing, and the next call goes on from that record. With
@@ -741,7 +757,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             List<SkippedInput> first = records.findSkippedInputs(sagaId, quarantineId, 1);
             Instant now = clock.get();
             if (first.isEmpty()) {
-                if (envelopes.compareAndSaveQuarantineEnded(records, SagaExecutionSupport.withReleased(current, now, config.reorderWindow()), current.version(), quarantineId)) {
+                SagaEnvelope<S> released = SagaExecutionSupport.withReleased(current, now, config.reorderWindow());
+                if (!envelopes.fits(records, released)) {
+                    return writesNothing(records, sagaId, null, "the instance released");
+                }
+                if (envelopes.compareAndSaveQuarantineEnded(records, released, current.version(), quarantineId)) {
                     log.info("Saga '{}' instance '{}' is released and ACTIVE again.", subscriptionId, sagaId);
                     return SagaSubscription.ReleaseResult.RELEASED;
                 }
@@ -769,6 +789,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             EventMeta meta = extractMeta(cloudEvent).meta();
             boolean saved;
             SagaEnvelope<S> tooLarge = null;
+            boolean deleteTooLarge = false;
             try {
                 E event = converter.toDomainEvent(cloudEvent);
                 SagaInput<E> input = SagaInput.event(event, EventMetadata.from(cloudEvent));
@@ -787,14 +808,20 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     }
                 } else {
                     // Applied already, or not a start event for an instance that never started, so it is only deleted
-                    saved = envelopes.compareAndSaveReplayed(records, SagaExecutionSupport.oneVersionUp(current), current.version(), quarantineId, record);
+                    SagaEnvelope<S> deleted = SagaExecutionSupport.oneVersionUp(current);
+                    deleteTooLarge = !envelopes.fits(records, deleted);
+                    saved = !deleteTooLarge && envelopes.compareAndSaveReplayed(records, deleted, current.version(), quarantineId, record);
                 }
             } catch (Throwable failure) {
                 rethrowIfNotTheInstances(failure);
                 return recordReleaseFailure(records, sagaId, record, meta, failure, now);
             }
+            if (deleteTooLarge) {
+                // The instance applied the record's input already, so quarantining it again on that input is not an option
+                return writesNothing(records, sagaId, record, "the instance with the record deleted");
+            }
             if (tooLarge != null) {
-                SagaSubscription.ReleaseResult stopped = quarantineAgainTooLarge(records, sagaId, record, meta, current, tooLarge, now);
+                SagaSubscription.ReleaseResult stopped = quarantineAgainTooLarge(records, sagaId, record, meta, current, tooLarge, "the instance with the event applied", null, now);
                 if (stopped != null) {
                     return stopped;
                 }
@@ -810,24 +837,37 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
     }
 
-    // Quarantine the instance again on record, whose write the store cannot take, without dispatching its commands. The
-    // ERROR says whether a further release gets past the record, which it does when the store can take the write with
-    // the marks trimmed. Null when the write lost, and the caller reads the instance again
+    // Quarantine the instance again on record, because the store cannot take the write named by cannotWrite, without
+    // dispatching its commands. That write is the instance with the event applied, which applied holds, or the failure
+    // record of the event when the event failed with failure. The write that quarantines it is checked too, first the
+    // one with the record's pending entry and the reason, then the bare one. When neither fits, nothing
+    // is written. The ERROR says whether a further release gets past the record, which it does when the store can take
+    // applied with the marks trimmed. Null when the instance changed since current was read, and the caller reads it again
     private SagaSubscription.@Nullable ReleaseResult quarantineAgainTooLarge(SagaStateStoreSkippedInputs records, String sagaId, SkippedInput record, EventMeta meta,
-                                                                           SagaEnvelope<S> current, SagaEnvelope<S> applied, Instant now) {
+                                                                           SagaEnvelope<S> current, @Nullable SagaEnvelope<S> applied, String cannotWrite,
+                                                                           @Nullable Throwable failure, Instant now) {
         IllegalStateException reason = new IllegalStateException("The release of saga instance '" + sagaId + "' stopped on the event '" + record.key()
-                                                                 + "', because its state store " + records.getClass().getName() + " cannot write the instance with the event applied.");
+                                                                 + "', because its state store " + records.getClass().getName() + " cannot write " + cannotWrite + ".");
         FailureRecord<S> requarantine = SagaExecutionSupport.onReleaseTooLarge(current, meta, reason, now, config.reorderWindow());
         if (requarantine == null) {
-            // Only when the instance applied the input already, which the replay that computed applied rules out
-            return recordReleaseFailure(records, sagaId, record, meta, reason, now);
+            // Only when another writer applied the input since current was read
+            return null;
         }
-        boolean fitsWhenReleasedAgain = envelopes.fits(records,
+        if (!envelopes.fitsWithoutState(records, requarantine.envelope(), requarantine.expectedVersion())) {
+            requarantine = Objects.requireNonNull(SagaExecutionSupport.onReleaseTooLargeBare(current, meta, reason, now, config.reorderWindow()));
+            if (!envelopes.fitsWithoutState(records, requarantine.envelope(), requarantine.expectedVersion())) {
+                return writesNothing(records, sagaId, record, cannotWrite + ", nor the instance quarantined again on it");
+            }
+        }
+        boolean fitsWhenReleasedAgain = applied == null || envelopes.fits(records,
                 SagaExecutionSupport.appliedAfterReleasingAgain(applied, requarantine.envelope(), meta, now, config.reorderWindow()));
         if (!envelopes.compareAndSaveWithoutState(sagaId, requarantine.envelope(), requarantine.expectedVersion())) {
             return null;
         }
-        if (fitsWhenReleasedAgain) {
+        if (applied == null) {
+            log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because the event failed while it was releasing and its state store cannot write the failure record. Release the instance again to try the event again. The event and the inputs after it stay recorded.",
+                    subscriptionId, sagaId, record.key(), failure);
+        } else if (fitsWhenReleasedAgain) {
             log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because its state store cannot write the instance with the event applied. A release keeps every stream version it applies until it ends, and quarantining the instance again trimmed them. The store can write the event applied to the trimmed instance, so release the instance again to go on from that event. The event and the inputs after it stay recorded.",
                     subscriptionId, sagaId, record.key());
         } else {
@@ -835,6 +875,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     subscriptionId, sagaId, record.key());
         }
         return SagaSubscription.ReleaseResult.QUARANTINED_AGAIN;
+    }
+
+    // The store cannot take any write that moves the release on, so nothing is written, nothing is dispatched, and the
+    // instance stays releasing. The timer poller tries it again on every poll, and logs this again
+    private SagaSubscription.ReleaseResult writesNothing(SagaStateStoreSkippedInputs records, String sagaId, @Nullable SkippedInput record, String cannotWrite) {
+        log.error("Saga '{}' instance '{}' stays releasing{} and nothing is dispatched, because its state store {} cannot write {}. The timer poller tries it again on every poll. "
+                  + "Delete the instance with SagaStateStore.delete(\"{}\"), which throws its state away and deletes the inputs it recorded, so export or handle those by hand first.",
+                subscriptionId, sagaId, record == null ? "" : " on the event '" + record.key() + "'", records.getClass().getName(), cannotWrite, sagaId);
+        return SagaSubscription.ReleaseResult.STILL_RELEASING;
     }
 
     // What a release ended as, read off the instance, or null when the instance is still releasing. A release another call
@@ -878,6 +927,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             envelope = SagaExecutionSupport.rebased(envelope, after);
+            if (!envelopes.fits(records, envelope)) {
+                // The record's commands went out with the first write. The caller reads the instance again and computes the
+                // record again, which asks the store before it dispatches them a second time
+                return false;
+            }
             expectedVersion = after.version();
             basis = after;
         }
@@ -925,6 +979,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         return moved;
                     }
                     break;
+                }
+                if (!envelopes.fitsWithoutState(records, failureRecord.envelope(), failureRecord.expectedVersion())) {
+                    SagaSubscription.ReleaseResult stopped = quarantineAgainTooLarge(records, sagaId, record, meta, current, null,
+                            "the failure record of the event", failure, now);
+                    if (stopped != null) {
+                        return stopped;
+                    }
+                    continue;
                 }
                 if (!envelopes.compareAndSaveWithoutState(sagaId, failureRecord.envelope(), failureRecord.expectedVersion())) {
                     continue;

@@ -568,14 +568,17 @@ The upgrade guide has the procedure for operators, in
   the time a majority takes, and a replica set without a majority available fails them where `w: 1` would have
   succeeded.
 - A release keeps every stream version it applies in the instance's stream marks until the write that ends it, see
-  point 2, so the instance's document grows by one number per replayed input during one release. Before a release
-  dispatches a record's commands it asks the store whether it can write the instance with the record applied, through
-  `SagaStateStoreSkippedInputs.fits`. When the write doesn't fit, the release applies and dispatches nothing for the
-  record. The instance is quarantined again on that record with its marks trimmed to the reorder window, the release
+  point 2, so the instance's document grows by one number per replayed input during one release. A release asks the
+  store before every write it makes whether it can take it, through `SagaStateStoreSkippedInputs.fits`, and for the
+  write that applies a record it asks before it dispatches the record's commands. When the store can't take the
+  instance with the record applied, or with the record's failure recorded, the release applies and dispatches nothing
+  for the record. The instance is quarantined again on that record with its marks trimmed to the reorder window, the release
   returns `QUARANTINED_AGAIN`, and an ERROR names the instance. When the record applied to the trimmed instance fits,
   the ERROR says to release the instance again, and a further release goes on from that record. Otherwise the ERROR
-  says a further release stops on the record too. `SpringMongoSagaStateStore` refuses a write of more than 16 MB less
-  16 KiB, which leaves room for the failure record. A store that keeps the default of `fits` refuses nothing, and a
+  says a further release stops on the record too. When the store can't take the write that quarantines the instance
+  again, even with no pending entry for the record and no failure message, the release writes nothing, returns
+  `STILL_RELEASING`, and an ERROR names the instance and says to delete it, and the timer poller logs that again on
+  every poll. `SpringMongoSagaStateStore` refuses a write of more than 16 MiB. A store that keeps the default of `fits` refuses nothing, and a
   release on it dispatches the commands of a record whose write the store then fails. A backlog long enough takes more
   than one release. Keeping the versions a release applies outside the instance's document would remove the limit, and
   is left for later.

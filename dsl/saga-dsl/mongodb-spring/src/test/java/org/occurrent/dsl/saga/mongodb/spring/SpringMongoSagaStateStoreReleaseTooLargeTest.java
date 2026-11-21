@@ -34,17 +34,21 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
 import org.occurrent.dsl.saga.SagaEnvelope.TypeMark;
+import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.dsl.saga.blocking.SagaSubscription.ReleaseResult;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -56,6 +60,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -64,10 +69,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.IntFunction;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
@@ -91,16 +96,26 @@ class SpringMongoSagaStateStoreReleaseTooLargeTest {
     private static final String ORDER = "order-1";
     private static final String SEEDED_TYPE = "seeded";
     private static final long MAX_DOCUMENT_SIZE = 16L * 1024 * 1024;
-    // Found by searching with the store's fits(..) until it refused. Each is checked against the size MongoDB reports
-    // for the stored instance, so a change to the document layout fails a control and not a guess
-    private static final int VERSIONS_PAST_WHAT_FITS = 1_051_234 + 200;
-    private static final int STREAMS_PAST_WHAT_FITS = 76_581 + 20;
-    private static final int PADDING_PAST_WHAT_FITS = 16_759_938;
-    private static final long FAILURE_RECORD_ROOM = 16L * 1024;
+    // Seed sizes, each checked against the size MongoDB reports for the stored instance, so a change to the document
+    // layout fails a control and not a guess. A stored size is the largest document less the room the next writes get.
+    // A start write adds 27 bytes, applying a record grows the state by STATE_GROWTH bytes, and quarantining the
+    // instance again with the failure message adds about 200. The long type test leaves room for the first record
+    // to be applied and not for a pending entry of 32 KiB
+    private static final int STATE_GROWTH = 4_000;
+    private static final int VERSIONS_IN_THE_STREAM = 1_040_000;
+    private static final int VERSIONS_ROOM = 2_000;
+    private static final int VERSIONS_PAD = 205_249;
+    private static final int STREAMS = 70_000;
+    private static final int STREAMS_ROOM = 2_000;
+    private static final int STREAMS_PAD = 1_455_311;
+    private static final int LONG_EVENT_TYPE_LENGTH = 32 * 1024;
+    private static final int LONG_TYPE_ROOM = 10_000;
+    private static final int LONG_TYPE_PAD = 1_447_311;
+    private static final int HARD_LIMIT_PAD = 1_457_311;
     private static final String RELEASE_AGAIN = "so release the instance again to go on from that event";
     private static final String STOPS_AGAIN = "even with the stream versions the release applied trimmed. A further release stops on this event too.";
 
-    sealed interface OrderEvent permits OrderPlaced, ItemAdded {
+    sealed interface OrderEvent permits OrderPlaced, ItemAdded, LongTypedItem {
         String orderId();
     }
 
@@ -108,6 +123,9 @@ class SpringMongoSagaStateStoreReleaseTooLargeTest {
     }
 
     record ItemAdded(String orderId, String item, int quantity) implements OrderEvent {
+    }
+
+    record LongTypedItem(String orderId, String item, int quantity) implements OrderEvent {
     }
 
     record Pack(String item, int quantity) {
@@ -159,7 +177,9 @@ class SpringMongoSagaStateStoreReleaseTooLargeTest {
                 .correlateAll(OrderEvent::orderId)
                 .startsOn(OrderPlaced.class)
                 .evolve(OrderPlaced.class, (state, e) -> "placed")
-                .evolve(ItemAdded.class, (state, e) -> "packing")
+                .evolve(ItemAdded.class, (state, e) -> "packing" + "x".repeat(STATE_GROWTH))
+                .evolve(LongTypedItem.class, (state, e) -> "packing" + "x".repeat(STATE_GROWTH))
+                .react(LongTypedItem.class, (state, e) -> List.of(SagaEffect.issue(new Pack(e.item(), e.quantity()))))
                 .react(ItemAdded.class, (state, e) -> {
                     if (failing.contains(e.item())) {
                         throw new IllegalStateException("cannot pack " + e.item());
@@ -179,13 +199,18 @@ class SpringMongoSagaStateStoreReleaseTooLargeTest {
 
     // Quarantined on "book", with "pen" recorded after it, so a release has two records to replay
     private void quarantinedOnBookWithPenRecorded() {
+        quarantinedOnBookWith(new ItemAdded(ORDER, "pen", 5));
+    }
+
+    // Quarantined on "book", with the given event recorded after it
+    private void quarantinedOnBookWith(OrderEvent recorded) {
         subscription = SagaRunner.<OrderEvent, Pack>agnostic(subscriptionModel, converter)
                 .run("orders", saga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofHours(1)).withQuarantineAfter(Duration.ofMillis(300)));
         write(new OrderPlaced(ORDER));
         failing.add("book");
         write(new ItemAdded(ORDER, "book", 2));
         await().dontCatchUncaughtExceptions().ignoreExceptions().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED));
-        write(new ItemAdded(ORDER, "pen", 5));
+        write(recorded);
         await().ignoreExceptions().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(stateStore.findSkippedInputs(ORDER, instance().quarantineId(), Integer.MAX_VALUE)).hasSize(2));
         failing.clear();
         dispatched.clear();
@@ -197,6 +222,36 @@ class SpringMongoSagaStateStoreReleaseTooLargeTest {
         return new SagaEnvelope<>(current.sagaId(), current.state(), current.status(), current.version(), current.timers(),
                 current.streamWatermarks(), current.positionWatermark(), current.createdAt(), current.updatedAt(), current.completedAt(),
                 current.currentStep(), current.started(), current.failure(), marks, current.quarantineSkipCount());
+    }
+
+    // Every LongTypedItem gets the given CloudEvent type, so a recorded event can have a long type
+    private static CloudEventConverter<OrderEvent> converterWithLongTypedItems(String longType) {
+        CloudEventTypeMapper<OrderEvent> types = new CloudEventTypeMapper<>() {
+            @Override
+            public String getCloudEventType(Class<? extends OrderEvent> type) {
+                return type == LongTypedItem.class ? longType : type.getName();
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <E extends OrderEvent> Class<E> getDomainEventType(String cloudEventType) {
+                if (cloudEventType.equals(longType)) {
+                    return (Class<E>) LongTypedItem.class;
+                }
+                return (Class<E>) (cloudEventType.equals(ItemAdded.class.getName()) ? ItemAdded.class : OrderPlaced.class);
+            }
+        };
+        return new JacksonCloudEventConverter.Builder<OrderEvent>(new ObjectMapper(), URI.create("urn:test")).typeMapper(types).build();
+    }
+
+    // One stream whose id is keyLength characters long, which sizes the stored document to the byte
+    private SagaEnvelope<String> withPadding(SagaEnvelope<String> base, int keyLength) {
+        Map<String, StreamMarks> marks = new HashMap<>(base.streamMarks());
+        marks.keySet().removeIf(key -> key.startsWith("pad-"));
+        marks.put("pad-" + "x".repeat(keyLength), new StreamMarks(base.streamMarks().get(STREAM).floor(), Map.of(), Map.of()));
+        return new SagaEnvelope<>(base.sagaId(), base.state(), base.status(), base.version(), base.timers(),
+                base.streamWatermarks(), base.positionWatermark(), base.createdAt(), base.updatedAt(), base.completedAt(),
+                base.currentStep(), base.started(), base.failure(), marks, base.quarantineSkipCount());
     }
 
     private SagaEnvelope<String> withAppliedVersionsInTheStream(int versions) {
@@ -271,7 +326,7 @@ class SpringMongoSagaStateStoreReleaseTooLargeTest {
     @Test
     void a_release_whose_next_write_would_not_fit_stops_before_dispatching_the_record_and_a_further_release_applies_it_once() {
         quarantinedOnBookWithPenRecorded();
-        save(withAppliedVersionsInTheStream(VERSIONS_PAST_WHAT_FITS));
+        save(withPadding(withAppliedVersionsInTheStream(VERSIONS_IN_THE_STREAM), VERSIONS_PAD));
         int sizeStored = storedSize();
 
         ReleaseResult stopped = subscription.release(ORDER);
@@ -283,7 +338,7 @@ class SpringMongoSagaStateStoreReleaseTooLargeTest {
         ReleaseResult further = subscription.release(ORDER);
 
         assertAll(
-                () -> assertThat(sizeStored).as("control: stored, and past what fits").isBetween((int) (MAX_DOCUMENT_SIZE - FAILURE_RECORD_ROOM) + 1, (int) MAX_DOCUMENT_SIZE),
+                () -> assertThat(sizeStored).as("control: stored with the room the versions test names").isEqualTo((int) MAX_DOCUMENT_SIZE - VERSIONS_ROOM),
                 () -> assertThat(stopped).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
                 () -> assertThat(dispatchedAtTheStop).as("nothing is dispatched for the record").isEmpty(),
                 () -> assertThat(afterTheStop.status()).isEqualTo(SagaStatus.QUARANTINED),
@@ -299,7 +354,7 @@ class SpringMongoSagaStateStoreReleaseTooLargeTest {
     @Test
     void an_instance_the_store_cannot_write_even_with_the_marks_trimmed_stays_quarantined_dispatches_nothing_and_logs_that_a_further_release_stops_too() {
         quarantinedOnBookWithPenRecorded();
-        save(withStreams(STREAMS_PAST_WHAT_FITS, 0));
+        save(withPadding(withStreams(STREAMS, 0), STREAMS_PAD));
         int sizeStored = storedSize();
 
         ReleaseResult first = subscription.release(ORDER);
@@ -308,7 +363,7 @@ class SpringMongoSagaStateStoreReleaseTooLargeTest {
 
         SagaEnvelope<String> after = instance();
         assertAll(
-                () -> assertThat(sizeStored).as("control: stored, and past what fits").isBetween((int) (MAX_DOCUMENT_SIZE - FAILURE_RECORD_ROOM) + 1, (int) MAX_DOCUMENT_SIZE),
+                () -> assertThat(sizeStored).as("control: stored with the room the streams test names").isEqualTo((int) MAX_DOCUMENT_SIZE - STREAMS_ROOM),
                 () -> assertThat(first).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
                 () -> assertThat(second).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
                 () -> assertThat(errorsAfterTheFirst).singleElement().asString().contains(STOPS_AGAIN).doesNotContain(RELEASE_AGAIN),
@@ -320,20 +375,106 @@ class SpringMongoSagaStateStoreReleaseTooLargeTest {
     }
 
     @Test
-    void fits_takes_a_document_of_exactly_the_most_MongoDB_stores_less_16_KiB_and_refuses_one_byte_more() {
-        quarantinedOnBookWithPenRecorded();
-        IntFunction<SagaEnvelope<String>> padded = length -> {
-            SagaEnvelope<String> current = instance();
-            return new SagaEnvelope<>(current.sagaId(), "x".repeat(length), current.status(), current.version(), current.timers(),
-                    current.streamWatermarks(), current.positionWatermark(), current.createdAt(), current.updatedAt(), current.completedAt(),
-                    current.currentStep(), current.started(), current.failure(), current.streamMarks(), current.quarantineSkipCount());
-        };
-        save(padded.apply(PADDING_PAST_WHAT_FITS - 1));
+    void a_recorded_event_with_a_32_KiB_type_makes_the_full_requarantine_too_large_so_the_release_stops_on_the_bare_write_without_dispatching_that_event() {
+        String longType = "type-" + "t".repeat(LONG_EVENT_TYPE_LENGTH - 5);
+        converter = converterWithLongTypedItems(longType);
+        quarantinedOnBookWith(new LongTypedItem(ORDER, "pen", 5));
+        save(withPadding(withStreams(STREAMS, 0), LONG_TYPE_PAD));
+        SagaEnvelope<String> before = instance();
+        int sizeBefore = storedSize();
+        SkippedInput recorded = stateStore.findSkippedInputs(ORDER, before.quarantineId(), Integer.MAX_VALUE).get(1);
 
+        ReleaseResult result = subscription.release(ORDER);
+
+        SagaEnvelope<String> after = instance();
+        int sizeAfter = storedSize();
+        List<SkippedInput> remaining = after.quarantineId() == null ? List.of() : stateStore.findSkippedInputs(ORDER, after.quarantineId(), Integer.MAX_VALUE);
+        SagaExecutionSupport.EventMeta meta = new SagaExecutionSupport.EventMeta(String.valueOf(recorded.event().getExtension("streamid")),
+                Long.parseLong(String.valueOf(recorded.event().getExtension("streamversion"))), null, recorded.event().getType(), recorded.event().getId(), String.valueOf(recorded.event().getSource()));
+        SagaEnvelope<String> releasing = releasingCopyOf(before);
+        Instant at = Instant.now();
+        Throwable reason = new IllegalStateException("The release of saga instance '" + ORDER + "' stopped on the event '" + recorded.key() + "', because its state store cannot write the instance with the event applied.");
+        SagaEnvelope<String> full = requireNonNull(SagaExecutionSupport.onReleaseTooLarge(releasing, meta, reason, at, SagaRunnerConfig.defaults().reorderWindow())).envelope();
+        SagaEnvelope<String> bare = requireNonNull(SagaExecutionSupport.onReleaseTooLargeBare(releasing, meta, reason, at, SagaRunnerConfig.defaults().reorderWindow())).envelope();
         assertAll(
-                () -> assertThat(storedSize()).as("the stored document at the last length that fits, in bytes").isEqualTo((int) (MAX_DOCUMENT_SIZE - FAILURE_RECORD_ROOM)),
-                () -> assertThat(envelopes.fits(stateStore, padded.apply(PADDING_PAST_WHAT_FITS - 1))).isTrue(),
-                () -> assertThat(envelopes.fits(stateStore, padded.apply(PADDING_PAST_WHAT_FITS))).isFalse()
+                () -> assertThat(holdsTheType(before, longType)).as("control: the instance does not hold the long type before the release").isFalse(),
+                () -> assertThat(sizeBefore).as("control: stored with the room the long type test names").isEqualTo((int) MAX_DOCUMENT_SIZE - LONG_TYPE_ROOM),
+                () -> assertThat(envelopes.fits(stateStore, full)).as("control: the full requarantine with a pending entry for the type is over the limit").isFalse(),
+                () -> assertThat(envelopes.fits(stateStore, bare)).as("control: the bare requarantine is at or under the limit").isTrue(),
+                () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
+                () -> assertThat(after.status()).isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(after.isReleasing()).isFalse(),
+                () -> assertThat(after.failure().input()).isEqualTo(recorded.key()),
+                () -> assertThat(after.failure().failureMessage()).as("the bare write has no failure message").isNull(),
+                () -> assertThat(remaining).extracting(SkippedInput::key).as("the event stays recorded").containsExactly(recorded.key()),
+                () -> assertThat(dispatched).as("book was applied before the stop, the long typed event was not").containsExactly(new Pack("book", 2)),
+                () -> assertThat(sizeAfter).isLessThanOrEqualTo((int) MAX_DOCUMENT_SIZE)
         );
     }
+
+    private static boolean holdsTheType(SagaEnvelope<String> envelope, String type) {
+        boolean inMarks = envelope.streamMarks().values().stream().anyMatch(marks -> marks.byType().containsKey(type) || marks.pending().containsKey(type));
+        SagaFailure failure = envelope.failure();
+        return inMarks || failure != null && (failure.input().contains(type) || failure.failureMessage() != null && failure.failureMessage().contains(type));
+    }
+
+    private static SagaEnvelope<String> releasingCopyOf(SagaEnvelope<String> stopped) {
+        SagaFailure failure = stopped.failure();
+        SagaFailure releasing = new SagaFailure(failure.input(), failure.position(), failure.firstFailedAt(), failure.failureType(), failure.failureMessage(), Instant.now(), failure.quarantineId());
+        return new SagaEnvelope<>(stopped.sagaId(), stopped.state(), stopped.status(), stopped.version(), stopped.timers(),
+                stopped.streamWatermarks(), stopped.positionWatermark(), stopped.createdAt(), stopped.updatedAt(), stopped.completedAt(),
+                stopped.currentStep(), stopped.started(), releasing, stopped.streamMarks(), stopped.quarantineSkipCount());
+    }
+
+    @Test
+    void an_instance_stored_at_the_hard_limit_cannot_start_a_release_so_release_throws_naming_the_instance_and_the_delete_and_changes_nothing() {
+        quarantinedOnBookWithPenRecorded();
+        save(withPadding(withStreams(STREAMS, 0), HARD_LIMIT_PAD));
+        int sizeBefore = storedSize();
+        long versionBefore = instance().version();
+
+        Throwable thrown = catchThrowable(() -> subscription.release(ORDER));
+
+        SagaEnvelope<String> after = instance();
+        assertAll(
+                () -> assertThat(sizeBefore).as("control: stored at the hard limit").isEqualTo((int) MAX_DOCUMENT_SIZE),
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining(ORDER).hasMessageContaining("SagaStateStore.delete"),
+                () -> assertThat(after.version()).isEqualTo(versionBefore),
+                () -> assertThat(after.status()).isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(after.isReleasing()).isFalse(),
+                () -> assertThat(dispatched).isEmpty()
+        );
+    }
+
+    @Test
+    void fits_takes_a_document_of_exactly_the_most_MongoDB_stores_and_refuses_one_byte_more_and_a_release_write_of_that_size_succeeds() {
+        quarantinedOnBookWithPenRecorded();
+        save(withPadding(withStreams(STREAMS, 0), HARD_LIMIT_PAD));
+        SagaEnvelope<String> stored = instance();
+        SkippedInput first = stateStore.findSkippedInputs(ORDER, stored.quarantineId(), 1).getFirst();
+        int sizeBefore = storedSize();
+        SagaEnvelope<String> candidate = withVersionAndState(stored, stored.version() + 1, stored.state());
+        SagaEnvelope<String> oneByteMore = withVersionAndState(stored, stored.version() + 1, stored.state() + "x");
+
+        boolean exactlyAtTheLimitFits = envelopes.fits(stateStore, candidate);
+        boolean oneByteMoreFits = envelopes.fits(stateStore, oneByteMore);
+        boolean written = envelopes.compareAndSaveReplayed(stateStore, candidate, stored.version(), stored.quarantineId(), first);
+
+        assertAll(
+                () -> assertThat(sizeBefore).as("control: the stored document is exactly 16,777,216 bytes").isEqualTo((int) MAX_DOCUMENT_SIZE),
+                () -> assertThat(exactlyAtTheLimitFits).isTrue(),
+                () -> assertThat(oneByteMoreFits).isFalse(),
+                () -> assertThat(written).as("MongoDB takes the release write of a document of exactly 16,777,216 bytes").isTrue(),
+                () -> assertThat(storedSize()).isEqualTo((int) MAX_DOCUMENT_SIZE),
+                () -> assertThat(instance().version()).isEqualTo(stored.version() + 1),
+                () -> assertThat(stateStore.findSkippedInputs(ORDER, stored.quarantineId(), Integer.MAX_VALUE)).extracting(SkippedInput::key).doesNotContain(first.key()).hasSize(1)
+        );
+    }
+
+    private static SagaEnvelope<String> withVersionAndState(SagaEnvelope<String> current, long version, String state) {
+        return new SagaEnvelope<>(current.sagaId(), state, current.status(), version, current.timers(),
+                current.streamWatermarks(), current.positionWatermark(), current.createdAt(), current.updatedAt(), current.completedAt(),
+                current.currentStep(), current.started(), current.failure(), current.streamMarks(), current.quarantineSkipCount());
+    }
+
 }
