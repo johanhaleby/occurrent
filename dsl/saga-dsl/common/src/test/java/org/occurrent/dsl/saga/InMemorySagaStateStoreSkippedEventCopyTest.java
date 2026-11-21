@@ -23,19 +23,39 @@ import io.cloudevents.core.data.BytesCloudEventData;
 import io.cloudevents.core.data.PojoCloudEventData;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.bson.BsonDbPointer;
+import org.bson.BsonRegularExpression;
+import org.bson.BsonTimestamp;
+import org.bson.BsonUndefined;
+import org.bson.Document;
+import org.bson.types.Binary;
+import org.bson.types.Code;
+import org.bson.types.CodeWithScope;
+import org.bson.types.Decimal128;
+import org.bson.types.MaxKey;
+import org.bson.types.MinKey;
+import org.bson.types.ObjectId;
+import org.bson.types.Symbol;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -212,6 +232,102 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
         assertThatThrownBy(() -> skip(event(other)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(KEY);
+        assertNothingWasRecorded();
+    }
+
+    @Test
+    void a_date_in_the_data_is_read_as_a_date_of_the_same_value_when_the_delivered_date_is_changed_after_the_skip() {
+        quarantinedInstance();
+        Date delivered = new Date(1_000L);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("at", delivered);
+        skip(event(PojoCloudEventData.wrap(data, InMemorySagaStateStoreSkippedEventCopyTest::render)));
+
+        delivered.setTime(2_000L);
+
+        Object read = valueOf(recordedEvent().getData()).get("at");
+        assertAll(
+                () -> assertThat(read).isExactlyInstanceOf(Date.class),
+                () -> assertThat(read).isEqualTo(new Date(1_000L))
+        );
+    }
+
+    @Test
+    void a_date_in_the_data_is_read_as_recorded_when_a_date_a_read_returned_is_changed() {
+        quarantinedInstance();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("at", new Date(1_000L));
+        data.put("all", List.of(new Date(3_000L)));
+        skip(event(PojoCloudEventData.wrap(data, InMemorySagaStateStoreSkippedEventCopyTest::render)));
+        Map<String, Object> firstRead = valueOf(recordedEvent().getData());
+        ((Date) firstRead.get("at")).setTime(2_000L);
+        ((Date) ((List<?>) firstRead.get("all")).getFirst()).setTime(4_000L);
+
+        Map<String, Object> secondRead = valueOf(recordedEvent().getData());
+
+        assertAll(
+                () -> assertThat(secondRead.get("at")).isEqualTo(new Date(1_000L)),
+                () -> assertThat(secondRead.get("all")).isEqualTo(List.of(new Date(3_000L)))
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("immutableLeaves")
+    void an_immutable_value_in_the_data_is_read_as_the_same_class_with_an_equal_value(String name, Object leaf) {
+        quarantinedInstance();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("leaf", leaf);
+        data.put("nested", List.of(leaf));
+        skip(event(PojoCloudEventData.wrap(data, InMemorySagaStateStoreSkippedEventCopyTest::render)));
+
+        Map<String, Object> read = valueOf(recordedEvent().getData());
+
+        assertAll(
+                () -> assertThat(read.get("leaf")).isExactlyInstanceOf(leaf.getClass()).isEqualTo(leaf),
+                () -> assertThat(read.get("nested")).isEqualTo(List.of(leaf))
+        );
+    }
+
+    static Stream<Arguments> immutableLeaves() {
+        return Stream.of(
+                Arguments.of("UUID", UUID.fromString("123e4567-e89b-12d3-a456-426614174000")),
+                Arguments.of("ObjectId", new ObjectId("507f1f77bcf86cd799439011")),
+                Arguments.of("Decimal128", Decimal128.parse("1.25")),
+                Arguments.of("Binary", new Binary(new byte[]{1, 2})),
+                Arguments.of("Code", new Code("x = 1")),
+                Arguments.of("Symbol", new Symbol("sym")),
+                Arguments.of("MinKey", new MinKey()),
+                Arguments.of("MaxKey", new MaxKey()),
+                Arguments.of("BsonTimestamp", new BsonTimestamp(5, 6)),
+                Arguments.of("BsonRegularExpression", new BsonRegularExpression("a.*", "i")),
+                Arguments.of("BsonDbPointer", new BsonDbPointer("ns", new ObjectId("507f1f77bcf86cd799439011"))),
+                Arguments.of("BsonUndefined", new BsonUndefined())
+        );
+    }
+
+    @Test
+    void a_code_with_scope_in_the_data_is_refused_and_nothing_is_recorded() {
+        quarantinedInstance();
+        Map<String, Object> delivered = new LinkedHashMap<>();
+        delivered.put("code", new CodeWithScope("x", new Document("a", 1)));
+
+        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(KEY)
+                .hasMessageContaining(CodeWithScope.class.getName());
+        assertNothingWasRecorded();
+    }
+
+    @Test
+    void a_subclass_of_date_in_the_data_is_refused_and_nothing_is_recorded() {
+        quarantinedInstance();
+        Map<String, Object> delivered = new LinkedHashMap<>();
+        delivered.put("at", new Timestamp(1_000L));
+
+        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(KEY)
+                .hasMessageContaining(Timestamp.class.getName());
         assertNothingWasRecorded();
     }
 

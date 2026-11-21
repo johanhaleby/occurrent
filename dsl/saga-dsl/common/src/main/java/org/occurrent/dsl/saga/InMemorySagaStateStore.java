@@ -52,8 +52,10 @@ import static java.util.Objects.requireNonNull;
  * The record of a skipped input holds a copy of its event, taken when it is recorded, and every read returns a copy of
  * that. Changing the delivered event afterwards, or an event a read returned, doesn't change the record. The copy
  * takes bytes, and a {@code Map} or a {@code List} at any depth that holds bytes, a {@code String}, a {@code Boolean}, a
- * {@code Character}, or a number of a {@code java.lang} or {@code java.math} class. {@link #compareAndSaveSkipped}
- * throws an {@link IllegalStateException}, and records nothing, for an event with data or an extension it can't copy.
+ * {@code Character}, a number of a {@code java.lang} or {@code java.math} class, a {@code java.util.Date}, a
+ * {@code UUID}, or a BSON value that {@code SpringMongoSagaStateStore} reads back as the same class, such as an
+ * {@code ObjectId} or a {@code Decimal128}. {@link #compareAndSaveSkipped} throws an {@link IllegalStateException},
+ * and records nothing, for an event with data or an extension it can't copy.
  *
  * @param <S> the user state type
  */
@@ -261,6 +263,12 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     private static final Set<Class<?>> UNCHANGEABLE = Set.of(String.class, Boolean.class, Character.class, Byte.class, Short.class,
             Integer.class, Long.class, Float.class, Double.class, BigInteger.class, BigDecimal.class);
 
+    // The BSON values that SpringMongoSagaStateStore reads back from map data as the same class, each of them immutable.
+    // Named, since this module doesn't depend on BSON. A CodeWithScope comes back too, but holds a Document that can change
+    private static final Set<String> BSON_VALUES = Set.of("org.bson.types.ObjectId", "org.bson.types.Decimal128", "org.bson.types.Binary",
+            "org.bson.types.Code", "org.bson.types.Symbol", "org.bson.types.MinKey", "org.bson.types.MaxKey", "org.bson.BsonTimestamp",
+            "org.bson.BsonRegularExpression", "org.bson.BsonDbPointer", "org.bson.BsonUndefined");
+
     // A copy that shares nothing the producer of the event or a reader of the record can change
     private static SkippedInput copyOf(String sagaId, SkippedInput input) {
         CloudEvent event = input.event();
@@ -323,7 +331,8 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                 }
                 yield copy;
             }
-            case Object other when UNCHANGEABLE.contains(other.getClass()) -> other;
+            case Date date when date.getClass() == Date.class -> new Date(date.getTime());
+            case Object other when UNCHANGEABLE.contains(other.getClass()) || other instanceof UUID || BSON_VALUES.contains(other.getClass().getName()) -> other;
             case Object other -> throw cannotCopy(sagaId, input, "a " + other.getClass().getName() + " in its data");
         };
     }
