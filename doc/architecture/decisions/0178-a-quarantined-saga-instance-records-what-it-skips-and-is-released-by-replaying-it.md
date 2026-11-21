@@ -578,7 +578,7 @@ The upgrade guide has the procedure for operators, in
   says a further release stops on the record too. When the store can't take the write that quarantines the instance
   again, even with no pending entry for the record and no failure message, the release writes nothing, returns
   `STILL_RELEASING`, and an ERROR names the instance and says to delete it, and the timer poller logs that again on
-  every poll. `SpringMongoSagaStateStore` refuses a write of more than 16 MiB. A store that keeps the default of `fits` refuses nothing, and a
+  every poll. `SpringMongoSagaStateStore` refuses an instance of more than 16 MiB, and a write of more than 16 MiB and 16 KiB with its compare-and-set filter, which holds the saga id. A store that keeps the default of `fits` refuses nothing, and a
   release on it dispatches the commands of a record whose write the store then fails. A backlog long enough takes more
   than one release. Keeping the versions a release applies outside the instance's document would remove the limit, and
   is left for later.

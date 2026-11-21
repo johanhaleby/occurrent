@@ -36,6 +36,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
+import org.bson.BsonDocument;
 import org.bson.Document;
 import org.bson.RawBsonDocument;
 import org.bson.codecs.configuration.CodecRegistry;
@@ -709,20 +710,39 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     /**
-     * Whether {@code candidate}, stored as one document, takes at most {@link #MAX_DOCUMENT_SIZE} bytes of BSON. MongoDB
-     * refuses a larger document. The check encodes the document the way a write does and reads nothing from the
-     * database.
+     * Whether a release can write {@code candidate}. MongoDB stores a document of at most {@link #MAX_DOCUMENT_SIZE}
+     * bytes of BSON, and the driver sends a write only when its statement, the compare-and-set filter together with the
+     * replacement or the update, takes at most {@link #MAX_STATEMENT_SIZE} bytes. A release replaces the instance whole
+     * or updates every field but the state, so this checks the document and both statements. The filter holds the saga
+     * id, so an instance of exactly 16 MiB fits only when its id takes less than about 16 KiB. The check encodes the
+     * writes the way the driver does and reads nothing from the database.
      */
     @Override
     public boolean fits(StoredSaga candidate) {
         Objects.requireNonNull(candidate, "candidate cannot be null");
         CodecRegistry codecs = instances(databaseFactory.getMongoDatabase()).getCodecRegistry();
-        int size = new RawBsonDocument(toDocument(candidate), codecs.get(Document.class)).getByteBuffer().remaining();
-        return size <= MAX_DOCUMENT_SIZE;
+        RawBsonDocument document = new RawBsonDocument(toDocument(candidate), codecs.get(Document.class));
+        // The write compares the stored version, a long like the candidate's, so the filter encodes to the same size
+        BsonDocument filter = versionIs(candidate.sagaId(), candidate.version()).toBsonDocument(BsonDocument.class, codecs);
+        BsonDocument update = withoutState(candidate).toBsonDocument(BsonDocument.class, codecs);
+        return document.getByteBuffer().remaining() <= MAX_DOCUMENT_SIZE
+               && encodedSize(statement(filter, document), codecs) <= MAX_STATEMENT_SIZE
+               && encodedSize(statement(filter, update), codecs) <= MAX_STATEMENT_SIZE;
+    }
+
+    // An update or replacement as the driver writes it into the update command, see SplittablePayload
+    private static BsonDocument statement(BsonDocument filter, BsonDocument updateOrReplacement) {
+        return new BsonDocument("q", filter).append("u", updateOrReplacement);
+    }
+
+    private static int encodedSize(BsonDocument document, CodecRegistry codecs) {
+        return new RawBsonDocument(document, codecs.get(BsonDocument.class)).getByteBuffer().remaining();
     }
 
     // The largest document MongoDB stores, its maxBsonObjectSize
     private static final int MAX_DOCUMENT_SIZE = 16 * 1024 * 1024;
+    // The largest statement the driver sends in an update command, maxBsonObjectSize plus its 16 KiB of headroom
+    private static final int MAX_STATEMENT_SIZE = MAX_DOCUMENT_SIZE + 16 * 1024;
 
     private static Bson setOnInsert(Document document) {
         List<Bson> updates = new ArrayList<>();

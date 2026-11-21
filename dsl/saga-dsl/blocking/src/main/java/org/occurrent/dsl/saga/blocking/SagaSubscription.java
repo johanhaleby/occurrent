@@ -143,7 +143,8 @@ public final class SagaSubscription implements AutoCloseable {
      * the marks trimmed to the reorder window instead, since a live write asks the store nothing and can leave more marks
      * than a release may write. When the store can't take that either, this throws an {@link IllegalStateException} that
      * names the instance and the way out, and logs it as an ERROR.
-     * {@code SpringMongoSagaStateStore} refuses an instance that takes more than 16 MiB of BSON. A store that keeps the
+     * {@code SpringMongoSagaStateStore} refuses an instance that takes more than 16 MiB of BSON, and a write that takes
+     * more than 16 MiB and 16 KiB with its compare-and-set filter, which holds the saga id. A store that keeps the
      * default of {@code fits} refuses none, so a release on it dispatches the commands of an input whose write the store
      * then fails.
      * <p>

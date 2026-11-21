@@ -169,7 +169,7 @@ public interface SagaStateStoreSkippedInputs {
      * <p>
      * The default says {@code true} to every instance, so a release on a store that keeps it checks nothing, and
      * dispatches the commands of a record whose write the store then refuses. A store whose writes have a size limit
-     * answers {@code false} for an instance over it. The release calls this outside a transaction, and the answer must
+     * answers {@code false} for an instance whose write would go over it. The release calls this outside a transaction, and the answer must
      * not depend on a read of the database.
      */
     default boolean fits(StoredSaga candidate) {

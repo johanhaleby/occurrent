@@ -351,7 +351,7 @@ release for the input the instance stopped on, the instance is quarantined again
 **When the write doesn't fit.** A release keeps every stream version it applies in the instance's stream marks until it
 ends, so the instance's document grows by one number per replayed stream event. The release asks the store before
 every write whether it can take it, and for the write that applies an input it asks before it dispatches the input's
-commands. On MongoDB the store refuses a document of more than 16 MiB. When the store can't take the instance with the
+commands. On MongoDB the store refuses a document of more than 16 MiB, and a write of more than 16 MiB and 16 KiB with its compare-and-set filter, which holds the saga id, so a long saga id lowers the limit. When the store can't take the instance with the
 input applied, or with the input's failure recorded, the release applies and dispatches nothing for that input. The instance is quarantined again on that input with its marks trimmed, the release returns
 `QUARANTINED_AGAIN`, and an `ERROR` names the instance and the input. That happens with quarantine off too, and on a
 store that doesn't write atomically. The `ERROR` says which of two cases it is:
