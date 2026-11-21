@@ -231,28 +231,30 @@ class StreamCatchupStopsRetryTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Site.class)
-    void a_stop_that_the_replay_sees_before_a_start_returns_relaunches_the_replay_itself_when_the_start_found_nothing_parked(Site site) {
+    void a_start_that_waits_for_a_stop_which_holds_the_replay_before_the_handover_lock_runs_the_parked_replay_again_when_the_stop_has_returned(Site site) {
         // Given a stop that marked the model stopped and is held at its claim, and the replay thread held before it takes the handover lock
         subscribeWhileTheWrappedModelRetries(site);
         CompletableFuture<Void> stopping;
+        CompletableFuture<Void> starting;
         try (AbstractCatchupSubscriptionModel.Claim ignored = catchup.claim(ID)) {
             try (AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = catchup.lockHandover(ID)) {
                 stopping = CompletableFuture.runAsync(() -> catchup.stop());
                 assertThat(live.retryEnded).as("the retry of the wrapped model ended once the model was stopped").succeedsWithin(WAIT);
 
-                // When start(true) returns, having found nothing parked
-                catchup.start(true);
-                assertThat(catchup.hasParkedReplay(ID)).as("replay parked by the start").isFalse();
+                // When start(true) is called on another thread, which has to wait for the stop
+                starting = callOnAnotherThread(() -> catchup.start(true));
+                assertThat(starting).as("the start while the stop is held").isNotDone();
             }
 
-            // Then the replay thread relaunches the replay, while the stop is still held
-            await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.isRunning(ID)).as("running").isTrue());
-            assertThat(catchup.hasParkedReplay(ID)).as("replay parked").isFalse();
+            // Then the replay thread parks the replay, and neither call has returned while the stop is still held
+            await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.hasParkedReplay(ID)).as("replay parked by the replay while the stop is held").isTrue());
             assertThat(stopping).as("the stop").isNotDone();
+            assertThat(starting).as("the start while the stop is held").isNotDone();
         }
         assertThat(stopping).as("the stop").succeedsWithin(WAIT);
-        // The stop went on to stop the live delegate after the start, so this start is what brings it up again
-        assertThatStartRunsTheParkedReplayAndTheSubscriptionGoesLive();
+        assertThat(starting).as("the start").succeedsWithin(WAIT);
+        assertThatTheSubscriptionGoesLive();
+        assertThat(errorsLogged()).as("errors logged").isEmpty();
     }
 
     @ParameterizedTest(name = "{0}")
@@ -287,31 +289,35 @@ class StreamCatchupStopsRetryTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Site.class)
-    void a_retry_that_gives_up_without_asking_stillWanted_after_a_stop_and_then_a_start_came_in_during_it_ends_and_the_replay_runs_again_to_go_live(Site site) {
-        // Given a stop that marked the model stopped and is held at its claim, and a start that has since come in
+    void a_retry_that_gives_up_without_asking_stillWanted_after_a_stop_and_a_start_that_waits_for_it_ends_and_the_replay_runs_again_to_go_live(Site site) {
+        // Given a stop that marked the model stopped and is held at its claim, and a start on another thread that waits for it
         subscribeWhileTheWrappedModelRetries(site, true);
         CompletableFuture<Void> stopping;
+        CompletableFuture<Void> starting;
         try (AbstractCatchupSubscriptionModel.Claim ignored = catchup.claim(ID)) {
             stopping = CompletableFuture.runAsync(() -> catchup.stop());
             await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.stopped).as("the model is stopped").isTrue());
-            catchup.start(true);
-            assertThat(catchup.stopped).as("the model is stopped after the start").isFalse();
+            starting = callOnAnotherThread(() -> catchup.start(true));
+            assertThat(starting).as("the start while the stop is held").isNotDone();
+            assertThat(catchup.stopped).as("the model is stopped while the start waits").isTrue();
 
-            // When the retry gives up on its last attempt, after the start
+            // When the retry gives up on its last attempt, while the start waits
             live.stopRetrying();
             assertThat(live.retryEnded).as("the retry of the wrapped model gave up").succeedsWithin(WAIT);
 
-            // Then the failure is the one that ended the retry, so it is logged at DEBUG and the replay runs again
+            // Then the failure is the one that ended the retry, so it is logged at DEBUG
             awaitTheLogLineForTheEndedRetry();
             assertAll(
                     () -> assertThat(levelOfTheLogLineForTheEndedRetry()).as("level of the line logged for the ended retry").isEqualTo(Level.DEBUG),
                     () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
             );
+            assertThat(starting).as("the start while the stop is held").isNotDone();
         }
+        // And the replay runs again once the stop has returned and the start has run
         assertThat(stopping).as("the stop").succeedsWithin(WAIT);
-        // The stop went on to stop the live delegate after the start, so this start is what brings it up again
-        catchup.start(true);
+        assertThat(starting).as("the start").succeedsWithin(WAIT);
         assertThatTheSubscriptionGoesLive();
+        assertThat(errorsLogged()).as("errors logged").isEmpty();
     }
 
     @Test
@@ -356,7 +362,7 @@ class StreamCatchupStopsRetryTest {
     }
 
     @Test
-    void a_stillWanted_that_answered_false_does_not_make_a_later_failure_of_the_replay_an_ended_retry_once_canResumeFrom_returned() {
+    void a_stillWanted_that_answered_false_does_not_make_a_later_failure_of_the_replay_an_ended_retry_once_canResumeFrom_returned_while_a_start_waits_for_the_stop() {
         Site site = Site.CAN_RESUME_FROM_AT_THE_START_OF_A_POSITION_REPLAY;
         // Given a wrapped model whose canResumeFrom reads stillWanted while a stop has marked the model stopped, and then
         // answers true, and a replay whose action fails once an event reaches it
@@ -382,27 +388,30 @@ class StreamCatchupStopsRetryTest {
             delivering.accept(cloudEvent);
         });
         CompletableFuture<Void> stopping;
+        CompletableFuture<Void> starting;
         try (AbstractCatchupSubscriptionModel.Claim ignored = catchup.claim(ID)) {
             stopping = CompletableFuture.runAsync(() -> catchup.stop());
             await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.stopped).as("the model is stopped").isTrue());
             readStillWanted.complete(null);
             assertThat(answeredByStillWanted).as("what stillWanted answered while the model was stopped").succeedsWithin(WAIT).isEqualTo(false);
 
-            // When a start comes in before canResumeFrom returns, and the replay then goes on and fails
-            catchup.start(true);
-            assertThat(catchup.stopped).as("the model is stopped after the start").isFalse();
+            // When a start on another thread waits for the stop, and canResumeFrom then returns
+            starting = callOnAnotherThread(() -> catchup.start(true));
+            assertThat(starting).as("the start while the stop is held").isNotDone();
             mayAnswer.complete(null);
-
-            // Then it is an ordinary failure of a replay a subscribe started
-            await().atMost(WAIT).untilAsserted(() -> assertThat(errorsLogged()).as("errors logged").singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("did not go live")));
-            assertThatThrownBy(() -> subscription.waitUntilStarted(WAIT)).as("waiting until the subscription started").isInstanceOf(IllegalStateException.class).hasMessage("the action failed");
-            assertAll(
-                    () -> assertThat(logged.list).as("lines logged for an ended retry").noneMatch(event -> event.getFormattedMessage().contains("stop retrying")),
-                    () -> assertThat(catchup.hasParkedReplay(ID)).as("replay parked").isFalse(),
-                    () -> assertThat(catchup.isRunning(ID)).as("running").isFalse()
-            );
+            assertThat(stopping).as("the stop").isNotDone();
         }
         assertThat(stopping).as("the stop").succeedsWithin(WAIT);
+        assertThat(starting).as("the start").succeedsWithin(WAIT);
+
+        // Then the replay the start runs again and the action fails, which is an ordinary failure of a replay a subscribe started
+        await().atMost(WAIT).untilAsserted(() -> assertThat(errorsLogged()).as("errors logged").singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("did not go live")));
+        assertThatThrownBy(() -> subscription.waitUntilStarted(WAIT)).as("waiting until the subscription started").isInstanceOf(IllegalStateException.class).hasMessage("the action failed");
+        assertAll(
+                () -> assertThat(logged.list).as("lines logged for an ended retry").noneMatch(event -> event.getFormattedMessage().contains("stop retrying")),
+                () -> assertThat(catchup.hasParkedReplay(ID)).as("replay parked").isFalse(),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isFalse()
+        );
     }
 
     @Test
@@ -524,7 +533,7 @@ class StreamCatchupStopsRetryTest {
     }
 
     @Test
-    void a_canResumeFrom_that_answers_false_once_a_stop_came_during_it_and_a_start_cleared_the_stop_before_it_answered_does_not_hold_the_subscription_as_unable_to_resume_and_the_replay_runs_again_to_go_live() {
+    void a_canResumeFrom_that_answers_false_once_a_stop_came_during_it_and_a_start_waits_for_the_stop_does_not_hold_the_subscription_as_unable_to_resume_and_the_replay_runs_again_to_go_live() {
         Site site = Site.CAN_RESUME_FROM_AT_THE_START_OF_A_POSITION_REPLAY;
         // Given a wrapped model whose first canResumeFrom begins while the replay is wanted, waits, and then answers false
         CompletableFuture<Void> began = new CompletableFuture<>();
@@ -543,24 +552,27 @@ class StreamCatchupStopsRetryTest {
         Subscription subscription = catchup.subscribe(ID, startAt, toDomainEvents(received));
         assertThat(began).as("canResumeFrom began").succeedsWithin(WAIT);
         CompletableFuture<Void> stopping;
+        CompletableFuture<Void> starting;
         try (AbstractCatchupSubscriptionModel.Claim ignored = catchup.claim(ID)) {
-            // And a stop held at its claim, after it marked the model stopped and before it parks the replay, and then a start that cleared it
+            // And a stop held at its claim, after it marked the model stopped and before it parks the replay, and a start on another thread that waits for it
             stopping = CompletableFuture.runAsync(() -> catchup.stop());
             await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.stopped).as("the model is stopped").isTrue());
-            catchup.start(true);
-            assertThat(catchup.stopped).as("the model is stopped after the start").isFalse();
+            starting = callOnAnotherThread(() -> catchup.start(true));
+            assertThat(starting).as("the start while the stop is held").isNotDone();
 
             // When canResumeFrom answers false
             mayAnswer.complete(null);
 
-            // Then the false is not read as lost history, so the replay is parked and run again instead
-            AtomicBoolean started = new AtomicBoolean(false);
-            assertThatCode(() -> started.set(subscription.waitUntilStarted(WAIT))).as("waiting until the subscription started").doesNotThrowAnyException();
-            assertThat(started).as("the subscription started").isTrue();
+            // Then the false is not read as lost history, so the replay parks itself while the stop is held
+            await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.hasParkedReplay(ID)).as("replay parked by the replay while the stop is held").isTrue());
+            assertThat(starting).as("the start while the stop is held").isNotDone();
         }
+        // And the start that waited for the stop runs the replay again, which goes live
         assertThat(stopping).as("the stop").succeedsWithin(WAIT);
-        // The stop went on to stop the live delegate after the start, so this start is what brings it up again
-        catchup.start(true);
+        assertThat(starting).as("the start").succeedsWithin(WAIT);
+        AtomicBoolean started = new AtomicBoolean(false);
+        assertThatCode(() -> started.set(subscription.waitUntilStarted(WAIT))).as("waiting until the subscription started").doesNotThrowAnyException();
+        assertThat(started).as("the subscription started").isTrue();
         assertThatTheSubscriptionGoesLive();
         assertAll(
                 () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
@@ -569,7 +581,7 @@ class StreamCatchupStopsRetryTest {
     }
 
     @Test
-    void a_canResumeFrom_that_answers_false_once_a_failed_start_stopped_the_model_again_during_it_and_another_start_cleared_the_stop_does_not_hold_the_subscription_as_unable_to_resume_and_the_replay_runs_again_to_go_live() {
+    void a_canResumeFrom_that_answers_false_once_a_failed_start_stopped_the_model_again_during_it_and_another_start_waits_for_that_start_does_not_hold_the_subscription_as_unable_to_resume_and_the_replay_runs_again_to_go_live() {
         Site site = Site.CAN_RESUME_FROM_AT_THE_START_OF_A_POSITION_REPLAY;
         // Given a wrapped model whose first canResumeFrom begins while the replay is wanted, waits, and then answers false
         CompletableFuture<Void> began = new CompletableFuture<>();
@@ -599,27 +611,45 @@ class StreamCatchupStopsRetryTest {
         assertThat(began).as("canResumeFrom began").succeedsWithin(WAIT);
         CompletableFuture<Void> secondStart;
         try (AbstractCatchupSubscriptionModel.Claim ignored = catchup.claim(ID)) {
-            // And the failed start stopping the model again, held at its claim before it parks the replay, and then another start that cleared that stop
+            // And the failed start stopping the model again, held at its claim before it parks the replay, and another start on another thread that waits for it
             mayFailTheLiveStart.complete(null);
             await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.stopped).as("the model is stopped again by the failed start").isTrue());
-            secondStart = CompletableFuture.runAsync(() -> catchup.start(true));
-            assertThat(secondStart).as("the second start").succeedsWithin(WAIT);
-            assertThat(catchup.stopped).as("the model is stopped after the second start").isFalse();
+            secondStart = callOnAnotherThread(() -> catchup.start(true));
+            assertThat(secondStart).as("the second start while the failed start is held").isNotDone();
 
             // When canResumeFrom answers false
             mayAnswer.complete(null);
 
-            // Then the false is not read as lost history, so the replay is parked and run again instead
-            AtomicBoolean started = new AtomicBoolean(false);
-            assertThatCode(() -> started.set(subscription.waitUntilStarted(WAIT))).as("waiting until the subscription started").doesNotThrowAnyException();
-            assertThat(started).as("the subscription started").isTrue();
+            // Then the false is not read as lost history, so the replay parks itself while the failed start is held
+            await().atMost(WAIT).untilAsserted(() -> assertThat(catchup.hasParkedReplay(ID)).as("replay parked by the replay while the failed start is held").isTrue());
+            assertThat(secondStart).as("the second start while the failed start is held").isNotDone();
         }
+        // And the second start, which waited for the failed start, runs the replay again, which goes live
         assertThat(failingStart).as("the failed start").failsWithin(WAIT).withThrowableThat().withMessageContaining("the live delegate failed to start");
+        assertThat(secondStart).as("the second start").succeedsWithin(WAIT);
+        AtomicBoolean started = new AtomicBoolean(false);
+        assertThatCode(() -> started.set(subscription.waitUntilStarted(WAIT))).as("waiting until the subscription started").doesNotThrowAnyException();
+        assertThat(started).as("the subscription started").isTrue();
         assertThatTheSubscriptionGoesLive();
         assertAll(
                 () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
                 () -> assertThat(errorsLogged()).as("errors logged").isEmpty()
         );
+    }
+
+    // Runs the call on another thread and returns once it has returned or waits, so a test can tell the call is held back
+    private static CompletableFuture<Void> callOnAnotherThread(Runnable call) {
+        CompletableFuture<Void> returned = new CompletableFuture<>();
+        Thread thread = Thread.ofPlatform().daemon().start(() -> {
+            try {
+                call.run();
+                returned.complete(null);
+            } catch (Throwable e) {
+                returned.completeExceptionally(e);
+            }
+        });
+        await().atMost(WAIT).until(() -> returned.isDone() || thread.getState() == Thread.State.WAITING || thread.getState() == Thread.State.TIMED_WAITING || thread.getState() == Thread.State.BLOCKED);
+        return returned;
     }
 
     private Subscription subscribeWhileTheWrappedModelRetries(Site site) {
