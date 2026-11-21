@@ -222,9 +222,11 @@ first and cancels nothing when the delete throws.
 An application that needs a guaranteed rebuild, or that changes the filter or the projection, subscribes under a new
 subscription id. The marker is keyed by the id alone, so a subscribe that reuses an id with another filter or another
 projection skips the replay on the blocking stack, and can resume after a stored position on the reactor stack. A
-start that does either misses the earlier events that only the new filter matches. With more than one instance,
-whether a new id is enough depends on where each instance keeps what it builds, which broker queue or consumer group
-it consumes, and whether instances on the old id still run, as
+start that does either misses the earlier events that only the new filter matches. While an instance on the old id
+still runs, a new id is safe only when the new subscription writes records that no instance on the old id writes.
+Otherwise every instance on the old id stops before the first one on the new id starts. With more than one instance,
+whether a new id is enough also depends on where each instance keeps what it builds and which broker queue or
+consumer group it consumes, as
 [Changing a checkpoint or marker that several instances share](../../migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
 in the 0.35.0 upgrade guide describes.
 [#1553](https://github.com/johanhaleby/occurrent/issues/1553) is about storing a fingerprint of the filter and the
@@ -233,8 +235,10 @@ projection with the marker, so a start with a changed one replays from the begin
 A push `@Saga` is where a new id costs most. A new id replays the whole history into the saga, so every instance that
 its TTL removed is recreated from its start event and dispatches its commands again, as the `SagaStateStore` javadoc
 warns for a redelivery. Rebuilding a saga under a new id needs completed instances kept for as long as the history it
-replays. With more than one instance, whether a new id is enough for a saga also depends on where each instance keeps
-what it builds, which broker queue or consumer group it consumes, and whether instances on the old id still run, as
+replays. While an instance on the old id still runs, a new id is safe only when the saga under the new id writes
+records that no instance on the old id writes. Otherwise every instance on the old id stops before the first one on
+the new id starts. With more than one instance, whether a new id is enough for a saga also depends on where each
+instance keeps what it builds and which broker queue or consumer group it consumes, as
 [Changing a checkpoint or marker that several instances share](../../migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
 describes.
 

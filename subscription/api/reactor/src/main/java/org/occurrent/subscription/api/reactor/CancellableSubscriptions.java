@@ -49,8 +49,10 @@ public interface CancellableSubscriptions extends SubscriptionModelCapability {
      * from the beginning. A store can lose a delete it acknowledged, for example when a MongoDB member with the
      * in-memory storage engine rolls back, and a marker write still in flight can reach the store after the delete.
      * Subscribe under a new id when the subscription has to be rebuilt.
-     * With more than one instance, whether a new id is enough depends on where each instance keeps what it builds,
-     * which broker queue or consumer group it consumes, and whether instances on the old id still run, as
+     * While an instance on the old id still runs, a new id is safe only when the new subscription writes records
+     * that no instance on the old id writes. Otherwise stop every instance on the old id before the first one on
+     * the new id starts. With more than one instance, whether a new id is enough also depends on where each
+     * instance keeps what it builds and which broker queue or consumer group it consumes, as
      * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
      * upgrade guide</a> describes.
      * <p>

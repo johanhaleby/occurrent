@@ -1635,9 +1635,10 @@ oplog window, a restart still ends in lost history.
 If you widen the filter of a durable subscription and keep its id, it now resumes from the last quiet position it
 saved, so the events before that position that the old filter didn't match are not delivered. Before, it resumed after
 the last event the old filter matched, and received them. When you widen a filter, use a new subscription id, or
-subscribe once with a `StartAt` for the position to start from. With more than one instance, whether a new id is
-enough depends on where each instance keeps what the subscription builds and whether instances on the old id still
-run, as
+subscribe once with a `StartAt` for the position to start from. While an instance on the old id still runs, a new id
+is safe only when the new subscription writes records that no instance on the old id writes. Otherwise stop every
+instance on the old id before the first one on the new id starts. With more than one instance, whether a new id is
+enough also depends on where each instance keeps what the subscription builds, as
 [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
 in the 0.35.0 upgrade guide describes.
 

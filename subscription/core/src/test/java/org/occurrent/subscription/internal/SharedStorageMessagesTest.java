@@ -47,12 +47,13 @@ class SharedStorageMessagesTest {
     }
 
     @Test
-    void the_step_for_a_new_id_links_the_guide_and_names_where_each_instance_keeps_what_it_builds_which_queue_it_consumes_and_whether_the_old_id_still_runs() {
+    void the_step_for_a_new_id_links_the_guide_and_says_a_new_id_is_safe_beside_a_running_old_id_only_for_records_it_does_not_write_and_otherwise_to_stop_every_old_instance_first() {
         assertThat(SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)
-                .startsWith("When more than one instance runs it, whether a new id is enough")
+                .startsWith("While an instance on the old id still runs, a new id is safe only when the new subscription writes records that no instance on the old id writes.")
+                .contains(" Otherwise stop every instance on the old id before the first one on the new id starts.")
+                .contains(" With more than one instance, whether a new id is enough also depends on")
                 .contains("where each instance keeps what it builds")
                 .contains("which broker queue or consumer group it consumes")
-                .contains("and whether instances on the old id still run")
                 .endsWith(", as " + SharedStorageMessages.GUIDE + " describes.");
     }
 }

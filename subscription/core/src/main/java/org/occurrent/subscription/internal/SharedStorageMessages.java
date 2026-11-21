@@ -56,7 +56,8 @@ public final class SharedStorageMessages {
      * with one under a new id. A new id keeps the new subscription apart from what is stored under the old id, but not
      * from the broker queue or consumer group the old one consumes, nor from a store the old one still writes to.
      */
-    public static final String NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT = "When more than one instance runs it, whether a new id is enough"
-            + " depends on where each instance keeps what it builds, which broker queue or consumer group it consumes,"
-            + " and whether instances on the old id still run, as " + GUIDE + " describes.";
+    public static final String NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT = "While an instance on the old id still runs, a new id is safe only"
+            + " when the new subscription writes records that no instance on the old id writes. Otherwise stop every instance on the old id"
+            + " before the first one on the new id starts. With more than one instance, whether a new id is enough also depends on"
+            + " where each instance keeps what it builds and which broker queue or consumer group it consumes, as " + GUIDE + " describes.";
 }
