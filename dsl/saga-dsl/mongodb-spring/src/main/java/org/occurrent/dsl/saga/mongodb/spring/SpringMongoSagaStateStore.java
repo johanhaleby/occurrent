@@ -43,6 +43,7 @@ import org.bson.Document;
 import org.bson.RawBsonDocument;
 import org.bson.codecs.configuration.CodecRegistry;
 import org.bson.conversions.Bson;
+import org.bson.types.Binary;
 import org.bson.types.ObjectId;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
@@ -57,8 +58,6 @@ import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
-import org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventReader;
-import org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventWriter;
 import org.occurrent.mongodb.deployment.internal.MongoDeployment;
 import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
@@ -659,44 +658,31 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         CloudEvent event = CLOUD_EVENT_JSON_FORMAT.deserialize(document.getString(SKIPPED_EVENT).getBytes(StandardCharsets.UTF_8));
         Object data = document.get(SKIPPED_DATA);
         if (data != null) {
-            event = CloudEventBuilder.from(event).withData(heldData(event, data)).build();
+            event = CloudEventBuilder.from(event).withData(data instanceof Binary binary ? binary.getData() : (byte[]) data).build();
         }
         return new SkippedInput(((Number) document.get(SKIPPED_SEQ)).longValue(), document.getString(SKIPPED_KEY), event);
     }
 
     // The event's attributes and extensions as CloudEvents JSON, so they read back with the types the event had, and its
-    // data the way the MongoDB event store stores it. Binary data stays binary instead of growing by a third as base64,
-    // so a record takes about what the event takes in the event store.
+    // data as the bytes it was delivered with, in BSON binary. Base64 inside the JSON would grow binary data by a third,
+    // and parsing JSON data into a document would read a field such as $numberLong as MongoDB Extended JSON and change it
     private static Document heldEvent(CloudEvent event) {
         Document held = new Document(SKIPPED_EVENT, new String(CLOUD_EVENT_JSON_FORMAT.serialize(CloudEventBuilder.from(event).withoutData().build()), StandardCharsets.UTF_8));
-        Object data = DocumentCloudEventWriter.toDocument(event).get(SKIPPED_DATA);
+        CloudEventData data = event.getData();
         if (data != null) {
-            held.append(SKIPPED_DATA, data);
+            held.append(SKIPPED_DATA, data.toBytes());
         }
         return held;
-    }
-
-    // Read by the event store's own reader, which needs only the attributes that say what the data is
-    private static CloudEventData heldData(CloudEvent event, Object data) {
-        Document withData = new Document("specversion", event.getSpecVersion().toString())
-                .append("id", event.getId())
-                .append("source", event.getSource().toString())
-                .append("type", event.getType());
-        if (event.getDataContentType() != null) {
-            withData.append("datacontenttype", event.getDataContentType());
-        }
-        return Objects.requireNonNull(DocumentCloudEventReader.toCloudEvent(withData.append(SKIPPED_DATA, data)).getData());
     }
 
     /**
      * {@inheritDoc}
      * <p>
-     * The record holds the event's attributes and extensions as a CloudEvents JSON string and its data the way the
-     * MongoDB event store stores it, binary data as BSON binary and a JSON object as a document. MongoDB stores at most
-     * 16 MiB in the record, and the record holds the saga id, the quarantine id and the key beside the event, so an event
-     * that comes that close to 16 MiB in the event store doesn't fit. This then throws an {@link IllegalStateException}
-     * that names the instance and the input, before it writes anything. A subscription that retries the event stops on
-     * it.
+     * The record holds the event's attributes and extensions as a CloudEvents JSON string and its data as the bytes it
+     * was delivered with, in BSON binary, so a release reads back the same data bytes. MongoDB stores at most 16 MiB in
+     * the record, and the record holds the saga id, the quarantine id, the key and the attributes beside the data, so an
+     * event whose data comes that close to 16 MiB doesn't fit. This then throws an {@link IllegalStateException} that
+     * names the instance and the input, before it writes anything. A subscription that retries the event stops on it.
      */
     @Override
     public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
@@ -789,8 +775,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (storedSize > MAX_DOCUMENT_SIZE || statementSize > MAX_STATEMENT_SIZE) {
             throw new IllegalStateException("Saga instance '" + sagaId + "' cannot record the input '" + key + "' it skips. Its record takes "
                     + storedSize + " bytes of BSON, where MongoDB stores at most " + MAX_DOCUMENT_SIZE + ", and the write that sends it takes "
-                    + statementSize + " bytes, where the driver sends at most " + MAX_STATEMENT_SIZE + ". The record holds the event as the "
-                    + "MongoDB event store holds it, together with the saga id, the quarantine id and the key, so an event that close to "
+                    + statementSize + " bytes, where the driver sends at most " + MAX_STATEMENT_SIZE + ". The record holds the event's data as "
+                    + "its bytes, together with its attributes, the saga id, the quarantine id and the key, so data that close to "
                     + "MongoDB's limit leaves no room for them. Nothing is written for the input.");
         }
     }

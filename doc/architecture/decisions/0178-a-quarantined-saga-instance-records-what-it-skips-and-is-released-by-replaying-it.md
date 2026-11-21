@@ -115,10 +115,11 @@ MongoDB's 16 MB limit, so there is no limit on how many it records.
 A store keeps a record's event and returns it from `findSkippedInputs`. The saga keeps no other copy of a skipped
 event. `SpringMongoSagaStateStore` writes its attributes and extensions as a CloudEvents JSON string in the record's
 `event` field, so a number that isn't an `Integer`, such as a `Long`, and a URI, a timestamp or a binary extension
-come back as a `String`. It writes the data in the record's `data` field the way the MongoDB event store stores it,
-binary data as BSON binary and a JSON object as a document, so a record takes about what the event takes in the event
-store. Written as CloudEvents JSON, binary data would grow by a third as base64, and a 13 MiB binary event would not
-fit in a record at all. A JSON object comes back the way the event store reads it back, as the same JSON value with the event store's spacing rather than the bytes the subscription delivered. MongoDB stores at most 16 MiB in a record, and the record holds the saga id, the quarantine id and the key beside the event, so an event that comes that close to 16 MiB in the event store doesn't fit. `compareAndSaveSkipped` then throws an `IllegalStateException` that names the instance and the input, before it writes anything, so the instance and its records stay as they were. A subscription that retries the event stops on it.
+come back as a `String`. It writes the data in the record's `data` field as the bytes it was delivered with, in BSON
+binary, so a release reads back the same data bytes, whatever the feed. Written as CloudEvents JSON, binary data would
+grow by a third as base64, and a 13 MiB binary event would not fit in a record at all. Parsed into a document, as the
+MongoDB event store stores JSON data, a field such as `{"$numberLong": "42"}` would read as MongoDB Extended JSON and
+come back as `42`. MongoDB stores at most 16 MiB in a record, and the record holds the attributes, the saga id, the quarantine id and the key beside the data, so an event whose data comes that close to 16 MiB doesn't fit. `compareAndSaveSkipped` then throws an `IllegalStateException` that names the instance and the input, before it writes anything, so the instance and its records stay as they were. A subscription that retries the event stops on it.
 
 The methods that read and write the records are on an interface of their own, `SagaStateStoreSkippedInputs`, which a
 store implements next to `SagaStateStore`, the way it implements `SagaStateStoreQueries`. It has no state type
@@ -439,7 +440,7 @@ on its first deploy, instead of quarantining without knowing it.
   saga id, the quarantine id and the key keeps a key from being recorded twice, and an index on the saga id, the
   quarantine id and the sequence number serves the order release reads them in.
 - A record document holds the attributes and extensions of its input's event as a CloudEvents JSON string, in its
-  `event` field, and the event's data in its `data` field, stored the way the MongoDB event store stores it. Every
+  `event` field, and the event's data in its `data` field, as the bytes it was delivered with in BSON binary. Every
   record has an `event`, K's record included, which the write that quarantines the instance writes. The collection is new in 0.35.0, so
   no released document changes.
 - A document a 0.34.0 node wrote has none of these fields and reads as not releasing, with no quarantine id.

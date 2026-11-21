@@ -50,11 +50,6 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-eventstore-mongodb-common</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-json-jackson</artifactId>
         </dependency>

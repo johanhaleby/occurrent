@@ -979,8 +979,8 @@ instances, each poll logs a `WARN` and tries again. The runbook covers what is l
 which `SpringMongoSagaStateStore` writes as top-level fields of the instance's document. The skipped inputs are documents in a collection
 of their own, named after the saga collection with `_skipped_inputs` appended, one per skipped input and one for the
 input the instance stopped on, each with `sagaId`, `quarantineId`, `seq`, `key`, `event` and `data`. `event` holds the
-event's attributes and extensions as a CloudEvents JSON string, and `data` its data the way the MongoDB event store
-stores it, binary data as BSON binary and a JSON object as a document. MongoDB stores at most 16 MiB in a record, and the record holds the saga id, the quarantine id and the key beside the event, so an event that comes that close to 16 MiB in the event store doesn't fit. `compareAndSaveSkipped` then throws an `IllegalStateException` that names the instance and the input, before it writes anything, so the instance and its records stay as they were. A subscription that retries the event stops on it. A document 0.34.0 wrote has none of these fields, and reads as an instance
+event's attributes and extensions as a CloudEvents JSON string, and `data` the bytes its data was delivered
+with, in BSON binary, so a release reads back the same bytes. MongoDB stores at most 16 MiB in a record, and the record holds the attributes, the saga id, the quarantine id and the key beside the data, so an event whose data comes that close to 16 MiB doesn't fit. `compareAndSaveSkipped` then throws an `IllegalStateException` that names the instance and the input, before it writes anything, so the instance and its records stay as they were. A subscription that retries the event stops on it. A document 0.34.0 wrote has none of these fields, and reads as an instance
 that is not releasing, with no quarantine id. The constructor now throws an `IllegalArgumentException` for a saga
 collection whose name ends in `_skipped_inputs`, because a store on the name without that suffix would keep its skipped
 inputs in the same collection. Rename such a collection before you upgrade.

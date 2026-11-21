@@ -16,7 +16,6 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
@@ -51,8 +50,6 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.net.URI;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -60,13 +57,16 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -183,7 +183,7 @@ class SpringMongoSagaStateStoreHeldEventTest {
                 () -> assertThat(held).extracting(input -> input.event().getType()).containsExactly(book.getType(), pen.getType()),
                 () -> assertThat(held).extracting(input -> input.event().getSource()).containsExactly(book.getSource(), pen.getSource()),
                 () -> assertThat(held).extracting(input -> input.event().getExtensionNames()).containsExactly(book.getExtensionNames(), pen.getExtensionNames()),
-                () -> assertThat(held).as("the data reads back as the same JSON value").extracting(input -> json(input.event())).containsExactly(json(book), json(pen)),
+                () -> assertThat(held).extracting(input -> requireNonNull(input.event().getData()).toBytes()).containsExactly(requireNonNull(book.getData()).toBytes(), requireNonNull(pen.getData()).toBytes()),
                 () -> assertThat(held.get(1).event().getTime()).isEqualTo(HAPPENED_AT),
                 () -> assertThat(held.get(1).event().getExtension(OccurrentCloudEventExtension.STREAM_ID)).isEqualTo(STREAM),
                 () -> assertThat(held.get(1).event().getExtension(OccurrentCloudEventExtension.STREAM_VERSION)).hasToString(String.valueOf(pen.getExtension(OccurrentCloudEventExtension.STREAM_VERSION))),
@@ -324,12 +324,63 @@ class SpringMongoSagaStateStoreHeldEventTest {
         return SagaEnvelopes.of(stateStore, null).find(sagaId).orElseThrow();
     }
 
-    private static JsonNode json(CloudEvent event) {
-        try {
-            return new ObjectMapper().readTree(requireNonNull(event.getData()).toBytes());
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+    @Test
+    void a_json_event_whose_data_holds_an_extended_json_object_is_released_with_the_bytes_it_was_delivered_with() {
+        byte[] data = "{\"orderId\":\"order-1\",\"value\":{\"$numberLong\": \"42\"}}".getBytes(UTF_8);
+        List<byte[]> convertedBytes = new CopyOnWriteArrayList<>();
+        subscription = SagaRunner.<OrderEvent, Pack>agnostic(subscriptionModel, readingExtendedJson(convertedBytes))
+                .run("orders", saga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofHours(1)).withQuarantineAfter(Duration.ofMillis(300)));
+        write(new OrderPlaced(ORDER));
+        failing.add("extended");
+        eventStore.write(STREAM, List.of(CloudEventBuilder.v1().withId("extended-1").withSource(URI.create("urn:test")).withType(converter.getCloudEventType(ItemAdded.class))
+                .withSubject(ORDER).withTime(HAPPENED_AT).withDataContentType("application/json").withData(data).build()));
+        await().dontCatchUncaughtExceptions().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED));
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(held()).hasSize(1));
+        CloudEvent delivered = stored().get(1);
+        CloudEvent heldEvent = held().get(0).event();
+        int convertedBeforeRelease = convertedBytes.size();
+
+        failing.clear();
+        subscription.release(ORDER);
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE));
+        List<byte[]> convertedByRelease = convertedBytes.subList(convertedBeforeRelease, convertedBytes.size());
+
+        assertAll(
+                () -> assertThat(requireNonNull(heldEvent.getData()).toBytes()).as("held data bytes equal the delivered bytes, so extended JSON is not parsed into another value").isEqualTo(data),
+                () -> assertThat(requireNonNull(delivered.getData()).toBytes()).as("the delivered bytes are the ones written").isEqualTo(data),
+                () -> assertThat(heldEvent.getDataContentType()).as("held content type equals the delivered one").isEqualTo(delivered.getDataContentType()),
+                () -> assertThat(extensionsOf(heldEvent)).as("held extensions equal the delivered ones").isEqualTo(extensionsOf(delivered)),
+                () -> assertThat(convertedByRelease).as("the converter is given the delivered bytes when the release replays the event").isNotEmpty().allSatisfy(bytes -> assertThat(bytes).isEqualTo(data)),
+                () -> assertThat(dispatched).as("the release dispatches the command of the held event").containsExactly(new Pack("extended", 1))
+        );
+    }
+
+    private static Map<String, String> extensionsOf(CloudEvent event) {
+        return event.getExtensionNames().stream().collect(Collectors.toMap(name -> name, name -> String.valueOf(event.getExtension(name))));
+    }
+
+    // Reads the event with extended JSON in its data as an item, and keeps the bytes it was given
+    private CloudEventConverter<OrderEvent> readingExtendedJson(List<byte[]> seen) {
+        return new CloudEventConverter<>() {
+            @Override
+            public CloudEvent toCloudEvent(OrderEvent domainEvent) {
+                return converter.toCloudEvent(domainEvent);
+            }
+
+            @Override
+            public OrderEvent toDomainEvent(CloudEvent cloudEvent) {
+                if (!"extended-1".equals(cloudEvent.getId())) {
+                    return converter.toDomainEvent(cloudEvent);
+                }
+                seen.add(requireNonNull(cloudEvent.getData()).toBytes());
+                return new ItemAdded(requireNonNull(cloudEvent.getSubject()), "extended", 1);
+            }
+
+            @Override
+            public String getCloudEventType(Class<? extends OrderEvent> type) {
+                return converter.getCloudEventType(type);
+            }
+        };
     }
 
     private List<SkippedInput> held() {
