@@ -2397,8 +2397,10 @@ subscription doesn't start on that node. During a rolling upgrade, a 0.34 node t
 stored in the new form fails to start it until it runs 0.35 too.
 
 To roll back to 0.34, stop every instance of the application, delete the stored checkpoint of every subscription whose
-checkpoint starts with `position:` and has `;v:2;` after its first value, and start every instance again on 0.34. Each
-of those subscriptions then starts from the start it is configured with. A 0.35 instance that still runs after the
+checkpoint starts with `position:` and has `;v:2;` after its first value, and start every instance again on 0.34 with
+the same start, as
+[Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete) describes.
+Each of those subscriptions then starts from the start it is configured with. A 0.35 instance that still runs after the
 delete can take such a subscription over and store a checkpoint in the new form again.
 
 ### When a catch-up loses its live start on every replay
@@ -2443,9 +2445,11 @@ A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter p
 subscription at a position, and its `cancelSubscription(id)` acts only on the instance you call it on. With checkpoint
 storage every instance that gets the lease refuses the same stored checkpoint. Stop every instance of the application,
 delete that checkpoint or replace it with a checkpoint you kept that the subscription model still has the history back
-to, and start every instance again with the same start, as the `ERROR` the competing consumer logs says. Without checkpoint storage, cancel the subscription on every
-instance and subscribe it again from the beginning, or from a checkpoint you kept that the subscription model still
-has the history back to.
+to, and start every instance again with the same start, as
+[Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete) describes
+and the `ERROR` the competing consumer logs says. Without checkpoint storage, stop every instance and start them all
+again subscribed from the beginning, or from a checkpoint you kept that the subscription model still has the history
+back to.
 
 A DCB catch-up and the reactor catch-ups replay only by position, and throw the same exception when you start them from
 a time replay's checkpoint in the new form.
@@ -2651,14 +2655,13 @@ A subscription that is refused, and has no such checkpoint stored with its state
 again: `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or `StartAt.checkpoint(GlobalCheckpoint.of(0))`.
 
 With one instance, cancel it first with `cancelSubscription(id)`, which deletes its stored checkpoint. With more than
-one instance, stop every instance, delete the stored checkpoint, and start every instance again with the same start. A
-cancel on one instance deletes the checkpoint every instance shares, so another instance can start at the present and
-store a newer checkpoint before the cancelled instance subscribes again, and the events in between are skipped.
-[How to recover](#how-to-recover) describes the steps.
+one, stop every instance, delete the stored checkpoint, and start them all again with the same start, as
+[Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete) describes.
 
 A blocking catch-up holds a refused resume, and holds the stored checkpoint it read with it, so deleting the checkpoint
-and resuming is refused again. With every instance of the application stopped, deleting the stored checkpoint and
-starting every instance again with the same start is enough. After that the subscription delivers a checkpoint with every event. For a refused replay whose live start was
+and resuming is refused again. Deleting the stored checkpoint with every instance of the application stopped, and
+starting them all again with the same start, is enough, as
+[Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete) describes. After that the subscription delivers a checkpoint with every event. For a refused replay whose live start was
 lost, size the change stream history to reach back across the replay. On MongoDB that is the oplog.
 
 `startAtGlobalPosition`, `startAtDcbPosition` and `DcbStartAt.afterPosition(long)` are deprecated for removal, since
@@ -2695,9 +2698,9 @@ whole history the next time it starts.
 
 Under the default `resumeBehavior`, a subscription that went live this way before 0.35 stored a checkpoint as it handled
 events, and resumes from that checkpoint in 0.35, so it still never gets the history. To get it, stop every instance of
-the application, delete the checkpoint stored for the subscription, and start every instance again with the same
-start. The subscription
-then replays the whole history, including the events it already handled after it went live, so rebuild the read
+the application, delete the checkpoint stored for the subscription, and start them all again with the same start, as
+[Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete) describes.
+The subscription then replays the whole history, including the events it already handled after it went live, so rebuild the read
 model it feeds first, or make sure its handler can take an event it already handled.
 
 For a start above position 0 in your own code, start from `StartAtTime.beginningOfTime()` or from a time instead.
@@ -2800,8 +2803,10 @@ the subscription doesn't need the history.
 For a subscription behind a catch-up whose `CheckpointStorage` holds a catch-up's checkpoint, restore the start it had
 when the replay stopped, so the catch-up finishes the replay, or remove the stored checkpoint to start from the new
 start position without the history. With more than one instance, stop every instance before you remove it, and start
-every instance again with the same start. A Spring Boot starter subscription at `DEFAULT` waits for its start by default, so
-the exception can stop the application from starting.
+them all again with the same start, as
+[Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete) describes.
+A Spring Boot starter subscription at `DEFAULT` waits for its start by default, so the exception can stop the
+application from starting.
 
 ### A record pattern over `NativeMongoSubscription` stops compiling
 
@@ -2987,23 +2992,17 @@ switch it to `BEGINNING`, or to resume it from a checkpoint the application kept
 has the history back to. Outside Spring Boot, on a blocking catch-up subscription model you call directly, the second
 can be a `resumeSubscription(id, StartAt)` at that checkpoint, as described below.
 
-The blocking starter runs every subscription through a `CompetingConsumerSubscriptionModel`. Its
-`cancelSubscription(id)` gives up the lease only on the instance you call it on, and the checkpoint it deletes is the
-one every instance shares. When more than one instance runs the application, another instance waiting for the lease
-can take it after the delete and start from its own annotation, at the present for `NOW` or `DEFAULT`. It can store a
-checkpoint before the instance you recover registers the subscription again. So with more than one instance, every
-step below that cancels the subscription has to delete the stored checkpoint with every instance stopped instead, as
-the next paragraph describes. Give every instance the same start attribute before you start them again.
+A step below that cancels the subscription is for one instance. With more than one, stop every instance, delete the
+stored checkpoint where a step cancels, and start them all again with the same start, as
+[Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete)
+describes. Do the same with one instance when the application doesn't start, or you would rather not call
+`cancelSubscription`.
 
-When the application doesn't start, or you would rather not call `cancelSubscription`, delete the stored checkpoint
-instead, with every instance of the application stopped. Spring Boot stores it in the collection
-`occurrent.subscription.mongodb.collection` names, `subscriptions` by default, as the document whose `_id` is the
-subscription id. Every step below that cancels the subscription can delete that document instead.
-
-A subscription that the blocking starter paused under `startupMode = BACKGROUND` recovers the same way. With every
-instance of the application stopped, delete its stored checkpoint, or replace it with a resume token the oplog still
-has, and start every instance again with the same start attribute. It then starts where its annotation says, or from
-the resume token you stored.
+A subscription that the blocking starter paused under `startupMode = BACKGROUND` recovers the same way. Delete its
+stored checkpoint, or replace it with a resume token the oplog still has, with every instance stopped and started
+again with the same start attribute, as
+[Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete) describes.
+It then starts where its annotation says, or from the resume token you stored.
 Only a token the application kept with its own state starts it without a gap. A newer one skips the events between
 the last one the handler handled and that token.
 
@@ -3011,20 +3010,22 @@ To replay from the beginning, when the read model or saga can take every event a
 
 1. Set `startAt = BEGINNING` on the annotation. In code, subscribe from the beginning, for example
    `DcbStartAt.beginning()` for a DCB subscription.
-2. Cancel the subscription with `cancelSubscription(id)`, which deletes its stored checkpoint.
+2. With one instance, cancel the subscription with `cancelSubscription(id)`, which deletes its stored checkpoint.
 3. Register it again, for example by restarting the application. With nothing stored, it replays from the beginning
    and then goes live.
 
 To rebuild the read model, when it can't take an event twice:
 
-1. Stop the application, or cancel the subscription.
+1. Stop every instance of the application, or with one instance cancel the subscription.
 2. Delete the read model's data and the subscription's stored checkpoint. Stopping the application keeps the
    checkpoint, and the next start would refuse it again.
-3. Replay from the beginning, as above.
+3. Replay from the beginning as above, and start every instance again with the same start, as
+   [Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete)
+   describes.
 
 To resume from a checkpoint the application kept, when it stores the checkpoint delivered with each event:
 
-1. Cancel the subscription.
+1. With one instance, cancel the subscription.
 2. Subscribe again from that checkpoint, or answer it from a `SubscriptionResumePoints` bean. A checkpoint from a
    replayed event never resumes with a gap. When the oplog no longer has the live start that checkpoint holds and its
    replay didn't start at the beginning, the subscribe throws `CatchupCannotResumeException`. Under
@@ -3040,13 +3041,33 @@ replays, so a checkpoint from a replayed event doesn't work here. When the catch
 
 The blocking Spring Boot starter puts a `CompetingConsumerSubscriptionModel` around the catch-up model, and that model
 has no resume at a position, see [#1304](https://github.com/johanhaleby/occurrent/issues/1304). So in Spring Boot,
-recover as above, with every instance stopped when more than one runs the application.
+recover as above.
 
 To continue from now, when skipping the events since the lost token is acceptable:
 
-1. Cancel the subscription.
+1. With one instance, cancel the subscription.
 2. Subscribe again with `StartAt.now()`, or register it again with `startAt = NOW` or the default. The events
    committed between the lost token and now are never delivered.
+
+#### Changing a stored checkpoint when instances compete
+
+When more than one instance of the application competes for a subscription through a
+`CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts around every subscription, delete or
+replace its stored checkpoint like this instead of cancelling the subscription:
+
+1. Stop every instance of the application.
+2. Delete the stored checkpoint, or replace it with the checkpoint to start from. Spring Boot stores it in the
+   collection `occurrent.subscription.mongodb.collection` names, `subscriptions` by default, as the document whose
+   `_id` is the subscription id.
+3. Start every instance again with the same start. In Spring Boot that is the same start attribute on the annotation.
+
+Every instance reads the same stored checkpoint, and the instance that holds the lease runs the subscription.
+`cancelSubscription(id)` gives up the lease only on the instance you call it on, and deletes the checkpoint every
+instance shares. Another instance waiting for the lease can then take it and start from its own start, at the present
+for `NOW` or `DEFAULT`, and store a newer checkpoint before the instance you recover subscribes again. A delete while
+an instance still runs has the same effect, also after a refused start, since the instance that refused gives the
+lease back and another instance that still competes can take it. The events between the old checkpoint and the newer
+one are never delivered.
 
 ### How to keep it from happening
 
@@ -3191,7 +3212,9 @@ registers with no stored checkpoint, and refuses the registration when it cannot
 On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription that relied on resuming from its
 checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events
 written while the application was down, and runs on every instance. Delete the old checkpoint of a subscription you
-later switch to `DEFAULT`, or it resumes from that position.
+later switch to `DEFAULT`, or it resumes from that position. Delete it with every instance stopped, and start them all
+again with the same start, as
+[Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete) describes.
 
 ## A subscription with no start position resumes from a catch-up's checkpoint
 
@@ -3240,8 +3263,9 @@ The reactive starter, a `@DcbSubscription`, and a projection or snapshot over DC
 
 Nothing, unless the handler can't take the events the replay delivers. The replay can run long when the checkpoint is
 far behind, and the application doesn't finish starting until it's done. Set `startupMode = BACKGROUND` on the
-annotation to start the application first. To start at the present instead, delete the stored checkpoint before the
-next boot.
+annotation to start the application first. To start at the present instead, delete the stored checkpoint with every
+instance stopped, and start them all again with the same start, as
+[Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete) describes.
 
 A subscription whose live checkpoint MongoDB no longer has stops the application from starting. Set
 `startupMode = BACKGROUND` to have it paused instead, and see
@@ -3556,8 +3580,8 @@ application doesn't start. With `startupMode = BACKGROUND`, and on the reactor s
 error in the log that names it. With every instance of the application stopped, delete its stored checkpoint, or
 replace it with a checkpoint the application kept that the subscription model still has the history back to, and start
 every instance again with the same start, as
-[A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now)
-describes. A handler at `NOW` with `resumeBehavior = SAME_AS_START_AT` stores no checkpoint, so it is paused with an
+[Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete) describes.
+A handler at `NOW` with `resumeBehavior = SAME_AS_START_AT` stores no checkpoint, so it is paused with an
 error in the log, and the next start of the application reads a new position. Without a catch-up subscription, the
 MongoDB subscription model restarts the handler from now when
 `occurrent.subscription.mongodb.restart-on-change-stream-history-lost` is `true`, its default, and the events written
@@ -4149,7 +4173,10 @@ Pick one, as the exception's message says:
 
 * Subscribe through a catch-up subscription, which replays from the event store and then goes live.
 * Remove the subscription's checkpoint from the durable storage, so it starts again from the position it is
-  subscribed at.
+  subscribed at. With more than one instance, remove it with every instance stopped and start them all again with
+  the same start, as
+  [Changing a stored checkpoint when instances compete](#changing-a-stored-checkpoint-when-instances-compete)
+  describes.
 * Turn `restartSubscriptionsOnChangeStreamHistoryLost` on, which restarts the subscription at the present and skips
   what was written in between.
 
