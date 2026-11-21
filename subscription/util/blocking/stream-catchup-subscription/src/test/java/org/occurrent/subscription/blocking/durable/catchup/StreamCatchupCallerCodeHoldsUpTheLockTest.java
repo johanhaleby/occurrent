@@ -62,6 +62,8 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
     // The fix answers in about LIFECYCLE_WAIT (10 s), so a call that has not ended after this is a hang
     private static final Duration BOUND = Duration.ofSeconds(30);
     private static final Duration WAIT = Duration.ofSeconds(10);
+    // Far below the 30 s a held shutdown() lets go of its hold after, so a stop that waits for the held shutdown() cannot end within it by the hold expiring. A stop needs no LIFECYCLE_WAIT when the lock is free
+    private static final Duration STOP_BOUND = Duration.ofSeconds(5);
     private static final String LIFECYCLE_THREAD = "occurrent-catchup-lifecycle";
 
     private final CountDownLatch actionReturned = new CountDownLatch(1);
@@ -326,6 +328,25 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
     }
 
     @Test
+    void a_stop_from_another_thread_completes_while_a_second_shutdown_is_held_in_a_serialized_wrapped_shutdown_after_a_first_one_returned_and_neither_model_holds_z_once_it_is_released() throws Exception {
+        // Given a wrapped model whose shutdown() is serialized, a shutdown that gave up on the lock and returned, and a second shutdown that gave up on it too and is held inside
+        // the wrapped shutdown() after it removed the subscriptions, and a function that returns only then, so the lock holder, the lifecycle thread running the subscribe of z, unwinds
+        live.serializesShutdown = true;
+        givenAShutdownThatReturnedAndASecondHeldAfterItRemovedTheSubscriptionsWhileTheFunctionAsks();
+
+        // When a lifecycle call from another thread runs while the second shutdown is held, which needs the lock the lifecycle thread must not hold while it waits for the serialized wrapped shutdown()
+        assertThat(CompletableFuture.runAsync(model::stop, daemonExecutor("stop-while-the-second-shutdown-is-held"))).as("a stop while the second shutdown without the lock is held in the wrapped shutdown()").succeedsWithin(STOP_BOUND);
+
+        // Then no thread but the two shutdowns' own has entered or waits to enter the wrapped shutdown()
+        assertThat(live.shutdownAttempts).as("the threads that entered or wait to enter the wrapped shutdown() while the second shutdown without the lock is held").containsExactlyInAnyOrder("first-shutdown-without-the-lock", "second-shutdown-without-the-lock");
+
+        // And once the second shutdown is released, neither model holds z with no further lifecycle call
+        releaseTheLocklessShutdown.countDown();
+        assertThat(shutdownWithoutTheLock().endedWithin(BOUND)).as("whether the second shutdown returned within " + BOUND + " once its wrapped shutdown() was released").isTrue();
+        awaitNeitherModelHoldsZ();
+    }
+
+    @Test
     void a_stop_from_another_thread_throws_when_a_catchup_listener_that_runs_under_the_lock_without_a_handed_call_waits_for_it_and_a_later_stop_completes() throws Exception {
         // Given z held paused with a parked replay, and a listener for z that waits for a stop from another thread
         eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
@@ -418,6 +439,32 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
         }));
         awaitTheFunction();
         assertThat(locklessShutdownReachedTheHold.get()).as("whether the wrapped shutdown() of the shutdown that gave up on the lock held within " + BOUND + " after it removed the subscriptions").isTrue();
+    }
+
+    // Two shutdowns that give up on the lock, one after the other, each from its own thread. The first one's wrapped shutdown() is not held and returns. The second one's is held
+    // after it removed the subscriptions, and shutdownWithoutTheLock() is that second one. The function, asked inside the wrapped model's subscribe under the lock, returns once it holds
+    private void givenAShutdownThatReturnedAndASecondHeldAfterItRemovedTheSubscriptionsWhileTheFunctionAsks() throws Exception {
+        live.afterShutdown = () -> {
+            if (Thread.currentThread().getName().equals("second-shutdown-without-the-lock")) {
+                locklessShutdownHeld.countDown();
+                HookedSubscriptionModel.awaitLatch(releaseTheLocklessShutdown);
+            }
+        };
+        live.asksTheStartAtInsideTheDelegate = true;
+        AtomicBoolean firstShutdownReturned = new AtomicBoolean();
+        actionResumesXThenSubscribesZ(StartAt.dynamic(context -> {
+            if (context.subscriptionModelType() == HookedSubscriptionModel.AsksAsAWrapper.class && functionAsked.compareAndSet(false, true)) {
+                Call first = new Call("first-shutdown-without-the-lock", model::shutdown);
+                firstShutdownReturned.set(first.endedWithin(BOUND) && first.thrown() == null);
+                callOfTheFunction.set(new Call("second-shutdown-without-the-lock", model::shutdown));
+                locklessShutdownReachedTheHold.set(awaitTheLatch(locklessShutdownHeld));
+                functionReturned.countDown();
+            }
+            return StartAt.now();
+        }));
+        awaitTheFunction();
+        assertThat(firstShutdownReturned.get()).as("whether the first shutdown that gave up on the lock returned without an exception within " + BOUND + " while the function waited for it").isTrue();
+        assertThat(locklessShutdownReachedTheHold.get()).as("whether the wrapped shutdown() of the second shutdown that gave up on the lock held within " + BOUND + " after it removed the subscriptions").isTrue();
     }
 
     // The function waits for a shutdown to return, which gives up on the lock after LIFECYCLE_WAIT, shuts the wrapped model down

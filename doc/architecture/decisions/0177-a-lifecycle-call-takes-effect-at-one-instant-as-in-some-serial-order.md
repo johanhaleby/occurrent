@@ -222,13 +222,21 @@ That pass forgets the catch-ups again and calls the wrapped model's `shutdown()`
 lifecycle thread takes only after the thread holding it has let it go. Whatever that thread registered before it let
 the lock go is removed then, with no further call from anyone.
 
-The thread holding the lock never runs the pass, and the pass never starts while the call without the lock is still
-inside the wrapped model's `shutdown()`. A wrapped model can make a second `shutdown()` wait for one under way.
-`InMemorySubscriptionModel.shutdown()` runs inside `synchronized (subscriptions)`, and `ChangeStreamSubscriptions`,
-under both MongoDB subscription models, runs its `shutdown()` inside `synchronized (monitor)`. A pass run by the thread
-holding the lock would then wait for the call without the lock while it held the lock, every lifecycle call from
-another thread would wait behind it, and if the call without the lock waited for anything that needs the lock, none of
-them would return.
+The thread holding the lock never runs the pass. No thread calls the wrapped model's `shutdown()` under the lock while
+a call without the lock is still inside it, whether that call came from the same `shutdown()` or from another one. A
+wrapped model can make a second `shutdown()` wait for one under way. `InMemorySubscriptionModel.shutdown()` runs inside
+`synchronized (subscriptions)`, and `ChangeStreamSubscriptions`, under both MongoDB subscription models, runs its
+`shutdown()` inside `synchronized (monitor)`. A thread that called it under the lock would then wait for the call
+without the lock while it held the lock, every lifecycle call from another thread would wait behind it, and if the call
+without the lock waited for anything that needs the lock, none of them would return.
+
+So the catch-up counts the calls without the lock that haven't returned yet. A pass, or a later `shutdown()`, that
+holds the lock while that count is above zero doesn't call the wrapped model. Its pass is parked instead, and the call
+without the lock that brings the count to zero hands every parked pass to the lifecycle thread. Nothing waits for the
+count while it holds the lock or runs on the lifecycle thread. A later `shutdown()` whose pass is parked returns at
+once, and counts as under way until that pass has run. A call without the lock that finds a pass under the lock inside
+the wrapped model's `shutdown()` skips its own call, since that pass shuts the wrapped model down, and while it runs no
+code a caller supplied holds the lock.
 
 A pass that throws is logged at `ERROR` and handed to the lifecycle thread again after a backoff of 100 ms, doubled
 each time up to 2 seconds, until it returns normally. A pass that is only run again when some thread next takes the

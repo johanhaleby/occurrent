@@ -55,6 +55,8 @@ class CatchupLifecycleCallerCodeHoldsUpTheLockTest {
     // The fix answers in about LIFECYCLE_WAIT (10 s), so a call that has not ended after this is a hang
     private static final Duration BOUND = Duration.ofSeconds(30);
     private static final Duration WAIT = Duration.ofSeconds(10);
+    // Far below the 30 s a held shutdown() lets go of its hold after, so a stop that waits for the held shutdown() cannot end within it by the hold expiring. A stop needs no LIFECYCLE_WAIT when the lock is free
+    private static final Duration STOP_BOUND = Duration.ofSeconds(5);
 
     private final ControllableLiveModel live = new ControllableLiveModel();
     private final GatedHistory history = new GatedHistory(cloudEvent("1"));
@@ -198,6 +200,58 @@ class CatchupLifecycleCallerCodeHoldsUpTheLockTest {
         // And once the shutdown is released, neither model holds z with no further lifecycle call
         assertThat(callOfTheFunction.get().endedWithin(BOUND)).as("whether the shutdown returned within " + BOUND + " once its live shutdown() was released").isTrue();
         assertThat(callOfTheFunction.get().thrown()).as("what the shutdown threw").isNull();
+        Awaitility.await().atMost(BOUND).untilAsserted(() -> {
+            assertThat(live.subscriptions).as("the subscriptions the live model holds").doesNotContainKey(Z);
+            assertThat(live.isRunning(Z)).as("whether the live model runs z").isFalse();
+            assertThat(live.isPaused(Z)).as("whether the live model holds z paused").isFalse();
+            assertThat(model.isRunning(Z)).as("whether the catch-up model runs z").isFalse();
+            assertThat(model.isPaused(Z)).as("whether the catch-up model holds z paused").isFalse();
+        });
+    }
+
+    @Test
+    void a_stop_from_another_thread_completes_while_a_second_shutdown_is_held_in_a_serialized_live_shutdown_after_a_first_one_returned_and_neither_model_holds_z_once_it_is_released() throws Exception {
+        // Given a live model whose shutdown() is serialized, a shutdown that gave up on the lock and returned, and a second shutdown that gave up on it too and is held inside
+        // the live shutdown() after it dropped the subscriptions, and a function, asked by the live model, that returns only then, so the lock holder, the lifecycle thread running the subscribe of z, unwinds
+        CountDownLatch locklessShutdownHeld = new CountDownLatch(1);
+        CountDownLatch releaseTheLocklessShutdown = new CountDownLatch(1);
+        AtomicBoolean firstShutdownReturned = new AtomicBoolean();
+        AtomicBoolean heldWithinTheBound = new AtomicBoolean();
+        live.asksTheStartAtAndRejectsOnceShutDown = true;
+        live.serializesShutdown = true;
+        live.afterShutdown = () -> {
+            if (Thread.currentThread().getName().equals("second-shutdown-without-the-lock")) {
+                locklessShutdownHeld.countDown();
+                awaitTheLatch(releaseTheLocklessShutdown);
+            }
+        };
+        try {
+            actionResumesXThenSubscribesZ(StartAt.dynamic(context -> {
+                if (context.subscriptionModelType() == ControllableLiveModel.AsksAsAWrapper.class && functionAsked.compareAndSet(false, true)) {
+                    Call first = new Call("first-shutdown-without-the-lock", model::shutdown);
+                    firstShutdownReturned.set(first.endedWithin(BOUND) && first.thrown() == null);
+                    callOfTheFunction.set(new Call("second-shutdown-without-the-lock", model::shutdown));
+                    heldWithinTheBound.set(awaitTheLatch(locklessShutdownHeld));
+                    functionReturned.countDown();
+                }
+                return StartAt.now();
+            }));
+            awaitTheFunction();
+            assertThat(firstShutdownReturned.get()).as("whether the first shutdown that gave up on the lock returned without an exception within " + BOUND + " while the function waited for it").isTrue();
+            assertThat(heldWithinTheBound.get()).as("whether the second shutdown that gave up on the lock was held in the live model's shutdown() within " + BOUND + " after it dropped the subscriptions").isTrue();
+
+            // When a lifecycle call from another thread runs while the second shutdown is held, which needs the lock the lifecycle thread must not hold while it waits for the serialized live shutdown()
+            assertThat(CompletableFuture.runAsync(model::stop, daemonExecutor("stop-while-the-second-shutdown-is-held"))).as("a stop while the second shutdown without the lock is held in the live model's shutdown()").succeedsWithin(STOP_BOUND);
+
+            // Then no thread but the two shutdowns' own has entered or waits to enter the live model's shutdown()
+            assertThat(live.shutdownAttempts).as("the threads that entered or wait to enter the live model's shutdown() while the second shutdown without the lock is held").containsExactlyInAnyOrder("first-shutdown-without-the-lock", "second-shutdown-without-the-lock");
+        } finally {
+            releaseTheLocklessShutdown.countDown();
+        }
+
+        // And once the second shutdown is released, neither model holds z with no further lifecycle call
+        assertThat(callOfTheFunction.get().endedWithin(BOUND)).as("whether the second shutdown returned within " + BOUND + " once its live shutdown() was released").isTrue();
+        assertThat(callOfTheFunction.get().thrown()).as("what the second shutdown threw").isNull();
         Awaitility.await().atMost(BOUND).untilAsserted(() -> {
             assertThat(live.subscriptions).as("the subscriptions the live model holds").doesNotContainKey(Z);
             assertThat(live.isRunning(Z)).as("whether the live model runs z").isFalse();

@@ -2985,11 +2985,13 @@ the catch-up is not affected.
   above on another thread ends once that code and the wait have both run for 10 seconds. A `start(..)`, `stop()`,
   `stopReplay()`, `resumeReplay()` or `resumeSubscription(..)` then throws `IllegalStateException` with "Nothing was
   changed." in its message, and a `shutdown()` shuts the wrapped model down without the lock and logs a `WARN`. Once
-  that call has returned and the thread that held the lock has let it go, the catch-up's lifecycle thread shuts the
-  wrapped model down again under the lock, so the wrapped model keeps no subscription that the code went on to
-  register. The thread that held the lock neither makes nor waits for that call. When it throws, it is logged at
-  `ERROR` and made again after a wait that starts at 100 ms and doubles up to 2 seconds, until it returns normally,
-  and until then a `start(..)` doesn't start the wrapped model.
+  that call, and every other such call still in the wrapped model's `shutdown()`, has returned and the thread that
+  held the lock has let it go, the catch-up's lifecycle thread shuts the wrapped model down again under the lock, so
+  the wrapped model keeps no subscription that the code went on to register. The thread that held the lock neither
+  makes nor waits for that call. A later `shutdown()` made while such a call is still in the wrapped model's
+  `shutdown()` doesn't wait for it, and hands its own call to the lifecycle thread the same way. When the call on the
+  lifecycle thread throws, it is logged at `ERROR` and made again after a wait that starts at 100 ms and doubles up to
+  2 seconds, until it returns normally, and until then a `start(..)` doesn't start the wrapped model.
 
 ### What to do
 
