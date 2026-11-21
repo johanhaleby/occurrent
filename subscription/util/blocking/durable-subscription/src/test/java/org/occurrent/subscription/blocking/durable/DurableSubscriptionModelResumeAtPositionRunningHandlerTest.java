@@ -675,6 +675,89 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
                 assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(START);
             });
         }
+
+        @Test
+        void no_quiet_position_is_saved_when_the_put_back_wrote_the_previous_checkpoint_and_threw_and_the_handler_the_resume_refused_returned_during_it() {
+            // Given
+            AtomicBoolean putBackFails = new AtomicBoolean();
+            InMemoryCheckpointStorage throwingAfterThePutBackWrote = new InMemoryCheckpointStorage() {
+                @Override
+                public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                    Checkpoint saved = super.save(subscriptionId, checkpoint, condition);
+                    if (putBackFails.get() && checkpoint.equals(START)) {
+                        throw new IllegalStateException("The reply of the put-back was lost");
+                    }
+                    return saved;
+                }
+            };
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, throwingAfterThePutBackWrote, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model, throwingAfterThePutBackWrote);
+            CompletableFuture<Void> handler = deliverAHandlerThatStaysRunning(EVENT_OF_THE_RUNNING_HANDLER);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.whenResuming = () -> {
+                wrapped.whenResuming = () -> {
+                };
+                handlerReturns(handler);
+            };
+            wrapped.failsResume = true;
+            putBackFails.set(true);
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("resume failed for " + SUBSCRIPTION_ID);
+
+            // Then
+            // The put-back wrote START before it threw, so START is stored. The handler's checkpoint was refused by the
+            // resume, so START does not cover its event and a quiet position stored over START would skip that event
+            // after a restart
+            await().during(300, MILLISECONDS).atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(throwingAfterThePutBackWrote.read(SUBSCRIPTION_ID)).isEqualTo(START);
+            });
+        }
+
+        @Test
+        void a_quiet_position_is_saved_when_a_delivery_stored_its_checkpoint_before_the_resume_read_it_and_the_put_back_wrote_it_again() {
+            // Given
+            AtomicBoolean handlerReturnsOnTheNextRead = new AtomicBoolean();
+            AtomicReference<CompletableFuture<Void>> handler = new AtomicReference<>();
+            InMemoryCheckpointStorage readingAfterTheHandlerReturned = new InMemoryCheckpointStorage() {
+                @Override
+                public @Nullable Checkpoint read(String subscriptionId) {
+                    if (handlerReturnsOnTheNextRead.compareAndSet(true, false)) {
+                        handlerReturns(handler.get());
+                    }
+                    return super.read(subscriptionId);
+                }
+            };
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, readingAfterTheHandlerReturned, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model, readingAfterTheHandlerReturned);
+            handler.set(deliverAHandlerThatStaysRunning(EVENT_OF_THE_RUNNING_HANDLER));
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+            handlerReturnsOnTheNextRead.set(true);
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class);
+
+            // Then
+            // The handler stored its checkpoint before the resume read what was stored, so the put-back wrote that
+            // checkpoint again and what is stored covers the latest delivery. Quiet positions are safe to save, and
+            // holding them would leave the stored checkpoint behind for as long as no event arrives
+            assertThat(readingAfterTheHandlerReturned.read(SUBSCRIPTION_ID)).isEqualTo(EVENT_OF_THE_RUNNING_HANDLER);
+            await().atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(readingAfterTheHandlerReturned.read(SUBSCRIPTION_ID)).isEqualTo(QUIET);
+            });
+        }
     }
 
     private Consumer<Checkpoint> aSaverOnceTheIntervalHasPassed() {

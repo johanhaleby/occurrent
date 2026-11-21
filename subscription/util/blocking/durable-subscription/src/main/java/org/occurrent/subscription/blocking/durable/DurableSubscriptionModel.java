@@ -1172,6 +1172,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * checkpoint storage then replays from where it would have before the call. When nothing was stored before, the
      * position asked for here stays stored. When putting the old checkpoint back throws too, that exception is added
      * to the thrown one as a suppressed exception, and the position asked for here may still be the one stored.
+     * After a failed resume, quiet positions are saved again only when the checkpoint left stored covers the last
+     * event delivered. When it doesn't, for example when the old checkpoint goes back over an event whose checkpoint
+     * this call refused, no quiet position is saved until a later event stores its checkpoint. When putting the old
+     * checkpoint back throws, the stored checkpoint is read to find out which one is stored.
      * <p>
      * A subscription subscribed without checkpointing (see {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)}),
      * or one the wrapped model doesn't report as paused, is passed on to the wrapped model as it is and nothing is
@@ -1690,8 +1694,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // pause stopped waiting for can still return, or still be called, after a resume has delivered later events,
         // and what it stored says nothing about them
         private boolean latestStored;
-        // What a put-back after a failed resume at a position compares what is stored with, to learn whether that covers
-        // the current delivery that started last. The checkpoint that delivery stored, as Checkpoint.asString, or the
+        // Compared with what is stored once a put-back after a failed resume at a position has written or thrown, to
+        // learn whether that covers the current delivery that started last. The checkpoint that delivery stored, as
+        // Checkpoint.asString, or the
         // quiet position saved after it, null when it stored none. The count of resumes at a position when that delivery
         // read its event or the quiet position was saved, since a resume after that stored a position that covers it
         private @Nullable String latestPosition;
@@ -1833,9 +1838,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
         // Called holding deliveryLock and saveLock, with what is stored once the put-back after a failed resume at a
         // position wrote or threw, null when that is unknown. The current delivery that started last counts as stored
-        // only when what is stored covers it: its own checkpoint, a quiet position saved after it, the position of a
-        // resume after it, or any checkpoint when nothing has been delivered. A delivery under way decides again when
-        // it finishes
+        // only when what is stored is its own checkpoint, a quiet position saved after it, the position of a resume
+        // after it, or any checkpoint when nothing has been delivered. A delivery under way decides again when it
+        // finishes
         void putBackLeft(@Nullable Checkpoint stored) {
             String position = stored == null ? null : stored.asString();
             if (position != null && position.equals(putBackOver.position())) {
