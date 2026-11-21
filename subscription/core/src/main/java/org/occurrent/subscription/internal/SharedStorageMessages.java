@@ -17,8 +17,9 @@
 package org.occurrent.subscription.internal;
 
 /**
- * The sentence a message appends when it tells someone to cancel a subscription, or to delete or replace what is
- * stored under its id. The blocking and reactor messages use the same constants, so they say the same thing.
+ * The sentence a message appends when it tells someone to cancel a subscription, to delete or replace what is stored
+ * under its id, or to subscribe under a new id. The blocking and reactor messages use the same constants, so they say
+ * the same thing.
  * <p>
  * Every instance of an application reads the same checkpoint or catch-up marker from shared storage. Under a
  * {@code CompetingConsumerSubscriptionModel} the instance that gets the lease next writes the checkpoint, and on the
@@ -49,4 +50,13 @@ public final class SharedStorageMessages {
      */
     public static final String MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT = "When more than one instance runs it, stop every instance,"
             + " delete what is stored under its id, and start every instance again with the same start, as " + GUIDE + " describes.";
+
+    /**
+     * For a message that tells someone to subscribe under a new id, or to replace a catch-up-then-live subscription
+     * with one under a new id. A new id keeps the new subscription apart from what is stored under the old id, but not
+     * from the broker queue or consumer group the old one consumes, nor from a store the old one still writes to.
+     */
+    public static final String NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT = "When more than one instance runs it, whether a new id is enough"
+            + " depends on where each instance keeps what it builds, which broker queue or consumer group it consumes,"
+            + " and whether instances on the old id still run, as " + GUIDE + " describes.";
 }

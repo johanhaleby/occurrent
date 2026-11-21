@@ -70,6 +70,7 @@ public final class CatchupMarkers {
         return "The checkpoint stored for subscription id \"" + subscriptionId + "\" is not a catch-up marker: " + stored
                 + ". Something other than a catch-up stored it, such as a durable subscription that used this id before."
                 + " Delete the checkpoint stored for this id, or subscribe under a new id. "
-                + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT;
+                + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " "
+                + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT;
     }
 }

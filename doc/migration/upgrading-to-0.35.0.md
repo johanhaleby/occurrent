@@ -171,7 +171,11 @@ other sections compile fine and behave differently, so read them first.
   A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
 - [A blocking cancel no longer promises a rebuild](#a-blocking-cancel-no-longer-promises-a-rebuild).
   `cancelSubscription(id)` on the blocking `CatchupThenPushSubscriptionModel` still deletes the catch-up marker, but a
-  rebuild takes a new subscription id. Compiles unchanged.
+  rebuild takes a new subscription id. With more than one instance, whether a new id is enough depends on where each
+  instance keeps what it builds, which broker queue or consumer group it consumes, and whether instances on the old id
+  still run, as
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
   `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached. Over
   `ReactorMongoSubscriptionModel` it fails only when MongoDB's reply to `hello` has no `localTime`, where 0.34.0 didn't
@@ -2419,13 +2423,19 @@ level, and the `Flux` of an unnamed reactor catch-up fails with the exception. I
 when its subscribe started the replay, and the replay ran again after a backoff when a resume started it. A named
 reactor subscription ended and freed its id unless a takeover started the replay. `waitUntilStarted()` fails with the
 exception, and the id stays taken, so a subscribe of the same id throws `DuplicateSubscriptionIdException` until you
-cancel the subscription. Resuming the subscription replays again from the beginning, and so does `start(true)`. Over a
+cancel the subscription. With more than one instance, stop every instance and delete or replace the stored checkpoint
+instead of cancelling, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes. Resuming the subscription replays again from the beginning, and so does `start(true)`. Over a
 `CompetingConsumerSubscriptionModel` around a blocking catch-up the node gives up the lease and stops competing for it
 until you resume the subscription.
 
 A replay that started later and loses its live start is held paused the same way. A replay again from its start would
 skip events, so `resumeSubscription(id)` throws `CatchupCannotResumeException` until you cancel the subscription, and so
-does `start(true)` on the blocking stack. A reactor `start(true)` keeps it held paused and replays nothing. On a
+does `start(true)` on the blocking stack. With more than one instance, stop every instance and delete or replace the
+stored checkpoint instead of cancelling, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes. A reactor `start(true)` keeps it held paused and replays nothing. On a
 blocking catch-up subscription model you call directly, `resumeSubscription(id, startAt)` at a position the change
 stream history still reaches resumes it. With checkpoint storage that position replaces the one the catch-up stored
 when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to. While
@@ -2937,7 +2947,10 @@ any position other than the beginning could skip that event.
   model finds the token gone, so it doesn't tell you the subscription stopped. Check `isPaused(id)` instead.
 - The subscription is paused, `isPaused(id)` answers `true`, and it delivers nothing.
 - After the error, `resumeSubscription(id)` throws `CatchupCannotResumeException` until you cancel the subscription,
-  see [How to recover](#how-to-recover). On a blocking catch-up subscription model you call directly, a
+  see [How to recover](#how-to-recover). With more than one instance, stop every instance and delete or replace the
+  stored checkpoint instead of cancelling, as
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes. On a blocking catch-up subscription model you call directly, a
   `resumeSubscription(id, startAt)` can end that refusal too, even at a position whose history is gone, and even when
   the error is logged while it runs. A `resumeSubscription(id)` after the pause but before the error isn't refused
   yet. A resume that isn't refused never delivers from a position whose history is gone. When it opens the
@@ -3053,10 +3066,18 @@ To continue from now, when skipping the events since the lost token is acceptabl
 
 When more than one instance of the application runs a subscription, every instance reads what is stored under its id.
 For a durable or catch-up subscription that is its checkpoint, and for a subscription with `source = PUSH` it is its
-catch-up marker. How to change it depends on where the handler keeps what it builds.
+catch-up marker. Three things about how the application runs decide how to change it, and whether a new subscription
+id is enough:
 
-When every instance writes to one store, such as a read model in MongoDB, delete or replace it like this instead of
-cancelling the subscription on one instance:
+- Where the handler keeps what it builds. Either every instance writes to one store, such as a read model in MongoDB,
+  or each instance keeps its own, for example in memory.
+- For a subscription with `source = PUSH`, which RabbitMQ queue or Kafka consumer group each instance consumes.
+  Instances that consume one queue or group share its events, and each event goes to one of them. The application
+  names the queue or the group when it builds the source, and a new subscription id doesn't change it.
+- Whether the filter or the handler changes while instances on the old id still run.
+
+When every instance writes to one store, delete or replace it like this instead of cancelling the subscription on one
+instance:
 
 1. Stop every instance of the application that can write the checkpoint or marker.
 2. Delete the stored checkpoint or marker, or replace the checkpoint with the one to start from. Spring Boot stores
@@ -3065,13 +3086,17 @@ cancelling the subscription on one instance:
 3. Start every instance again with the same start. In Spring Boot that is the same start attribute on the annotation.
 
 The instance that starts first runs the subscription from that start, and what it writes to the store is there for
-every instance. An instance that starts after it finds the checkpoint or marker the first one stored, and resumes
-after it or skips its replay. The store already has those events from the first instance.
+every instance. An instance that starts once the first one has stored its checkpoint or marker finds it, and resumes
+after it or skips its replay. The store already has those events from the first instance. On the reactive starter and
+for `source = PUSH`, an instance that starts before that runs from the same start too, so the store gets those events
+from more than one instance, as on any start that finds nothing stored.
 
 When each instance keeps what it builds for itself, for example in memory, one checkpoint or marker can't serve every
 instance. The one that starts first stores it, and every instance that starts after resumes after it or skips its
 replay, so what that instance builds misses those events. That happens on every start, also when nothing was deleted.
-Give each instance a subscription id of its own instead:
+So instances can share a subscription id only when they write to one store, and a step in this guide that stops every
+instance and starts them all again with the same start is for instances that do. Give each instance a subscription id
+of its own instead:
 
 - The checkpoint and the catch-up marker are stored under the subscription id, so each instance then reads only what
   it stored itself, and a change to it needs only that instance stopped.
@@ -3100,12 +3125,35 @@ again before the instance you recover subscribes again:
   is done. When it does that after your cancel deleted the marker, the subscribe on the instance you recover finds the
   marker and skips its replay on the blocking stack, or replays only the events after it on the reactive stack.
 
-A new subscription id that every instance shares needs no instance stopped when every instance writes to one store.
-Nothing is stored under it, so the subscription starts from its start, and the catch-up of a subscription with
-`source = PUSH` replays the whole history. Use one for a rebuild or a changed filter, or when the application can't
-stop every instance at once. Once no instance runs the old id, delete what is stored under it. When each instance keeps
-what it builds for itself, a new id that every instance shares has the same problem as the old one, since every
-instance that starts after the first finds what the first one stored under it.
+A new subscription id has nothing stored under it, so the subscription starts from its start, and the catch-up of a
+subscription with `source = PUSH` replays the whole history. Use one for a rebuild or a changed filter or handler, or
+when the application can't stop every instance at once. Once no instance runs the old id, delete what is stored under
+it. A new id keeps the new subscription apart from the checkpoint and the marker of the old one, but not from the
+store the old one writes to, or from the queue or consumer group it consumes. What else it takes depends on the
+deployment:
+
+- When every instance writes to one store, give every instance the same new id. While an instance on the old id still
+  runs, the old and the new subscription both write to the store. That is safe when the new subscription writes
+  records the old one doesn't, such as a collection of its own, or when both apply every event the same way and
+  applying an event twice changes nothing. Otherwise stop every instance on the old id before the first instance on
+  the new id starts.
+- When every instance writes to one store and the subscription has `source = PUSH`, also let the new subscription
+  consume a RabbitMQ queue or a Kafka consumer group that no instance on the old id consumes. Or stop every instance on
+  the old id before the first instance on the new id starts.
+- When each instance keeps what it builds for itself, a new id that every instance shares has the same problem as the
+  old one, since every instance that starts after the first finds what the first one stored under it. Give each
+  instance a new id of its own, and for `source = PUSH` keep each instance on a queue or consumer group of its own.
+
+An instance on the old id that consumes the queue or consumer group of the new subscription gets some of the events
+stored after the catch-up of the new subscription read the history. `RabbitMqCloudEventSource` acknowledges such an
+event and `KafkaCloudEventSource` commits its offset once the old subscription has handled it, and also when the old
+filter declines it. `RabbitMqDomainEventSource` and `KafkaDomainEventSource` do the same. So the new subscription
+never gets that event. Only when the old and the new subscription handle every event the same way, into the same
+store, does the store have it anyway.
+
+A new RabbitMQ queue gets only the messages published after it is bound, so it has to exist before the subscription on
+the new id starts. Building the `RabbitMqCloudEventSource` creates the queue and its bindings, unless it is built with
+`declareTopology(false)`.
 
 A step in this guide that says "with one instance" means that one process runs the subscription and nothing else
 writes to its checkpoint storage under that id. A subscription model that the application calls directly doesn't
@@ -3902,10 +3950,18 @@ then skips its replay. 0.34.0 had the same gap.
 
 * Subscribe under a new subscription id when a projection has to be rebuilt, or when its filter or its projection
   changes. The marker is stored under the id alone, so under the old id a stored marker skips the replay and the
-  changed projection never sees the history.
+  changed projection never sees the history. With more than one instance, whether a new id is enough depends on where
+  each instance keeps what it builds, which broker queue or consumer group it consumes, and whether instances on the old
+  id still run, as
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes.
 * Rebuild a push `@Saga` under a new id only when its completed instances are kept for as long as the history it
   replays. A new id replays the whole history into the saga, so every instance that its TTL removed is recreated from
-  its start event and dispatches its commands again. With `catchup = NONE` a new id replays nothing.
+  its start event and dispatches its commands again. With `catchup = NONE` a new id replays nothing. With more than one
+  instance, whether a new id is enough also depends on where each instance keeps what it builds, which broker queue
+  or consumer group it consumes, and whether instances on the old id still run, as
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes.
 * Don't give a durable subscription and a blocking catch-up-then-push model, `CatchupProjectionFeed` or
   `DomainEventFeed` the same subscription id in the same `CheckpointStorage`. Any checkpoint stored under the id counts
   as the marker, so a checkpoint the durable subscription stored makes the blocking catch-up skip its replay.
@@ -4339,13 +4395,20 @@ What you see:
 - The marker is stored under the subscription id alone. When you change the filter or the projection, subscribe under
   a new id. A start under the old id can resume after a position its earlier filter stored, and skip the events at or
   below it that the new filter matches. 0.34.0 skipped the whole replay in that case.
+- With more than one instance, whether a new id is enough for a rebuild or a changed filter or projection depends on
+  where each instance keeps what it builds, which broker queue or consumer group it consumes, and whether instances on
+  the old id still run, as
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes.
 - A catch-up that reads a checkpoint stored under the subscription id takes it as its marker. When something other
   than a catch-up stored it, such as a durable subscription that used the id before it moved to `source = PUSH`, and
   it is not a position, that catch-up fails with an `IllegalStateException` that names the id. 0.34.0 took any stored
   checkpoint as a finished catch-up and skipped the replay. Delete that checkpoint with every instance stopped and
-  start them all again with the same start, as
+  start them all again with the same start, or subscribe under a new id. With more than one instance, whether a new id
+  is enough depends on where each instance keeps what it builds, which broker queue or consumer group it consumes, and
+  whether instances on the old id still run.
   [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
-  describes, or subscribe under a new id. A start that finds no marker replays the whole history. A failed catch-up
+  describes both. A start that finds no marker replays the whole history. A failed catch-up
   does not delete that checkpoint, but the push model's `cancelSubscription(id)` does. When a durable checkpoint is a
   position, a catch-up can resume after it and replace it. So don't share a subscription id between a durable subscription and a catch-up-then-push model,
   `CatchupProjectionFeed` or `DomainEventFeed`, on either stack.

@@ -4801,7 +4801,7 @@ class ReactiveHandoverTest {
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(captured.errors()).singleElement()
                     .satisfies(error -> assertThat(error.getFormattedMessage())
                             .startsWith("A catch-up of this test payload failed. The test payload refuses every event")
-                            .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+                            .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)));
         }
     }
 
@@ -4816,7 +4816,7 @@ class ReactiveHandoverTest {
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(captured.errors()).singleElement()
                     .satisfies(error -> assertThat(error.getFormattedMessage())
                             .startsWith("A catch-up of this test payload failed, since the checkpoint stored under its id is not a catch-up marker.")
-                            .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+                            .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)));
         }
     }
 
@@ -4833,7 +4833,26 @@ class ReactiveHandoverTest {
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(captured.errors()).singleElement()
                     .satisfies(error -> assertThat(error.getFormattedMessage())
                             .startsWith("A payload of this test payload with de-dup key bad1 failed to be delivered after its caller was told it was taken in.")
-                            .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+                            .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+        }
+    }
+
+    @Test
+    void a_marker_that_cannot_be_forgotten_logs_how_to_change_what_is_stored_and_when_a_new_id_is_enough_when_several_instances_run_it() {
+        try (CapturedLog captured = new CapturedLog()) {
+            ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(new CopyOnWriteArrayList<>(), Map.of());
+            FakeSource source = source(List.of("R1"), false);
+            source.onLiveDrained = () -> handover.accept("bad1").subscribe();
+            source.forgetFailure = new IllegalStateException("marker delete failed");
+
+            StepVerifier.create(handover.catchUp(source)).expectNext(true).verifyComplete();
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(captured.errors())
+                    .filteredOn(error -> error.getFormattedMessage().startsWith("The catch-up marker of this test payload could not be forgotten"))
+                    .singleElement()
+                    .satisfies(error -> assertThat(error.getFormattedMessage())
+                            .endsWith("see the \"Cancel\" section of ADR 179. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT
+                                    + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)));
         }
     }
 

@@ -75,6 +75,10 @@ import java.util.function.Predicate;
  * stored as its catch-up marker. Without one, every catch-up replays the whole history. ADR 179's "What a reactor
  * catch-up start replays" says what a start replays. The marker is stored under the projection's id alone, so a
  * projection whose filter or logic changes is registered under a new id.
+ * With more than one instance, whether a new id is enough depends on where each instance keeps what it builds, which
+ * broker queue or consumer group it consumes, and whether instances on the old id still run, as
+ * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
+ * upgrade guide</a> describes.
  * <p>
  * An event the projection's fold writes to the event store and feeds back through {@link #acceptAndWait(Object)} is an early copy,
  * and it needs a durable path as well. Either the application's forwarder publishes it to the broker queue this feed's

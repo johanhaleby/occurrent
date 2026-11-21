@@ -259,6 +259,9 @@ that exact shape worked there like any other, and this is a behaviour change for
 If you have such an id, migrate it before upgrading, while still on the previous version. Read the checkpoint
 under the old id, save it under a new one that does not start with the reserved prefix, delete the old id, then
 point wherever the application passes that subscription id (a `subscribe(..)` call, typically) at the new one.
+When more than one instance runs the subscription, do it with every instance stopped, as
+[Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+in the 0.35.0 upgrade guide describes, so that no instance stores a newer checkpoint under the old id after it is read.
 Do this through the storage's own API and before the upgrade, because afterward `read` refuses the old id the
 same as `save` and `delete` do, so the API can no longer see the checkpoint to move it. If the upgrade has already
 happened, migrate directly in Redis instead, with the application stopped, `GET` the old key, `SET` the new one to

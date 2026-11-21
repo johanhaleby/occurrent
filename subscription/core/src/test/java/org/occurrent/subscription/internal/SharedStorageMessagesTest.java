@@ -45,4 +45,14 @@ class SharedStorageMessagesTest {
                 .contains("delete what is stored under its id")
                 .endsWith("start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes.");
     }
+
+    @Test
+    void the_step_for_a_new_id_links_the_guide_and_names_where_each_instance_keeps_what_it_builds_which_queue_it_consumes_and_whether_the_old_id_still_runs() {
+        assertThat(SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .startsWith("When more than one instance runs it, whether a new id is enough")
+                .contains("where each instance keeps what it builds")
+                .contains("which broker queue or consumer group it consumes")
+                .contains("and whether instances on the old id still run")
+                .endsWith(", as " + SharedStorageMessages.GUIDE + " describes.");
+    }
 }
