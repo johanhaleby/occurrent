@@ -138,11 +138,21 @@ failover, and each can miss a different write. A record read after the instance 
 instance deleted, and a release that acts on it sends the commands of a record another release applied already. When
 that replay fails, the release quarantines the instance again on a record that is gone, and its compare-and-set on
 the version it read wins. So `findWithFirstSkippedInput` reads the instance and its first record in one transaction of
-the store's at read concern `snapshot`, and both are what the primary had at the same moment. An instance that
-transaction doesn't find is read again at `linearizable`, as `find` does, and read in a new transaction when that read
-finds it. A standalone server refuses the transaction, and every write of a record with it, so its records don't change
-between two reads, and the store reads the instance and then its first record at `majority`. Inside a caller's
-transaction both reads run in it, see point 4.
+the store's at read concern `snapshot`, and both are what the primary had at the same moment. MongoDB documents that
+only `snapshot` reads every shard of a sharded cluster at the same moment in a transaction, so that holds when the
+instance and its records are on different shards too. A standalone server refuses the transaction, and every write of
+a record with it, so its records don't change between two reads, and the store reads the instance and then its first
+record at `majority`.
+
+An instance that transaction doesn't find is read again at `linearizable`, as `find` does. When that read finds it, the
+store reads both again in a new transaction. A new primary right after an election can hand out a snapshot from before
+writes a majority already has, and the linearizable read runs in a session of its own. So the store passes the
+cluster time and operation time of that session to the session of the new transaction before its first read, and the
+driver asks for a snapshot at or after that time (`afterClusterTime`). That snapshot has every write the linearizable
+read saw. When it doesn't find the instance either, the instance was deleted after the linearizable read, which started
+after the call did.
+
+`findWithFirstSkippedInput` refuses a caller's transaction, see point 4.
 
 A transaction aborted with the `TransientTransactionError` label runs again through the store's `RetryStrategy`. A
 commit that ends with `UnknownTransactionCommitResult` is committed again through the same strategy. The transaction
@@ -212,8 +222,8 @@ In a Spring transaction of another resource where no MongoDB transaction has sta
 does outside a transaction. It reads through the driver rather than the template there, since a template with
 `SessionSynchronization.ALWAYS` would start a MongoDB transaction for the read, and the read would see its snapshot.
 
-Inside a transaction the store joins, `find`, `findWithoutState` and `findWithFirstSkippedInput` read at the transaction's snapshot, which misses an instance written after the snapshot began. A
-found instance needs nothing more, since the executor writes it back through a compare-and-set, and a write inside the
+Inside a transaction the store joins, `find` and `findWithoutState` read at the transaction's snapshot, which misses an
+instance written after the snapshot began. A found instance needs nothing more, since the executor writes it back through a compare-and-set, and a write inside the
 transaction to an instance changed after its snapshot fails with a write conflict. An absence has no such write, and no
 read in the transaction can see past its snapshot. So on an absence the store inserts a document with the
 saga's id and deletes it again in the same transaction, and the server decides whether that insert conflicts.
@@ -242,6 +252,17 @@ The store doesn't check that write concern. Spring keeps the transaction's `Clie
 `MongoResourceHolder`, so the store can tell that a transaction is active but can't read the concern it commits at. A
 refusal would break every saga run inside a caller's transaction, and a warning would fire on every such call whatever
 the concern is. The SPI and the store's javadoc say that the caller's commit decides.
+
+`findWithFirstSkippedInput` throws an `IllegalStateException` inside a caller's MongoDB transaction, in all three cases
+above and under `SYNCHRONIZATION_NEVER`, before it reads anything. A transaction at read concern `local` or `majority`
+on a sharded cluster reads each shard at its own moment, so it could return an instance that applied a replay together
+with the record that replay deleted, the pair the read exists to rule out. Only `snapshot` reads the shards at one
+moment. The store can't tell the read concern of the transaction for the same reason it can't tell the write concern,
+so it refuses a transaction at `snapshot` too, on a replica set as well as through a mongos. The same rule on every
+deployment means a release that works against a test replica set doesn't start failing on a sharded cluster in
+production. In Occurrent only a release reads with it, from `SagaSubscription.release(sagaId)` and from the timer
+poller. The poller runs on a thread of its own, so it's never inside a caller's transaction, and the delivery of an
+input never reads with it. A caller that released inside a transaction releases outside it instead.
 
 ## Consequences
 
@@ -275,4 +296,15 @@ the concern is. The SPI and the store's javadoc say that the caller's commit dec
   that only reading the protocol shows to be correct.
 - **Put the records back in a list on the instance's document.** One document is atomic without a transaction, and it
   grows toward MongoDB's 16 MB limit, which ADR 178 rejected.
-- **Refuse or warn inside a caller's transaction.** See point 4.
+- **Refuse or warn inside a caller's transaction.** See point 4. That holds for the reads and writes a saga makes, and
+  not for the release's paired read, which point 4 refuses.
+- **Check the read concern of a caller's transaction, and refuse only one that isn't `snapshot`.** Spring keeps the
+  `ClientSession` where the store can't read it on a template from `withSession`, so the check would need a refusal for
+  that case anyway, and it would pass on a test replica set for a transaction that reads two moments on a sharded
+  cluster.
+- **Read the pair outside the caller's transaction, in a session of the store's.** That read can't see what the
+  caller's transaction wrote and hasn't committed, a release's own write for the record before included, so the next
+  write of the release expects a version the transaction already moved past and loses every attempt.
+- **Read every empty snapshot again at `linearizable`, a bounded number of times, and throw when the attempts run
+  out.** Each new snapshot can be from before the linearizable read for the same reason as the first one. Passing the
+  time of the linearizable read to the new transaction gives a snapshot after it on the first attempt.

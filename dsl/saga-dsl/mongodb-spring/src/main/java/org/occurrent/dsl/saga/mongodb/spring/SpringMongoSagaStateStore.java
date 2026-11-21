@@ -16,12 +16,14 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import com.mongodb.ClientSessionOptions;
 import com.mongodb.MongoException;
 import com.mongodb.MongoServerException;
 import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
+import com.mongodb.client.ClientSession;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
@@ -79,6 +81,8 @@ import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -137,12 +141,18 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * quarantine of an instance only in such a transaction, one that finds no skipped input left or completes the instance.
  * <p>
  * A release reads with {@link #findWithFirstSkippedInput}, which reads the instance and its first skipped input in one
- * transaction of the store's at read concern {@code snapshot}, so both are what the primary had at the same moment. An
- * instance that read doesn't find is read again at read concern {@code linearizable}, as {@link #find} does, and when
- * that read finds it the store reads both again in a new transaction. A standalone server refuses transactions, and so
- * every write of a skipped input there, so the store reads the instance and then its first skipped input at read
- * concern {@code majority}. Inside a transaction of the caller's both reads run in it, and an absent instance is decided
- * as for {@link #find}, see below.
+ * transaction of the store's at read concern {@code snapshot}, so both are what the primary had at the same moment, on
+ * a sharded cluster too when the two are on different shards. An instance that read doesn't find is read again at read
+ * concern {@code linearizable}, as {@link #find} does. When that read finds it, the store reads both again in a new
+ * transaction that starts after the linearizable read, so it has every write that read saw, also on a new primary right
+ * after an election. A standalone server refuses transactions, and so every write of a skipped input there, so the
+ * store reads the instance and then its first skipped input at read concern {@code majority}.
+ * <p>
+ * {@link #findWithFirstSkippedInput} throws an {@link IllegalStateException} inside a MongoDB transaction of the
+ * caller's, before it reads anything, so a release can't run in one. A transaction at read concern {@code local} or
+ * {@code majority} on a sharded cluster reads each shard as it is at its own moment, and could return an instance with a
+ * record that a later version of it already deleted. The store can't tell the read concern of a transaction it joins,
+ * so it refuses one at read concern {@code snapshot} too.
  * <p>
  * The three writes of {@link SagaStateStoreSkippedInputs} and the {@link #delete(String)} of a quarantined instance write
  * the instance and its skipped inputs in one MongoDB transaction, through a {@link MongoTransactionManager} on the
@@ -177,8 +187,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * outside a {@code MongoTransactionManager} transaction, and the store doesn't retry them there either, whatever a
  * {@code RetryStrategy} you implement yourself retries.
  * <p>
- * Inside a transaction of the caller's, {@link #find}, {@link #findWithoutState} and {@link #findWithFirstSkippedInput}
- * read at the transaction's snapshot,
+ * Inside a transaction of the caller's, {@link #find} and {@link #findWithoutState} read at the transaction's snapshot,
  * which misses an instance written after the snapshot began. When the read finds no instance, the store inserts a
  * document that holds only the saga's id and deletes it again in the same transaction, and the server decides whether
  * that insert conflicts. An instance another writer wrote after the snapshot began makes the insert fail with a
@@ -187,7 +196,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * leave no document behind when the transaction commits, and a change stream on the collection may see them. The
  * collection must accept a document that holds only {@code _id}, so a validator that requires other fields makes such a
  * read of an absent instance fail. In a Spring transaction of another resource where no MongoDB transaction has started,
- * the three methods read as they do outside a transaction.
+ * the two methods read as they do outside a transaction, and so does {@link #findWithFirstSkippedInput}.
  * <p>
  * {@link #findReleasingSagaIds(String, int)} finds the instances that have {@code failureReleasedAt} set. The inputs a
  * quarantined instance skips are stored one document each, in a collection next to the instances named after it with
@@ -233,6 +242,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                                                        + "or SagaRunnerConfig.disableQuarantine() on a SagaRunner.";
     static final String REPLICA_SET_REQUIRED_MESSAGE = QUARANTINE_NEEDS_TRANSACTIONS + "The server refused the transaction. " + WAYS_TO_RUN_THE_SAGA;
     static final String STANDALONE_SERVER_MESSAGE = QUARANTINE_NEEDS_TRANSACTIONS + "The server is a standalone server, which refuses transactions. " + WAYS_TO_RUN_THE_SAGA;
+    // A transaction at read concern local or majority on a sharded cluster reads each shard at its own moment, so the
+    // instance and its records could come from two. Only snapshot reads every shard at one moment, and the store can't
+    // see the read concern of a transaction it joins
+    static final String CALLERS_TRANSACTION_MESSAGE = "SpringMongoSagaStateStore releases a quarantined saga instance outside a MongoDB transaction of the caller's, and was called inside one. "
+                                                      + "A release reads the instance and its first skipped input in a transaction of its own at read concern snapshot, since a transaction at another read concern can read the two from different moments on a sharded cluster. "
+                                                      + "Call SagaSubscription.release outside the transaction.";
     private static final String ID = "_id";
     private static final String STATE = SagaCodec.STATE;
     private static final String STATUS = SagaCodec.STATUS;
@@ -451,18 +466,18 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (joinsCallersTransaction()) {
             return findInCallersTransaction(sagaId, query.get());
         }
-        Document found = retried(() -> readInstance(query.get(), ReadConcern.MAJORITY));
-        return found != null || deployment == MongoDeployment.OTHER ? found : retried(() -> readInstance(query.get(), ReadConcern.LINEARIZABLE));
+        Document found = retried(() -> readInstance(null, query.get(), ReadConcern.MAJORITY));
+        return found != null || deployment == MongoDeployment.OTHER ? found : retried(() -> readInstance(null, query.get(), ReadConcern.LINEARIZABLE));
     }
 
     // From the primary, on the database MongoDatabaseUtils hands out, which is bound to no session here. A template with
     // SessionSynchronization.ALWAYS would start a transaction for the read in a Spring transaction of another resource,
     // and the read would see that transaction's snapshot. A linearizable read waits at most the write timeout, as MongoDB
-    // advises, since it can't complete without a majority
-    private @Nullable Document readInstance(Query query, ReadConcern readConcern) {
+    // advises, since it can't complete without a majority. In session, when one is given
+    private @Nullable Document readInstance(@Nullable ClientSession session, Query query, ReadConcern readConcern) {
         try {
-            FindIterable<Document> found = instances(MongoDatabaseUtils.getDatabase(databaseFactory)).withReadConcern(readConcern).withReadPreference(ReadPreference.primary())
-                    .find(query.getQueryObject()).projection(query.getFieldsObject());
+            MongoCollection<Document> instances = instances(MongoDatabaseUtils.getDatabase(databaseFactory)).withReadConcern(readConcern).withReadPreference(ReadPreference.primary());
+            FindIterable<Document> found = (session == null ? instances.find(query.getQueryObject()) : instances.find(session, query.getQueryObject())).projection(query.getFieldsObject());
             return (readConcern == ReadConcern.LINEARIZABLE ? found.maxTime(WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS) : found).first();
         } catch (RuntimeException e) {
             throw translated(e);
@@ -685,38 +700,46 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     // On a replica set or a mongos both reads run in one transaction of the store's, at read concern snapshot, so they
-    // see the instance and its records as one write left them. Two reads at read concern majority can each go to
-    // another primary across a failover. Inside a transaction of the caller's both reads run in it. A standalone server
-    // refuses the transactions every write of a record takes, so its records don't change and two plain reads do
+    // see the instance and its records as one write left them, on one shard or on two. Two reads at read concern majority
+    // can each go to another primary across a failover. A standalone server refuses the transactions every write of a
+    // record takes, so its records don't change and two plain reads do. A transaction of the caller's is refused, see
+    // CALLERS_TRANSACTION_MESSAGE
     @Override
     public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
-        return joiningCallersTransaction(() -> {
-            Objects.requireNonNull(sagaId, "sagaId cannot be null");
-            Query byId = Query.query(where(ID).is(sagaId));
-            if (joinsCallersTransaction()) {
-                MongoDatabase database = MongoDatabaseUtils.getDatabase(databaseFactory);
-                return withFirstSkippedInput(findInCallersTransaction(sagaId, byId), document -> firstSkippedInput(database, sagaId, document));
+        Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        if (MongoDatabaseUtils.isTransactionActive(databaseFactory)) {
+            throw new IllegalStateException(CALLERS_TRANSACTION_MESSAGE);
+        }
+        Query byId = Query.query(where(ID).is(sagaId));
+        if (deployment == MongoDeployment.OTHER) {
+            Document found = retried(() -> readInstance(null, byId, ReadConcern.MAJORITY));
+            return withFirstSkippedInput(found, document -> retried(() -> firstSkippedInput(
+                    MongoDatabaseUtils.getDatabase(databaseFactory).withReadConcern(ReadConcern.MAJORITY).withReadPreference(ReadPreference.primary()), sagaId, document)));
+        }
+        Optional<StoredSagaWithFirstSkippedInput> found = inSnapshot(sagaId, byId, null);
+        if (found.isPresent()) {
+            return found;
+        }
+        // An absence in the snapshot is read again at read concern linearizable, as find does. An instance found then is
+        // read in a new snapshot that starts after that read, since a new primary right after an election can still hand
+        // out a snapshot from before it
+        try (ClientSession linearizable = databaseFactory.getSession(ClientSessionOptions.builder().causallyConsistent(true).build())) {
+            if (retried(() -> readInstance(linearizable, byId, ReadConcern.LINEARIZABLE)) == null) {
+                return Optional.empty();
             }
-            if (deployment == MongoDeployment.OTHER) {
-                Document found = retried(() -> readInstance(byId, ReadConcern.MAJORITY));
-                return withFirstSkippedInput(found, document -> retried(() -> firstSkippedInput(
-                        MongoDatabaseUtils.getDatabase(databaseFactory).withReadConcern(ReadConcern.MAJORITY).withReadPreference(ReadPreference.primary()), sagaId, document)));
-            }
-            Optional<StoredSagaWithFirstSkippedInput> found = inSnapshot(sagaId, byId);
-            // An absence in the snapshot is read again at read concern linearizable, as find does. An instance found then
-            // is read in a new snapshot, which begins after that read and so has it
-            if (found.isPresent() || retried(() -> readInstance(byId, ReadConcern.LINEARIZABLE)) == null) {
-                return found;
-            }
-            return inSnapshot(sagaId, byId);
-        });
+            return inSnapshot(sagaId, byId, linearizable);
+        }
     }
 
-    private Optional<StoredSagaWithFirstSkippedInput> inSnapshot(String sagaId, Query byId) {
+    // With after, the snapshot starts after every read made in that session
+    private Optional<StoredSagaWithFirstSkippedInput> inSnapshot(String sagaId, Query byId, @Nullable ClientSession after) {
         // Decoded after the transaction, so a stored instance that no longer reads back throws once instead of being retried
         Document[] read = retried(() -> {
             try {
                 return Objects.requireNonNull(transactions.execute(status -> {
+                    if (after != null) {
+                        CommitRetryingTransactionManager.startAfter(status, after);
+                    }
                     MongoDatabase database = MongoDatabaseUtils.getDatabase(databaseFactory);
                     Document found = instances(database).find(byId.getQueryObject()).first();
                     return new Document[]{found, found == null ? null : firstSkippedInput(database, sagaId, found)};
@@ -1427,6 +1450,14 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
         private static boolean hasUnknownCommitResult(Throwable cause) {
             return cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL);
+        }
+
+        // A Spring session is causally consistent, so the first command of the transaction asks for a snapshot at or
+        // after the operation time of earlier, which holds every write the reads of earlier saw
+        private static void startAfter(TransactionStatus status, ClientSession earlier) {
+            ClientSession session = Objects.requireNonNull(((MongoTransactionObject) ((DefaultTransactionStatus) status).getTransaction()).getSession(), "the transaction's session");
+            session.advanceClusterTime(earlier.getClusterTime());
+            session.advanceOperationTime(Objects.requireNonNull(earlier.getOperationTime(), "the server sent no operationTime for the read the snapshot starts after"));
         }
 
         @Override

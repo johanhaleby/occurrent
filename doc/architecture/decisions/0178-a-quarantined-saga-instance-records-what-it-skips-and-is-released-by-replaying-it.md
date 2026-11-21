@@ -205,7 +205,8 @@ quarantined, and nothing reads their records after that.
 `SpringMongoSagaStateStore` reads the instance and its records from the primary, whatever read preference the
 `MongoOperations` it is given has. A release reads the instance and its first record with `findWithFirstSkippedInput`,
 in one transaction at read concern `snapshot`, as ADR 182 point 3 says, and every other read is at read concern
-`majority`. A read from a secondary that lags can find no record while one is written, and a release turns the instance
+`majority`. It refuses to run inside a MongoDB transaction of the caller's, as ADR 182 point 4 says, so a release
+runs outside one. A read from a secondary that lags can find no record while one is written, and a release turns the instance
 `ACTIVE` once its read finds no record. The write that does that
 also checks inside its transaction that no record is under the quarantine id, as ADR 182 point 3 says, so a release
 whose read missed a record writes nothing and replays the record on its next attempt.
