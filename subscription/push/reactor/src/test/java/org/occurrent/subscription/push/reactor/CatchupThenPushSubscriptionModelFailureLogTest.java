@@ -17,6 +17,7 @@
 package org.occurrent.subscription.push.reactor;
 
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -25,15 +26,20 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.event.Level;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -82,6 +88,48 @@ class CatchupThenPushSubscriptionModelFailureLogTest {
                                 .endsWith(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)
                                 .doesNotContain(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
                                 .doesNotContain("Cancel the subscription and subscribe again once the cause is fixed")));
+    }
+
+    @Test
+    void a_cancel_whose_catch_up_marker_delete_fails_warns_to_cancel_again_and_how_to_delete_the_marker_when_several_instances_run_it() {
+        InMemoryReactivePositionOrderedReader store = new InMemoryReactivePositionOrderedReader();
+        store.append(List.of(CloudEventBuilder.v1().withId("1").withSource(URI.create("urn:occurrent:test")).withType("Created").build()));
+        MarkerStoreWhoseDeleteFails markers = new MarkerStoreWhoseDeleteFails();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, new PushSubscriptionModel(), markers);
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(5));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(markers.read("sub").hasElement().block()).as("catch-up marker written").isTrue());
+
+        model.cancelSubscription("sub");
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(CapturingLoggerProvider.logged(CatchupThenPushSubscriptionModel.class, Level.WARN)).singleElement().satisfies(logged ->
+                        assertThat(logged.message())
+                                .startsWith("Could not delete the catch-up marker of cancelled subscription sub.")
+                                .endsWith("unless the subscription is cancelled again first. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+    }
+
+    private static final class MarkerStoreWhoseDeleteFails implements CheckpointStorage {
+        private final InMemoryCheckpointStorage backing = new InMemoryCheckpointStorage();
+
+        @Override
+        public Mono<Checkpoint> read(String subscriptionId) {
+            return backing.read(subscriptionId);
+        }
+
+        @Override
+        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition writeCondition) {
+            return backing.save(subscriptionId, checkpoint, writeCondition);
+        }
+
+        @Override
+        public Mono<Long> writeVersion(String subscriptionId) {
+            return backing.writeVersion(subscriptionId);
+        }
+
+        @Override
+        public Mono<Void> delete(String subscriptionId) {
+            return Mono.error(new RuntimeException("The marker store is unavailable"));
+        }
     }
 
     private static PositionOrderedReader failingReader() {

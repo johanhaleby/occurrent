@@ -39,10 +39,11 @@ class SharedStorageMessagesTest {
     }
 
     @Test
-    void the_step_for_a_marker_links_the_guide_and_says_to_stop_every_instance_and_start_every_instance_again_with_the_same_start() {
+    void the_step_for_a_marker_names_the_catch_up_marker_the_checkpoint_storage_keeps_and_not_whatever_is_stored_under_the_id_and_links_the_guide() {
         assertThat(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .startsWith("When more than one instance runs it, stop every instance,")
-                .contains("delete what is stored under its id")
+                .contains("delete the catch-up marker the checkpoint storage keeps under its id")
+                .doesNotContain("what is stored under")
                 .endsWith("start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes.");
     }
 
