@@ -216,15 +216,26 @@ seconds, and throws (`NOTHING_CHANGED`). A `shutdown()` that gives up shuts the 
 and logs a `WARN`.
 
 The marked code can be inside the wrapped model, which can ask the function again in its own `subscribe(..)`, and the
-wrapped model then goes on registering the subscription once the function returns. So a `shutdown()` that gives up
-queues a second pass, which forgets the catch-ups again and calls the wrapped model's `shutdown()` again, under the
-lock. The thread that holds the lock runs it before its outermost hold ends, or the shutdown runs it itself when it
-finds the lock free by then. The shutdown queues the pass before it calls the wrapped model's `shutdown()` without the
-lock. That call can remove the subscriptions and then block, and if the pass were queued only once it returned, the
-thread holding the lock could register a subscription and let the lock go with nothing queued. A pass that throws
-stays queued, is logged at `ERROR`, and runs again each time a thread lets the lock go. Until the call without the
-lock has returned and the pass has returned normally, the shutdown counts as under way, and a `start(..)` doesn't
-start the wrapped model.
+wrapped model then goes on registering the subscription once the function returns. So once the wrapped model's
+`shutdown()` without the lock has returned, a `shutdown()` that gave up hands a second pass to the lifecycle thread.
+That pass forgets the catch-ups again and calls the wrapped model's `shutdown()` again, under the lock, which the
+lifecycle thread takes only after the thread holding it has let it go. Whatever that thread registered before it let
+the lock go is removed then, with no further call from anyone.
+
+The thread holding the lock never runs the pass, and the pass never starts while the call without the lock is still
+inside the wrapped model's `shutdown()`. A wrapped model can make a second `shutdown()` wait for one under way.
+`InMemorySubscriptionModel.shutdown()` runs inside `synchronized (subscriptions)`, and `ChangeStreamSubscriptions`,
+under both MongoDB subscription models, runs its `shutdown()` inside `synchronized (monitor)`. A pass run by the thread
+holding the lock would then wait for the call without the lock while it held the lock, every lifecycle call from
+another thread would wait behind it, and if the call without the lock waited for anything that needs the lock, none of
+them would return.
+
+A pass that throws is logged at `ERROR` and handed to the lifecycle thread again after a backoff of 100 ms, doubled
+each time up to 2 seconds, until it returns normally. A pass that is only run again when some thread next takes the
+lock can wait for good, since nothing has to call the model after `shutdown()` has returned. A later `shutdown()` that
+calls the wrapped model's `shutdown()` under the lock and returns normally settles every pass that is waiting to run
+again, since it has done what they wait to do. Until the call without the lock has returned and the pass has returned
+normally, the shutdown counts as under way, and a `start(..)` doesn't start the wrapped model.
 
 The shutdown keeps the call without the lock rather than leave the whole shutdown to the thread holding the lock. With
 only the pass, every subscription in the wrapped model would go on running after `shutdown()` had returned, for as long

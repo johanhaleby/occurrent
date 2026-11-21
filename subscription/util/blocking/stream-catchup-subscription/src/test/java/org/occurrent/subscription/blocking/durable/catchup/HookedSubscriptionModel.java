@@ -46,6 +46,9 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
     final AtomicInteger stops = new AtomicInteger();
     final AtomicInteger shutdowns = new AtomicInteger();
     final List<String> resumed = new CopyOnWriteArrayList<>();
+    // The name of the thread of each shutdown(), recorded before the monitor of a serialized shutdown() is taken
+    final List<String> shutdownAttempts = new CopyOnWriteArrayList<>();
+    private final Object shutdownMonitor = new Object();
     volatile Runnable beforeStart = () -> {
     };
     volatile Runnable beforeStop = () -> {
@@ -62,6 +65,9 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
     // Off, a shutdown() is counted and hooked but leaves the in-memory delegate running. Its own shutdown() waits for an
     // action that is still running
     volatile boolean shutsTheDelegateDown = true;
+    // On, shutdown() runs one at a time on a monitor, as a wrapped model does whose shutdown() is synchronized. A shutdown()
+    // held inside it, by afterShutdown, then holds every other shutdown() at the monitor
+    volatile boolean serializesShutdown = false;
     // Off, a subscribe is given StartAt.now(). On, the in-memory delegate asks the start-at it got from inside its own
     // subscribe, after it has checked that it is not shut down and before it registers the subscription, as a live
     // delegate that evaluates a StartAt.dynamic function does. The catch-up model hands that function to a delegate only
@@ -161,6 +167,17 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
 
     @Override
     public void shutdown() {
+        shutdownAttempts.add(Thread.currentThread().getName());
+        if (serializesShutdown) {
+            synchronized (shutdownMonitor) {
+                shutDownHooked();
+            }
+        } else {
+            shutDownHooked();
+        }
+    }
+
+    private void shutDownHooked() {
         shutdowns.incrementAndGet();
         beforeShutdown.run();
         if (shutsTheDelegateDown) {

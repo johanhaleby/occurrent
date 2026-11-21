@@ -64,7 +64,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
@@ -125,8 +124,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private final Executor lifecycleThread;
     private final AtomicInteger callsOnTheLifecycleThread;
     private final AtomicLong callersCodeUnderTheLockSince;
-    private final ConcurrentLinkedQueue<ShutdownLeftForTheLockHolder> shutdownsLeftForTheLockHolder;
-    private final ArrayDeque<ShutdownLeftForTheLockHolder> shutdownsThatThrewUnderTheLock;
     private final ConcurrentMap<Object, LiveDelegateCalls> liveDelegateCalls;
     // Moves on with every start and stop, so a start whose live delegate failed can tell whether another came after it
     private long lifecycleGeneration = 0;
@@ -314,8 +311,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.lifecycleThread = sharedState.lifecycleThread;
         this.callsOnTheLifecycleThread = sharedState.callsOnTheLifecycleThread;
         this.callersCodeUnderTheLockSince = sharedState.callersCodeUnderTheLockSince;
-        this.shutdownsLeftForTheLockHolder = sharedState.shutdownsLeftForTheLockHolder;
-        this.shutdownsThatThrewUnderTheLock = sharedState.shutdownsThatThrewUnderTheLock;
         this.liveDelegateCalls = sharedState.liveDelegateCalls;
         HistoryLossReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.addHistoryLossListener(historyLossListener));
     }
@@ -354,12 +349,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // The System.nanoTime() at which the thread holding modelLock began to run code a caller supplied, such as a
         // StartAt.dynamic function or a CatchupListener, and 0 while it runs none. Written only by that thread
         private final AtomicLong callersCodeUnderTheLockSince = new AtomicLong();
-        // Second passes queued by a shutdown() that gave up waiting for code a caller supplied under modelLock, run under
-        // the lock once that code has let it go, since the code can go on registering a subscription in the live delegate
-        private final ConcurrentLinkedQueue<ShutdownLeftForTheLockHolder> shutdownsLeftForTheLockHolder = new ConcurrentLinkedQueue<>();
-        // Second passes that threw, run again at the end of every outermost hold of modelLock until one returns normally.
-        // Read and written only with modelLock held
-        private final ArrayDeque<ShutdownLeftForTheLockHolder> shutdownsThatThrewUnderTheLock = new ArrayDeque<>();
         // The calls to the live delegate's start(..) and shutdown() of each model that makes them
         private final ConcurrentMap<Object, LiveDelegateCalls> liveDelegateCalls = new ConcurrentHashMap<>();
     }
@@ -375,18 +364,24 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // Whether a shutdown() has shut the live delegate down, with no start(..) of the model since, so a later
         // shutdown() doesn't shut it down again. Written only with the model lock held, and read under it
         private boolean shutDown;
+        // The passes under the lock that threw and wait on a backoff to run again, which a shutdown() of the model that
+        // shuts the live delegate down under the lock settles. Read and written only with the model lock held
+        private final Set<ShutdownLeftToTheLifecycleThread> passesThatThrew = new LinkedHashSet<>();
     }
 
     // A shutdown() that gave up on the model lock. It counts as under way, so a start(..) of the model doesn't start the
-    // live delegate, until both its pass without the lock and its second pass under the lock have run
-    private static final class ShutdownLeftForTheLockHolder {
+    // live delegate, until its pass without the lock has returned and its pass under the lock has returned normally
+    private static final class ShutdownLeftToTheLifecycleThread {
         private final Object model;
         private final LiveDelegateCalls calls;
         private final Runnable forgetTheCatchups;
         private final Runnable shutDownTheLiveDelegate;
         private final AtomicInteger passesLeft = new AtomicInteger(2);
+        // Read and written only with the model lock held
+        private boolean passUnderTheLockDone;
+        private int failures;
 
-        private ShutdownLeftForTheLockHolder(Object model, LiveDelegateCalls calls, Runnable forgetTheCatchups, Runnable shutDownTheLiveDelegate) {
+        private ShutdownLeftToTheLifecycleThread(Object model, LiveDelegateCalls calls, Runnable forgetTheCatchups, Runnable shutDownTheLiveDelegate) {
             this.model = model;
             this.calls = calls;
             this.forgetTheCatchups = forgetTheCatchups;
@@ -400,6 +395,27 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 }
             }
         }
+
+        // With the model lock held
+        private void passUnderTheLockRan() {
+            if (passUnderTheLockDone) {
+                return;
+            }
+            passUnderTheLockDone = true;
+            calls.passesThatThrew.remove(this);
+            passRan();
+        }
+
+        // With the model lock held
+        private Duration backoffAfterFailure() {
+            return backoffAfter(++failures);
+        }
+    }
+
+    // FIRST_BACKOFF, doubled with each failure in a row up to MAX_BACKOFF
+    private static Duration backoffAfter(int failuresInARow) {
+        long millis = FIRST_BACKOFF.toMillis() << Math.min(failuresInARow - 1, 16);
+        return Duration.ofMillis(Math.min(millis, MAX_BACKOFF.toMillis()));
     }
 
     // A subscribe whose function is asked with no claim held, kept from before the function is asked until the
@@ -2482,11 +2498,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             return again;
         }
 
-        // FIRST_BACKOFF, doubled with each failure in a row up to MAX_BACKOFF. Called with the handover lock held.
+        // Called with the handover lock held.
         private Duration backoffAfterFailure() {
-            failures++;
-            long millis = FIRST_BACKOFF.toMillis() << Math.min(failures - 1, 16);
-            return Duration.ofMillis(Math.min(millis, MAX_BACKOFF.toMillis()));
+            return backoffAfter(++failures);
         }
     }
 
@@ -4533,7 +4547,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try {
             body.run();
         } finally {
-            unlockTheModelLock();
+            modelLock.unlock();
         }
     }
 
@@ -4599,7 +4613,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 body.run();
             }
         } finally {
-            unlockTheModelLock();
+            modelLock.unlock();
         }
     }
 
@@ -4630,41 +4644,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try {
             body.run();
         } finally {
-            unlockTheModelLock();
-        }
-    }
-
-    // Before the outermost hold of the lock ends, runs the second passes that shutdowns queued, so a call that ran code a
-    // caller supplied under the lock returns with the live delegate shut down again. A shutdown that queues its pass
-    // after the check here runs it itself once it finds the lock free, or the next thread to hold the lock does.
-    // A pass that threw runs again here at the end of every outermost hold until it returns normally
-    private void unlockTheModelLock() {
-        if (modelLock.getHoldCount() == 1) {
-            runTheShutdownsLeftForTheLockHolder();
-        }
-        modelLock.unlock();
-        if (!modelLock.isHeldByCurrentThread()) {
-            runTheShutdownsLeftOnceTheLockIsFree();
-        }
-    }
-
-    private void runTheShutdownsLeftOnceTheLockIsFree() {
-        while (!shutdownsLeftForTheLockHolder.isEmpty() && modelLock.tryLock()) {
-            try {
-                runTheShutdownsLeftForTheLockHolder();
-            } finally {
-                modelLock.unlock();
-            }
-        }
-    }
-
-    private void runTheShutdownsLeftForTheLockHolder() {
-        for (int threw = shutdownsThatThrewUnderTheLock.size(); threw > 0; threw--) {
-            shutDownAgainUnderTheLock(shutdownsThatThrewUnderTheLock.remove());
-        }
-        ShutdownLeftForTheLockHolder left;
-        while ((left = shutdownsLeftForTheLockHolder.poll()) != null) {
-            shutDownAgainUnderTheLock(left);
+            modelLock.unlock();
         }
     }
 
@@ -4776,12 +4756,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * While code a caller supplied holds the lock up, as {@link #runInTurn} describes, it waits for the lock up to
      * {@link #LIFECYCLE_WAIT} that way, and then runs {@code shutDownTheLiveDelegate} without the lock and logs a
      * {@code WARN}, since that code may be waiting for this shutdown. That code can be inside the live delegate, which
-     * goes on registering a subscription once the code returns, so {@code forgetTheCatchups} and
-     * {@code shutDownTheLiveDelegate} run again under the lock, on the thread that held it before that thread lets it
-     * go, or on the thread that called the shutdown when it finds the lock free by then. The shutdown queues that second
-     * run before it runs {@code shutDownTheLiveDelegate} without the lock. When the second run throws, it is logged at
-     * {@code ERROR} and runs again each time a thread lets the lock go, until it returns normally. Until then the
-     * shutdown counts as under way, and a {@code start(..)} doesn't start the live delegate.
+     * goes on registering a subscription once the code returns, so once {@code shutDownTheLiveDelegate} without the lock
+     * has returned, the shutdown hands {@code forgetTheCatchups} and {@code shutDownTheLiveDelegate} to the lifecycle
+     * thread, which runs them again under the lock once the thread that held it has let it go. That thread doesn't run
+     * them or wait for them. When that run throws, it is logged at {@code ERROR} and handed to the lifecycle thread again
+     * after a backoff of 100 ms, doubled each time up to 2 seconds, until it returns normally or a later
+     * {@code shutdown()} of {@code model} shuts the live delegate down under the lock. Until then the shutdown counts
+     * as under way, and a {@code start(..)} doesn't start the live delegate.
      * <p>
      * Called from inside the action of a replay or of a live call, or on a thread that holds a {@link #claim}, the
      * shutdown doesn't wait. This returns once {@code forgetTheCatchups} has run, and the lifecycle thread the children
@@ -4790,7 +4771,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * <p>
      * Once the live delegate's {@code shutdown()} has returned normally under the lock, a later {@code shutdown()} of
      * {@code model} doesn't call it there again, until a {@code start(..)} of {@code model} has started the live delegate
-     * again. One that threw left the live delegate running, so the next {@code shutdown()} calls it again.
+     * again or a run on the lifecycle thread that threw waits to run again. One that threw left the live delegate
+     * running, so the next {@code shutdown()} calls it again.
      */
     void shutDownInTurn(Object model, Runnable forgetTheCatchups, Runnable shutDownTheLiveDelegate) {
         forgetTheCatchups.run();
@@ -4807,8 +4789,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // this sees the shutdown under way and doesn't start the live delegate, so neither leaves this waiting for good. On a
     // thread other than the lifecycle thread, the wait for the lock ends as heldUpByCallersCode describes, and the live
     // delegate is then shut down without the lock, as for a stuck start, since that code can be waiting for this shutdown.
-    // That code can be inside the live delegate, which then goes on registering a subscription once it returns, so the
-    // shutdown also queues a second pass under the lock, and counts as under way until both passes have run
+    // That code can be inside the live delegate, which then goes on registering a subscription once it returns, so once
+    // the call without the lock has returned the shutdown hands a pass under the lock to the lifecycle thread, and
+    // counts as under way until both passes have run. The thread holding the lock never runs or waits for that pass
     private void shutDownTheLiveDelegateInTurn(Object model, Runnable forgetTheCatchups, Runnable shutDownTheLiveDelegate, boolean givesUpBehindCallersCode) {
         LiveDelegateCalls calls = liveDelegateCalls.computeIfAbsent(model, ignored -> new LiveDelegateCalls());
         boolean aStartIsInTheLiveDelegate;
@@ -4816,7 +4799,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             calls.shutdowns++;
             aStartIsInTheLiveDelegate = calls.starts > 0;
         }
-        ShutdownLeftForTheLockHolder leftForTheLockHolder = null;
+        boolean leftToTheLifecycleThread = false;
         try {
             if (aStartIsInTheLiveDelegate) {
                 shutDownTheLiveDelegate.run();
@@ -4824,32 +4807,33 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (!givesUpBehindCallersCode) {
                 modelLock.lock();
             } else if (!lockUnlessHeldUpByCallersCode()) {
-                log.warn("shutdown() of {} waited {} ms for the model lock while code the caller supplied, such as a StartAt.dynamic function, ran under it, and shuts the wrapped model down without the lock, and again under it once that code has let it go.",
+                log.warn("shutdown() of {} waited {} ms for the model lock while code the caller supplied, such as a StartAt.dynamic function, ran under it, and shuts the wrapped model down without the lock, and again under it on the lifecycle thread once that code has let it go.",
                         model, LIFECYCLE_WAIT.toMillis());
-                // Queued before the pass without the lock, which can remove the subscriptions and then block, so the code
-                // holding the lock can't register a subscription and let the lock go without finding this pass queued
-                leftForTheLockHolder = new ShutdownLeftForTheLockHolder(model, calls, forgetTheCatchups, shutDownTheLiveDelegate);
-                shutdownsLeftForTheLockHolder.add(leftForTheLockHolder);
+                ShutdownLeftToTheLifecycleThread left = new ShutdownLeftToTheLifecycleThread(model, calls, forgetTheCatchups, shutDownTheLiveDelegate);
+                leftToTheLifecycleThread = true;
                 try {
                     if (!aStartIsInTheLiveDelegate) {
                         shutDownTheLiveDelegate.run();
                     }
                 } finally {
-                    leftForTheLockHolder.passRan();
-                    runTheShutdownsLeftOnceTheLockIsFree();
+                    left.passRan();
+                    // Handed over only now, so the pass never runs while the call without the lock is still in the live delegate
+                    leaveThePassUnderTheLockToTheLifecycleThread(left);
                 }
                 return;
             }
             try {
-                if (!calls.shutDown) {
+                if (!calls.shutDown || !calls.passesThatThrew.isEmpty()) {
                     shutDownTheLiveDelegate.run();
                     calls.shutDown = true;
+                    // This call did what each of them is waiting to do, under the lock once the thread that held it had let it go
+                    List.copyOf(calls.passesThatThrew).forEach(ShutdownLeftToTheLifecycleThread::passUnderTheLockRan);
                 }
             } finally {
-                unlockTheModelLock();
+                modelLock.unlock();
             }
         } finally {
-            if (leftForTheLockHolder == null) {
+            if (!leftToTheLifecycleThread) {
                 synchronized (calls) {
                     calls.shutdowns--;
                 }
@@ -4857,23 +4841,34 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
-    // Run with the model lock held, by the thread that held it while this model's shutdown gave up on it, or by whichever
-    // thread takes it next. It forgets again what a subscribe or a resume under way added after the first forget, and
-    // shuts the live delegate down again, whatever that call registered there. What it throws is logged, since the
-    // thread that runs it made no shutdown. A pass that threw stays queued, and the shutdown stays under way, so no
-    // start(..) of the model starts the live delegate until a later run returns normally
-    private void shutDownAgainUnderTheLock(ShutdownLeftForTheLockHolder left) {
+    // The lifecycle thread runs the pass after the calls handed to it before, and takes the lock for it, so it runs once
+    // the thread that held the lock has let it go, whether that thread is the lifecycle thread or another one
+    private void leaveThePassUnderTheLockToTheLifecycleThread(ShutdownLeftToTheLifecycleThread left) {
+        handToTheLifecycleThread(NOTHING_TO_WAIT_FOR, () -> underTheModelLock(() -> shutDownAgainUnderTheLock(left)), e -> logHandedCallThrew(left.model, "shutdown()", e));
+    }
+
+    // Run with the model lock held on the lifecycle thread. It forgets again what a subscribe or a resume under way added
+    // after the first forget, and shuts the live delegate down again, whatever that call registered there. A pass that
+    // threw stays under way, so no start(..) of the model starts the live delegate, and is handed to the lifecycle thread
+    // again after a backoff, until it returns normally or a shutdown() of the model shuts the live delegate down under the
+    // lock. The backoff waits on no thread that runs lifecycle calls
+    private void shutDownAgainUnderTheLock(ShutdownLeftToTheLifecycleThread left) {
+        if (left.passUnderTheLockDone) {
+            return;
+        }
         try {
             left.forgetTheCatchups.run();
             left.shutDownTheLiveDelegate.run();
             left.calls.shutDown = true;
         } catch (Throwable e) {
-            // Every Throwable, since the thread that runs this goes on with a call of its own
-            log.error("shutdown() of {}, run again under the model lock once the code a caller supplied had let it go, threw. It runs again the next time a thread lets the model lock go.", left.model, e);
-            shutdownsThatThrewUnderTheLock.add(left);
+            // Every Throwable, since the live delegate keeps the subscription for good when the pass never runs again
+            Duration backoff = left.backoffAfterFailure();
+            log.error("shutdown() of {}, run again under the model lock on the lifecycle thread once the code a caller supplied had let it go, threw. It runs again in {} ms.", left.model, backoff.toMillis(), e);
+            left.calls.passesThatThrew.add(left);
+            CompletableFuture.delayedExecutor(backoff.toMillis(), TimeUnit.MILLISECONDS, Runnable::run).execute(() -> leaveThePassUnderTheLockToTheLifecycleThread(left));
             return;
         }
-        left.passRan();
+        left.passUnderTheLockRan();
     }
 
     // The lifecycle thread waits for the action to return before it runs body, which takes the lock itself, so a call it

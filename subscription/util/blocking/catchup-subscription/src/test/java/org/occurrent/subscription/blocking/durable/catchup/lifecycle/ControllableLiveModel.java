@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
@@ -53,6 +54,14 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     volatile Consumer<String> beforeSubscribe = id -> {
     };
     volatile boolean asksTheStartAtAndRejectsOnceShutDown = false;
+    // Runs at the end of shutdown(), inside the monitor when serializesShutdown is on, so a test can hold a shutdown() after it dropped the subscriptions
+    volatile Runnable afterShutdown = () -> {
+    };
+    // On, shutdown() runs one at a time on a monitor, as a wrapped model does whose shutdown() is synchronized
+    volatile boolean serializesShutdown = false;
+    // The name of the thread of each shutdown(), recorded before the monitor of a serialized shutdown() is taken
+    final List<String> shutdownAttempts = new CopyOnWriteArrayList<>();
+    private final Object shutdownMonitor = new Object();
 
     /**
      * The context type the start-at is asked with, since the catch-up model hands the function to a live model only for
@@ -97,10 +106,22 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
 
     @Override
     public void shutdown() {
+        shutdownAttempts.add(Thread.currentThread().getName());
+        if (serializesShutdown) {
+            synchronized (shutdownMonitor) {
+                shutDownHooked();
+            }
+        } else {
+            shutDownHooked();
+        }
+    }
+
+    private void shutDownHooked() {
         if (asksTheStartAtAndRejectsOnceShutDown) {
             shutDown = true;
             subscriptions.clear();
         }
+        afterShutdown.run();
     }
 
     private synchronized Subscription subscribeHoldingTheMonitor(String subscriptionId, Consumer<CloudEvent> action) {
