@@ -26,6 +26,7 @@ import org.occurrent.dsl.saga.codec.EncodedSaga;
 import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
+import org.occurrent.dsl.saga.internal.SkippedInputData;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -54,12 +55,17 @@ import static java.util.Objects.requireNonNull;
  * takes bytes, and a {@code Map} or a {@code List} at any depth that holds bytes, a {@code String}, a {@code Boolean}, a
  * {@code Character}, a number of a {@code java.lang} or {@code java.math} class, a {@code java.util.Date}, a
  * {@code UUID}, or a BSON value that {@code SpringMongoSagaStateStore} reads back as the same class, such as an
- * {@code ObjectId} or a {@code Decimal128}. The data is a {@code BytesCloudEventData} or a {@code PojoCloudEventData}
- * of exactly that class, and every other value is of exactly the class listed, so a subclass is refused. A {@code Map}
- * and a {@code List} are the exception, and any implementation of them is copied, as long as a map holds no key equal to
- * another of its keys. An {@code IdentityHashMap} can hold two equal keys, and a copy would keep only one of them.
- * {@link #compareAndSaveSkipped} throws an {@link IllegalStateException}, and records nothing, for an event with data or
- * an extension it can't copy.
+ * {@code ObjectId} or a {@code Decimal128}. It copies data that is a {@code BytesCloudEventData}, or a
+ * {@code PojoCloudEventData} of exactly that class whose map or list it can copy, where every other value is of exactly
+ * the class listed, so not a subclass. A {@code Map} and a {@code List} are the exception, and any implementation of them
+ * is copied, as long as a map holds no key equal to another of its keys. An {@code IdentityHashMap} can hold two equal
+ * keys, and a copy would keep only one of them.
+ * <p>
+ * Data it can't copy is held as its bytes, and every read rebuilds it the way {@code SpringMongoSagaStateStore} rebuilds
+ * data it holds as bytes. A {@code JsonCloudEventData} comes back as a {@code JsonCloudEventData} that the CloudEvents
+ * JSON format reads from those bytes, and data of any other class, such as a {@code PojoCloudEventData} of an object,
+ * comes back as a {@code BytesCloudEventData}. {@link #compareAndSaveSkipped} throws an {@link IllegalStateException},
+ * and records nothing, only for an event with an extension it can't copy.
  *
  * @param <S> the user state type
  */
@@ -327,21 +333,32 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
             }
         }
         CloudEventData data = event.getData();
-        // Matched by exact class. A subclass would be stored as its superclass, and a release would hand the converter a
-        // different data class than was delivered
-        if (data != null && data.getClass() == BytesCloudEventData.class) {
-            copy.withData(BytesCloudEventData.wrap(data.toBytes().clone()));
-        } else if (data != null && data.getClass() == PojoCloudEventData.class && data instanceof PojoCloudEventData<?> pojo && (pojo.getValue() instanceof Map<?, ?> || pojo.getValue() instanceof List<?>)) {
-            Object value = requireNonNull(copyOf(sagaId, input, pojo.getValue()));
-            byte[] bytes = pojo.toBytes().clone();
-            copy.withData(PojoCloudEventData.wrap(value, ignored -> bytes.clone()));
-        } else if (data != null) {
-            throw cannotCopy(sagaId, input, "its data, a " + data.getClass().getName());
+        if (data != null) {
+            copy.withData(copyOf(data));
         }
         return new SkippedInput(input.seq(), input.key(), copy.build());
     }
 
-    private static @Nullable Object copyOf(String sagaId, SkippedInput input, @Nullable Object value) {
+    // Matched by exact class. A subclass would be stored as its superclass, and a release would hand the converter a
+    // different data class than was delivered. Data it can't copy is held as its bytes and rebuilt from them on every
+    // read, the way SpringMongoSagaStateStore holds data it can't read back as it was delivered
+    private static CloudEventData copyOf(CloudEventData data) {
+        if (data.getClass() == BytesCloudEventData.class) {
+            return BytesCloudEventData.wrap(data.toBytes().clone());
+        }
+        if (data.getClass() == PojoCloudEventData.class && data instanceof PojoCloudEventData<?> pojo && (pojo.getValue() instanceof Map<?, ?> || pojo.getValue() instanceof List<?>)) {
+            try {
+                Object value = requireNonNull(copyOf(pojo.getValue()));
+                byte[] bytes = pojo.toBytes().clone();
+                return PojoCloudEventData.wrap(value, ignored -> bytes.clone());
+            } catch (Uncopyable ignored) {
+                // Held as its bytes below
+            }
+        }
+        return SkippedInputData.fromBytes(SkippedInputData.classOf(data), data.toBytes().clone());
+    }
+
+    private static @Nullable Object copyOf(@Nullable Object value) {
         return switch (value) {
             case null -> null;
             case byte[] bytes -> bytes.clone();
@@ -350,28 +367,35 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                 for (Map.Entry<?, ?> entry : map.entrySet()) {
                     Object key = entry.getKey();
                     if (key == null || !UNCHANGEABLE.contains(key.getClass())) {
-                        throw cannotCopy(sagaId, input, "a key in its data, " + (key == null ? "null" : "a " + key.getClass().getName()));
+                        throw new Uncopyable();
                     }
                     // A map that tells keys apart by more than equals, such as an IdentityHashMap, can hold two equal keys,
                     // and the copy would keep one of them
                     if (copy.containsKey(key)) {
-                        throw cannotCopy(sagaId, input, "a map in its data that holds the key '" + key + "' twice, as two keys that are equal");
+                        throw new Uncopyable();
                     }
-                    copy.put(key, copyOf(sagaId, input, entry.getValue()));
+                    copy.put(key, copyOf(entry.getValue()));
                 }
                 yield copy;
             }
             case List<?> list -> {
                 List<@Nullable Object> copy = new ArrayList<>(list.size());
                 for (Object element : list) {
-                    copy.add(copyOf(sagaId, input, element));
+                    copy.add(copyOf(element));
                 }
                 yield copy;
             }
             case Date date when date.getClass() == Date.class -> new Date(date.getTime());
             case Object other when UNCHANGEABLE.contains(other.getClass()) || other instanceof UUID || BSON_VALUES.contains(other.getClass().getName()) -> other;
-            case Object other -> throw cannotCopy(sagaId, input, "a " + other.getClass().getName() + " in its data");
+            case Object other -> throw new Uncopyable();
         };
+    }
+
+    // A value in the data the copy can't take, so the data is held as its bytes
+    private static final class Uncopyable extends RuntimeException {
+        private Uncopyable() {
+            super(null, null, false, false);
+        }
     }
 
     private static IllegalStateException cannotCopy(String sagaId, SkippedInput input, String what) {

@@ -83,12 +83,13 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * Docker-based. A release hands the converter a held event exactly as it was delivered, or the record of the input is
- * refused, naming the instance, the input and the value, before anything is written. Checks against a MongoDB replica
- * set that each class of extension the record holds reads back as the same class with the same value, that an extension
- * of any other class is refused, that a map with a value BSON reads back as another class, a {@code BigDecimal} for one,
- * is refused, and that data of a class a release can't rebuild, such as {@code JsonCloudEventData}, is refused while
- * {@code BytesCloudEventData} is held and read back as itself.
+ * Docker-based. A release hands the converter a held event as it was delivered, or as the bytes of its data when the
+ * data doesn't come back from BSON as the same values of the same classes. A record whose attribute or extension doesn't
+ * come back is refused, naming the instance, the input and the value, before anything is written. Checks against a
+ * MongoDB replica set that each class of extension the record holds reads back as the same class with the same value,
+ * that an extension of any other class is refused, and that data BSON reads back as another class, such as a
+ * {@code BigDecimal} in a map, is held as its bytes and read back as {@code BytesCloudEventData}, where
+ * {@code JsonCloudEventData} is read back as itself.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -148,8 +149,7 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
-    void a_saga_input_whose_map_data_holds_a_BigDecimal_is_refused_with_the_field_named_and_nothing_written_or_dispatched() {
-        List<SkippedInput> attempted = new CopyOnWriteArrayList<>();
+    void a_saga_input_whose_map_data_holds_a_BigDecimal_is_held_as_its_bytes_and_quarantines_the_instance_without_stopping_the_subscription() {
         List<IllegalStateException> refused = new CopyOnWriteArrayList<>();
         @SuppressWarnings("unchecked")
         SpringMongoSagaStateStore<String> observed = Mockito.mock(SpringMongoSagaStateStore.class, Mockito.withSettings().spiedInstance(stateStore).defaultAnswer(invocation -> {
@@ -157,7 +157,6 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
                 return invocation.callRealMethod();
             } catch (Throwable e) {
                 if ("compareAndSaveSkipped".equals(invocation.getMethod().getName()) && e instanceof IllegalStateException refusal) {
-                    attempted.add((SkippedInput) invocation.getArguments()[3]);
                     refused.add(refusal);
                 }
                 throw e;
@@ -173,34 +172,30 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
         eventStore.write(STREAM, List.of(CloudEventBuilder.v1().withId("priced-1").withSource(URI.create("urn:test")).withType(converter.getCloudEventType(ItemAdded.class))
                 .withSubject(ORDER).withDataContentType("application/json").withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(UTF_8))).build()));
 
-        await().dontCatchUncaughtExceptions().ignoreExceptions().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(refused).isNotEmpty());
+        await().dontCatchUncaughtExceptions().ignoreExceptions().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED));
         eventStore.write(STREAM, converter.toCloudEvents(List.of(new ItemAdded(ORDER, "pen", 5))));
 
-        await().dontCatchUncaughtExceptions().ignoreExceptions().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(dispatched).as("nothing is dispatched for the event or for the one after it").isEmpty());
-        IllegalStateException thrown = refused.get(0);
+        await().dontCatchUncaughtExceptions().ignoreExceptions().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(template.getCollection(SKIPPED_INPUTS).countDocuments()).as("the event it failed on and the one after it are held").isEqualTo(2));
         assertAll(
-                () -> assertThat(thrown).hasMessageContaining("'" + ORDER + "'").hasMessageContaining("'" + attempted.get(0).key() + "'").hasMessageContaining("'price'")
-                        .hasMessageContaining("Nothing is written for the input"),
-                () -> assertThat(instance().status()).as("the instance is not quarantined, since its first skipped input has no record").isNotEqualTo(SagaStatus.QUARANTINED),
-                () -> assertThat(template.getCollection(SKIPPED_INPUTS).countDocuments()).as("no record is written").isZero()
+                () -> assertThat(refused).as("no record is refused, so the subscription is not stopped").isEmpty(),
+                () -> assertThat(dispatched).as("nothing is dispatched while the instance is quarantined").isEmpty()
         );
     }
 
     @Test
-    void a_map_data_value_BSON_reads_back_as_another_class_is_refused_at_a_nested_path() {
+    void a_map_data_value_BSON_reads_back_as_another_class_is_held_as_the_bytes_of_the_data_and_read_back_as_bytes() {
         Map<String, Object> nested = new LinkedHashMap<>();
         nested.put("amount", LONG_DECIMAL);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("orderId", ORDER);
         data.put("lines", List.of(Map.of("name", "pen"), nested));
         CloudEvent event = baseEvent().withDataContentType("application/json").withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(UTF_8))).build();
-        StoredSaga instance = anInstance();
 
-        Throwable thrown = catchThrowable(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)));
+        CloudEvent held = heldAndRead(event);
 
         assertAll(
-                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + ORDER + "'").hasMessageContaining("'" + KEY + "'").hasMessageContaining("'lines[1].amount'"),
-                () -> assertNothingWritten()
+                () -> assertThat(held.getData()).isExactlyInstanceOf(BytesCloudEventData.class),
+                () -> assertThat(requireNonNull(held.getData()).toBytes()).isEqualTo("{}".getBytes(UTF_8))
         );
     }
 
@@ -219,21 +214,19 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
-    void map_data_whose_nested_map_has_a_key_that_is_not_a_String_is_refused_with_the_path_named_and_nothing_written() {
+    void map_data_whose_nested_map_has_a_key_that_is_not_a_String_is_held_as_the_bytes_of_the_data_and_read_back_as_bytes() {
         Map<Object, Object> nested = new LinkedHashMap<>();
         nested.put(7, "pen");
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("orderId", ORDER);
         data.put("line", nested);
         CloudEvent event = baseEvent().withDataContentType("application/json").withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(UTF_8))).build();
-        StoredSaga instance = anInstance();
 
-        Throwable thrown = catchThrowable(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)));
+        CloudEvent held = heldAndRead(event);
 
         assertAll(
-                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + ORDER + "'").hasMessageContaining("'" + KEY + "'")
-                        .hasMessageContaining("'line' of its data"),
-                () -> assertNothingWritten()
+                () -> assertThat(held.getData()).isExactlyInstanceOf(BytesCloudEventData.class),
+                () -> assertThat(requireNonNull(held.getData()).toBytes()).isEqualTo("{}".getBytes(UTF_8))
         );
     }
 
@@ -400,18 +393,17 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
-    void json_data_the_cloudevents_json_format_deserialized_is_refused_with_nothing_written() {
+    void json_data_the_cloudevents_json_format_deserialized_is_held_and_read_back_as_JsonCloudEventData_with_equal_bytes() {
         CloudEvent event = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE).deserialize(("{\"specversion\":\"1.0\",\"id\":\"json-1\",\"source\":\"urn:test\","
                 + "\"type\":\"test\",\"subject\":\"" + ORDER + "\",\"datacontenttype\":\"application/json\",\"data\":{\"orderId\":\"" + ORDER + "\",\"value\":42}}").getBytes(UTF_8));
         assertThat(requireNonNull(event.getData())).as("the event the store is handed carries JsonCloudEventData").isInstanceOf(JsonCloudEventData.class);
-        StoredSaga instance = anInstance();
 
-        Throwable thrown = catchThrowable(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)));
+        CloudEvent held = heldAndRead(event);
 
         assertAll(
-                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + ORDER + "'").hasMessageContaining("'" + KEY + "'")
-                        .hasMessageContaining(JsonCloudEventData.class.getName()),
-                () -> assertNothingWritten()
+                () -> assertThat(held.getData()).isExactlyInstanceOf(JsonCloudEventData.class),
+                () -> assertThat(requireNonNull(held.getData()).toBytes()).isEqualTo(requireNonNull(event.getData()).toBytes()),
+                () -> assertThat(((JsonCloudEventData) requireNonNull(held.getData())).getNode()).isEqualTo(((JsonCloudEventData) requireNonNull(event.getData())).getNode())
         );
     }
 
@@ -430,43 +422,41 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
-    void map_data_holding_two_equal_keys_is_refused_and_nothing_written() {
-        assertRefusedAsCollapsing(identityMapWithTwoEqualKeys());
+    void map_data_holding_two_equal_keys_is_held_as_the_bytes_of_the_data_and_read_back_as_bytes() {
+        assertHeldAsBytes(identityMapWithTwoEqualKeys());
     }
 
     @Test
-    void map_data_holding_two_equal_keys_in_a_nested_map_is_refused_and_nothing_written() {
+    void map_data_holding_two_equal_keys_in_a_nested_map_is_held_as_the_bytes_of_the_data_and_read_back_as_bytes() {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("inner", identityMapWithTwoEqualKeys());
-        assertRefusedAsCollapsing(data);
+        assertHeldAsBytes(data);
     }
 
     @Test
-    void map_data_holding_two_equal_keys_in_a_map_inside_a_list_is_refused_and_nothing_written() {
+    void map_data_holding_two_equal_keys_in_a_map_inside_a_list_is_held_as_the_bytes_of_the_data_and_read_back_as_bytes() {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("parts", List.of(identityMapWithTwoEqualKeys()));
-        assertRefusedAsCollapsing(data);
+        assertHeldAsBytes(data);
     }
 
     @Test
-    void map_data_that_is_a_comparator_ordered_map_holding_two_equal_keys_is_refused_and_nothing_written() {
+    void map_data_that_is_a_comparator_ordered_map_holding_two_equal_keys_is_held_as_the_bytes_of_the_data_and_read_back_as_bytes() {
         Map<Object, Object> data = new TreeMap<>((a, b) -> -1);
         data.put("item", "first");
         data.put("item", "second");
         assertThat(data).hasSize(2);
-        assertRefusedAsCollapsing(data);
+        assertHeldAsBytes(data);
     }
 
-    private void assertRefusedAsCollapsing(Map<?, ?> data) {
+    private void assertHeldAsBytes(Map<?, ?> data) {
         CloudEvent event = baseEvent().withDataContentType("application/json").withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(UTF_8))).build();
-        StoredSaga instance = anInstance();
 
-        Throwable thrown = catchThrowable(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)));
+        CloudEvent held = heldAndRead(event);
 
         assertAll(
-                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + ORDER + "'").hasMessageContaining("'" + KEY + "'")
-                        .hasMessageContaining("keys [item] where it was delivered with [item, item]"),
-                () -> assertNothingWritten()
+                () -> assertThat(held.getData()).isExactlyInstanceOf(BytesCloudEventData.class),
+                () -> assertThat(requireNonNull(held.getData()).toBytes()).isEqualTo("{}".getBytes(UTF_8))
         );
     }
 

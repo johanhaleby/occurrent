@@ -408,9 +408,10 @@ db.getCollection("saga-order-fulfilment")
 
 `failureReleasedAt` is stored as epoch milliseconds. The inputs still to replay are documents in the collection named
 after the saga collection with `_skipped_inputs` appended, one per skipped input and one for the input the instance
-stopped on, each with `sagaId`, `quarantineId`, `seq`, `key` and `event`, and `extensions`, `dataDocument` and `data` when
-the event has them. A release replays them in order of `seq`, and only those under the instance's
-`failureQuarantineId`:
+stopped on, each with `sagaId`, `quarantineId`, `seq`, `key` and `event`, and `extensions`, `dataDocument`, `data` and
+`dataClass` when the event has them. A record too large for one document holds `chunks` and `size` in place of the
+event, and the event is in the collection named after the saga collection with `_skipped_input_chunks` appended. A
+release replays them in order of `seq`, and only those under the instance's `failureQuarantineId`:
 
 ```javascript
 db.getCollection("saga-order-fulfilment_skipped_inputs")
@@ -429,24 +430,29 @@ own JSON. Other data is held in `data` as its bytes in BSON binary, and a releas
 `BytesCloudEventData`.
 
 Before it writes anything, `compareAndSaveSkipped` checks the record with a round trip. It encodes the record to BSON
-the way MongoDB stores it, decodes it, and reads the event back the way a release does. It throws an
-`IllegalStateException` when the event read back isn't the one that was delivered, so the instance and its records
-stay as they were. The message names the instance, the input and, when it's known, where in the event the difference
-is. A subscription that retries the event stops on it. That happens when:
+the way MongoDB stores it, decodes it, and reads the event back the way a release does. When the data read back isn't
+the data that was delivered, or doesn't encode at all, the record holds the data's bytes in `data` instead and the
+name of the data's class in `dataClass`, and the store logs a `WARN` that names the instance, the input and the
+difference. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth with a key that isn't a `String`
+doesn't encode, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
+`BytesCloudEventData`, so all three are held this way. A release hands the converter a `JsonCloudEventData` read from
+those bytes when `dataClass` names one, and a `BytesCloudEventData` for data of any other class, so a converter that
+reads a map or an object from the data gets its bytes instead.
 
-- An attribute, an extension or a data value at any depth comes back as another value or as a value of another class.
-  A `BigDecimal` in a map comes back as a `Decimal128`, a `String` with an unpaired surrogate comes back as another
-  `String`, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
-  `BytesCloudEventData`. A map or a list inside the data may come back as another implementation of `Map` or `List`.
-- Encoding, decoding or reading the event back throws, such as for a map at any depth with a key that isn't a
-  `String`.
-- The record goes over the 16 MiB MongoDB stores in one. The attributes, the saga id, the quarantine id and the key
-  share it with the data, so data that comes that close to 16 MiB doesn't fit. A map from another feed, such as one a
-  Jackson converter built, is held both as a document and as its bytes, so it fits only up to about half that.
+A record that doesn't fit in the 16 MiB MongoDB stores in one document is split into chunks of 8 MiB in
+`<sagaCollection>_skipped_input_chunks`, each with `sagaId`, `quarantineId`, `key`, `chunk` and `bytes`. The record
+then holds `chunks`, the number of chunks, and `size`, their total size in bytes, in place of the event, and a release
+joins the chunks again.
 
-These records are the only copy of the skipped events that the saga keeps, and erasing an event from the event store
-doesn't erase its copy here. Release or delete the quarantined instances before you erase an event from the event
-store, or a later release applies the event you erased. The same goes for an event you redact in place with
+`compareAndSaveSkipped` throws an `IllegalStateException`, so the instance and its records stay as they were, only when
+an attribute or an extension doesn't come back as it was delivered, such as a `String` with an unpaired surrogate,
+when the record doesn't encode even with the data held as its bytes, or when the saga id, the quarantine id and the
+key take about 8 MiB between them and leave no room for a chunk. The message names the instance, the input and, when
+it's known, where in the event the difference is. A subscription that retries such an event stops on it.
+
+These records and their chunks are the only copy of the skipped events that the saga keeps, and erasing an event
+from the event store doesn't erase its copy here. Release or delete the quarantined instances before you erase an
+event from the event store, or a later release applies the event you erased. The same goes for an event you redact in place with
 `EventStoreOperations.updateEvent`. The record keeps the event as it was when the instance skipped it, and a release
 applies that copy, not the redacted one.
 
@@ -511,12 +517,13 @@ const removed = db.getCollection("saga-order-fulfilment").findOneAndDelete({ _id
 ```
 
 That removes the same document, since the instance is one document keyed by its saga id. From 0.35.0 the Java call
-also deletes the records of the inputs the instance skipped, under the quarantine id the instance had. When `removed`
-has a `failureQuarantineId`, delete those records too:
+also deletes the records of the inputs the instance skipped, under the quarantine id the instance had, and their
+chunks. When `removed` has a `failureQuarantineId`, delete those records and chunks too:
 
 ```javascript
 if (removed && removed.failureQuarantineId) {
   db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({ sagaId: "order-4711", quarantineId: removed.failureQuarantineId })
+  db.getCollection("saga-order-fulfilment_skipped_input_chunks").deleteMany({ sagaId: "order-4711", quarantineId: removed.failureQuarantineId })
 }
 ```
 
@@ -669,17 +676,20 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    stays quarantined through the downgrade, like an instance that keeps failing. Every instance that keeps failing
    still holds records of inputs that were acknowledged and never applied, and after step 6 no release replays them.
 6. Stop every 0.35.0 node. Before you change any instance, dump every record still in
-   `<sagaCollection>_skipped_inputs` with `mongodump`. Those records are the only copy of the inputs the instances that
-   keep failing never applied, so handle them by hand from that dump. On MongoDB, run this for each saga's collection,
-   with your own connection string, which names the database the saga collection is in:
+   `<sagaCollection>_skipped_inputs`, and every chunk in `<sagaCollection>_skipped_input_chunks`, with `mongodump`.
+   Those records are the only copy of the inputs the instances that keep failing never applied, so handle them by hand
+   from that dump. On MongoDB, run this for each saga's collection, with your own connection string, which names the
+   database the saga collection is in:
 
    ```
    mongodump --uri "<connection string>" --collection "saga-order-fulfilment_skipped_inputs" --out skipped-inputs-dump
+   mongodump --uri "<connection string>" --collection "saga-order-fulfilment_skipped_input_chunks" --out skipped-inputs-dump
    ```
 
    `mongodump` writes the records as BSON to `skipped-inputs-dump/<database>/saga-order-fulfilment_skipped_inputs.bson`,
-   where `<database>` is the database in your connection string. BSON keeps the type of every value, so the dump is the
-   copy to keep and to rebuild events from. It holds personal data when the events hold any, so keep it where such data
+   and the chunks to `saga-order-fulfilment_skipped_input_chunks.bson` next to it, where `<database>` is the database
+   in your connection string. BSON keeps the type of every value, so the dump is the copy to keep and to rebuild events
+   from. It holds personal data when the events hold any, so keep it where such data
    may be kept.
 
    Don't rebuild events from a JSON export, such as the one `mongoexport` writes, also with `--jsonFormat=canonical`.
@@ -694,6 +704,9 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    mongorestore --uri "<connection string without a database>" --nsInclude "<database>.saga-order-fulfilment_skipped_inputs" \
      --nsFrom "<database>.saga-order-fulfilment_skipped_inputs" --nsTo "skipped-inputs.saga-order-fulfilment_skipped_inputs" \
      skipped-inputs-dump
+   mongorestore --uri "<connection string without a database>" --nsInclude "<database>.saga-order-fulfilment_skipped_input_chunks" \
+     --nsFrom "<database>.saga-order-fulfilment_skipped_input_chunks" --nsTo "skipped-inputs.saga-order-fulfilment_skipped_input_chunks" \
+     skipped-inputs-dump
    ```
 
    `--nsInclude` names the one collection to restore. Without it `mongorestore` restores every collection in
@@ -704,7 +717,7 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    Read the restored collection with a MongoDB driver that has the UUID representation of the application's client,
    such as the one `spring.mongodb.representation.uuid` sets. With another one, the Java driver reads a UUID in the data
    as an `org.bson.types.Binary`. Each record holds `sagaId` and `quarantineId`, and `seq` and then `key` give the order
-   the instance would have applied them in. A record holds its event in up to four fields:
+   the instance would have applied them in. A record holds its event in up to five fields:
 
    | Field | What it holds |
    | --- | --- |
@@ -712,6 +725,15 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    | `extensions` | The extensions, when the event has any. |
    | `dataDocument` | The data, when it was delivered as a map. |
    | `data` | The data as bytes. A record with `dataDocument` has `data` only when the delivered bytes differ from the JSON of `dataDocument`. |
+   | `dataClass` | The class of the data, when the record holds as bytes data it couldn't hold as it was delivered. |
+
+   A record too large for one document holds `chunks` and `size` in place of those fields. Its chunks are the
+   documents in the restored `saga-order-fulfilment_skipped_input_chunks` with the record's `sagaId`, `quarantineId` and
+   `key`. Take those whose `chunk` is below `chunks`, in order of `chunk`, and join their `bytes`, read as bytes the
+   way binary data in an extension is. The joined bytes, `size` of them, are a BSON document that holds the record's
+   `seq` and the five fields above. Decode it, such as with `new RawBsonDocument(bytes).decode(codec)` in the Java
+   driver, and rebuild the event from that document. A record whose chunks are missing, or whose joined bytes aren't
+   `size` long, can't be rebuilt from this dump.
 
    Rebuild each event from its record the way a release in `SpringMongoSagaStateStore` reads it:
 
@@ -721,10 +743,15 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
      `org.bson.types.Binary`, and its bytes are `getData()`. A value the driver gives as a `byte[]` is those bytes. A document holds a value as a string in
      `value` and its class in `type`, where `uri` is a `URI`, `timestamp` an `OffsetDateTime`, `byte` a `Byte`, `short` a `Short`, `float` a
      `Float`, `bigInteger` a `BigInteger` and `bigDecimal` a `BigDecimal`.
+   - When the record has `dataClass`, the data is `data`, read as bytes the way binary data in an extension is. When
+     `dataClass` is `io.cloudevents.jackson.JsonCloudEventData`, it is a `JsonCloudEventData` of those bytes read as
+     JSON, the way the CloudEvents JSON format reads the data of an event whose `datacontenttype` is JSON. Data of any
+     other class is a `BytesCloudEventData` of those bytes.
    - When the record has `dataDocument`, the data is a `PojoCloudEventData` of that document. Its bytes are `data` when
      the record has it, read as bytes the way binary data in an extension is, and otherwise the document as the Java
      driver's `Document.toJson()` writes it, in UTF-8.
-   - When the record has `data` and no `dataDocument`, the data is those bytes, read as bytes the same way.
+   - When the record has `data` and neither `dataDocument` nor `dataClass`, the data is those bytes, read as bytes the
+     same way.
    - A record with neither field holds an event without data.
 
    Then, from a process that runs no `SagaRunner`, store every instance that is still
@@ -749,15 +776,18 @@ No step deletes an instance. 0.34.0 reads an instance that step 6 updated as one
 and the input it stopped on. It skips every input addressed to the instance and fires none of its timers, and the
 instance stays quarantined until you delete it, as in 0.34.0. After a later upgrade to 0.35.0, `release` refuses it,
 because 0.34.0 skipped inputs without recording them. The records of the inputs it skipped on 0.35.0 stay in
-`<sagaCollection>_skipped_inputs`. Each one holds a full copy of the event it stands for, personal data included when
-the event holds any, and 0.34.0 never reads or deletes them. Step 6 removed the quarantine ids they are filed under,
-so no release can replay them either, also after a later upgrade to 0.35.0. Delete them once step 6 has run, and only
-when the collection restored from the dump in step 6 holds as many records as `<sagaCollection>_skipped_inputs`, since
-the delete removes the last copy of every input that was never applied. A JSON export is not such a copy. Rebuild the
-events you still need from the restored records first, as step 6 describes:
+`<sagaCollection>_skipped_inputs`, with their chunks in `<sagaCollection>_skipped_input_chunks`. Each one holds a full
+copy of the event it stands for, personal data included when the event holds any, and 0.34.0 never reads or deletes
+them. Step 6 removed the quarantine ids they are filed under, so no release can replay them either, also after a later
+upgrade to 0.35.0. Delete them once step 6 has run, and only when the collections restored from the dump in step 6
+hold as many records as `<sagaCollection>_skipped_inputs` and as many chunks as
+`<sagaCollection>_skipped_input_chunks`, since the delete removes the last copy of every input that was never applied.
+A JSON export is not such a copy. Rebuild the events you still need from the restored records first, as step 6
+describes:
 
 ```javascript
 db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({})
+db.getCollection("saga-order-fulfilment_skipped_input_chunks").deleteMany({})
 ```
 
 The
@@ -765,5 +795,5 @@ The
 covers the upgrade from 0.34.0.
 
 Deleting an instance is not reversible from inside Occurrent. Take a backup first if you want one, of both the saga
-collection and `<sagaCollection>_skipped_inputs`. The delete removes the instance's skipped-input records too, and
+collection, `<sagaCollection>_skipped_inputs` and `<sagaCollection>_skipped_input_chunks`. The delete removes the instance's skipped-input records too, and
 `release` refuses an instance restored without them, since it has no record of the input it was quarantined on.

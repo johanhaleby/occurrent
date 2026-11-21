@@ -116,11 +116,13 @@ MongoDB's 16 MB limit, so there is no limit on how many it records.
 
 A store keeps a record's event and returns it from `findSkippedInputs` and `findWithFirstSkippedInput`. The saga
 keeps no other copy of a skipped
-event. A release converts the event again, so `SpringMongoSagaStateStore` records an event only when a release hands
-the converter the event exactly as it was delivered. That means the same attributes, the same `CloudEventData` class,
+event. A release converts the event again, so `SpringMongoSagaStateStore` holds an event so that a release hands the
+converter the event exactly as it was delivered. That means the same attributes, the same `CloudEventData` class,
 the same data values with the same Java classes at any depth, the same bytes, and the extensions with the same values
 and the same Java classes. A map or a list inside the data may come back as another implementation of `Map` or `List`,
-such as a `Document` for a `LinkedHashMap`.
+such as a `Document` for a `LinkedHashMap`. Data the record can't hold that way is held as its bytes and its class,
+and a record too large for one document is split across several, so an event a quarantined instance skips stops the
+subscription only when the record can't hold its attributes, its extensions or its key.
 
 In the record, `event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. A
 `URI`, an `OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` extension is stored as a
@@ -130,30 +132,56 @@ as it is.
 Data delivered as a `PojoCloudEventData` that holds a map, which is how the MongoDB event store delivers a JSON object,
 is held in `dataDocument`, with its bytes in `data` unless they are the document's own JSON, and a release hands the
 converter a map again. Other data is held in `data` as its bytes in BSON binary, and a release hands the converter a
-`BytesCloudEventData`. Written as CloudEvents JSON, binary data would grow by a third as base64, and a 13 MiB binary
-event would not fit in a record at all. JSON data parsed into a document would read a field such as
+`BytesCloudEventData`. Written as CloudEvents JSON, binary data would grow by a third as base64, so a 13 MiB binary
+event would take more than 17 MiB. JSON data parsed into a document would read a field such as
 `{"$numberLong": "42"}` as MongoDB Extended JSON and come back as `42`. A map released as its bytes would hand the
 converter the MongoDB event store's JSON of it, where a date is `{"$date": ...}`, instead of the map it converted on
 delivery.
 
 `compareAndSaveSkipped` checks the record with a round trip before it writes anything. It encodes the record to BSON
 the way MongoDB stores it, decodes it, and reads the event back with the method `findSkippedInputs` and
-`findWithFirstSkippedInput` read a record with, so the check and a release read the record the same way. It throws an `IllegalStateException`, and the instance
-and its records stay as they were, when:
+`findWithFirstSkippedInput` read a record with, so the check and a release read the record the same way.
 
-- The event read back differs from the delivered one in an attribute, an extension or a data value at any depth, in
-  its value or its Java class. A `BigDecimal` in a map comes back as a `Decimal128`, a `String` with an unpaired
-  surrogate comes back as another `String`, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON
-  object into comes back as a `BytesCloudEventData`.
-- Encoding, decoding or reading the event back throws, such as for a map at any depth with a key that isn't a
-  `String`, which the BSON codec rejects with a `ClassCastException`.
-- The record doesn't fit. MongoDB stores at most 16 MiB in a record, and the record holds the attributes, the saga id,
-  the quarantine id and the key beside the data, so an event whose data comes that close to 16 MiB doesn't fit. A map
-  from another feed, such as one a Jackson converter built, is held both as a document and as its bytes, so it fits
-  only up to about half that.
+When the data read back differs from the delivered data in a value at any depth, in its value or its Java class, or
+encoding, decoding or reading it back throws, the record holds the data's bytes in `data` instead, as BSON binary, and
+the name of the data's class in `dataClass`. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth
+with a key that isn't a `String` makes the BSON codec throw a `ClassCastException`, and the `JsonCloudEventData` the
+CloudEvents JSON format reads a JSON object into comes back as a `BytesCloudEventData`, so all three are held this way.
+A release hands the converter a `JsonCloudEventData` that the CloudEvents JSON format reads from those bytes when
+`dataClass` names one, and a `BytesCloudEventData` with the same bytes for data of any other class. A
+`JsonCloudEventData` built from a node rather than read by the format comes back as the node its JSON reads as, such
+as a `DoubleNode` of `1.1` for a `DecimalNode` of `1.10`. The store logs a warning that names the instance, the input
+and the difference, since the converter then gets bytes where it was delivered a map or an object.
+
+A record that doesn't fit in one document, at most 16 MiB, or in the write that sends it, at most 16 MiB and 16 KiB
+with its filter, is encoded to BSON and split into chunks of 8 MiB. Each chunk is a document in a collection named
+after the saga collection with `_skipped_input_chunks` appended, under the record's saga id, quarantine id and key and
+the chunk's index. The record then holds only `seq`, the number of chunks in `chunks` and their total size in `size`.
+A read takes the chunks below the record's count in the order of their index, and throws an `IllegalStateException`
+when an index is missing or the bytes don't add up to `size`, instead of reading another event.
+
+The chunks are written before the record that points at them and deleted after it, and every one of those writes is in
+the transaction that writes the instance. A failure between two of them rolls all of them back, and a Spring
+transaction of the caller's that catches the failure can't commit either, since the store marks it rollback-only. A
+transaction whose session its owner bound to the `MongoDatabaseFactory` is one the store can't abort, and its owner
+can commit it after a failed write. That leaves chunks no record points at, when the record's write failed, or when
+the chunks' delete failed after the record's. It never leaves a record without its chunks, since the chunks are
+written first and deleted last. A read never reaches a chunk no record points at, the next skip of the same key
+overwrites it, and it is deleted with the records of its key or its quarantine id, by a replay, by the end of the
+quarantine, or by `delete(sagaId)`.
+
+`compareAndSaveSkipped` throws an `IllegalStateException`, and the instance and its records stay as they were, only
+when:
+
+- The event read back differs from the delivered one in an attribute or an extension, in its value or its Java class,
+  such as a `String` with an unpaired surrogate, which comes back as another `String`.
+- Encoding, decoding or reading the record back throws even with the data held as its bytes, such as for an extension
+  of a class BSON has no codec for.
+- The saga id, the quarantine id and the key take so much room that a chunk doesn't fit beside them in one document,
+  which takes about 8 MiB between them.
 
 The message names the instance, the input and, when it's known, where in the event the difference is. A subscription
-that retries the event stops on it.
+that retries such an event stops on it.
 
 The methods that read and write the records are on an interface of their own, `SagaStateStoreSkippedInputs`, which a
 store implements next to `SagaStateStore`, the way it implements `SagaStateStoreQueries`. It has no state type
@@ -498,7 +526,11 @@ on its first deploy, instead of quarantining without knowing it.
   quarantine id and the sequence number serves the order release reads them in.
 - A record document holds the attributes of its input's event as a CloudEvents JSON string, in its `event` field,
   its extensions in `extensions`, and its data in `dataDocument` when it was delivered as a map and in `data` as
-  bytes otherwise, see section 2. Every
+  bytes otherwise, with `dataClass` naming the data's class when the record holds as bytes data it couldn't hold as
+  delivered, see section 2. A record too large for one document holds `chunks` and `size` in place of those fields,
+  and its BSON is split across documents in a collection named after the saga collection with
+  `_skipped_input_chunks` appended, each holding `sagaId`, `quarantineId`, `key`, `chunk` and `bytes`, with a unique
+  index on the first four. Every
   record has an `event`, K's record included, which the write that quarantines the instance writes. The collection is new in 0.35.0, so
   no released document changes.
 - A document a 0.34.0 node wrote has none of these fields and reads as not releasing, with no quarantine id.
@@ -723,5 +755,10 @@ The upgrade guide has the procedure for operators, in
   without a public enum value.
 - **Check a held event against a list of the classes the record can hold**, instead of with a round trip. Such a list
   has to know every way BSON changes a value, and two it didn't know about were a `String` with an unpaired surrogate
-  and a key that isn't a `String` in a nested map or a map inside a list. The round trip refuses both without knowing
+  and a key that isn't a `String` in a nested map or a map inside a list. The round trip finds both without knowing
   about either.
+- **Refuse an event the record can't hold as delivered, or one over 16 MiB.** A subscription that delivers the event
+  again before any later one, as a MongoDB subscription does, would stop on it for every instance of the saga, and the
+  only way out would be to change the event or the converter. Holding the data's bytes and splitting a large record
+  keep the subscription going, at the cost of a release handing the converter bytes where it was delivered a map or an
+  object.

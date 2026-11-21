@@ -78,8 +78,8 @@ other sections compile fine and behave differently, so read them first.
   starts, since a 0.34.0 node fails on every event for an instance that 0.35.0 quarantined. On MongoDB such an
   instance is stored as `QUARANTINED_RECORDING`, so a query of your own for `status: "QUARANTINED"`, such as the
   0.34.0 runbook's, no longer finds it. `SpringMongoSagaStateStore` refuses a collection name that ends in
-  `_skipped_inputs`, creates a second collection next to its own, and reads instances from the primary, with
-  quarantine on or off. Breaks the build only for a record pattern over `SagaFailure` or `SagaEnvelope`.
+  `_skipped_inputs` or `_skipped_input_chunks`, creates two collections next to its own, and reads instances from the
+  primary, with quarantine on or off. Breaks the build only for a record pattern over `SagaFailure` or `SagaEnvelope`.
 - [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due). A failed
   timer is tried again after every instance that was already due. Compiles unchanged unless you use a record pattern
   over `TimerEntry`.
@@ -902,13 +902,13 @@ and the issue is [#1259](https://github.com/johanhaleby/occurrent/issues/1259).
 - A `SagaStateStore` of your own.
 - An instance that 0.34.0 quarantined.
 - A record pattern over `SagaFailure` or `SagaEnvelope`.
-- A `SpringMongoSagaStateStore` on a collection whose name ends in `_skipped_inputs`, which includes a `@Saga` whose
-  id makes the default `saga-<id>` name end in it. The constructor throws an `IllegalArgumentException`, with
-  quarantine on or off.
+- A `SpringMongoSagaStateStore` on a collection whose name ends in `_skipped_inputs` or `_skipped_input_chunks`, which
+  includes a `@Saga` whose id makes the default `saga-<id>` name end in either. The constructor throws an
+  `IllegalArgumentException`, with quarantine on or off.
 - A `SpringMongoSagaStateStore` whose `MongoOperations` reads from secondaries. The store now reads saga instances and
   skipped inputs from the primary.
-- Every `SpringMongoSagaStateStore`, which creates a `<collection>_skipped_inputs` collection with two indexes on it
-  when it is constructed, with quarantine on or off.
+- Every `SpringMongoSagaStateStore`, which creates a `<collection>_skipped_inputs` collection with two indexes on it,
+  and a `<collection>_skipped_input_chunks` collection with one, when it is constructed, with quarantine on or off.
 - An upgrade from 0.34.0, which stops every 0.34.0 node that runs sagas before any 0.35.0 node starts, and a rollback
   to 0.34.0, as [Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) describes.
 
@@ -978,11 +978,13 @@ instances, each poll logs a `WARN` and tries again. The runbook covers what is l
 `SagaCodec` stores a release in three fields, `failureReleasedAt`, `failureQuarantineId` and `quarantineSkipCount`,
 which `SpringMongoSagaStateStore` writes as top-level fields of the instance's document. The skipped inputs are documents in a collection
 of their own, named after the saga collection with `_skipped_inputs` appended, one per skipped input and one for the
-input the instance stopped on, each with `sagaId`, `quarantineId`, `seq`, `key` and `event`, and `extensions`, `dataDocument` and
-`data` when the event has them. A document 0.34.0 wrote has none of these fields, and reads as an instance
-that is not releasing, with no quarantine id. The constructor now throws an `IllegalArgumentException` for a saga
-collection whose name ends in `_skipped_inputs`, because a store on the name without that suffix would keep its skipped
-inputs in the same collection. Rename such a collection before you upgrade.
+input the instance stopped on, each with `sagaId`, `quarantineId`, `seq`, `key` and `event`, and `extensions`,
+`dataDocument`, `data` and `dataClass` when the event has them. A record too large for one document holds `chunks` and
+`size` in place of the event, and the event is in a collection named after the saga collection with
+`_skipped_input_chunks` appended. A document 0.34.0 wrote has none of these fields, and reads as an instance that is
+not releasing, with no quarantine id. The constructor now throws an `IllegalArgumentException` for a saga collection
+whose name ends in `_skipped_inputs` or `_skipped_input_chunks`, because a store on the name without that suffix would
+keep its skipped inputs or their chunks in the same collection. Rename such a collection before you upgrade.
 
 `event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. A `URI`, an
 `OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` extension is stored as a string
@@ -992,20 +994,25 @@ own JSON. Other data is held in `data` as its bytes in BSON binary, and a releas
 `BytesCloudEventData`.
 
 Before it writes anything, `compareAndSaveSkipped` checks the record with a round trip. It encodes the record to BSON
-the way MongoDB stores it, decodes it, and reads the event back the way a release does. It throws an
-`IllegalStateException` when the event read back isn't the one that was delivered, so the instance and its records
-stay as they were. The message names the instance, the input and, when it's known, where in the event the difference
-is. A subscription that retries the event stops on it. That happens when:
+the way MongoDB stores it, decodes it, and reads the event back the way a release does. When the data read back isn't
+the data that was delivered, or doesn't encode at all, the record holds the data's bytes in `data` instead and the
+name of the data's class in `dataClass`, and the store logs a `WARN` that names the instance, the input and the
+difference. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth with a key that isn't a `String`
+doesn't encode, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
+`BytesCloudEventData`, so all three are held this way. A release hands the converter a `JsonCloudEventData` read from
+those bytes when `dataClass` names one, and a `BytesCloudEventData` for data of any other class, so a converter that
+reads a map or an object from the data gets its bytes instead.
 
-- An attribute, an extension or a data value at any depth comes back as another value or as a value of another class.
-  A `BigDecimal` in a map comes back as a `Decimal128`, a `String` with an unpaired surrogate comes back as another
-  `String`, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
-  `BytesCloudEventData`. A map or a list inside the data may come back as another implementation of `Map` or `List`.
-- Encoding, decoding or reading the event back throws, such as for a map at any depth with a key that isn't a
-  `String`.
-- The record goes over the 16 MiB MongoDB stores in one. The attributes, the saga id, the quarantine id and the key
-  share it with the data, so data that comes that close to 16 MiB doesn't fit. A map from another feed, such as one a
-  Jackson converter built, is held both as a document and as its bytes, so it fits only up to about half that.
+A record that doesn't fit in the 16 MiB MongoDB stores in one document is split into chunks of 8 MiB in
+`<sagaCollection>_skipped_input_chunks`, each with `sagaId`, `quarantineId`, `key`, `chunk` and `bytes`. The record
+then holds `chunks`, the number of chunks, and `size`, their total size in bytes, in place of the event, and a release
+joins the chunks again.
+
+`compareAndSaveSkipped` throws an `IllegalStateException`, so the instance and its records stay as they were, only when
+an attribute or an extension doesn't come back as it was delivered, such as a `String` with an unpaired surrogate,
+when the record doesn't encode even with the data held as its bytes, or when the saga id, the quarantine id and the
+key take about 8 MiB between them and leave no room for a chunk. The message names the instance, the input and, when
+it's known, where in the event the difference is. A subscription that retries such an event stops on it.
 
 An instance that 0.35.0 quarantined is stored with the status `QUARANTINED_RECORDING` instead of `QUARANTINED`. Both
 read back as `SagaStatus.QUARANTINED`, and the store's own queries match both. A query you wrote by hand for
@@ -1027,8 +1034,11 @@ A store that implements it keeps the skipped inputs, each with its event, and re
 `findSkippedInputs` and `findWithFirstSkippedInput`. A release converts the event again, so a store returns the event as it was delivered, with the
 same attributes, the same data class, the same values of the same Java classes at any depth and the same extension
 classes. A map or a list inside the data may come back as another implementation of `Map` or `List`. A store that
-can't hold an event that way throws an `IllegalStateException` from `compareAndSaveSkipped` before it writes anything.
-`SpringMongoSagaStateStore` finds that out with a round trip, as
+can't hold the data that way may hold its bytes instead, and then returns a `JsonCloudEventData` read from those bytes
+for data that was one, and a `BytesCloudEventData` with the same bytes for data of any other class. A store whose
+writes have a size limit splits a record that goes over it. A store throws an `IllegalStateException` from
+`compareAndSaveSkipped` before it writes anything for an event it can't hold even so.
+`SpringMongoSagaStateStore` finds out what it can hold with a round trip, as
 [Stored saga state for a release](#stored-saga-state-for-a-release) describes. Apart from `delete(sagaId)`, it changes the records only in three
 compare-and-sets on the instance, `compareAndSaveSkipped`, `compareAndSaveReplayed` and
 `compareAndSaveQuarantineEnded`. Each writes the instance and its records in one atomic write, and on a version
@@ -1086,8 +1096,9 @@ describes, once you have decided not to recover it.
 
 Add the new bindings to a record pattern over `SagaFailure` or `SagaEnvelope`. No recipe does it.
 
-Rename a `SpringMongoSagaStateStore` collection whose name ends in `_skipped_inputs`, or the `@Saga` id behind it. Let
-the MongoDB user the store connects with create the `<collection>_skipped_inputs` collection and its indexes. When you
+Rename a `SpringMongoSagaStateStore` collection whose name ends in `_skipped_inputs` or `_skipped_input_chunks`, or
+the `@Saga` id behind it. Let the MongoDB user the store connects with create the `<collection>_skipped_inputs` and
+`<collection>_skipped_input_chunks` collections and their indexes. When you
 sent saga reads to secondaries to spare the primary, expect that load on the primary now.
 
 ### Upgrading from 0.34.0 and rolling back to it
@@ -1165,17 +1176,20 @@ its subscription goes live. To downgrade without that stall, do steps 1 to 5 whi
    stays quarantined through the downgrade, like an instance that keeps failing. Every instance that keeps failing
    still holds records of inputs that were acknowledged and never applied, and after step 6 no release replays them.
 6. Stop every 0.35.0 node. Before you change any instance, dump every record still in
-   `<sagaCollection>_skipped_inputs` with `mongodump`. Those records are the only copy of the inputs the instances that
-   keep failing never applied, so handle them by hand from that dump. On MongoDB, run this for each saga's collection,
-   with your own connection string, which names the database the saga collection is in:
+   `<sagaCollection>_skipped_inputs`, and every chunk in `<sagaCollection>_skipped_input_chunks`, with `mongodump`.
+   Those records are the only copy of the inputs the instances that keep failing never applied, so handle them by hand
+   from that dump. On MongoDB, run this for each saga's collection, with your own connection string, which names the
+   database the saga collection is in:
 
    ```
    mongodump --uri "<connection string>" --collection "saga-order-fulfilment_skipped_inputs" --out skipped-inputs-dump
+   mongodump --uri "<connection string>" --collection "saga-order-fulfilment_skipped_input_chunks" --out skipped-inputs-dump
    ```
 
    `mongodump` writes the records as BSON to `skipped-inputs-dump/<database>/saga-order-fulfilment_skipped_inputs.bson`,
-   where `<database>` is the database in your connection string. BSON keeps the type of every value, so the dump is the
-   copy to keep and to rebuild events from. It holds personal data when the events hold any, so keep it where such data
+   and the chunks to `saga-order-fulfilment_skipped_input_chunks.bson` next to it, where `<database>` is the database
+   in your connection string. BSON keeps the type of every value, so the dump is the copy to keep and to rebuild events
+   from. It holds personal data when the events hold any, so keep it where such data
    may be kept.
 
    Don't rebuild events from a JSON export, such as the one `mongoexport` writes, also with `--jsonFormat=canonical`.
@@ -1190,6 +1204,9 @@ its subscription goes live. To downgrade without that stall, do steps 1 to 5 whi
    mongorestore --uri "<connection string without a database>" --nsInclude "<database>.saga-order-fulfilment_skipped_inputs" \
      --nsFrom "<database>.saga-order-fulfilment_skipped_inputs" --nsTo "skipped-inputs.saga-order-fulfilment_skipped_inputs" \
      skipped-inputs-dump
+   mongorestore --uri "<connection string without a database>" --nsInclude "<database>.saga-order-fulfilment_skipped_input_chunks" \
+     --nsFrom "<database>.saga-order-fulfilment_skipped_input_chunks" --nsTo "skipped-inputs.saga-order-fulfilment_skipped_input_chunks" \
+     skipped-inputs-dump
    ```
 
    `--nsInclude` names the one collection to restore. Without it `mongorestore` restores every collection in
@@ -1200,7 +1217,7 @@ its subscription goes live. To downgrade without that stall, do steps 1 to 5 whi
    Read the restored collection with a MongoDB driver that has the UUID representation of the application's client,
    such as the one `spring.mongodb.representation.uuid` sets. With another one, the Java driver reads a UUID in the data
    as an `org.bson.types.Binary`. Each record holds `sagaId` and `quarantineId`, and `seq` and then `key` give the order
-   the instance would have applied them in. A record holds its event in up to four fields:
+   the instance would have applied them in. A record holds its event in up to five fields:
 
    | Field | What it holds |
    | --- | --- |
@@ -1208,6 +1225,15 @@ its subscription goes live. To downgrade without that stall, do steps 1 to 5 whi
    | `extensions` | The extensions, when the event has any. |
    | `dataDocument` | The data, when it was delivered as a map. |
    | `data` | The data as bytes. A record with `dataDocument` has `data` only when the delivered bytes differ from the JSON of `dataDocument`. |
+   | `dataClass` | The class of the data, when the record holds as bytes data it couldn't hold as it was delivered. |
+
+   A record too large for one document holds `chunks` and `size` in place of those fields. Its chunks are the
+   documents in the restored `saga-order-fulfilment_skipped_input_chunks` with the record's `sagaId`, `quarantineId` and
+   `key`. Take those whose `chunk` is below `chunks`, in order of `chunk`, and join their `bytes`, read as bytes the
+   way binary data in an extension is. The joined bytes, `size` of them, are a BSON document that holds the record's
+   `seq` and the five fields above. Decode it, such as with `new RawBsonDocument(bytes).decode(codec)` in the Java
+   driver, and rebuild the event from that document. A record whose chunks are missing, or whose joined bytes aren't
+   `size` long, can't be rebuilt from this dump.
 
    Rebuild each event from its record the way a release in `SpringMongoSagaStateStore` reads it:
 
@@ -1217,10 +1243,15 @@ its subscription goes live. To downgrade without that stall, do steps 1 to 5 whi
      `org.bson.types.Binary`, and its bytes are `getData()`. A value the driver gives as a `byte[]` is those bytes. A document holds a value as a string in
      `value` and its class in `type`, where `uri` is a `URI`, `timestamp` an `OffsetDateTime`, `byte` a `Byte`, `short` a `Short`, `float` a
      `Float`, `bigInteger` a `BigInteger` and `bigDecimal` a `BigDecimal`.
+   - When the record has `dataClass`, the data is `data`, read as bytes the way binary data in an extension is. When
+     `dataClass` is `io.cloudevents.jackson.JsonCloudEventData`, it is a `JsonCloudEventData` of those bytes read as
+     JSON, the way the CloudEvents JSON format reads the data of an event whose `datacontenttype` is JSON. Data of any
+     other class is a `BytesCloudEventData` of those bytes.
    - When the record has `dataDocument`, the data is a `PojoCloudEventData` of that document. Its bytes are `data` when
      the record has it, read as bytes the way binary data in an extension is, and otherwise the document as the Java
      driver's `Document.toJson()` writes it, in UTF-8.
-   - When the record has `data` and no `dataDocument`, the data is those bytes, read as bytes the same way.
+   - When the record has `data` and neither `dataDocument` nor `dataClass`, the data is those bytes, read as bytes the
+     same way.
    - A record with neither field holds an event without data.
 
    Then, from a process that runs no `SagaRunner`, store every instance that is still
@@ -1245,15 +1276,18 @@ No step deletes an instance. 0.34.0 reads an instance that step 6 updated as one
 and the input it stopped on. It skips every input addressed to the instance and fires none of its timers, and the
 instance stays quarantined until you delete it, as in 0.34.0. After a later upgrade to 0.35.0, `release` refuses it,
 because 0.34.0 skipped inputs without recording them. The records of the inputs it skipped on 0.35.0 stay in
-`<sagaCollection>_skipped_inputs`. Each one holds a full copy of the event it stands for, personal data included when
-the event holds any, and 0.34.0 never reads or deletes them. Step 6 removed the quarantine ids they are filed under,
-so no release can replay them either, also after a later upgrade to 0.35.0. Delete them once step 6 has run, and only
-when the collection restored from the dump in step 6 holds as many records as `<sagaCollection>_skipped_inputs`, since
-the delete removes the last copy of every input that was never applied. A JSON export is not such a copy. Rebuild the
-events you still need from the restored records first, as step 6 describes:
+`<sagaCollection>_skipped_inputs`, with their chunks in `<sagaCollection>_skipped_input_chunks`. Each one holds a full
+copy of the event it stands for, personal data included when the event holds any, and 0.34.0 never reads or deletes
+them. Step 6 removed the quarantine ids they are filed under, so no release can replay them either, also after a later
+upgrade to 0.35.0. Delete them once step 6 has run, and only when the collections restored from the dump in step 6
+hold as many records as `<sagaCollection>_skipped_inputs` and as many chunks as
+`<sagaCollection>_skipped_input_chunks`, since the delete removes the last copy of every input that was never applied.
+A JSON export is not such a copy. Rebuild the events you still need from the restored records first, as step 6
+describes:
 
 ```javascript
 db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({})
+db.getCollection("saga-order-fulfilment_skipped_input_chunks").deleteMany({})
 ```
 
 ## A saga timer that keeps failing waits behind the timers already due

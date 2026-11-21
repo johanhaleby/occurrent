@@ -176,65 +176,80 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
     }
 
     @Test
-    void a_mutable_object_in_the_data_is_refused_and_nothing_is_recorded() {
+    void a_mutable_object_in_the_data_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         Map<String, Object> delivered = new LinkedHashMap<>();
         delivered.put("counter", new AtomicInteger(1));
+        CloudEventData data = PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render);
+        byte[] asDelivered = data.toBytes();
 
-        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining("s1")
-                .hasMessageContaining(AtomicInteger.class.getName());
-        assertNothingWasRecorded();
+        skip(event(data));
+
+        CloudEventData read = recordedEvent().getData();
+        assertAll(
+                () -> assertThat(read).isExactlyInstanceOf(BytesCloudEventData.class),
+                () -> assertThat(read.toBytes()).isEqualTo(asDelivered)
+        );
     }
 
     @Test
-    void a_mutable_object_nested_in_a_list_in_the_data_is_refused_and_nothing_is_recorded() {
+    void a_mutable_object_nested_in_a_list_in_the_data_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         Map<String, Object> delivered = new LinkedHashMap<>();
         delivered.put("parts", List.of(new StringBuilder("x")));
+        CloudEventData data = PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render);
 
-        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining(StringBuilder.class.getName());
-        assertNothingWasRecorded();
+        skip(event(data));
+
+        CloudEventData read = recordedEvent().getData();
+        assertAll(
+                () -> assertThat(read).isExactlyInstanceOf(BytesCloudEventData.class),
+                () -> assertThat(read.toBytes()).isEqualTo(data.toBytes())
+        );
     }
 
     @Test
-    void a_map_key_that_is_not_a_scalar_is_refused_and_nothing_is_recorded() {
+    void a_map_key_that_is_not_a_scalar_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         Map<Object, Object> delivered = new LinkedHashMap<>();
         delivered.put(new StringBuilder("k"), "v");
+        CloudEventData data = PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render);
 
-        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining("key");
-        assertNothingWasRecorded();
+        skip(event(data));
+
+        CloudEventData read = recordedEvent().getData();
+        assertAll(
+                () -> assertThat(read).isExactlyInstanceOf(BytesCloudEventData.class),
+                () -> assertThat(read.toBytes()).isEqualTo(data.toBytes())
+        );
     }
 
     @Test
-    void a_pojo_whose_value_is_not_a_map_or_a_list_is_refused_and_nothing_is_recorded() {
+    void a_pojo_whose_value_is_not_a_map_or_a_list_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         CloudEventData data = PojoCloudEventData.wrap(new StringBuilder("x"), value -> value.toString().getBytes(StandardCharsets.UTF_8));
 
-        assertThatThrownBy(() -> skip(event(data)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY);
-        assertNothingWasRecorded();
+        skip(event(data));
+
+        CloudEventData read = recordedEvent().getData();
+        assertAll(
+                () -> assertThat(read).isExactlyInstanceOf(BytesCloudEventData.class),
+                () -> assertThat(read.toBytes()).isEqualTo("x".getBytes(StandardCharsets.UTF_8))
+        );
     }
 
     @Test
-    void data_of_another_implementation_is_refused_and_nothing_is_recorded() {
+    void data_of_another_implementation_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         CloudEventData other = () -> new byte[]{1};
 
-        assertThatThrownBy(() -> skip(event(other)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY);
-        assertNothingWasRecorded();
+        skip(event(other));
+
+        CloudEventData read = recordedEvent().getData();
+        assertAll(
+                () -> assertThat(read).isExactlyInstanceOf(BytesCloudEventData.class),
+                () -> assertThat(read.toBytes()).containsExactly(1)
+        );
     }
 
     @Test
@@ -308,69 +323,45 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
     }
 
     @Test
-    void a_code_with_scope_in_the_data_is_refused_and_nothing_is_recorded() {
+    void a_code_with_scope_in_the_data_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         Map<String, Object> delivered = new LinkedHashMap<>();
         delivered.put("code", new CodeWithScope("x", new Document("a", 1)));
 
-        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining(CodeWithScope.class.getName());
-        assertNothingWasRecorded();
+        assertHeldAsBytesAndRead(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render));
     }
 
     @Test
-    void a_subclass_of_date_in_the_data_is_refused_and_nothing_is_recorded() {
+    void a_subclass_of_date_in_the_data_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         Map<String, Object> delivered = new LinkedHashMap<>();
         delivered.put("at", new Timestamp(1_000L));
 
-        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining(Timestamp.class.getName());
-        assertNothingWasRecorded();
+        assertHeldAsBytesAndRead(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render));
     }
 
     @Test
-    void bytes_data_of_a_subclass_is_refused_and_nothing_is_recorded() {
+    void bytes_data_of_a_subclass_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
-        CloudEventData data = new SubclassedBytesData(new byte[]{1, 2, 3});
-
-        assertThatThrownBy(() -> skip(event(data)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining("s1")
-                .hasMessageContaining(SubclassedBytesData.class.getName());
-        assertNothingWasRecorded();
+        assertHeldAsBytesAndRead(new SubclassedBytesData(new byte[]{1, 2, 3}));
     }
 
     @Test
-    void a_subclass_of_a_number_in_the_data_is_refused_and_nothing_is_recorded() {
+    void a_subclass_of_a_number_in_the_data_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         Map<String, Object> delivered = new LinkedHashMap<>();
         delivered.put("amount", new SubclassedBigDecimal("1.5"));
 
-        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining(SubclassedBigDecimal.class.getName());
-        assertNothingWasRecorded();
+        assertHeldAsBytesAndRead(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render));
     }
 
     @Test
-    void a_map_key_that_is_a_subclass_of_a_number_is_refused_and_nothing_is_recorded() {
+    void a_map_key_that_is_a_subclass_of_a_number_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         Map<Object, Object> delivered = new LinkedHashMap<>();
         delivered.put(new SubclassedBigDecimal("1.5"), "v");
 
-        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining("key")
-                .hasMessageContaining(SubclassedBigDecimal.class.getName());
-        assertNothingWasRecorded();
+        assertHeldAsBytesAndRead(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render));
     }
 
     @Test
@@ -388,56 +379,50 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
     }
 
     @Test
-    void a_map_holding_two_equal_keys_is_refused_and_nothing_is_recorded() {
+    void a_map_holding_two_equal_keys_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
-        Map<Object, Object> delivered = identityMapWithTwoEqualKeys();
-
-        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining("holds the key 'item' twice");
-        assertNothingWasRecorded();
+        assertHeldAsBytesAndRead(PojoCloudEventData.wrap(identityMapWithTwoEqualKeys(), InMemorySagaStateStoreSkippedEventCopyTest::render));
     }
 
     @Test
-    void a_map_holding_two_equal_keys_nested_in_a_map_is_refused_and_nothing_is_recorded() {
+    void a_map_holding_two_equal_keys_nested_in_a_map_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         Map<String, Object> delivered = new LinkedHashMap<>();
         delivered.put("inner", identityMapWithTwoEqualKeys());
 
-        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining("holds the key 'item' twice");
-        assertNothingWasRecorded();
+        assertHeldAsBytesAndRead(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render));
     }
 
     @Test
-    void a_map_holding_two_equal_keys_nested_in_a_list_is_refused_and_nothing_is_recorded() {
+    void a_map_holding_two_equal_keys_nested_in_a_list_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         Map<String, Object> delivered = new LinkedHashMap<>();
         delivered.put("parts", List.of(identityMapWithTwoEqualKeys()));
 
-        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining("holds the key 'item' twice");
-        assertNothingWasRecorded();
+        assertHeldAsBytesAndRead(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render));
     }
 
     @Test
-    void a_comparator_ordered_map_holding_two_equal_keys_is_refused_and_nothing_is_recorded() {
+    void a_comparator_ordered_map_holding_two_equal_keys_is_held_as_the_bytes_of_the_data_and_read_as_bytes() {
         quarantinedInstance();
         Map<Object, Object> delivered = new TreeMap<>((a, b) -> -1);
         delivered.put("item", "first");
         delivered.put("item", "second");
         assertThat(delivered).hasSize(2);
 
-        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(KEY)
-                .hasMessageContaining("holds the key 'item' twice");
-        assertNothingWasRecorded();
+        assertHeldAsBytesAndRead(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render));
+    }
+
+    private void assertHeldAsBytesAndRead(CloudEventData delivered) {
+        byte[] asDelivered = delivered.toBytes();
+
+        skip(event(delivered));
+
+        CloudEventData read = recordedEvent().getData();
+        assertAll(
+                () -> assertThat(read).isExactlyInstanceOf(BytesCloudEventData.class),
+                () -> assertThat(read.toBytes()).isEqualTo(asDelivered)
+        );
     }
 
     private static Map<Object, Object> identityMapWithTwoEqualKeys() {

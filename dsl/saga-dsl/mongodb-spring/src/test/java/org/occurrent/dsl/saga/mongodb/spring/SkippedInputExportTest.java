@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClient;
@@ -23,12 +24,16 @@ import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.core.data.BytesCloudEventData;
 import io.cloudevents.core.data.PojoCloudEventData;
 import io.cloudevents.core.provider.EventFormatProvider;
+import io.cloudevents.jackson.JsonCloudEventData;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonBinarySubType;
 import org.bson.Document;
+import org.bson.RawBsonDocument;
 import org.bson.UuidRepresentation;
+import org.bson.codecs.DocumentCodec;
 import org.bson.types.Binary;
 import org.bson.types.Decimal128;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,6 +53,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -62,6 +68,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Random;
 import java.util.UUID;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -69,8 +76,9 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Docker-based. The downgrade guide has the operator dump the skipped inputs with {@code mongodump}, restore the dump
- * into a database of its own, read the restored records with a driver and rebuild each event with a recipe. Checks that
+ * Docker-based. The downgrade guide has the operator dump the skipped inputs and their chunks with two {@code mongodump}
+ * lines, restore the dump into a database of its own with two {@code mongorestore} commands, read the restored records
+ * with a driver, join the chunks of a record over 16 MiB and rebuild each event with a recipe. Checks that
  * the recipe, applied to records read from a dump restored with the guide's commands, gives exactly the event the store
  * returns for the same record, down to the class of every extension and of every value inside the data. Also checks
  * that a {@code mongoexport} JSON copy is not a copy to rebuild from, since it cannot tell a delivered map from a
@@ -86,7 +94,10 @@ class SkippedInputExportTest {
 
     private static final String COLLECTION = "saga-export";
     private static final String SKIPPED_INPUTS = COLLECTION + "_skipped_inputs";
+    private static final String SKIPPED_INPUT_CHUNKS = COLLECTION + "_skipped_input_chunks";
     private static final String OTHER_SAGAS_SKIPPED_INPUTS = "saga-other_skipped_inputs";
+    private static final String OTHER_SAGAS_SKIPPED_INPUT_CHUNKS = "saga-other_skipped_input_chunks";
+    private static final int OVER_A_DOCUMENT = 17 * 1024 * 1024;
     private static final String ORDER = "order-1";
     private static final String QUARANTINE_ID = "q-1";
     private static final Instant NOW = Instant.parse("2026-03-04T05:16:17.456Z");
@@ -101,6 +112,7 @@ class SkippedInputExportTest {
     private SpringMongoSagaStateStore<String> stateStore;
     private MongoTemplate template;
     private int recorded;
+    private String restoredDatabaseName;
 
     @BeforeEach
     void createInstances() {
@@ -158,6 +170,56 @@ class SkippedInputExportTest {
     }
 
     @Test
+    void a_record_over_16_MiB_is_restored_and_rebuilt_through_its_chunks_with_the_delivered_attributes_extensions_and_bytes() throws Exception {
+        byte[] bytes = new byte[OVER_A_DOCUMENT];
+        new Random(5).nextBytes(bytes);
+        CloudEvent delivered = builder("held-1").withExtension("tenant", "acme").withExtension("attempt", 3).withData("application/octet-stream", bytes).build();
+        record(delivered);
+
+        List<Document> restored = assertEveryRestoredRecordRebuildsToWhatTheStoreReturns();
+
+        Document record = restored.getFirst();
+        assertThat(record.keySet()).as("fields of the record, which holds the counts and none of the event").contains("seq", "chunks", "size")
+                .doesNotContain("event", "extensions", "data", "dataDocument", "dataClass");
+        assertThat(record.getInteger("chunks")).as("chunks of the record").isGreaterThan(1);
+        assertThat(differences(rebuild(record), delivered)).as("differences between the rebuilt event and the delivered one").isEmpty();
+    }
+
+    @Test
+    void json_data_held_as_its_bytes_and_dataClass_is_rebuilt_as_JsonCloudEventData_with_the_delivered_bytes() throws Exception {
+        CloudEvent delivered = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE).deserialize(("{\"specversion\":\"1.0\",\"id\":\"held-1\",\"source\":\"urn:test\","
+                + "\"type\":\"test\",\"subject\":\"" + ORDER + "\",\"datacontenttype\":\"application/json\",\"data\":{\"orderId\":\"" + ORDER + "\",\"value\":42,\"nested\":{\"amount\":1.5}}}").getBytes(UTF_8));
+        assertThat(delivered.getData()).as("the event is delivered with JsonCloudEventData").isInstanceOf(JsonCloudEventData.class);
+        record(delivered);
+
+        Document record = assertEveryRestoredRecordRebuildsToWhatTheStoreReturns().getFirst();
+
+        assertThat(record.getString("dataClass")).as("dataClass of the record").isEqualTo("io.cloudevents.jackson.JsonCloudEventData");
+        assertThat(bytesOf(record.get("data"))).as("data of the record").isEqualTo(requireNonNull(delivered.getData()).toBytes());
+        assertThat(record).as("the record").doesNotContainKey("dataDocument");
+        assertThat(rebuild(record).getData()).as("data of the rebuilt event").isInstanceOf(JsonCloudEventData.class);
+        assertThat(differences(rebuild(record), delivered)).as("differences between the rebuilt event and the delivered one").isEmpty();
+    }
+
+    @Test
+    void data_of_another_class_held_as_its_bytes_and_dataClass_is_rebuilt_as_the_delivered_bytes() throws Exception {
+        record(mapEvent("held-1", Map.of("price", new BigDecimal("1.10")), "{\"price\":1.10}".getBytes(UTF_8)));
+        Map<Object, Object> nonStringKey = new LinkedHashMap<>();
+        nonStringKey.put(7, "pen");
+        record(builder("held-2").withDataContentType("application/json").withData(PojoCloudEventData.wrap(nonStringKey, value -> "{\"7\":\"pen\"}".getBytes(UTF_8))).build());
+
+        List<Document> restored = assertEveryRestoredRecordRebuildsToWhatTheStoreReturns();
+
+        assertThat(restored).as("records").allSatisfy(record -> {
+            assertThat(record.getString("dataClass")).as("dataClass of the record").isEqualTo("io.cloudevents.core.data.PojoCloudEventData");
+            assertThat(record).as("the record").doesNotContainKey("dataDocument");
+            assertThat(rebuild(record).getData()).as("data of the rebuilt event").isExactlyInstanceOf(BytesCloudEventData.class);
+        });
+        assertThat(bytesOf(restored.get(0).get("data"))).as("bytes of the map with a BigDecimal").isEqualTo("{\"price\":1.10}".getBytes(UTF_8));
+        assertThat(bytesOf(restored.get(1).get("data"))).as("bytes of the map with a key that is not a String").isEqualTo("{\"7\":\"pen\"}".getBytes(UTF_8));
+    }
+
+    @Test
     void every_class_of_extension_is_rebuilt_with_its_class_and_value() throws Exception {
         record(builder("held-1")
                 .withExtension("uriext", URI.create("https://example.com/a?b=c"))
@@ -199,7 +261,7 @@ class SkippedInputExportTest {
     @Test
     void an_extension_the_driver_reads_as_Binary_is_rebuilt_from_its_bytes() throws Exception {
         record(CloudEventBuilder.from(mapEvent("held-1", deliveredMap(), null)).withExtension("bytesext", new byte[]{0, 1, (byte) 0xff}).build());
-        String restoredDatabase = restore(dump(SKIPPED_INPUTS));
+        String restoredDatabase = restore(dumpOfTheGuide());
         rewriteBinaryAsUserDefinedSubtype(restoredDatabase, true, false);
 
         List<Document> restored = readRestored(restoredDatabase);
@@ -212,7 +274,7 @@ class SkippedInputExportTest {
     void data_the_driver_reads_as_Binary_is_rebuilt_from_its_bytes() throws Exception {
         record(CloudEventBuilder.from(mapEvent("held-1", deliveredMap(), "{\"other\":1}".getBytes(UTF_8))).build());
         record(builder("held-2").withData("application/octet-stream", new byte[]{0, 1, (byte) 0xff, (byte) 0x80}).build());
-        String restoredDatabase = restore(dump(SKIPPED_INPUTS));
+        String restoredDatabase = restore(dumpOfTheGuide());
         rewriteBinaryAsUserDefinedSubtype(restoredDatabase, false, true);
 
         List<Document> restored = readRestored(restoredDatabase);
@@ -229,13 +291,16 @@ class SkippedInputExportTest {
     void only_the_named_collection_is_restored_when_the_dump_directory_holds_another_sagas_collection_too() throws Exception {
         record(mapEvent("held-1", deliveredMap(), null));
         template.getCollection(OTHER_SAGAS_SKIPPED_INPUTS).insertOne(new Document("sagaId", "other-1").append("quarantineId", "q-9").append("seq", 0L).append("key", "other"));
-        String directory = dump(SKIPPED_INPUTS, OTHER_SAGAS_SKIPPED_INPUTS);
+        template.getCollection(OTHER_SAGAS_SKIPPED_INPUT_CHUNKS).insertOne(new Document("sagaId", "other-1").append("quarantineId", "q-9").append("key", "other").append("chunk", 0));
+        String directory = dump(SKIPPED_INPUTS, SKIPPED_INPUT_CHUNKS, OTHER_SAGAS_SKIPPED_INPUTS, OTHER_SAGAS_SKIPPED_INPUT_CHUNKS);
         template.getCollection(OTHER_SAGAS_SKIPPED_INPUTS).deleteMany(new Document());
+        template.getCollection(OTHER_SAGAS_SKIPPED_INPUT_CHUNKS).deleteMany(new Document());
 
         String restoredDatabase = restore(directory);
 
         assertThat(template.getCollection(OTHER_SAGAS_SKIPPED_INPUTS).countDocuments()).as("records written back into the other saga's collection in the source database").isZero();
-        assertThat(collectionNames(restoredDatabase)).as("collections in the restored database").containsExactly(SKIPPED_INPUTS);
+        assertThat(template.getCollection(OTHER_SAGAS_SKIPPED_INPUT_CHUNKS).countDocuments()).as("chunks written back into the other saga's collection in the source database").isZero();
+        assertThat(collectionNames(restoredDatabase)).as("collections in the restored database").containsExactlyInAnyOrder(SKIPPED_INPUTS, SKIPPED_INPUT_CHUNKS);
         assertThat(readRestored(restoredDatabase)).as("records restored").hasSize(1);
     }
 
@@ -322,7 +387,7 @@ class SkippedInputExportTest {
     // Runs the guide's dump and restore inside the container against this test's own database, and reads the restored
     // records with a driver
     private List<Document> restoredRecords() throws IOException, InterruptedException {
-        return readRestored(restore(dump(SKIPPED_INPUTS)));
+        return readRestored(restore(dumpOfTheGuide()));
     }
 
     // The guide's mongodump, run for each saga's collection into the one directory. Returns the directory.
@@ -338,16 +403,24 @@ class SkippedInputExportTest {
         return directory;
     }
 
-    // The guide's mongorestore of this saga's skipped inputs collection, from a connection string that names no
-    // database. Returns the name of the database restored into.
+    // The guide's two mongodump lines for this saga, one for the records and one for the chunks, into one directory
+    private String dumpOfTheGuide() throws IOException, InterruptedException {
+        return dump(SKIPPED_INPUTS, SKIPPED_INPUT_CHUNKS);
+    }
+
+    // The guide's two mongorestore commands, one for the records and one for the chunks, each with its own --nsInclude,
+    // from a connection string that names no database. Returns the name of the database restored into.
     private String restore(String directory) throws IOException, InterruptedException {
         String restoredDatabase = requireNonNull(new ConnectionString(mongoDBContainer.getReplicaSetUrl("restored-" + UUID.randomUUID().toString().substring(0, 8))).getDatabase());
         assertThat(restoredDatabase.getBytes(UTF_8).length).as("restored database name fits MongoDB's limit").isLessThan(64);
 
-        ExecResult restore = mongoDBContainer.execInContainer("mongorestore", "--uri", "mongodb://localhost:27017/?directConnection=true",
-                "--nsInclude", databaseName + "." + SKIPPED_INPUTS,
-                "--nsFrom", databaseName + "." + SKIPPED_INPUTS, "--nsTo", restoredDatabase + "." + SKIPPED_INPUTS, directory);
-        assertThat(restore.getExitCode()).as("mongorestore exit code, stderr: " + restore.getStderr()).isZero();
+        for (String collection : List.of(SKIPPED_INPUTS, SKIPPED_INPUT_CHUNKS)) {
+            ExecResult restore = mongoDBContainer.execInContainer("mongorestore", "--uri", "mongodb://localhost:27017/?directConnection=true",
+                    "--nsInclude", databaseName + "." + collection,
+                    "--nsFrom", databaseName + "." + collection, "--nsTo", restoredDatabase + "." + collection, directory);
+            assertThat(restore.getExitCode()).as("mongorestore exit code for " + collection + ", stderr: " + restore.getStderr()).isZero();
+        }
+        restoredDatabaseName = restoredDatabase;
         return restoredDatabase;
     }
 
@@ -397,7 +470,8 @@ class SkippedInputExportTest {
 
     // SpringMongoSagaStateStore.toSkippedInput as the downgrade in the upgrade guide and the runbook writes it down, so a
     // change to one of the three is made in all of them
-    private static CloudEvent rebuild(Document record) {
+    private CloudEvent rebuild(Document read) {
+        Document record = read.containsKey("chunks") ? joined(read) : read;
         CloudEventBuilder builder = CloudEventBuilder.from(EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE).deserialize(record.getString("event").getBytes(UTF_8)));
         Document extensions = record.get("extensions", Document.class);
         if (extensions != null) {
@@ -432,13 +506,40 @@ class SkippedInputExportTest {
         // The recipe: `data` is read as bytes the way binary data in an extension is
         byte[] bytes = data == null ? null : data instanceof Binary binary ? binary.getData() : (byte[]) data;
         Document dataDocument = record.get("dataDocument", Document.class);
-        if (dataDocument != null) {
+        String dataClass = record.getString("dataClass");
+        if (dataClass != null) {
+            // The recipe: JSON bytes when dataClass names JsonCloudEventData, the bytes as delivered for any other class
+            if (dataClass.equals("io.cloudevents.jackson.JsonCloudEventData")) {
+                try {
+                    builder.withData(JsonCloudEventData.wrap(new ObjectMapper().readTree(bytes)));
+                } catch (IOException e) {
+                    throw new IllegalStateException(e);
+                }
+            } else {
+                builder.withData(bytes);
+            }
+        } else if (dataDocument != null) {
             byte[] delivered = bytes == null ? dataDocument.toJson().getBytes(UTF_8) : bytes;
             builder.withData(PojoCloudEventData.wrap(dataDocument, value -> delivered));
         } else if (bytes != null) {
             builder.withData(bytes);
         }
         return builder.build();
+    }
+
+    // The recipe for a record over 16 MiB: its chunks below `chunks` in order of `chunk`, the bytes joined, `size` of them,
+    // are the BSON document that holds the record's seq and fields
+    private Document joined(Document record) {
+        try (MongoClient client = MongoClients.create(mongoDBContainer.getReplicaSetUrl(restoredDatabaseName))) {
+            List<Document> chunks = client.getDatabase(restoredDatabaseName).getCollection(SKIPPED_INPUT_CHUNKS, Document.class)
+                    .find(new Document("sagaId", record.get("sagaId")).append("quarantineId", record.get("quarantineId")).append("key", record.get("key"))
+                            .append("chunk", new Document("$lt", record.getInteger("chunks"))))
+                    .sort(new Document("chunk", 1)).into(new ArrayList<>());
+            ByteArrayOutputStream joined = new ByteArrayOutputStream();
+            chunks.forEach(chunk -> joined.writeBytes(bytesOf(chunk.get("bytes"))));
+            assertThat(joined.size()).as("joined bytes of " + chunks.size() + " chunks").isEqualTo(((Number) record.get("size")).intValue());
+            return new RawBsonDocument(joined.toByteArray()).decode(new DocumentCodec());
+        }
     }
 
     // Compares every attribute, every extension with its class, the data's class and bytes, and a wrapped value deeply
