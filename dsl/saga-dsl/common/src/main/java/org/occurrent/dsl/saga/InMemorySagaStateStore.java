@@ -54,8 +54,10 @@ import static java.util.Objects.requireNonNull;
  * takes bytes, and a {@code Map} or a {@code List} at any depth that holds bytes, a {@code String}, a {@code Boolean}, a
  * {@code Character}, a number of a {@code java.lang} or {@code java.math} class, a {@code java.util.Date}, a
  * {@code UUID}, or a BSON value that {@code SpringMongoSagaStateStore} reads back as the same class, such as an
- * {@code ObjectId} or a {@code Decimal128}. {@link #compareAndSaveSkipped} throws an {@link IllegalStateException},
- * and records nothing, for an event with data or an extension it can't copy.
+ * {@code ObjectId} or a {@code Decimal128}. The data is a {@code BytesCloudEventData} or a {@code PojoCloudEventData}
+ * of exactly that class, and every other value is of exactly the class listed, so a subclass is refused. A {@code Map}
+ * and a {@code List} are the exception, and any implementation of them is copied. {@link #compareAndSaveSkipped} throws
+ * an {@link IllegalStateException}, and records nothing, for an event with data or an extension it can't copy.
  *
  * @param <S> the user state type
  */
@@ -297,9 +299,11 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
             }
         }
         CloudEventData data = event.getData();
-        if (data instanceof BytesCloudEventData bytes) {
-            copy.withData(BytesCloudEventData.wrap(bytes.toBytes().clone()));
-        } else if (data instanceof PojoCloudEventData<?> pojo && (pojo.getValue() instanceof Map<?, ?> || pojo.getValue() instanceof List<?>)) {
+        // Matched by exact class. A subclass would be stored as its superclass, and a release would hand the converter a
+        // different data class than was delivered
+        if (data != null && data.getClass() == BytesCloudEventData.class) {
+            copy.withData(BytesCloudEventData.wrap(data.toBytes().clone()));
+        } else if (data != null && data.getClass() == PojoCloudEventData.class && data instanceof PojoCloudEventData<?> pojo && (pojo.getValue() instanceof Map<?, ?> || pojo.getValue() instanceof List<?>)) {
             Object value = requireNonNull(copyOf(sagaId, input, pojo.getValue()));
             byte[] bytes = pojo.toBytes().clone();
             copy.withData(PojoCloudEventData.wrap(value, ignored -> bytes.clone()));

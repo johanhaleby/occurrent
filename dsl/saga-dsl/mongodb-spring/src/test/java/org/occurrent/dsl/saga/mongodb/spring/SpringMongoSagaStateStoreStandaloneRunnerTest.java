@@ -19,6 +19,7 @@ package org.occurrent.dsl.saga.mongodb.spring;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
+import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -106,7 +107,8 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
 
     private final InMemorySubscriptionModel subscriptionModel = new InMemorySubscriptionModel();
     private final InMemoryEventStore eventStore = new InMemoryEventStore(subscriptionModel);
-    private final CloudEventConverter<OrderEvent> converter = new JacksonCloudEventConverter.Builder<OrderEvent>(new ObjectMapper(), URI.create("urn:test")).build();
+    private final AtomicInteger itemAddedDeliveries = new AtomicInteger();
+    private final CloudEventConverter<OrderEvent> converter = new DeliveryCountingConverter(new JacksonCloudEventConverter.Builder<OrderEvent>(new ObjectMapper(), URI.create("urn:test")).build());
     private final List<OrderCommand> dispatched = new CopyOnWriteArrayList<>();
     private final AtomicInteger handled = new AtomicInteger();
     private MongoTemplate mongoTemplate;
@@ -225,7 +227,7 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
     }
 
     @Test
-    void a_quarantined_instance_restored_from_a_replica_set_skips_its_inputs_without_holding_up_the_subscription_when_quarantine_is_off() {
+    void a_quarantined_instance_restored_from_a_replica_set_refuses_its_inputs_and_holds_the_subscription_when_quarantine_is_off() {
         Instant now = Instant.parse("2026-03-04T05:06:07Z");
         SagaFailure failure = new SagaFailure(ORDER + "@1", 1L, now.minusSeconds(300), IllegalStateException.class.getName(), "boom", null, "quarantine-restored");
         // What 0.35.0 wrote on a replica set, which the standalone server now holds as restored data
@@ -238,9 +240,12 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
         write(ORDER, new ItemAdded(ORDER, "book"));
         write("order-2", new OrderPlaced("order-2"));
 
-        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(envelopes().find("order-2").map(SagaEnvelope::state))
-                .as("the input after the skipped one is processed, so the skipped one did not hold up the subscription")
-                .contains("placed"));
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(itemAddedDeliveries)
+                .as("the input is delivered again, since the refused delivery did not acknowledge it")
+                .hasValueGreaterThanOrEqualTo(2));
+        await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(envelopes().find("order-2"))
+                .as("the input after the refused one is not processed, so the subscription did not move past it")
+                .isEmpty());
         SagaEnvelope<String> after = envelopes().find(ORDER).orElseThrow();
         assertAll(
                 () -> assertThat(after.version()).as("the quarantined instance's version").isEqualTo(3L),
@@ -248,8 +253,37 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
                 () -> assertThat(after.status()).as("still quarantined").isEqualTo(SagaStatus.QUARANTINED),
                 () -> assertThat(after.state()).as("its state is untouched").isEqualTo("placed"),
                 () -> assertThat(mongoTemplate.findById(ORDER, Document.class, COLLECTION)).as("the stored document is untouched").isEqualTo(restored),
-                () -> assertThat(mongoTemplate.getCollection(COLLECTION + "_skipped_inputs").countDocuments()).as("no record of the skipped input").isZero(),
-                () -> assertThat(dispatched).as("the skipped input issued no Pack").doesNotContain(new Pack("book"))
+                () -> assertThat(mongoTemplate.getCollection(COLLECTION + "_skipped_inputs").countDocuments()).as("no record of the refused input").isZero(),
+                () -> assertThat(dispatched).as("the refused input issued no Pack").isEmpty(),
+                () -> assertThat(handled).as("no OrderPlaced is handled, including the one for order-2").hasValue(0)
         );
+    }
+
+    // Counts a conversion of an ItemAdded to a domain event, which each delivery attempt of the input does before it is handled
+    private final class DeliveryCountingConverter implements CloudEventConverter<OrderEvent> {
+        private final CloudEventConverter<OrderEvent> delegate;
+
+        private DeliveryCountingConverter(CloudEventConverter<OrderEvent> delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public CloudEvent toCloudEvent(OrderEvent domainEvent) {
+            return delegate.toCloudEvent(domainEvent);
+        }
+
+        @Override
+        public OrderEvent toDomainEvent(CloudEvent cloudEvent) {
+            OrderEvent event = delegate.toDomainEvent(cloudEvent);
+            if (event instanceof ItemAdded) {
+                itemAddedDeliveries.incrementAndGet();
+            }
+            return event;
+        }
+
+        @Override
+        public String getCloudEventType(Class<? extends OrderEvent> type) {
+            return delegate.getCloudEventType(type);
+        }
     }
 }

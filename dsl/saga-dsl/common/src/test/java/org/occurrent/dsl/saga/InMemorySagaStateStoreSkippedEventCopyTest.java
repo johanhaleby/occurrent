@@ -331,6 +331,72 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
         assertNothingWasRecorded();
     }
 
+    @Test
+    void bytes_data_of_a_subclass_is_refused_and_nothing_is_recorded() {
+        quarantinedInstance();
+        CloudEventData data = new SubclassedBytesData(new byte[]{1, 2, 3});
+
+        assertThatThrownBy(() -> skip(event(data)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(KEY)
+                .hasMessageContaining("s1")
+                .hasMessageContaining(SubclassedBytesData.class.getName());
+        assertNothingWasRecorded();
+    }
+
+    @Test
+    void a_subclass_of_a_number_in_the_data_is_refused_and_nothing_is_recorded() {
+        quarantinedInstance();
+        Map<String, Object> delivered = new LinkedHashMap<>();
+        delivered.put("amount", new SubclassedBigDecimal("1.5"));
+
+        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(KEY)
+                .hasMessageContaining(SubclassedBigDecimal.class.getName());
+        assertNothingWasRecorded();
+    }
+
+    @Test
+    void a_map_key_that_is_a_subclass_of_a_number_is_refused_and_nothing_is_recorded() {
+        quarantinedInstance();
+        Map<Object, Object> delivered = new LinkedHashMap<>();
+        delivered.put(new SubclassedBigDecimal("1.5"), "v");
+
+        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(KEY)
+                .hasMessageContaining("key")
+                .hasMessageContaining(SubclassedBigDecimal.class.getName());
+        assertNothingWasRecorded();
+    }
+
+    @Test
+    void an_extension_that_is_a_subclass_of_a_number_is_refused_and_nothing_is_recorded() {
+        quarantinedInstance();
+        CloudEvent delivered = CloudEventBuilder.v1().withId("e1").withSource(URI.create("urn:test")).withType("t")
+                .withExtension("amount", new SubclassedBigDecimal("1.5")).build();
+
+        assertThatThrownBy(() -> skip(delivered))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(KEY)
+                .hasMessageContaining("amount")
+                .hasMessageContaining(SubclassedBigDecimal.class.getName());
+        assertNothingWasRecorded();
+    }
+
+    private static final class SubclassedBytesData extends BytesCloudEventData {
+        SubclassedBytesData(byte[] value) {
+            super(value);
+        }
+    }
+
+    private static final class SubclassedBigDecimal extends java.math.BigDecimal {
+        SubclassedBigDecimal(String value) {
+            super(value);
+        }
+    }
+
     private void assertNothingWasRecorded() {
         SagaEnvelope<String> stored = codec.decode(store.find("s1").orElseThrow());
         assertAll(
