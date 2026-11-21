@@ -477,9 +477,9 @@ nothing was stored before, the new checkpoint stays.
 The MongoDB subscription models stop waiting for a running event handler one second into a pause, so a handler can
 still be running when the resume stores the position. Once it returns, the checkpoint of its event isn't stored over
 that position, and neither is a quiet position read before the resume. A restart then resumes from the position you
-asked for. A plain `resumeSubscription(id)` that goes to the stored checkpoint drops those saves the same way. The
-MongoDB models go to it only when their change stream can open there, so not for a catch-up's position or a time, and
-for those they go on from their own position. An
+asked for. A plain `resumeSubscription(id)` drops those saves the same way when it asks the wrapped model to resume at
+the stored checkpoint. That includes a catch-up's position or a time on the MongoDB models, which go on from their own
+position for those checkpoints. An
 evaluation of the start position that found no checkpoint stored before such a resume, or a restart after a lost
 history, stored a position records no first position over it. It throws `IllegalStateException`, and evaluating again
 starts from the stored checkpoint.

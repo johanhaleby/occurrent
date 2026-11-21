@@ -182,9 +182,11 @@ The save is dropped when one of these came after that read:
 
 * a resume at a position, a put-back or a restart position, whether its write returned or threw, since each one stores
   where the subscription reads from next
-* a plain resume of the paused subscription that goes to the stored checkpoint, since the resumed run reads from there
-  and the replaced run's save would write an earlier checkpoint over it. The resume reads the stored checkpoint under
-  the same lock, so no save is written between that read and the drop
+* a plain resume of the paused subscription that asks the wrapped model to resume at the stored checkpoint, whatever
+  the wrapped model's `restartsAt(..)` answers for it. The replaced run's save would write its own checkpoint over the
+  stored one, and when another node stored that checkpoint during the pause to replay from it, a restart after a crash
+  would skip the replay. The resume reads the stored checkpoint under the same lock, so no save is written between that
+  read and the drop
 * a save from a later read, or from the same read and a delivery started later, since a run reads and delivers one
   event at a time on one thread, so only a run that a resume replaced saves after a later read has
 
@@ -198,22 +200,33 @@ e2 again while quiet saves wait for the next event. A quiet position handed out 
 would write over it, and once the history no longer holds that quiet position, a restart from it skips the events
 written after the restart position.
 
-A plain resume goes to the stored checkpoint when the wrapped model's `restartsAt(..)` answers `true` for it, the same
-check that decides whether a resume at a position stores its position. Such a resume stores nothing, so the model
-notes the checkpoint it read as stored and as the position of a resume. A quiet position handed out after the resume,
-or a delivery the resumed run reads, then saves as it would after a resume at a position.
+Whether the stored checkpoint also covers the deliveries read before such a resume depends on the wrapped model's
+`restartsAt(..)`, the same check that decides whether a resume at a position stores its position. When it answers
+`true`, the wrapped model reads from the stored checkpoint again, and the resume stores nothing, so the model notes the
+checkpoint it read as stored and as the position of a resume. A quiet position handed out after the resume, or a
+delivery the resumed run reads, then saves as it would after a resume at a position.
 
-A plain resume where the wrapped model goes on from the position it has read to doesn't count. That happens when the
-subscription still holds its own start, when the model can't be repositioned, and on the MongoDB models when the stored
-checkpoint is one their change stream can't open at, such as a catch-up's `GlobalCheckpoint` or a time. The resumed run
-continues the replaced one's reads, so its saves follow them, and dropping the replaced run's saves there would hold
-quiet saves until the next event stores its checkpoint.
+When it answers `false`, the wrapped model may go on from the position it has read to. The MongoDB models do that for
+a checkpoint their change stream can't open at, such as a catch-up's `GlobalCheckpoint` or a time. A model that keeps
+the default of `restartsAt(..)` answers `false` as well, even when it resumes at the checkpoint. The replaced run's
+saves are dropped all the same, and a quiet position is saved once the stored checkpoint covers the latest delivery,
+for example after the next event stores its checkpoint.
 
-Counting such a resume would lose events. Say a subscription started at `StartAt.now()` with a `GlobalCheckpoint`
-stored delivers e1, and the persist predicate declines e1's checkpoint. Quiet saves wait, since the stored checkpoint
-doesn't cover e1. Had the plain resume counted, the model would take the `GlobalCheckpoint` as covering e1 while the
-MongoDB model goes on after e1, and the next quiet position would be stored past e1. A restart then wouldn't deliver e1
-again, although its checkpoint was never stored.
+Taking the stored checkpoint as covering there would lose events. Say a subscription started at `StartAt.now()` with a
+`GlobalCheckpoint` stored delivers e1, and the persist predicate declines e1's checkpoint. Quiet saves wait, since the
+stored checkpoint doesn't cover e1. If the plain resume made the `GlobalCheckpoint` cover e1 while the MongoDB model
+goes on after e1, the next quiet position would be stored past e1. A restart then wouldn't deliver e1 again, although
+its checkpoint was never stored.
+
+Dropping the replaced run's saves only where `restartsAt(..)` answers `true` would lose a replay instead. Say another
+node stores c0 during the pause to replay from it, and the wrapped model keeps the default of `restartsAt(..)` but
+resumes at c0. A handler the pause stopped waiting for returns from e5 and stores e5's checkpoint over c0. A crash
+before the resumed run stores a checkpoint of its own then restarts after e5, without the replay c0 asked for.
+
+A plain resume that hands the wrapped model no checkpoint doesn't count. That happens when the subscription still
+holds its own start and the checkpoint and write version stored are the ones read when it was subscribed, and when the
+model can't be repositioned. The resumed run continues the replaced one's reads, so its saves follow them, and
+dropping the replaced run's saves there would hold quiet saves until the next event stores its checkpoint.
 
 The first position the model records for a subscription that starts at the model default follows the same rule. The
 evaluation of the start position notes how many times the subscription was repositioned before it reads the stored
@@ -248,9 +261,9 @@ do. `resumeSubscription(subscriptionId, startAt)` throws `UnsupportedOperationEx
   dropped once a resume at a position, a put-back or a restart position came after the read it belongs to, or once the
   resumed run has started saving. It used to write the older checkpoint over the newer one, and a quiet position handed
   out before a restart position was stored could write over the restart position. A plain
-  `resumeSubscription(subscriptionId)` that goes to the stored checkpoint drops it right away. One where the wrapped
-  model goes on from its own position, as a MongoDB model does for a stored `GlobalCheckpoint`, drops it once the
-  resumed run has started saving.
+  `resumeSubscription(subscriptionId)` that asks the wrapped model to resume at the stored checkpoint drops it right
+  away, whatever the wrapped model's `restartsAt(..)` answers. One that hands the wrapped model no checkpoint, because
+  the subscription still holds its own start, drops it once the resumed run has started saving.
 * A first position the model records is dropped, and the evaluation throws `IllegalStateException`, once a resume, a
   put-back or a restart position came after the evaluation found nothing stored. It used to be written, and could
   replace the position stored then with an earlier one.

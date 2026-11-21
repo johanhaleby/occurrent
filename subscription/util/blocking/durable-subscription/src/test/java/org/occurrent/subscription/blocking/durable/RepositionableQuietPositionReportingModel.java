@@ -34,6 +34,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * restarts at any checkpoint, or, from {@link #continuingFromItsOwnPositionForAGlobalCheckpoint()}, at any checkpoint
  * but a {@link GlobalCheckpoint}. A resume at a {@code GlobalCheckpoint} then goes on from its own position and
  * delivers nothing again, as a MongoDB model does.
+ * From {@link #keepingTheDefaultRestartsAt()} it answers {@code restartsAt} through the default of
+ * {@link RepositionableSubscriptions}, which is false, and still resumes at the checkpoint it is given.
  * A pause returns at once, as the pause of a wrapped model does that stops waiting for a handler that is still running.
  */
 final class RepositionableQuietPositionReportingModel extends QuietPositionReportingModel implements RepositionableSubscriptions {
@@ -42,17 +44,23 @@ final class RepositionableQuietPositionReportingModel extends QuietPositionRepor
     final List<Checkpoint> resumedAt = new CopyOnWriteArrayList<>();
     final AtomicInteger plainResumes = new AtomicInteger();
     private final boolean continuesFromItsOwnPositionForAGlobalCheckpoint;
+    private final boolean keepsTheDefaultRestartsAt;
 
     RepositionableQuietPositionReportingModel() {
-        this(false);
+        this(false, false);
     }
 
-    private RepositionableQuietPositionReportingModel(boolean continuesFromItsOwnPositionForAGlobalCheckpoint) {
+    private RepositionableQuietPositionReportingModel(boolean continuesFromItsOwnPositionForAGlobalCheckpoint, boolean keepsTheDefaultRestartsAt) {
         this.continuesFromItsOwnPositionForAGlobalCheckpoint = continuesFromItsOwnPositionForAGlobalCheckpoint;
+        this.keepsTheDefaultRestartsAt = keepsTheDefaultRestartsAt;
     }
 
     static RepositionableQuietPositionReportingModel continuingFromItsOwnPositionForAGlobalCheckpoint() {
-        return new RepositionableQuietPositionReportingModel(true);
+        return new RepositionableQuietPositionReportingModel(true, false);
+    }
+
+    static RepositionableQuietPositionReportingModel keepingTheDefaultRestartsAt() {
+        return new RepositionableQuietPositionReportingModel(false, true);
     }
 
     @Override
@@ -81,6 +89,9 @@ final class RepositionableQuietPositionReportingModel extends QuietPositionRepor
 
     @Override
     public boolean restartsAt(Checkpoint checkpoint) {
+        if (keepsTheDefaultRestartsAt) {
+            return RepositionableSubscriptions.super.restartsAt(checkpoint);
+        }
         return !continuesFromItsOwnPositionForAGlobalCheckpoint || !isGlobal(checkpoint);
     }
 
