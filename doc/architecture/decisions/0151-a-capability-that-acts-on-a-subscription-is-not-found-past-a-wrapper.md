@@ -181,13 +181,15 @@ The save is dropped when one of these came after that read:
 * a save from a later read, or from the same read and a delivery started later, since a run reads and delivers one
   event at a time on one thread, so only a run that a resume replaced saves after a later read has
 
-In the MongoDB models, the run that lost the history asks for the restart position on the thread it reads on, so the
-deliveries of the read it restarts on still save. When a delivery that started before the restart position was written
-ends, the model goes on comparing the stored checkpoint with the restart position. Without the rule, a stopped run that
-returns from its action for e1 after the resumed run stored e2 writes e1 over e2, and a restart would deliver e2 again
-while quiet saves wait for the next event. A quiet position handed out before a restart position was stored would write
-over it, and once the history no longer holds that quiet position, a restart from it skips the events written after the
-restart position.
+`HistoryLossListener` doesn't say which thread it's called on, so the rule doesn't depend on it. The save of a delivery
+or a quiet position whose read was made before the restart position was written is dropped whichever thread it runs
+on, and one whose read was made after it saves. The MongoDB models end the run that lost the history and read again
+before they deliver, so the restarted run loses no save. When a delivery that started before the restart position was
+written ends, the model goes on comparing the stored checkpoint with the restart position. Without the rule, a stopped
+run that returns from its action for e1 after the resumed run stored e2 writes e1 over e2, and a restart would deliver
+e2 again while quiet saves wait for the next event. A quiet position handed out before a restart position was stored
+would write over it, and once the history no longer holds that quiet position, a restart from it skips the events
+written after the restart position.
 
 When nothing was stored before, the new checkpoint stays. Deleting it could remove a checkpoint that another node, or
 the resumed subscription's own events, wrote in the meantime. With nothing stored, a restart subscribes the wrapped
