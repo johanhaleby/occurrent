@@ -48,8 +48,8 @@ public enum StartupMode {
      * In the blocking Spring Boot starter, a subscription that sets {@code BACKGROUND} explicitly is paused, with an
      * error in the log that names it, when the subscription model refuses the position stored for it because the
      * history back to that position is gone, so the rest of the application starts. To run it again, stop every
-     * instance of the application, delete or replace the checkpoint stored for the subscription, and start the
-     * application again.
+     * instance of the application, delete the checkpoint stored for the subscription or replace it with a checkpoint
+     * the application kept that the subscription model still has the history back to, and start the application again.
      */
     BACKGROUND
 }

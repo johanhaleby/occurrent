@@ -2441,8 +2441,10 @@ store nor the MongoDB model answers one.
 A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts around its catch-up, can't resume a
 subscription at a position, and its `cancelSubscription(id)` acts only on the instance you call it on. With checkpoint
 storage every instance that gets the lease refuses the same stored checkpoint. Stop every instance of the application
-and delete or replace that checkpoint, as the `ERROR` the competing consumer logs says. Without checkpoint storage,
-cancel the subscription on every instance and subscribe it again from the beginning or from a checkpoint you kept.
+and delete that checkpoint, or replace it with a checkpoint you kept that the subscription model still has the history
+back to, as the `ERROR` the competing consumer logs says. Without checkpoint storage, cancel the subscription on every
+instance and subscribe it again from the beginning, or from a checkpoint you kept that the subscription model still
+has the history back to.
 
 A DCB catch-up and the reactor catch-ups replay only by position, and throw the same exception when you start them from
 a time replay's checkpoint in the new form.
@@ -2972,7 +2974,9 @@ any position other than the beginning could skip that event.
 Cancelling a subscription whose checkpoint Spring Boot stores deletes the checkpoint. When the subscription is
 registered again, it starts where its annotation says. So cancelling and subscribing again with `NOW` or `DEFAULT`
 skips every event since the lost token. For a `NOW` or `DEFAULT` subscription the only ways back without a gap are to
-switch it to `BEGINNING` or to resume it from a checkpoint the application kept.
+switch it to `BEGINNING`, or to resume it from a checkpoint the application kept that the subscription model still
+has the history back to. Outside Spring Boot, on a blocking catch-up subscription model you call directly, the second
+can be a `resumeSubscription(id, StartAt)` at that checkpoint, as described below.
 
 When the application doesn't start, or you would rather not call `cancelSubscription`, delete the stored checkpoint
 instead, with every instance of the application stopped. Spring Boot stores it in the collection
@@ -2982,6 +2986,8 @@ subscription id. Every step below that cancels the subscription can delete that 
 A subscription that the blocking starter paused under `startupMode = BACKGROUND` recovers the same way. With every
 instance of the application stopped, delete its stored checkpoint, or replace it with a resume token the oplog still
 has, and start the application again. It then starts where its annotation says, or from the resume token you stored.
+Only a token the application kept with its own state starts it without a gap. A newer one skips the events between
+the last one the handler handled and that token.
 
 To replay from the beginning, when the read model or saga can take every event again:
 
@@ -3529,7 +3535,8 @@ longer than the oplog window to start, from the event store bean to the handler'
 the starter runs through a catch-up subscription, which both starters do by default, then refuses to start instead of
 skipping the events since that position. The blocking starter throws `CatchupCannotResumeException` and the
 application doesn't start. With `startupMode = BACKGROUND`, and on the reactor starter, the handler is paused with an
-error in the log that names it. Delete or replace its stored checkpoint and restart the application, as
+error in the log that names it. Delete its stored checkpoint, or replace it with a checkpoint the application kept that
+the subscription model still has the history back to, and restart the application, as
 [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now)
 describes. A handler at `NOW` with `resumeBehavior = SAME_AS_START_AT` stores no checkpoint, so it is paused with an
 error in the log, and the next start of the application reads a new position. Without a catch-up subscription, the

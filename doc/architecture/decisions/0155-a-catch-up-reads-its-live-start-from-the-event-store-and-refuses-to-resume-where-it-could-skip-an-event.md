@@ -261,7 +261,8 @@ model opens at the model's default with no error. A live checkpoint resumes only
 
 ### A paused subscription is recovered by hand
 
-A paused subscription delivers nothing until someone cancels it and subscribes it again, from one of two starts:
+A paused subscription delivers nothing until someone recovers it. They cancel it and subscribe it again from one of
+two starts:
 
 - The beginning, when the handler can take every event again, or once the application has deleted what the handler
   built. Cancelling a subscription under `DurableSubscriptionModel`, which the blocking Spring Boot starter builds,
@@ -277,9 +278,13 @@ A paused subscription delivers nothing until someone cancels it and subscribes i
   newer than the token the subscription lost, for example when the subscription's own checkpoint storage is written
   less often than the application stores its checkpoint.
 
+Where this section says a start is refused, a blocking Spring Boot subscription with `startupMode = BACKGROUND` or
+`occurrent.subscription.mode=manual` is held paused instead, with the error logged, since both ask `LostStartHold`.
+
 On a blocking catch-up model the application calls directly, `resumeSubscription(id, startAt)` at a resume token the
-oplog still has resumes the paused subscription without a cancel. Cancelling it and subscribing again from now skips
-every event since the lost token.
+application stored with its own state, while the oplog still has it, resumes the paused subscription without a cancel.
+At a token newer than the one the application stored, it skips the events between the two. Cancelling the subscription and
+subscribing again from now skips every event since the lost token.
 
 ## Alternatives considered
 
